@@ -1,0 +1,11 @@
+odc-stac
+planetary_computer
+pystac-client
+rioxarray
+dask
+fsspec
+geojson
+shapely
+geopandas
+pyproj
+rasterio
