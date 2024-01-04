@@ -10,3 +10,5 @@ geopandas
 pyproj
 rasterio
 kbatch
+xarray
+pyproj

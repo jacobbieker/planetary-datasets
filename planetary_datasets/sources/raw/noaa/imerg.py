@@ -10,7 +10,7 @@ def get_gpm(timestep: dt.datetime, ftps: FTP_TLS) -> list[str]:
     files = ftps.nlst()
     local_paths = []
     for f in files:
-        if "HHR" in f and "7B.zip" in f:
+        if "HHR" in f and "7B.zip" in f: # Newest version as of 2024-01-01 is 7B
             print(f"Downloading: {f}")
             if os.path.exists(f):
                 continue
