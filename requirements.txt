@@ -13,3 +13,9 @@ kbatch
 xarray
 pyproj
 monetio
+lxml
+s3fs
+gcsfs
+adlfs
+zarr
+datasets
