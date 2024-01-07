@@ -20,3 +20,4 @@ adlfs
 zarr
 datasets
 cfgrib
+h5py
