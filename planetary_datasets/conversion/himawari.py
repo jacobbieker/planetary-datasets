@@ -13,7 +13,7 @@ from kerchunk.hdf import SingleHdf5ToZarr
 # C should be channels 0 to 15 I think, or 1 to 16, zero padded to 2 digits
 
 
-def get_himawari_kerchunk(time: dt.datetime, raw_location: str):
+def get_himawari_kerchunk(time: dt.datetime, raw_location: str, output_location: str):
     """
     Generate a Kerchunk file from a Himawari file
     """
@@ -38,7 +38,7 @@ def get_himawari_kerchunk(time: dt.datetime, raw_location: str):
         with fsspec.open(file_url, **so) as infile:
             h5chunks = SingleHdf5ToZarr(infile, file_url, inline_threshold=300)
             outfile = file_url.replace("nc", "json").split("/")[-1]
-            os.path.join("himawari", outfile)
+            os.path.join(output_location, outfile)
             with fs2.open(outfile, 'wb') as f:
                 f.write(ujson.dumps(h5chunks.translate()).encode())
 
@@ -76,7 +76,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--raw-location", type=str, default="s3://noaa-himawari9")
     parser.add_argument("--output-location", type=str, default="himawari9")
-    parser.add_argument("--upload-to-hf", action="store_false")
+    parser.add_argument("--upload-to-hf", action="store_true")
     parser.add_argument("--hf-token", type=str, default="")
     args = parser.parse_args()
     assert args.raw_location in ["s3://noaa-himawari9", "s3://noaa-himawari8"]
@@ -95,7 +95,7 @@ if __name__ == "__main__":
     start_idx = random.randint(0, len(date_range))
     for day in date_range[start_idx:]:
         os.mkdir(args.output_location)
-        get_himawari_kerchunk(day, raw_location=args.raw_location)
+        get_himawari_kerchunk(day, raw_location=args.raw_location, output_location=args.output_location)
         zip_name = zip_jsons(day, args.output_location)
         if args.upload_to_hf:
             upload_to_hf(zip_name, args.hf_token, repo_id=repo_id)
