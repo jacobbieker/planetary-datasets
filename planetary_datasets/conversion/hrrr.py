@@ -95,7 +95,7 @@ if __name__ == "__main__":
     parser.add_argument("--upload-to-hf", action="store_true")
     parser.add_argument("--hf-token", type=str, default="")
     args = parser.parse_args()
-    date_range = pd.date_range(start="2014-01-01", end=(dt.datetime.now() - dt.timedelta(days=1)).strftime("%Y-%m-%d"), freq="1H")
+    date_range = pd.date_range(start="2014-07-30", end=(dt.datetime.now() - dt.timedelta(days=1)).strftime("%Y-%m-%d"), freq="1H")
     start_idx = random.randint(0, len(date_range))
     for day in date_range[start_idx:]:
         print(day)
