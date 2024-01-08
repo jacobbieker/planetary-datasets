@@ -5,14 +5,15 @@ import rioxarray
 import datetime as dt
 import numpy as np
 import pyproj
-from typing import Union
+from typing import Union, Optional
 
 
 def get_goes_image(
     start_datetime: dt.datetime,
     end_datetime: dt.datetime,
     image_type: str = "FULL DISK",
-    max_images: int = 4,
+    bands: Optional[list[int]] = None,
+    full_resolution: bool = False,
 ) -> Union[xr.Dataset, None]:
     """
     Get the GOES images for the given time period
@@ -21,7 +22,10 @@ def get_goes_image(
         start_datetime: datetime to start getting images from
         end_datetime: End datetime to get images from
         image_type: Which GOES image type to get, either 'CONUS' or 'FULL DISK'
-        max_images: Max number of images to get
+        bands: Which bands to get, if None, all bands are included
+        full_resolution: Whether to get the full resolution images,
+            which are variable in band, or the fixed resolution images, which are 2km
+
 
     Returns:
         Xarray Dataset containing the GOES images

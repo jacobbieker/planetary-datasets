@@ -38,7 +38,7 @@ def get_himawari_kerchunk(time: dt.datetime, raw_location: str, output_location:
         with fsspec.open(file_url, **so) as infile:
             h5chunks = SingleHdf5ToZarr(infile, file_url, inline_threshold=300)
             outfile = file_url.replace("nc", "json").split("/")[-1]
-            os.path.join(output_location, outfile)
+            outfile = os.path.join(output_location, outfile)
             with fs2.open(outfile, 'wb') as f:
                 f.write(ujson.dumps(h5chunks.translate()).encode())
 
