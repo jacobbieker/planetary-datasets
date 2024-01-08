@@ -30,7 +30,9 @@ def get_goes_image(
     Returns:
         Xarray Dataset containing the GOES images
     """
-    assert image_type in ["CONUS", "FULL DISK"], ValueError(f"Image type {image_type=} not recognized")
+    assert image_type in ["CONUS", "FULL DISK"], ValueError(
+        f"Image type {image_type=} not recognized"
+    )
     catalog = pystac_client.Client.open(
         "https://planetarycomputer.microsoft.com/api/stac/v1",
         modifier=planetary_computer.sign_inplace,
@@ -38,13 +40,10 @@ def get_goes_image(
     search = catalog.search(
         collections=["goes-cmi"],
         datetime=[start_datetime, end_datetime],
-        limit=max_images,
         query={"goes:image-type": {"eq": image_type}},
     )
     timesteps = []
     for i, item in enumerate(search.items()):
-        if i >= max_images:
-            break
         bands = []
         for idx in range(1, 7):
             bands.append(f"C{idx:02d}_2km")
@@ -61,8 +60,6 @@ def get_goes_image(
             {"time": dt.datetime.strptime(ds.attrs["date_created"], "%Y-%m-%dT%H:%M:%S.%fZ")}
         )
         timesteps.append(ds)
-    if len(timesteps) != max_images:  # Only want to return if all images are available
-        return None
     ds = xr.concat(timesteps, dim="time")
     ds = ds.sortby("time").transpose("time", "band", "x", "y")
     # Add lat/lon coordinates

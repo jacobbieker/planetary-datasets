@@ -21,14 +21,19 @@ def _download_file(remote_path: str, local_path: str) -> str:
 
 
 def get_aircraft_observations(timestep: dt.datetime) -> str:
-    remote_path = BASEURL + f"{timestep.strftime('%Y')}/prepbufr.gdas.{timestep.strftime('%Y%m%d')}.t{timestep.strftime('%H')}z.nr.48h"
+    remote_path = (
+        BASEURL
+        + f"{timestep.strftime('%Y')}/prepbufr.gdas.{timestep.strftime('%Y%m%d')}.t{timestep.strftime('%H')}z.nr.48h"
+    )
     local_path = os.path.basename(remote_path)
     return _download_file(remote_path, local_path)
 
 
 if __name__ == "__main__":
     # From 2009 to now
-    date_range = pd.date_range(start="2016-01-01", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="6H")
+    date_range = pd.date_range(
+        start="2016-01-01", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="6H"
+    )
     start_idx = random.randint(0, len(date_range))
     for day in date_range[start_idx:]:
         day_outname = day.strftime("%Y%m%d%H")

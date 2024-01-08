@@ -4,13 +4,29 @@ from monetio import aeronet
 import datetime as dt
 from typing import Optional
 
-def get_aeronet_observations(start_time: dt.datetime, end_time: dt.datetime, parameter: Optional[str] = None, inversion: bool = False) -> xr.Dataset:
+
+def get_aeronet_observations(
+    start_time: dt.datetime,
+    end_time: dt.datetime,
+    parameter: Optional[str] = None,
+    inversion: bool = False,
+) -> xr.Dataset:
     """Fetch Aeronet data for a given day."""
     if parameter is not None:
-        assert parameter in ["AOD10", "AOD15", "AOD20", "SDA10", "SDA15", "SDA20", "TOT10", "TOT15", "TOT20"], ValueError(f"Parameter {parameter=} not recognized")
-    dates = pd.date_range(start=start_time, end=end_time, freq='H')
+        assert parameter in [
+            "AOD10",
+            "AOD15",
+            "AOD20",
+            "SDA10",
+            "SDA15",
+            "SDA20",
+            "TOT10",
+            "TOT15",
+            "TOT20",
+        ], ValueError(f"Parameter {parameter=} not recognized")
+    dates = pd.date_range(start=start_time, end=end_time, freq="H")
     if inversion:
-        df = aeronet.add_data(dates=dates, product='ALL', inv_type='ALM20')
+        df = aeronet.add_data(dates=dates, product="ALL", inv_type="ALM20")
     else:
         df = aeronet.add_data(dates=dates, product=parameter)
     ds = df.to_xarray()
@@ -22,6 +38,7 @@ def get_aeronet_observations(start_time: dt.datetime, end_time: dt.datetime, par
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--start_time", type=str, required=True)
     parser.add_argument("--end_time", type=str, required=True)
@@ -30,5 +47,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     start_time = dt.datetime.strptime(args.start_time, "%Y-%m-%d")
     end_time = dt.datetime.strptime(args.end_time, "%Y-%m-%d")
-    ds = get_aeronet_observations(start_time, end_time, parameter=args.parameter, inversion=args.inversion)
+    ds = get_aeronet_observations(
+        start_time, end_time, parameter=args.parameter, inversion=args.inversion
+    )
     ds.to_netcdf(f"{args.parameter}_{args.start_time}_{args.end_time}.nc")

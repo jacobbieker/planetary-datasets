@@ -6,11 +6,13 @@ from ftplib import FTP_TLS
 
 
 def get_gpm(timestep: dt.datetime, ftps: FTP_TLS) -> list[str]:
-    ftps.cwd(f"/gpmallversions/V07/{timestep.strftime('%Y')}/{timestep.strftime('%m')}/{timestep.strftime('%d')}/gis")
+    ftps.cwd(
+        f"/gpmallversions/V07/{timestep.strftime('%Y')}/{timestep.strftime('%m')}/{timestep.strftime('%d')}/gis"
+    )
     files = ftps.nlst()
     local_paths = []
     for f in files:
-        if "HHR" in f and "7B.zip" in f: # Newest version as of 2024-01-01 is 7B
+        if "HHR" in f and "7B.zip" in f:  # Newest version as of 2024-01-01 is 7B
             print(f"Downloading: {f}")
             if os.path.exists(f):
                 continue
@@ -22,6 +24,7 @@ def get_gpm(timestep: dt.datetime, ftps: FTP_TLS) -> list[str]:
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--username", type=str, required=True)
     parser.add_argument("--password", type=str, required=True)
@@ -29,7 +32,9 @@ if __name__ == "__main__":
     ftps = FTP_TLS()
     ftps.connect("arthurhouftps.pps.eosdis.nasa.gov")
     ftps.login(args.username, args.password)
-    date_range = pd.date_range(start="2000-01-01", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="D")
+    date_range = pd.date_range(
+        start="2000-01-01", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="D"
+    )
     start_idx = random.randint(0, len(date_range))
     for day in date_range[start_idx:]:
         day_outname = day.strftime("%Y%m%d")

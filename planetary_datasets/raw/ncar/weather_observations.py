@@ -21,14 +21,18 @@ def _download_file(remote_path: str, local_path: str) -> str:
 
 
 def get_weather_observations(timestep: dt.datetime) -> str:
-    remote_path = BASEURL + f"{timestep.strftime('%Y')}/prepbufr.{timestep.strftime('%Y%m%d')}.wo40.tar.gz"
+    remote_path = (
+        BASEURL + f"{timestep.strftime('%Y')}/prepbufr.{timestep.strftime('%Y%m%d')}.wo40.tar.gz"
+    )
     local_path = os.path.basename(remote_path)
     return _download_file(remote_path, local_path)
 
 
 if __name__ == "__main__":
     # From 2009 to now
-    date_range = pd.date_range(start="1998-01-01", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="D")
+    date_range = pd.date_range(
+        start="1998-01-01", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="D"
+    )
     start_idx = random.randint(0, len(date_range))
     for day in date_range[start_idx:]:
         day_outname = day.strftime("%Y%m%d")

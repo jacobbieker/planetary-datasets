@@ -9,6 +9,14 @@ setup(
     author="Jacob Bieker",
     author_email="jacob@bieker.tech",
     url="https://github.com/jacobbieker/planetary-datasets",
-    install_requires=["odc-stac", "pystac-client", "planetary-computer", "rioxarray", "fsspec", "geopandas", "dask"],
+    install_requires=[
+        "odc-stac",
+        "pystac-client",
+        "planetary-computer",
+        "rioxarray",
+        "fsspec",
+        "geopandas",
+        "dask",
+    ],
     packages=find_packages(),
 )
