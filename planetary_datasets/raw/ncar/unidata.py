@@ -26,7 +26,10 @@ def get_metar_observations(timestep: dt.datetime) -> str:
         + f"/surface/{timestep.strftime('%Y%m')}/{timestep.strftime('%Y%m%d')}/Surface_METAR_{timestep.strftime('%Y%m%d')}_0000.nc"
     )
     local_path = os.path.basename(remote_path)
-    return _download_file(remote_path, local_path)
+    if not os.path.exists(local_path):
+        return _download_file(remote_path, local_path)
+    else:
+        return local_path
 
 
 def get_buoy_observations(timestep):
@@ -35,7 +38,10 @@ def get_buoy_observations(timestep):
         + f"/surface/{timestep.strftime('%Y%m')}/{timestep.strftime('%Y%m%d')}/Surface_Buoy_{timestep.strftime('%Y%m%d')}_0000.nc"
     )
     local_path = os.path.basename(remote_path)
-    return _download_file(remote_path, local_path)
+    if not os.path.exists(local_path):
+        return _download_file(remote_path, local_path)
+    else:
+        return local_path
 
 
 def get_surface_synoptic_observations(timestep):
@@ -44,7 +50,10 @@ def get_surface_synoptic_observations(timestep):
         + f"/surface/{timestep.strftime('%Y%m')}/{timestep.strftime('%Y%m%d')}/Surface_Synoptic_{timestep.strftime('%Y%m%d')}_0000.nc"
     )
     local_path = os.path.basename(remote_path)
-    return _download_file(remote_path, local_path)
+    if not os.path.exists(local_path):
+        return _download_file(remote_path, local_path)
+    else:
+        return local_path
 
 
 def get_upper_air_observations(timestep):
@@ -53,7 +62,10 @@ def get_upper_air_observations(timestep):
         + f"/upperair/{timestep.strftime('%Y%m')}/{timestep.strftime('%Y%m%d')}/Upperair_{timestep.strftime('%Y%m%d')}_0000.nc"
     )
     local_path = os.path.basename(remote_path)
-    return _download_file(remote_path, local_path)
+    if not os.path.exists(local_path):
+        return _download_file(remote_path, local_path)
+    else:
+        return local_path
 
 
 if __name__ == "__main__":

@@ -22,10 +22,25 @@ def _download_file(remote_path: str, local_path: str) -> str:
 
 def get_weather_observations(timestep: dt.datetime) -> str:
     remote_path = (
+        BASEURL + f"{timestep.strftime('%Y')}/prepbufr.{timestep.strftime('%Y%m%d')}.nr.tar.gz"
+    )
+    local_path = os.path.basename(remote_path)
+    if not os.path.exists(local_path):
+        return _download_file(remote_path, local_path)
+    else:
+        return local_path
+
+
+def get_early_weather_observations(timestep: dt.datetime) -> str:
+    # Early observations have wo40, newer ones have .nr
+    remote_path = (
         BASEURL + f"{timestep.strftime('%Y')}/prepbufr.{timestep.strftime('%Y%m%d')}.wo40.tar.gz"
     )
     local_path = os.path.basename(remote_path)
-    return _download_file(remote_path, local_path)
+    if not os.path.exists(local_path):
+        return _download_file(remote_path, local_path)
+    else:
+        return local_path
 
 
 if __name__ == "__main__":
@@ -38,7 +53,8 @@ if __name__ == "__main__":
         day_outname = day.strftime("%Y%m%d")
         year = day.year
         try:
-            weather_obs = get_weather_observations(day)
+            weather_obs = get_early_weather_observations(day)
+            get_weather_observations(day)
         except Exception as e:
             print(e)
             continue
