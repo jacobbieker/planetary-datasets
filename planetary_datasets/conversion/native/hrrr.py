@@ -88,7 +88,7 @@ def upload_to_hf(zip_name, hf_token):
     api.upload_file(
         path_or_fileobj=zip_name,
         path_in_repo=f"data/{zip_name.split('/')[-1][:4]}/{zip_name}",
-        repo_id="jacobbieker/hrrr-kerchunk",
+        repo_id="jacobbieker/hrrr-native",
         repo_type="dataset",
     )
     os.remove(zip_name)
