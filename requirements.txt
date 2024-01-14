@@ -21,3 +21,6 @@ zarr
 datasets
 cfgrib
 h5py
+pybufrkit
+satip
+

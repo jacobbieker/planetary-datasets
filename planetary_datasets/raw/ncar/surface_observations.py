@@ -22,8 +22,7 @@ def _download_file(remote_path: str, local_path: str) -> str:
 
 def get_surface_observations(timestep: dt.datetime) -> str:
     remote_path = (
-        BASEURL
-        + f"{timestep.strftime('%Y')}/gdassfcobs.{timestep.strftime('%Y%m%d')}.tar.gz"
+        BASEURL + f"{timestep.strftime('%Y')}/gdassfcobs.{timestep.strftime('%Y%m%d')}.tar.gz"
     )
     local_path = os.path.basename(remote_path)
     if not os.path.exists(local_path):

@@ -78,9 +78,7 @@ if __name__ == "__main__":
     start_idx = random.randint(0, len(date_range))
     for day in date_range[start_idx:]:
         os.mkdir(args.output_location)
-        get_gk2a_kerchunk(
-            day, raw_location=args.raw_location, output_location=args.output_location
-        )
+        get_gk2a_kerchunk(day, raw_location=args.raw_location, output_location=args.output_location)
         zip_name = zip_jsons(day, args.output_location)
         if args.upload_to_hf:
             upload_to_hf(zip_name, args.hf_token, repo_id=repo_id)

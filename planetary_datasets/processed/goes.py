@@ -34,7 +34,7 @@ def get_goes_image(
         f"Image type {image_type=} not recognized"
     )
     if bands_to_use is None:
-        bands_to_use = list(range(1, 17)) # 1-16
+        bands_to_use = list(range(1, 17))  # 1-16
     catalog = pystac_client.Client.open(
         "https://planetarycomputer.microsoft.com/api/stac/v1",
         modifier=planetary_computer.sign_inplace,
@@ -51,7 +51,9 @@ def get_goes_image(
             if full_resolution:
                 if idx in [1, 3, 5]:
                     bands.append(f"C{idx:02d}_1km")
-                elif idx in [2,]:
+                elif idx in [
+                    2,
+                ]:
                     bands.append(f"C{idx:02d}_0.5km")
                 else:
                     bands.append(f"C{idx:02d}_2km")
@@ -60,14 +62,25 @@ def get_goes_image(
 
         if full_resolution:
             ds_20 = xr.concat(
-                [rioxarray.open_rasterio(item.assets[band].href) for band in bands if "_2km"], dim="band"
+                [rioxarray.open_rasterio(item.assets[band].href) for band in bands if "_2km"],
+                dim="band",
             )
             ds_05 = xr.concat(
-                [rioxarray.open_rasterio(item.assets[band].href) for band in bands if "0.5km" in band], dim="band"
+                [
+                    rioxarray.open_rasterio(item.assets[band].href)
+                    for band in bands
+                    if "0.5km" in band
+                ],
+                dim="band",
             )
             # Load the 1km bands
             ds_1 = xr.concat(
-                [rioxarray.open_rasterio(item.assets[band].href) for band in bands if "_1km" in band], dim="band"
+                [
+                    rioxarray.open_rasterio(item.assets[band].href)
+                    for band in bands
+                    if "_1km" in band
+                ],
+                dim="band",
             )
             dses = [ds_20, ds_05, ds_1]
         else:
@@ -82,7 +95,10 @@ def get_goes_image(
             )
         timesteps.append(dses)
     # Concatentate along the same index in each sublist
-    dses = [xr.concat([timestep[idx] for timestep in timesteps], dim="time") for idx in range(len(timesteps[0]))]
+    dses = [
+        xr.concat([timestep[idx] for timestep in timesteps], dim="time")
+        for idx in range(len(timesteps[0]))
+    ]
     for idx, ds in enumerate(dses):
         # Add the band names as coordinates
         ds = ds.sortby("time").transpose("time", "band", "x", "y")

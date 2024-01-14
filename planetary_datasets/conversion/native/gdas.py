@@ -35,7 +35,7 @@ def gen_json(file_url, output_location):
     ):  # scan_grib outputs a list containing one reference file per grib message
         out_file_name = make_json_name(output_location, file_url, i)  # get name
         print(out_file_name)
-        message['templates']['u'] = file_url
+        message["templates"]["u"] = file_url
         with fsspec.open(out_file_name, "w") as f:
             f.write(ujson.dumps(message))  # write to file
     os.remove(f"{file_url.split('/')[-1]}")
@@ -61,7 +61,8 @@ def generate_individual_gfs_kerchunk(time: dt.datetime, raw_location: str, outpu
     fs_read = fsspec.filesystem(protocol, anon=True, skip_instance_cache=True)
     # Get the analysis files as well
     files_anl = fs_read.glob(
-        f"{raw_location}/gdas.{time.strftime('%Y%m%d')}/{time.strftime('%H')}/*t{time.strftime('%H')}z.pgr*")
+        f"{raw_location}/gdas.{time.strftime('%Y%m%d')}/{time.strftime('%H')}/*t{time.strftime('%H')}z.pgr*"
+    )
     files_anl = sorted(
         ["s3://" + f for f in files_anl if ".idx" not in f]
     )  # Remove index files from it

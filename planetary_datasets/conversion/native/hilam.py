@@ -35,7 +35,7 @@ def gen_json(file_url, output_location):
     ):  # scan_grib outputs a list containing one reference file per grib message
         out_file_name = make_json_name(output_location, file_url, i)  # get name
         print(out_file_name)
-        message['templates']['u'] = file_url
+        message["templates"]["u"] = file_url
         with fsspec.open(out_file_name, "w") as f:
             f.write(ujson.dumps(message))  # write to file
     os.remove(f"{file_url.split('/')[-1]}")
@@ -55,16 +55,13 @@ def generate_individual_hilam_kerchunk(time: dt.datetime, output_location: str):
     files = fs_read.glob(
         f"{raw_location}/{time.strftime('%Y')}/{time.strftime('%m')}/{time.strftime('%d')}/{time.strftime('%H')}/*"
     )  # select second last run to ensure it is a complete forecast
-    files = sorted(
-        ["s3://" + f for f in files]
-    )  # Remove index files from it
+    files = sorted(["s3://" + f for f in files])  # Remove index files from it
     # Get the analysis files as well
     raw_location = "s3://fmi-opendata-rcrhirlam-pressure-grib"
     files_prs = fs_read.glob(
-        f"{raw_location}/{time.strftime('%Y')}/{time.strftime('%m')}/{time.strftime('%d')}/{time.strftime('%H')}/*")
-    files_prs = sorted(
-        ["s3://" + f for f in files_prs]
-    )  # Remove index files from it
+        f"{raw_location}/{time.strftime('%Y')}/{time.strftime('%m')}/{time.strftime('%d')}/{time.strftime('%H')}/*"
+    )
+    files_prs = sorted(["s3://" + f for f in files_prs])  # Remove index files from it
     if len(files) == 0 or len(files_prs) == 0:
         return None
     # Local filenames would be the same, so surface first, then pressure
@@ -120,9 +117,7 @@ if __name__ == "__main__":
     start_idx = random.randint(0, len(date_range))
     for day in date_range[start_idx:]:
         os.mkdir(args.output_location)
-        generate_individual_hilam_kerchunk(
-            day, output_location=args.output_location
-        )
+        generate_individual_hilam_kerchunk(day, output_location=args.output_location)
         zip_name = zip_jsons(day, args.output_location)
         if args.upload_to_hf:
             upload_to_hf(zip_name, args.hf_token)
