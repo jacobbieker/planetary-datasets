@@ -73,45 +73,17 @@ def get_surface_observations(
     )
 
 
-def get_gruan_data():
+def get_gruan_data(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
+    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
     c.retrieve(
         "insitu-observations-gruan-reference-network",
         {
             "format": "csv-lev.zip",
-            "year": "2011",
-            "month": "06",
+            "month": f'{day.strftime("%m")}',
             "day": [
-                "01",
-                "02",
-                "03",
-                "04",
-                "05",
-                "06",
-                "07",
-                "08",
-                "09",
-                "10",
-                "11",
-                "12",
-                "13",
-                "14",
-                "15",
-                "16",
-                "17",
-                "18",
-                "19",
-                "20",
-                "21",
-                "22",
-                "23",
-                "24",
-                "25",
-                "26",
-                "27",
-                "28",
-                "29",
-                "30",
+                f'{day.strftime("%d")}',
             ],
+            "year": f'{day.strftime("%Y")}',
             "variable": [
                 "air_temperature",
                 "air_temperature_post_processing_radiation_correction",
@@ -140,64 +112,22 @@ def get_gruan_data():
                 "wind_speed_total_uncertainty",
             ],
         },
-        "download.csv-lev.zip",
+        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip',
     )
 
 
-def get_woudc_data():
+def get_woudc_data(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
+    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
     c.retrieve(
         "insitu-observations-woudc-ozone-total-column-and-profiles",
         {
             "observation_type": "vertical_profile",
             "format": "csv-lev.zip",
-            "year": "2000",
-            "month": [
-                "01",
-                "02",
-                "03",
-                "04",
-                "05",
-                "06",
-                "07",
-                "08",
-                "09",
-                "10",
-                "11",
-                "12",
-            ],
+            "month": f'{day.strftime("%m")}',
             "day": [
-                "01",
-                "02",
-                "03",
-                "04",
-                "05",
-                "06",
-                "07",
-                "08",
-                "09",
-                "10",
-                "11",
-                "12",
-                "13",
-                "14",
-                "15",
-                "16",
-                "17",
-                "18",
-                "19",
-                "20",
-                "21",
-                "22",
-                "23",
-                "24",
-                "25",
-                "26",
-                "27",
-                "28",
-                "29",
-                "30",
-                "31",
+                f'{day.strftime("%d")}',
             ],
+            "year": f'{day.strftime("%Y")}',
             "variable": [
                 "air_temperature",
                 "geopotential_height",
@@ -207,11 +137,12 @@ def get_woudc_data():
                 "wind_speed",
             ],
         },
-        "download.csv-lev.zip",
+        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip',
     )
 
 
-def get_gnss_data():
+def get_gnss_data(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
+    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
     c.retrieve(
         "insitu-observations-gnss",
         {
@@ -224,50 +155,18 @@ def get_gnss_data():
                 "zenith_total_delay",
                 "zenith_total_delay_random_uncertainty",
             ],
-            "year": "2000",
-            "month": [
-                "10",
-                "11",
-            ],
+            "month": f'{day.strftime("%m")}',
             "day": [
-                "01",
-                "02",
-                "03",
-                "04",
-                "05",
-                "06",
-                "07",
-                "08",
-                "09",
-                "10",
-                "11",
-                "12",
-                "13",
-                "14",
-                "15",
-                "16",
-                "17",
-                "18",
-                "19",
-                "20",
-                "21",
-                "22",
-                "23",
-                "24",
-                "25",
-                "26",
-                "27",
-                "28",
-                "29",
-                "30",
-                "31",
+                f'{day.strftime("%d")}',
             ],
+            "year": f'{day.strftime("%Y")}',
         },
-        "download.csv-lev.zip",
+        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip',
     )
 
 
-def get_igra_data():
+def get_igra_data(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
+    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
     c.retrieve(
         "insitu-observations-igra-baseline-network",
         {
@@ -281,47 +180,18 @@ def get_igra_data():
                 "wind_from_direction",
                 "wind_speed",
             ],
-            "year": "2000",
-            "month": "01",
+            "month": f'{day.strftime("%m")}',
             "day": [
-                "01",
-                "02",
-                "03",
-                "04",
-                "05",
-                "06",
-                "07",
-                "08",
-                "09",
-                "10",
-                "11",
-                "12",
-                "13",
-                "14",
-                "15",
-                "16",
-                "17",
-                "18",
-                "19",
-                "20",
-                "21",
-                "22",
-                "23",
-                "24",
-                "25",
-                "26",
-                "27",
-                "28",
-                "29",
-                "30",
-                "31",
+                f'{day.strftime("%d")}',
             ],
+            "year": f'{day.strftime("%Y")}',
         },
-        "download.csv-lev.zip",
+        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip',
     )
 
 
-def get_harmonized_igra_data():
+def get_harmonized_igra_data(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
+    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
     c.retrieve(
         "insitu-observations-igra-baseline-network",
         {
@@ -347,46 +217,17 @@ def get_harmonized_igra_data():
                 "wind_speed",
                 "wind_speed_total_uncertainty",
             ],
-            "year": "2000",
-            "month": "01",
+            "month": f'{day.strftime("%m")}',
             "day": [
-                "01",
-                "02",
-                "03",
-                "04",
-                "05",
-                "06",
-                "07",
-                "08",
-                "09",
-                "10",
-                "11",
-                "12",
-                "13",
-                "14",
-                "15",
-                "16",
-                "17",
-                "18",
-                "19",
-                "20",
-                "21",
-                "22",
-                "23",
-                "24",
-                "25",
-                "26",
-                "27",
-                "28",
-                "29",
-                "30",
-                "31",
+                f'{day.strftime("%d")}',
             ],
+            "year": f'{day.strftime("%Y")}',
         },
-        "download.csv-lev.zip",
+        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip',
     )
 
-def get_epn_data():
+def get_epn_data(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
+    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
     c.retrieve(
         'insitu-observations-gnss',
         {
@@ -397,25 +238,14 @@ def get_epn_data():
                 'total_column_water_vapour_era5',
                 'zenith_total_delay', 'zenith_total_delay_random_uncertainty',
             ],
-            'year': '2000',
-            'month': [
-                '10', '11',
+            "month": f'{day.strftime("%m")}',
+            "day": [
+                f'{day.strftime("%d")}',
             ],
-            'day': [
-                '01', '02', '03',
-                '04', '05', '06',
-                '07', '08', '09',
-                '10', '11', '12',
-                '13', '14', '15',
-                '16', '17', '18',
-                '19', '20', '21',
-                '22', '23', '24',
-                '25', '26', '27',
-                '28', '29', '30',
-                '31',
-            ],
+            "year": f'{day.strftime("%Y")}',
         },
-        'download.csv-lev.zip')
+        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip')
+
 
 if __name__ == "__main__":
     import argparse
@@ -439,6 +269,38 @@ if __name__ == "__main__":
         end_date = "2010-12-31"
         raw_location = "marine/"
         output_location = "marine/"
+    elif args.type == "epn":
+        get_data = get_epn_data
+        end_date = "2020-12-31"
+        raw_location = "epn/"
+        output_location = "epn/"
+    elif args.type == "igra":
+        get_data = get_igra_data
+        end_date = "2023-12-31"
+        raw_location = "igra/"
+        output_location = "igra/"
+    elif args.type == "harmonized-igra":
+        get_data = get_harmonized_igra_data
+        end_date = "2023-12-31"
+        raw_location = "harmonized-igra/"
+        output_location = "harmonized-igra/"
+    elif args.type == "gnss":
+        get_data = get_gnss_data
+        end_date = "2023-12-31"
+        raw_location = "gnss/"
+        output_location = "gnss/"
+    elif args.type == "woudc":
+        get_data = get_woudc_data
+        end_date = "2023-12-31"
+        raw_location = "woudc/"
+        output_location = "woudc/"
+    elif args.type == "gruan":
+        get_data = get_gruan_data
+        end_date = "2023-12-31"
+        raw_location = "gruan/"
+        output_location = "gruan/"
+    else:
+        raise ValueError(f"Unknown {args.type=}")
 
     date_range = pd.date_range(
         start=start_date,
