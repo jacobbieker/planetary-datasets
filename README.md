@@ -12,3 +12,16 @@ Google Cloud and AWS.
 pip install planetary-datasets
 ```
 
+## Usage
+
+### Preprocessing data
+
+To preprocess data (i.e. native to Zarr), one option is the Planetary Computer.
+To do that, you need to install `kbatch` and then, after signing in, run the following:
+
+```bash
+kbatch job submit -f pc/eumetsat-0deg.yaml
+```
+
+This will create a job that downloads EUMETSAT 0-Deg imagery, convert to zarr, and upload to Hugging Face.
+You will need to set the EUMETSAT API key and secret, and Hugging Face token for it to work.
