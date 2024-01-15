@@ -386,6 +386,36 @@ def get_harmonized_igra_data():
         "download.csv-lev.zip",
     )
 
+def get_epn_data():
+    c.retrieve(
+        'insitu-observations-gnss',
+        {
+            'network_type': 'epn',
+            'format': 'csv-lev.zip',
+            'variable': [
+                'total_column_water_vapour', 'total_column_water_vapour_combined_uncertainty',
+                'total_column_water_vapour_era5',
+                'zenith_total_delay', 'zenith_total_delay_random_uncertainty',
+            ],
+            'year': '2000',
+            'month': [
+                '10', '11',
+            ],
+            'day': [
+                '01', '02', '03',
+                '04', '05', '06',
+                '07', '08', '09',
+                '10', '11', '12',
+                '13', '14', '15',
+                '16', '17', '18',
+                '19', '20', '21',
+                '22', '23', '24',
+                '25', '26', '27',
+                '28', '29', '30',
+                '31',
+            ],
+        },
+        'download.csv-lev.zip')
 
 if __name__ == "__main__":
     import argparse
