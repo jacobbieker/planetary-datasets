@@ -1,0 +1,6 @@
+name: "preprocess-g2ka"
+code: "./"
+args:
+  - "/srv/conda/envs/notebook/bin/python"
+  - "g2ka.py"
+image: "mcr.microsoft.com/planetary-computer/python:latest"
