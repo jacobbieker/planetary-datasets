@@ -271,17 +271,17 @@ if __name__ == "__main__":
         output_location = "marine/"
     elif args.type == "epn":
         get_data = get_epn_data
-        end_date = "2020-12-31"
+        end_date = "2014-12-31"
         raw_location = "epn/"
         output_location = "epn/"
     elif args.type == "igra":
         get_data = get_igra_data
-        end_date = "2023-12-31"
+        end_date = "2020-12-31"
         raw_location = "igra/"
         output_location = "igra/"
     elif args.type == "harmonized-igra":
         get_data = get_harmonized_igra_data
-        end_date = "2023-12-31"
+        end_date = "2020-12-31"
         raw_location = "harmonized-igra/"
         output_location = "harmonized-igra/"
     elif args.type == "gnss":
@@ -296,7 +296,8 @@ if __name__ == "__main__":
         output_location = "woudc/"
     elif args.type == "gruan":
         get_data = get_gruan_data
-        end_date = "2023-12-31"
+        start_date = "2006-01-01"
+        end_date = "2020-12-31"
         raw_location = "gruan/"
         output_location = "gruan/"
     else:
