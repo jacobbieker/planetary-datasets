@@ -1,8 +1,8 @@
 name: "eumetsat-0deg-hrv"
-code: "planetary_datasets/conversion/zarr/eumetsat.py"
+code: "../"
 args:
   - "/srv/conda/envs/notebook/bin/python"
-  - "eumetsat.py"
+  - "planetary_datasets/conversion/zarr/eumetsat.py"
   - "--product-id=EO:EUM:DAT:MSG:HRSEVIRI"
   - "--bands=hrv"
   - "--hf-token=<TOKEN>"
