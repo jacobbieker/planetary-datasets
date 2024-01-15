@@ -23,4 +23,5 @@ cfgrib
 h5py
 pybufrkit
 satip
+meteostat
 
