@@ -29,7 +29,8 @@ def get_landsat(
         collections=["sentinel-3-olci-lfr-l2-netcdf"],
         datetime=[start_datetime, end_datetime],
         query={
-            "platform": {"in": ["landsat-8", "landsat-9"]},
+            # Avoid scan line issues in the landsat-7 data
+            "platform": {"in": ["landsat-8", "landsat-9", "landsat-4", "landsat-5"]},
         },
     )
 
