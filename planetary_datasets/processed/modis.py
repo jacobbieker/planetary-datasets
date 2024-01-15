@@ -6,7 +6,7 @@ import fsspec
 from typing import Union, Optional
 
 
-def get_landsat(
+def get_modis(
     start_datetime: dt.datetime,
     end_datetime: dt.datetime,
     bands: Optional[list[str]] = None,
@@ -18,41 +18,28 @@ def get_landsat(
         start_datetime: datetime to start getting images from
         end_datetime: End datetime to get images from
         bands_to_use: Which bands to get, if None, all bands are included
-        full_resolution: Whether to get the full resolution images,
-            which are variable in band, or the fixed resolution images, which are 2km
     """
     catalog = pystac_client.Client.open(
         "https://planetarycomputer.microsoft.com/api/stac/v1",
         modifier=planetary_computer.sign_inplace,
     )
     search = catalog.search(
-        collections=["landsat-c2-l2"],
+        collections=["modis-09Q1-061"] if bands == "250m" else ["modis-09A1-061"],
         datetime=[start_datetime, end_datetime],
-        query={
-            # Avoid scan line issues in the landsat-7 data
-            "platform": {"in": ["landsat-8", "landsat-9", "landsat-4", "landsat-5"]},
-        },
     )
 
     if bands == "all":
         catalog_values = [
-            "nir08",
-            "red",
-            "green",
-            "blue",
-            "drad",
-            "emis",
-            "trad",
-            "urad",
-            "atran",
-            "cdist",
-            "swir16",
-            "swir22",
-            "qa_pixel",
-            "lwir11",
+            "sur_refl_b01",
+            "sur_refl_b02",
+            "sur_refl_b03",
+            "sur_refl_b04",
+            "sur_refl_b05",
+            "sur_refl_b06",
+            "sur_refl_b07",
         ]
-    if bands == "rgb":
-        catalog_values = ["red", "green", "blue"]
+    if bands == "250m":
+        catalog_values = ["sur_refl_b01", "sur_refl_b02",]
 
     dses = []
     for i, item in enumerate(search.items()):
