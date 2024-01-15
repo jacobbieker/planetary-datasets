@@ -370,7 +370,7 @@ if __name__ == "__main__":
             for zip_name in final_filenames:
                 path_in_repo = f"data/{zip_name.split('/')[-1][:4]}/{day.strftime('%m')}/{day.strftime('%d')}/{zip_name.split('/')[-1]}"
                 upload_to_hf(zip_name, args.hf_token, repo_id=repo_id, path_in_repo=path_in_repo)
-                shutil.rmtree(args.output_location)
+            shutil.rmtree(args.output_location)
         else:
             zip_name = zip_zarrs(day, args.output_location, bands=args.bands)
             upload_to_hf(zip_name, args.hf_token, repo_id=repo_id)
