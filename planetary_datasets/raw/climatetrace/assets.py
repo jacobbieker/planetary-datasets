@@ -11,8 +11,11 @@ for p in paths:
     data = pd.read_csv(p)
     print(data)
     for i, row in data.iterrows():
+        print(row["link"])
         if len(row['link']) == 0:
             continue
         print(row["link"])
-        subprocess.check_call(["wget", row["link"], "--output-document", f"/run/media/jacob/data/ClimateTrace/{row['link'].split('/')[-1]}"])
+        if os.path.exists(f"/run/media/jacob/data/ClimateTrace/{row['subsector']}_{row['year']}_{row['link'].split('/')[-1]}"):
+            continue
+        subprocess.check_call(["wget", row["link"], "--output-document", f"/run/media/jacob/data/ClimateTrace/{row['subsector']}_{row['year']}_{row['link'].split('/')[-1]}"])
         print(f"Downloaded: {row['link']}")
