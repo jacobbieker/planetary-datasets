@@ -4,3 +4,7 @@ import xarray as xr
 import gcsfs
 import fsspec
 
+def get_era5_weatherbench():
+    return None
+
+
