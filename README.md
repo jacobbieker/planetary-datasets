@@ -41,11 +41,9 @@ If you find this library useful, it would be great if you could cite the repo! T
 ```
 @software{Bieker_Planetary_Datasets_2023,
 author = {Bieker, Jacob},
-doi = {10.5281/zenodo.1234},
 month = feb,
 title = {{Planetary Datasets}},
 url = {https://github.com/jacobbieker/planetary-datasets},
-version = {0.0.1},
 year = {2023}
 }
 ```
