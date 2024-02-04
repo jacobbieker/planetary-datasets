@@ -16,6 +16,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: 'pip' # caching pip dependenciesA
       - name: Do some macOS specific installs for Python 3.9
         run: |
           brew install ${{inputs.brew_install}}
