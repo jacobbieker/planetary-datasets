@@ -16,7 +16,7 @@ from ocf_blosc2 import Blosc2
 if TYPE_CHECKING:
     import numpy as np
 
-from nwp_consumer import internal
+from planetary_datasets import internal
 
 log = structlog.getLogger()
 # Enable dask to split large chunks
@@ -29,6 +29,14 @@ class NWPConsumerService:
     Each method on the class is a business use case for the consumer
     """
 
+    # Dependency-injected attributes
+    fetcher: internal.FetcherInterface
+    storer: internal.StorageInterface
+    # Configuration options
+    rawdir: pathlib.Path
+    zarrdir: pathlib.Path
+    scheduler: str | None = None
+
     def __init__(
         self,
         *,
@@ -37,29 +45,37 @@ class NWPConsumerService:
         rawdir: str,
         zarrdir: str,
     ) -> None:
-        """Initialise the service."""
+        """Create a consumer service with the given dependencies."""
         self.fetcher = fetcher
         self.storer = storer
         self.rawdir = pathlib.Path(rawdir)
         self.zarrdir = pathlib.Path(zarrdir)
 
-    def DownloadRawDataset(self, *, start: dt.date, end: dt.date) -> list[pathlib.Path]:
+        # If huggingface is used as the storer, revert to single threaded scheduler
+        # for dask, as the version-controlled filesystem is not thread-safe in this
+        # implementation of the logic. It could be done via many operations in one
+        # commit, but that would require modifying the signature of the storer interface
+        if storer.name() == "huggingface":
+            self.scheduler = "single-threaded"
+
+    def DownloadRawDataset(self, *, start: dt.datetime, end: dt.datetime) -> list[pathlib.Path]:
         """Fetch raw data for each initTime in the given range.
 
         :param start: The start date of the time range to download
         :param end: The end date of the time range to download
         """
-        # Get the list of init times as datetime objects
-        # * This spans every hour between the start and end dates up to 11:00pm on the end date
+        # Get the list of init times valid for the fetcher
+        # between the start and end times (inclusive)
         allInitTimes: list[dt.datetime] = [
             pdt.to_pydatetime()
             for pdt in pd.date_range(
                 start=start,
-                end=end + dt.timedelta(days=1),
+                end=end,
                 inclusive="left",
-                freq="H",
+                freq="h",
                 tz=dt.UTC,
             ).tolist()
+            if pdt.to_pydatetime().hour in self.fetcher.getInitHours()
         ]
 
         # For each init time, get the list of files that need to be downloaded
@@ -85,9 +101,12 @@ class NWPConsumerService:
             log.info(
                 event="no new files to download",
                 startDate=start.strftime("%Y-%m-%d %H:%M"),
-                endDate=end.strftime("%Y-%m-%d %H:%M"),
+               endDate=end.strftime("%Y-%m-%d %H:%M"),
             )
-            return []
+            return [
+                self.rawdir / fi.it().strftime(internal.IT_FOLDER_FMTSTR) / fi.filename()
+                for fi in allWantedFileInfos
+            ]
         else:
             log.info(
                 event="downloading files",
@@ -109,12 +128,17 @@ class NWPConsumerService:
                     / (infoPathTuple[0].filename()),
                 ),
             )
-            .compute()
+            .compute(scheduler=self.scheduler)
         )
 
         return storedFiles
 
-    def ConvertRawDatasetToZarr(self, *, start: dt.date, end: dt.date) -> list[pathlib.Path]:
+    def ConvertRawDatasetToZarr(
+        self,
+        *,
+        start: dt.datetime,
+        end: dt.datetime,
+    ) -> list[pathlib.Path]:
         """Convert raw data for the given time range to Zarr.
 
         :param start: The start date of the time range to convert
@@ -136,7 +160,7 @@ class NWPConsumerService:
                     ).as_posix(),
                 )
                 continue
-            if start <= it.date() <= end:
+            if start <= it <= end:
                 desiredInitTimes.append(it)
 
         if not desiredInitTimes:
@@ -145,7 +169,11 @@ class NWPConsumerService:
                 startDate=start.strftime("%Y/%m/%d %H:%M"),
                 endDate=end.strftime("%Y/%m/%d %H:%M"),
             )
-            return []
+            return [
+                self.zarrdir / it.strftime(f"{internal.ZARR_FMTSTR}.zarr.zip")
+                for it in allInitTimes
+                if start <= it <= end
+            ]
         else:
             log.info(
                 event=f"converting {len(desiredInitTimes)} init times to zarr.",
@@ -163,9 +191,11 @@ class NWPConsumerService:
             .map(lambda datasets: _mergeDatasets(datasets=datasets))
             .filter(_dataQualityFilter)
             .map(lambda ds: _saveAsTempZipZarr(ds=ds))
-            .map(lambda path: self.storer.store(src=path, dst=self.zarrdir / path.name))
-            .compute(num_workers=1)
-        )  # AWS ECS only has 1 CPU which amounts to half a physical core
+            .map(lambda path: self.storer.store(
+                src=path, dst=self.zarrdir / path.relative_to(internal.TMP_DIR))
+            )
+            .compute(scheduler=self.scheduler, num_workers=1)
+        )
 
         if not isinstance(storedfiles, list):
             storedfiles = [storedfiles]
@@ -175,8 +205,8 @@ class NWPConsumerService:
     def DownloadAndConvert(
         self,
         *,
-        start: dt.date,
-        end: dt.date,
+        start: dt.datetime,
+        end: dt.datetime,
     ) -> tuple[list[pathlib.Path], list[pathlib.Path]]:
         """Fetch and save as Zarr a dataset for each initTime in the given time range.
 
@@ -222,7 +252,7 @@ class NWPConsumerService:
         storedFiles = (
             datasets.map(lambda ds: _saveAsTempZipZarr(ds=ds))
             .map(lambda path: self.storer.store(src=path, dst=self.zarrdir / "latest.zarr.zip"))
-            .compute()
+            .compute(scheduler=self.scheduler)
         )
 
         # Save as regular zarr
@@ -231,7 +261,7 @@ class NWPConsumerService:
         storedFiles += (
             datasets.map(lambda ds: _saveAsTempRegularZarr(ds=ds))
             .map(lambda path: self.storer.store(src=path, dst=self.zarrdir / "latest.zarr"))
-            .compute()
+            .compute(scheduler=self.scheduler)
         )
 
         # Delete the temporary files
@@ -322,19 +352,24 @@ class NWPConsumerService:
 
 
 def _saveAsTempZipZarr(ds: xr.Dataset) -> pathlib.Path:
-    # Save the dataset to a temp zarr file
+    # Get the name of the zarr file from the inittime and the zarr format string
     dt64: np.datetime64 = ds.coords["init_time"].values[0]
     initTime: dt.datetime = dt.datetime.fromtimestamp(dt64.astype(int) / 1e9, tz=dt.UTC)
     tempZarrPath = internal.TMP_DIR / (
-        initTime.strftime(internal.ZARR_FMTSTR.split("/")[-1]) + ".zarr.zip"
+        initTime.strftime(internal.ZARR_FMTSTR) + ".zarr.zip"
     )
+    # Delete the temporary zarr if it already exists
     if tempZarrPath.exists():
         tempZarrPath.unlink()
+    tempZarrPath.parent.mkdir(parents=True, exist_ok=True)
+    # Save the dataset to a zarr file
     with zarr.ZipStore(path=tempZarrPath.as_posix(), mode="w") as store:
         ds.to_zarr(
             store=store,
-            encoding=_generate_encoding(ds=ds)
+            encoding=_generate_encoding(ds=ds),
         )
+
+    log.debug("Saved as zipped zarr", path=tempZarrPath.as_posix())
     return tempZarrPath
 
 
@@ -401,7 +436,9 @@ def _mergeDatasets(datasets: list[xr.Dataset]) -> xr.Dataset:
         return xr.merge(objects=datasets, combine_attrs="drop_conflicts", compat="override")
 
 
-def _insert_zerod_missing_variables_with_correct_shape(datasets: list[xr.Dataset]) -> list[xr.Dataset]:
+def _insert_zerod_missing_variables_with_correct_shape(
+    datasets: list[xr.Dataset],
+) -> list[xr.Dataset]:
     """Insert zero'd out data for missing variables in each dataset so that merging works."""
     for i, dataset in enumerate(datasets):
         for j, dataset2 in enumerate(datasets):
