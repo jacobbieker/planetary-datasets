@@ -15,9 +15,11 @@ class ISDSource(AbstractSource):
         # Fetch the ISD data for the given year
         files = self.get_isd_s3_files(timestamp)
         # Download the files
+        local_files = []
         for file in files:
-            self.download_file(f"s3://noaa-isd-pds/data/{timestamp.strftime('%Y')}/{file}", file)
-        return self.process()
+            local_files.append(self.download_file(f"s3://noaa-isd-pds/data/{timestamp.strftime('%Y')}/{file}", file))
+        return self.process(local_files)
+
 
     @staticmethod
     def get_isd_s3_files(timestamp: dt.datetime) -> list:

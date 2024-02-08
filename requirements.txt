@@ -1,7 +1,7 @@
 odc-stac
 planetary_computer
 pystac-client
-rioxarray
+#rioxarray
 dask[distributed]
 fsspec
 geojson
@@ -22,7 +22,7 @@ datasets
 cfgrib
 h5py
 pybufrkit
-satip
+#satip
 meteostat
 structlog
 ocf-blosc2
