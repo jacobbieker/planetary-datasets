@@ -1,16 +1,50 @@
+from pathlib import Path
+
 import cdsapi
 import datetime as dt
 import os
 import pandas as pd
 import random
 import shutil
+from planetary_datasets.base import AbstractSource, AbstractConvertor
 
-c = cdsapi.Client(url="", key="")
+
+class ECMWFObservationSource(AbstractSource):
+    def __init__(self, observation_type: str, raw_location: str, processed_location: str, **kwargs):
+        super().__init__(raw_location, processed_location, **kwargs)
+        self.observation_type = observation_type
+        assert self.observation_type in ["surface", "marine", "gruan", "woudc", "igra", "harmonized-igra", "gnss", "epn"]
+        self.client = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=kwargs.get("cds_key", ""))
+        if self.observation_type == "surface":
+            self.download_function = get_surface_observations
+        elif self.observation_type == "marine":
+            self.download_function = get_marine_observation
+        elif self.observation_type == "gruan":
+            self.download_function = get_gruan_data
+        elif self.observation_type == "woudc":
+            self.download_function = get_woudc_data
+        elif self.observation_type == "igra":
+            self.download_function = get_igra_data
+        elif self.observation_type == "harmonized-igra":
+            self.download_function = get_harmonized_igra_data
+        elif self.observation_type == "gnss":
+            self.download_function = get_gnss_data
+        elif self.observation_type == "epn":
+            self.download_function = get_epn_data
+        else:
+            raise ValueError(f"Unknown {self.observation_type=}")
+
+    def get(self, timestamp: dt.datetime) -> str:
+        output_path = str(self.raw_location / f'{day.strftime("%Y%m%d")}.zip')
+        self.download_function(timestamp, output_path)
+        return output_path
+
+    def process(self) -> str:
+        pass
 
 
-def get_marine_observation(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
+def get_marine_observation(day: dt.datetime, raw_location: str):
     """Get marine obsevations from CDS"""
-    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
     c.retrieve(
         "insitu-observations-surface-marine",
         {
@@ -33,15 +67,14 @@ def get_marine_observation(day: dt.datetime, raw_location: str, output_location:
             ],
             "year": f'{day.strftime("%Y")}',
         },
-        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip',
+        raw_location,
     )
 
 
 def get_surface_observations(
-    day: dt.datetime, raw_location: str, output_location: str, cds_key: str
+    day: dt.datetime, raw_location: str
 ):
     """Get surface observations from CDS"""
-    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
     c.retrieve(
         "insitu-observations-surface-land",
         {
@@ -69,12 +102,11 @@ def get_surface_observations(
             ],
             "year": f'{day.strftime("%Y")}',
         },
-        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip',
+        raw_location,
     )
 
 
-def get_gruan_data(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
-    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
+def get_gruan_data(day: dt.datetime, raw_location: str):
     c.retrieve(
         "insitu-observations-gruan-reference-network",
         {
@@ -112,12 +144,11 @@ def get_gruan_data(day: dt.datetime, raw_location: str, output_location: str, cd
                 "wind_speed_total_uncertainty",
             ],
         },
-        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip',
+        raw_location,
     )
 
 
-def get_woudc_data(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
-    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
+def get_woudc_data(day: dt.datetime, raw_location: str):
     c.retrieve(
         "insitu-observations-woudc-ozone-total-column-and-profiles",
         {
@@ -137,12 +168,11 @@ def get_woudc_data(day: dt.datetime, raw_location: str, output_location: str, cd
                 "wind_speed",
             ],
         },
-        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip',
+        raw_location,
     )
 
 
-def get_gnss_data(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
-    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
+def get_gnss_data(day: dt.datetime, raw_location: str):
     c.retrieve(
         "insitu-observations-gnss",
         {
@@ -161,12 +191,11 @@ def get_gnss_data(day: dt.datetime, raw_location: str, output_location: str, cds
             ],
             "year": f'{day.strftime("%Y")}',
         },
-        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip',
+        raw_location,
     )
 
 
-def get_igra_data(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
-    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
+def get_igra_data(day: dt.datetime, raw_location: str):
     c.retrieve(
         "insitu-observations-igra-baseline-network",
         {
@@ -186,12 +215,11 @@ def get_igra_data(day: dt.datetime, raw_location: str, output_location: str, cds
             ],
             "year": f'{day.strftime("%Y")}',
         },
-        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip',
+        raw_location,
     )
 
 
-def get_harmonized_igra_data(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
-    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
+def get_harmonized_igra_data(day: dt.datetime, raw_location: str):
     c.retrieve(
         "insitu-observations-igra-baseline-network",
         {
@@ -223,11 +251,10 @@ def get_harmonized_igra_data(day: dt.datetime, raw_location: str, output_locatio
             ],
             "year": f'{day.strftime("%Y")}',
         },
-        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip',
+        raw_location,
     )
 
-def get_epn_data(day: dt.datetime, raw_location: str, output_location: str, cds_key: str):
-    c = cdsapi.Client(url="https://cds.climate.copernicus.eu/api/v2", key=cds_key)
+def get_epn_data(day: dt.datetime, raw_location: str):
     c.retrieve(
         'insitu-observations-gnss',
         {
@@ -244,7 +271,7 @@ def get_epn_data(day: dt.datetime, raw_location: str, output_location: str, cds_
             ],
             "year": f'{day.strftime("%Y")}',
         },
-        f'{os.path.join(raw_location,day.strftime("%Y%m%d"))}.zip')
+        target=raw_location)
 
 
 if __name__ == "__main__":

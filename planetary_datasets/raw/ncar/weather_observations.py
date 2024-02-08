@@ -4,43 +4,32 @@ from urllib.request import build_opener
 import datetime as dt
 import pandas as pd
 import random
+from pathlib import Path
+from planetary_datasets.base import AbstractSource, AbstractConvertor
+
 
 BASEURL = "https://data.rda.ucar.edu/ds337.0/tarfiles/"
 opener = build_opener()
 
 
-def _download_file(remote_path: str, local_path: str) -> str:
-    sys.stdout.write("downloading " + remote_path + " ... ")
-    sys.stdout.flush()
-    infile = opener.open(remote_path)
-    outfile = open(local_path, "wb")
-    outfile.write(infile.read())
-    outfile.close()
-    sys.stdout.write("done\n")
-    return local_path
+class NCARWeatherObservationsSource(AbstractSource):
+    def check_integrity(self, local_path: Path) -> bool:
+        pass
 
+    def get(self, timestamp: dt.datetime) -> str:
+        for remote_path in [
+            f"{timestamp.strftime('%Y')}/prepbufr.{timestamp.strftime('%Y%m%d')}.nr.tar.gz",
+            f"{timestamp.strftime('%Y')}/prepbufr.{timestamp.strftime('%Y%m%d')}.wo40.tar.gz",
+        ]:
+            try:
+                local_path = Path(os.path.basename(remote_path))
+                self.download_file(Path(remote_path), local_path)
+            except Exception as e:
+                print(e)
+                continue
 
-def get_weather_observations(timestep: dt.datetime) -> str:
-    remote_path = (
-        BASEURL + f"{timestep.strftime('%Y')}/prepbufr.{timestep.strftime('%Y%m%d')}.nr.tar.gz"
-    )
-    local_path = os.path.basename(remote_path)
-    if not os.path.exists(local_path):
-        return _download_file(remote_path, local_path)
-    else:
-        return local_path
-
-
-def get_early_weather_observations(timestep: dt.datetime) -> str:
-    # Early observations have wo40, newer ones have .nr
-    remote_path = (
-        BASEURL + f"{timestep.strftime('%Y')}/prepbufr.{timestep.strftime('%Y%m%d')}.wo40.tar.gz"
-    )
-    local_path = os.path.basename(remote_path)
-    if not os.path.exists(local_path):
-        return _download_file(remote_path, local_path)
-    else:
-        return local_path
+    def process(self) -> str:
+        pass
 
 
 if __name__ == "__main__":

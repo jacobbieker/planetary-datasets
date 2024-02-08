@@ -1,6 +1,33 @@
 from subprocess import Popen
 import pandas as pd
 import datetime as dt
+import fsspec
+from planetary_datasets.base import AbstractSource, AbstractConvertor
+
+
+class MRMSSource(AbstractSource):
+    def __init__(self, source_location: str, raw_location: str,  **kwargs):
+        super().__init__(source_location, raw_location,  **kwargs)
+        self.observation_type = kwargs.get("observation_type", "PrecipRate")
+
+    def get(self, timestamp: dt.datetime) -> list[str]:
+        base_url = f"https://mtarchive.geol.iastate.edu/{timestamp.strftime('%Y')}/{timestamp.strftime('%m')}/{timestamp.strftime('%d')}/mrms/ncep/{self.observation_type}"
+        files = self.list_files(base_url)
+        output_paths = []
+        for file in files:
+            output_paths.append(self.download_file(file, self.raw_location / file.split("/")[-1]))
+        return output_paths
+
+
+    def list_files(self, url) -> list[str]:
+        fs = fsspec.filesystem("https")
+        return fs.ls(url)
+
+    def process(self) -> str:
+        pass
+
+    def check_integrity(self, local_path: str) -> bool:
+        pass
 
 
 def get_mrms(day: dt.datetime):

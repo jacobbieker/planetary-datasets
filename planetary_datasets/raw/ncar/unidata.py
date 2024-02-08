@@ -4,68 +4,55 @@ from urllib.request import build_opener
 import datetime as dt
 import pandas as pd
 import random
+from planetary_datasets.base import AbstractSource, AbstractConvertor
+from pathlib import Path
+import xarray as xr
+import fsspec
 
 BASEURL = "https://data.rda.ucar.edu/ds336.0"
 opener = build_opener()
 
+class UniDataObservationsSource(AbstractSource):
 
-def _download_file(remote_path: str, local_path: str) -> str:
-    sys.stdout.write("downloading " + remote_path + " ... ")
-    sys.stdout.flush()
-    infile = opener.open(remote_path)
-    outfile = open(local_path, "wb")
-    outfile.write(infile.read())
-    outfile.close()
-    sys.stdout.write("done\n")
-    return local_path
+    def __init__(self, observation_type: str, raw_location: str, processed_location: str, **kwargs):
+        super().__init__(raw_location, processed_location, **kwargs)
+        self.observation_type = observation_type
 
+    def create_correct_remote_path(self, timestamp: dt.datetime) -> str:
+        if self.observation_type == "metar":
+            return (
+                f"surface/{timestamp.strftime('%Y%m')}/{timestamp.strftime('%Y%m%d')}/Surface_METAR_{timestamp.strftime('%Y%m%d')}_0000.nc"
+            )
+        elif self.observation_type == "buoy":
+            return (
+                f"surface/{timestamp.strftime('%Y%m')}/{timestamp.strftime('%Y%m%d')}/Surface_Buoy_{timestamp.strftime('%Y%m%d')}_0000.nc"
+            )
+        elif self.observation_type == "synoptic":
+            return (
+                f"surface/{timestamp.strftime('%Y%m')}/{timestamp.strftime('%Y%m%d')}/Surface_Synoptic_{timestamp.strftime('%Y%m%d')}_0000.nc"
+            )
+        elif self.observation_type == "upper_air":
+            return (
+                f"upperair/{timestamp.strftime('%Y%m')}/{timestamp.strftime('%Y%m%d')}/Upperair_{timestamp.strftime('%Y%m%d')}_0000.nc"
+            )
+        else:
+            raise ValueError("Observation type not recognized")
 
-def get_metar_observations(timestep: dt.datetime) -> str:
-    remote_path = (
-        BASEURL
-        + f"/surface/{timestep.strftime('%Y%m')}/{timestep.strftime('%Y%m%d')}/Surface_METAR_{timestep.strftime('%Y%m%d')}_0000.nc"
-    )
-    local_path = os.path.basename(remote_path)
-    if not os.path.exists(local_path):
-        return _download_file(remote_path, local_path)
-    else:
-        return local_path
+    def get(self, timestamp: dt.datetime) -> str:
+        remote_path = self.create_correct_remote_path(timestamp)
+        local_path = Path(os.path.basename(remote_path))
+        self.download_file(Path(remote_path), local_path)
 
+    def process(self) -> str:
+        pass
 
-def get_buoy_observations(timestep):
-    remote_path = (
-        BASEURL
-        + f"/surface/{timestep.strftime('%Y%m')}/{timestep.strftime('%Y%m%d')}/Surface_Buoy_{timestep.strftime('%Y%m%d')}_0000.nc"
-    )
-    local_path = os.path.basename(remote_path)
-    if not os.path.exists(local_path):
-        return _download_file(remote_path, local_path)
-    else:
-        return local_path
-
-
-def get_surface_synoptic_observations(timestep):
-    remote_path = (
-        BASEURL
-        + f"/surface/{timestep.strftime('%Y%m')}/{timestep.strftime('%Y%m%d')}/Surface_Synoptic_{timestep.strftime('%Y%m%d')}_0000.nc"
-    )
-    local_path = os.path.basename(remote_path)
-    if not os.path.exists(local_path):
-        return _download_file(remote_path, local_path)
-    else:
-        return local_path
-
-
-def get_upper_air_observations(timestep):
-    remote_path = (
-        BASEURL
-        + f"/upperair/{timestep.strftime('%Y%m')}/{timestep.strftime('%Y%m%d')}/Upperair_{timestep.strftime('%Y%m%d')}_0000.nc"
-    )
-    local_path = os.path.basename(remote_path)
-    if not os.path.exists(local_path):
-        return _download_file(remote_path, local_path)
-    else:
-        return local_path
+    def check_integrity(self, local_path: Path) -> bool:
+        try:
+            xr.open_dataset(local_path)
+            return True
+        except Exception as e:
+            print(e)
+            return False
 
 
 if __name__ == "__main__":

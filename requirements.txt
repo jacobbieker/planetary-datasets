@@ -2,7 +2,7 @@ odc-stac
 planetary_computer
 pystac-client
 rioxarray
-dask
+dask[distributed]
 fsspec
 geojson
 shapely
@@ -24,4 +24,11 @@ h5py
 pybufrkit
 satip
 meteostat
-
+structlog
+ocf-blosc2
+huggingface-hub
+cfgrib
+h5netcdf
+psutil
+wetterdienst
+isd

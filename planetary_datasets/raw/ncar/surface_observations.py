@@ -4,31 +4,24 @@ from urllib.request import build_opener
 import datetime as dt
 import pandas as pd
 import random
+from pathlib import Path
+from planetary_datasets.base import AbstractSource, AbstractConvertor
+
 
 BASEURL = "https://data.rda.ucar.edu/ds461.0/tarfiles/"
 opener = build_opener()
 
 
-def _download_file(remote_path: str, local_path: str) -> str:
-    sys.stdout.write("downloading " + remote_path + " ... ")
-    sys.stdout.flush()
-    infile = opener.open(remote_path)
-    outfile = open(local_path, "wb")
-    outfile.write(infile.read())
-    outfile.close()
-    sys.stdout.write("done\n")
-    return local_path
+class SurfaceObservationsSource(AbstractSource):
+    def get(self, timestamp: dt.datetime) -> str:
+        remote_path = (
+            f"{timestamp.strftime('%Y')}/gdassfcobs.{timestamp.strftime('%Y%m%d')}.tar.gz"
+        )
+        local_path = Path(os.path.basename(remote_path))
+        self.download_file(Path(remote_path), local_path)
 
-
-def get_surface_observations(timestep: dt.datetime) -> str:
-    remote_path = (
-        BASEURL + f"{timestep.strftime('%Y')}/gdassfcobs.{timestep.strftime('%Y%m%d')}.tar.gz"
-    )
-    local_path = os.path.basename(remote_path)
-    if not os.path.exists(local_path):
-        return _download_file(remote_path, local_path)
-    else:
-        return local_path
+    def process(self) -> str:
+        pass
 
 
 if __name__ == "__main__":

@@ -6,9 +6,9 @@ import xarray as xr
 
 
 class AbstractSink(ABC):
-    def __init__(self, source_location: Path, output_location: Path, start_date: datetime, end_date: datetime,
+    def __init__(self, processed_location: Path, output_location: Path, start_date: datetime, end_date: datetime,
                  **kwargs):
-        self.source_location = source_location
+        self.processed_location = processed_location
         self.output_location = output_location
         self.start_date = start_date
         self.end_date = end_date
@@ -18,4 +18,12 @@ class AbstractSink(ABC):
         """Save files to a location, local or remote"""
         raise NotImplementedError
 
+    @abstractmethod
+    def compress(self) -> None:
+        """Compress the files"""
+        raise NotImplementedError
 
+    @abstractmethod
+    def load(self) -> Union[xr.Dataset, xr.DataArray]:
+        """Load the files"""
+        raise NotImplementedError
