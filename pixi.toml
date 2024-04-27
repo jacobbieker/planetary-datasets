@@ -1,0 +1,12 @@
+[project]
+name = "planetary-datasets"
+version = "0.0.1"
+description = "Datasets for ML models for planetary use-cases (e.g. solar mapping, land use, forecasting)"
+authors = ["Jacob Bieker <jacob@bieker.tech>"]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tasks]
+
+[dependencies]
+python = ">=3.11,<3.13"
