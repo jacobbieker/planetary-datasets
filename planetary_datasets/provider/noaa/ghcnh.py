@@ -11,6 +11,7 @@ import pooch
 
 STATION_LIST = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/doc/ghcnh-station-list.txt"
 FILE_PATH_TEMPLATE = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/by-year/{year}/parquet/GHCNh_{station_id}_{year}.parquet"
+FILE_PATH_TEMPLATE = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/by-station/GHCNh_{station_id}_por.psv"
 
 def load_ghcnh_data(station_id: str, year: int) -> xr.Dataset:
     """
@@ -94,9 +95,19 @@ def download_file(url):
     return local_filename
 
 if __name__ == "__main__":
+
+    possible_files = []
+
     station_df = get_list_of_stations()
     for year in range(1950, 2024):
         for station_id in station_df["station_id"]:
+            possible_files.append(FILE_PATH_TEMPLATE.format(station_id=station_id))
+
+    # Save to a file
+    with open("possible_files_por.txt", "w") as f:
+        for file in possible_files:
+            f.write(f"{file}\n")
+            """
             if os.path.exists(f"{station_id}_{year}.parquet"):
                 continue
             try:
@@ -104,6 +115,7 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"Failed to download {station_id} for {year}, {e}")
                 continue
+            """
             """
             try:
                 df = load_ghcnh_data(station_id, year=year)

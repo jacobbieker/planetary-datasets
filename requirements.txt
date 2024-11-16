@@ -12,7 +12,7 @@ rasterio
 kbatch
 xarray
 pyproj
-monetio
+#monetio
 lxml
 s3fs
 gcsfs
@@ -32,3 +32,4 @@ h5netcdf
 psutil
 wetterdienst
 isd
+icechunk

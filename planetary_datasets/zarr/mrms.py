@@ -9,6 +9,7 @@ from glob import glob
 import numcodecs
 from multiprocessing import Pool, Queue
 from tqdm import tqdm
+import icechunk
 
 zarr_mode_to_extra_kwargs = {
     "a": {"append_dim": "time"},

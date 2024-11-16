@@ -8,6 +8,7 @@ from huggingface_hub import HfApi, HfFileSystem
 import random
 import zarr
 from typing import Optional
+from numcodecs import Blosc
 
 
 def get_global_mosaic(time: dt.datetime, channels: Optional[list[str]] = None) -> xr.Dataset:
@@ -78,7 +79,7 @@ if __name__ == "__main__":
     fs = HfFileSystem()
     api = HfApi()
     start_idx = random.randint(0, len(date_range))
-    for day in date_range:
+    for day in date_range[::-1]:
         day_outname = day.strftime("%Y%m%d")
         year = day.year
         dses = []
@@ -108,8 +109,8 @@ if __name__ == "__main__":
             ds = get_global_mosaic(timestep)
             dses.append(ds)
         ds = xr.concat(dses, dim="time")
-        with zarr.ZipStore(day_outname + ".zarr.zip", mode="w") as store:
-            compressor = zarr.Blosc(cname="zstd", clevel=3, shuffle=2)
+        with zarr.storage.ZipStore(day_outname + ".zarr.zip", mode="w") as store:
+            compressor = Blosc(cname="zstd", clevel=3, shuffle=2)
             # encodings
             enc = {x: {"compressor": compressor} for x in ds}
             ds.to_zarr(store, mode="w", compute=True, encoding=enc)
