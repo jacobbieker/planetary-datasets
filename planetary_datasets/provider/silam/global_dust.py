@@ -27,7 +27,17 @@ def download_forecast(date: dt.datetime) -> list[str]:
         downloaded_url_path = os.path.join(url_dir, url.split("/")[-1])
         # Download the file to a local directory, try 3 times before giving up
         finished = False
+        if os.path.exists(downloaded_url_path):
+            # Open to check its valid
+            try:
+                with xr.open_dataset(downloaded_url_path):
+                    finished = True
+                    downloaded_paths.append(downloaded_url_path)
+            except Exception as e:
+                print(e)
         for i in range(3):
+            if finished:
+                break
             try:
                 with fsspec.open(url, "rb") as f:
                     with open(downloaded_url_path, "wb") as f2:
@@ -39,7 +49,8 @@ def download_forecast(date: dt.datetime) -> list[str]:
                 print(e)
         if not finished:
             print(f"Failed to download {url}")
-        print(f"Downloaded {url}")
+        else:
+            print(f"Downloaded {url}")
     return downloaded_paths
 
 
