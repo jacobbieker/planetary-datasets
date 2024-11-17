@@ -43,8 +43,10 @@ def download_forecast(date: dt.datetime) -> list[str]:
     return downloaded_paths
 
 
-def get_silam_dust_forecast_xr(date: dt.datetime) -> xr.Dataset:
+def get_silam_dust_forecast_xr(date: dt.datetime) -> xr.Dataset | None:
     downloaded_paths = download_forecast(date)
+    if len(downloaded_paths) == 0:
+        return None
     datasets = []
     for url in downloaded_paths:
         with fsspec.open(url, "rb") as f:
@@ -66,6 +68,8 @@ def get_silam_dust_forecast_xr(date: dt.datetime) -> xr.Dataset:
 
 def add_forecast_to_icechunk_store(date: dt.datetime):
     ds = get_silam_dust_forecast_xr(date)
+    if ds is None or len(ds.time) < 120:
+        return
     if not os.path.exists("./silam_dust"):
         storage_config = icechunk.StorageConfig.filesystem("./silam_dust")
         store = icechunk.IcechunkStore.create(storage_config)
