@@ -8,6 +8,8 @@ import os
 
 """
 https://thredds.silam.fmi.fi/thredds/fileServer/dust_glob01_v5_7_2/files/SILAM-dust-glob01_v5_7_2_2024111300_001.nc4
+
+SILAM-dust-glob01_v5_7_2_2024111400
 """
 
 def construct_urls_from_datetime(date: dt.datetime) -> list[str]:
@@ -29,12 +31,9 @@ def download_forecast(date: dt.datetime) -> list[str]:
         finished = False
         if os.path.exists(downloaded_url_path):
             # Open to check its valid
-            try:
-                with xr.open_dataset(downloaded_url_path):
-                    finished = True
-                    downloaded_paths.append(downloaded_url_path)
-            except Exception as e:
-                print(e)
+            print(f"Already downloaded {url}")
+            downloaded_paths.append(downloaded_url_path)
+            finished = True
         for i in range(3):
             if finished:
                 break
@@ -46,7 +45,7 @@ def download_forecast(date: dt.datetime) -> list[str]:
                 downloaded_paths.append(downloaded_url_path)
                 break
             except Exception as e:
-                print(e)
+                continue
         if not finished:
             print(f"Failed to download {url}")
         else:
@@ -56,13 +55,13 @@ def download_forecast(date: dt.datetime) -> list[str]:
 
 def get_silam_dust_forecast_xr(date: dt.datetime) -> xr.Dataset | None:
     downloaded_paths = download_forecast(date)
+    print(downloaded_paths)
     if len(downloaded_paths) == 0:
         return None
     datasets = []
     for url in downloaded_paths:
-        with fsspec.open(url, "rb") as f:
-            ds = xr.open_dataset(f)
-            datasets.append(ds)
+        ds = xr.open_dataset(url)
+        datasets.append(ds)
     ds = xr.concat(datasets, dim="time")
     # Get timedelta from all the forecasts from the time dimension
     steps = ds.time.values - ds.time.values[0]
@@ -74,6 +73,7 @@ def get_silam_dust_forecast_xr(date: dt.datetime) -> xr.Dataset | None:
     # Rename lat/lon to latitude and longitude
     ds = ds.rename({"lat": "latitude", "lon": "longitude"})
     ds = ds.chunk({"init_time": 1, "step": 1, "latitude": -1, "longitude": -1})
+    print(ds)
     return ds
 
 

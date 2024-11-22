@@ -27,3 +27,4 @@ class MeteostatObservationsSource(AbstractSource):
 
     def process(self) -> str:
         pass
+

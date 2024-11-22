@@ -1,17 +1,16 @@
 import datetime as dt
 import fsspec
-import ujson
 import zipfile
 import pandas as pd
 import random
 import shutil
 from huggingface_hub import HfApi
 import os
+import xarray as xr
+import zarr
 
-from kerchunk.hdf import SingleHdf5ToZarr
 
-
-def get_himawari_kerchunk(time: dt.datetime, raw_location: str, output_location: str):
+def get_himawari_files(time: dt.datetime, raw_location: str, output_location: str) -> list[str]:
     """
     Generate a Kerchunk file from a Himawari file
     """
@@ -32,26 +31,44 @@ def get_himawari_kerchunk(time: dt.datetime, raw_location: str, output_location:
     files_wind = ["s3://" + f for f in files_wind if int(f.split("/")[-2]) % 10 == 0]
     # Combine the files
     files = sorted(files + files_cloud + files_wind)
+    # Save to a directory locally
+    output_dir = os.path.join(output_location, time.strftime("%Y%m%d"))
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+    output_files = []
     for file_url in files:
         with fsspec.open(file_url, **so) as infile:
-            h5chunks = SingleHdf5ToZarr(infile, file_url, inline_threshold=300)
-            outfile = file_url.replace("nc", "json").split("/")[-1]
+            outfile = file_url.split("/")[-1]
             outfile = os.path.join(output_location, outfile)
             with fs2.open(outfile, "wb") as f:
-                f.write(ujson.dumps(h5chunks.translate()).encode())
+                f.write(infile.read())
+            output_files.append(outfile)
+    return output_files
 
 
-def zip_jsons(time, output_folder):
-    zip_name = f"{time.strftime('%Y%m%d')}.zip"
-    with zipfile.ZipFile(zip_name, "w", zipfile.ZIP_DEFLATED) as zip_ref:
-        for folder_name, subfolders, filenames in os.walk(output_folder):
-            for filename in filenames:
-                print(filename)
-                file_path = os.path.join(folder_name, filename)
-                zip_ref.write(file_path, arcname=os.path.relpath(file_path, output_folder))
-
-    zip_ref.close()
-    return zip_name
+def make_himawari_zarr(time: dt.datetime, files: list[str], output_location: str) -> str:
+    # Combine the files
+    ds = xr.open_mfdataset(files, engine="h5netcdf", combine="nested", concat_dim="time")
+    day_outname = time.strftime("%Y%m%d")
+    zip_name = day_outname + ".zarr.zip"
+    with zarr.storage.ZipStore(day_outname + ".zarr.zip", mode="w") as store:
+        # encodings
+        enc = {
+            variable: {
+                "codecs": [zarr.codecs.BytesCodec(), zarr.codecs.ZstdCodec()],
+            }
+            for variable in ds.data_vars
+        }
+        ds.to_zarr(store, mode="w", compute=True, encoding=enc, zarr_format=3, consolidated=True)
+    api = HfApi(token="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")
+    api.upload_file(
+        path_or_fileobj=zip_name,
+        path_in_repo=f"data/{time.strftime("%Y")}/{zip_name}",
+        repo_id=repo_id,
+        repo_type="dataset",
+    )
+    os.remove(zip_name)
+    ds.close()
 
 
 def upload_to_hf(zip_name, hf_token, repo_id):
@@ -91,12 +108,11 @@ if __name__ == "__main__":
     # From 2020 to end of 2022, which Himwarai 9 comes online
     date_range = pd.date_range(start=start_date, end=end_date, freq="D")
     start_idx = random.randint(0, len(date_range))
-    for day in date_range[start_idx:]:
+    for day in date_range:
         os.mkdir(args.output_location)
-        get_himawari_kerchunk(
+        saved_files = get_himawari_files(
             day, raw_location=args.raw_location, output_location=args.output_location
         )
+        make_himawari_zarr(day, saved_files, args.output_location)
         zip_name = zip_jsons(day, args.output_location)
-        if args.upload_to_hf:
-            upload_to_hf(zip_name, args.hf_token, repo_id=repo_id)
-            shutil.rmtree(args.output_location)
+        shutil.rmtree(args.output_location)

@@ -74,10 +74,14 @@ def get_global_mosaic(time: dt.datetime, channels: Optional[list[str]] = None) -
 
 if __name__ == "__main__":
     date_range = pd.date_range(
-        start="2021-07-13", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="D"
+        start="2021-07-13", end=(dt.datetime.now() - pd.Timedelta(days=1)).strftime("%Y-%m-%d"), freq="D"
     )
-    fs = HfFileSystem()
-    api = HfApi()
+    date_range = pd.date_range(start=(dt.datetime.now() - dt.timedelta(days=30)), end=(dt.datetime.now() - dt.timedelta(days=1)).strftime("%Y-%m-%d"), freq = "D")
+    os.environ["HF_TOKEN"] = "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"
+    fs = HfFileSystem(token=os.environ["HF_TOKEN"])
+    api = HfApi(token=os.environ["HF_TOKEN"])
+    #fs = HfFileSystem()
+    #api = HfApi()
     start_idx = random.randint(0, len(date_range))
     for day in date_range[::-1]:
         day_outname = day.strftime("%Y%m%d")
@@ -88,32 +92,25 @@ if __name__ == "__main__":
         ):
             # Check there are 24 timesteps in the file, if not, redo it
             # Download file to disk and then open it
-            with fs.open(
-                f"datasets/jacobbieker/global-mosaic-of-geostationary-images/data/{year}/{day_outname}.zarr.zip",
-                "rb",
-            ) as f:
-                with open(day_outname + ".zarr.zip", "wb") as f2:
-                    f2.write(f.read())
-            try:
-                ds = xr.open_zarr(day_outname + ".zarr.zip")
-                if len(ds.time.values) != 24:
-                    raise ValueError
-                ds.close()
-                del ds
-                os.remove(day_outname + ".zarr.zip")
-                continue
-            except ValueError:
-                pass
+            print(f"Skipping {day_outname} as it exists")
+            continue
         for hour in range(0, 24):
             timestep = day + dt.timedelta(hours=hour)
             ds = get_global_mosaic(timestep)
             dses.append(ds)
+        if len(dses) != 24:
+            print(f"Skipping {day_outname} as it has {len(dses)} timesteps")
+            continue
         ds = xr.concat(dses, dim="time")
         with zarr.storage.ZipStore(day_outname + ".zarr.zip", mode="w") as store:
-            compressor = Blosc(cname="zstd", clevel=3, shuffle=2)
             # encodings
-            enc = {x: {"compressor": compressor} for x in ds}
-            ds.to_zarr(store, mode="w", compute=True, encoding=enc)
+            enc = {
+                variable: {
+                    "codecs": [zarr.codecs.BytesCodec(), zarr.codecs.ZstdCodec()],
+                }
+                for variable in ds.data_vars
+            }
+            ds.to_zarr(store, mode="w", compute=True, encoding=enc, zarr_format=3, consolidated=True)
         api.upload_file(
             path_or_fileobj=day_outname + ".zarr.zip",
             path_in_repo=f"data/{year}/{day_outname}.zarr.zip",

@@ -1,17 +1,20 @@
 import datetime as dt
 import fsspec
-import ujson
 import zipfile
 import pandas as pd
 import random
 import shutil
 from huggingface_hub import HfApi
 import os
+import xarray as xr
+import zarr
 
-from kerchunk.hdf import SingleHdf5ToZarr
+"""
+--raw-location /run/media/jacob/Square1/europe_clouds_raw --output-location /run/media/jacob/Square1/europe_clouds_zarr --product-id EO:EUM:DAT:MSG:CLM --bands cloud
 
+"""
 
-def get_gk2a_kerchunk(time: dt.datetime, raw_location: str, output_location: str):
+def get_gk2a_files(time: dt.datetime, raw_location: str, output_location: str) -> list[str]:
     """
     Generate a Kerchunk file from a Himawari file
     """
@@ -23,16 +26,43 @@ def get_gk2a_kerchunk(time: dt.datetime, raw_location: str, output_location: str
     files = fs_read.glob(raw_location)
     # Remove any files where the minute of day is not a multiple of 10
     files = ["s3://" + f for f in files]
+    output_dir = os.path.join(output_location, time.strftime("%Y%m%d"))
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+    output_files = []
     for file_url in files:
-        try:
-            with fsspec.open(file_url, **so) as infile:
-                h5chunks = SingleHdf5ToZarr(infile, file_url, inline_threshold=300)
-                outfile = file_url.replace("nc", "json").split("/")[-1]
-                outfile = os.path.join(output_location, outfile)
-                with fs2.open(outfile, "wb") as f:
-                    f.write(ujson.dumps(h5chunks.translate()).encode())
-        except:
-            pass
+        with fsspec.open(file_url, **so) as infile:
+            outfile = file_url.split("/")[-1]
+            outfile = os.path.join(output_location, outfile)
+            with fs2.open(outfile, "wb") as f:
+                f.write(infile.read())
+            output_files.append(outfile)
+    return output_files
+
+
+def make_gk2a_zarr(time: dt.datetime, files: list[str], output_location: str) -> str:
+    # Combine the files
+    ds = xr.open_mfdataset(files, engine="h5netcdf", combine="nested", concat_dim="time")
+    day_outname = time.strftime("%Y%m%d")
+    zip_name = day_outname + ".zarr.zip"
+    with zarr.storage.ZipStore(day_outname + ".zarr.zip", mode="w") as store:
+        # encodings
+        enc = {
+            variable: {
+                "codecs": [zarr.codecs.BytesCodec(), zarr.codecs.ZstdCodec()],
+            }
+            for variable in ds.data_vars
+        }
+        ds.to_zarr(store, mode="w", compute=True, encoding=enc, zarr_format=3, consolidated=True)
+    api = HfApi(token="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")
+    api.upload_file(
+        path_or_fileobj=zip_name,
+        path_in_repo=f"data/{time.strftime("%Y")}/{zip_name}",
+        repo_id=repo_id,
+        repo_type="dataset",
+    )
+    os.remove(zip_name)
+    ds.close()
 
 
 def zip_jsons(time, output_folder):
@@ -75,11 +105,8 @@ if __name__ == "__main__":
     start_date = "2023-02-23"
     end_date = (dt.datetime.now() - dt.timedelta(days=1)).strftime("%Y-%m-%d")
     date_range = pd.date_range(start=start_date, end=end_date, freq="D")
-    start_idx = random.randint(0, len(date_range))
-    for day in date_range[start_idx:]:
+    for day in date_range[::-1]:
         os.mkdir(args.output_location)
-        get_gk2a_kerchunk(day, raw_location=args.raw_location, output_location=args.output_location)
-        zip_name = zip_jsons(day, args.output_location)
-        if args.upload_to_hf:
-            upload_to_hf(zip_name, args.hf_token, repo_id=repo_id)
-            shutil.rmtree(args.output_location)
+        files = get_gk2a_files(day, raw_location=args.raw_location, output_location=args.output_location)
+        make_gk2a_zarr(day, files, args.output_location)
+        shutil.rmtree(args.output_location)

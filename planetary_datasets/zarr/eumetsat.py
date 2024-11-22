@@ -354,7 +354,25 @@ if __name__ == "__main__":
     )
     start_idx = random.randint(0, len(date_range))
     for day in date_range[start_idx:]:
-        os.mkdir(args.output_location)
+        api = HfApi(token=args.hf_token)
+        if api.file_exists(repo_id,
+                           f"data/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/{day.strftime('%Y%m%d%H%M')}_{args.bands}.zarr.zip"):
+            print(f"Skipping {day.strftime('%Y%m%d%H%M')}")
+            continue
+        elif api.file_exists(repo_id, f"data/{day.strftime('%Y')}/{day.strftime('%Y%m%d0000')}_cloud.zip"):
+            print(f"Skipping Cloud {day.strftime('%Y%m%d%H%M')}")
+            continue
+        else:
+            print(f"Processing {day.strftime('%Y%m%d%H%M')}")
+        # Check if file is already in HF
+        if os.path.exists(args.output_location):
+            shutil.rmtree(args.output_location)
+        if os.path.exists(args.raw_location):
+            shutil.rmtree(args.raw_location)
+        if not os.path.exists(args.output_location):
+            os.mkdir(args.output_location)
+        if not os.path.exists(args.raw_location):
+            os.mkdir(args.raw_location)
         end_date = day + dt.timedelta(days=1) if is_mask else day + dt.timedelta(minutes=15)
         final_filenames = download_and_process_eumetsat_day(
             day,
@@ -368,10 +386,24 @@ if __name__ == "__main__":
         )
         if not is_mask:
             for zip_name in final_filenames:
-                path_in_repo = f"data/{zip_name.split('/')[-1][:4]}/{day.strftime('%m')}/{day.strftime('%d')}/{zip_name.split('/')[-1]}"
+                path_in_repo = f"data/{zip_name.split('/')[-1][:4]}/{zip_name.split('/')[-1][4:6]}/{zip_name.split('/')[-1][6:8]}/{zip_name.split('/')[-1]}"
                 upload_to_hf(zip_name, args.hf_token, repo_id=repo_id, path_in_repo=path_in_repo)
-            shutil.rmtree(args.output_location)
+            try:
+                shutil.rmtree(args.output_location)
+            except:
+                pass
+            try:
+                shutil.rmtree(args.raw_location)
+            except:
+                pass
         else:
             zip_name = zip_zarrs(day, args.output_location, bands=args.bands)
             upload_to_hf(zip_name, args.hf_token, repo_id=repo_id)
-            shutil.rmtree(args.output_location)
+            try:
+                shutil.rmtree(args.output_location)
+            except:
+                pass
+            try:
+                shutil.rmtree(args.raw_location)
+            except:
+                pass
