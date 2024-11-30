@@ -30,6 +30,15 @@ class MRMSSource(AbstractSource):
         pass
 
 
+"""
+wget --load-cookies ~/.urs_cookies --save-cookies ~/.urs_cookies --keep-session-cookies --content-disposition -r -c --no-parent https://gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHHE.07/
+Half Hourly IMERG Early
+
+wget --load-cookies ~/.urs_cookies --save-cookies ~/.urs_cookies --keep-session-cookies --content-disposition -r -c --no-parent https://gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07/
+Half Hourly IMERG Final
+
+"""
+
 def get_mrms(day: dt.datetime):
     path = f"https://mtarchive.geol.iastate.edu/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/mrms/ncep/GaugeCorr_QPE_01H/"
     args = ["wget", "-r", "-nc", "--no-parent", path]

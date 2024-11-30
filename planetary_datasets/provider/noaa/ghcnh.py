@@ -63,24 +63,6 @@ def get_list_of_stations() -> pd.DataFrame:
     df["elevation"] = elevs
     return df
 
-def download_with_pooch(station_df):
-    base_path = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/by-year/"
-    files = {}
-    for station_id in station_df["station_id"]:
-        files[f"{base_path}GHCNh_{station_id}_por.psv"] = None
-    odie = pooch.create(
-        # Use the default cache folder for the operating system
-        path="/mnt/storage/GHCNh/",
-        base_url=base_path,
-        # The registry specifies the files that can be fetched
-        registry=files,
-    )
-    for f in files.keys():
-        try:
-            odie.fetch(f, progressbar=True)
-        except requests.exceptions.ReadTimeout:
-            print(f"Failed to download {f}")
-
 def download_file(url):
     local_filename = url.split('/')[-1]
     # NOTE the stream=True parameter below
