@@ -124,5 +124,9 @@ if __name__ == "__main__":
     dummy_dataset.to_zarr(path, mode="w", compute=False, zarr_format=3, encoding=encoding)
 
     for time_idx, day in tqdm(enumerate(timestamps)):
-        data = get_global_mosaic(day)
-        data.chunk({"time": 1, "yc": -1, "xc": -1}).rename({"lat": "latitude", "lon": "longitude"}).to_zarr(path,region={"time": slice(time_idx, time_idx+1),"xc": "auto", "yc": "auto"}, )
+        try:
+            data = get_global_mosaic(day)
+            data.chunk({"time": 1, "yc": -1, "xc": -1}).rename({"lat": "latitude", "lon": "longitude"}).to_zarr(path,region={"time": slice(time_idx, time_idx+1),"xc": "auto", "yc": "auto"}, )
+        except Exception as e:
+            print(e)
+            continue
