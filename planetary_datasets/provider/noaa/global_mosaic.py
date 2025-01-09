@@ -121,7 +121,7 @@ if __name__ == "__main__":
     dummy_dataset = xr.Dataset({v: default_dataarray for v in variables},
                                coords={"time": timestamps, "latitude": (["yc", "xc"], data.latitude.values), "longitude": (["yc", "xc"], data.longitude.values)})
     print(dummy_dataset)
-    dummy_dataset.to_zarr(path, mode="w", compute=False, zarr_format=3, consolidated=True, encoding=encoding)
+    dummy_dataset.to_zarr(path, mode="w", compute=False, zarr_format=3, encoding=encoding)
 
     for time_idx, day in tqdm(enumerate(timestamps)):
         data = get_global_mosaic(day)
