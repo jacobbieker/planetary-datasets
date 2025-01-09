@@ -76,7 +76,7 @@ def get_global_mosaic(time: dt.datetime, channels: Optional[list[str]] = None) -
 
 
 variables = ["vis", "ssr", "wv", "lwir", "swir"]
-encoding = {v: {"codecs": [zarr.codecs.BytesCodec(), zarr.codecs.ZstdCodec()]} for v in variables}
+encoding = {v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle)} for v in variables}
 encoding["time"] = {"units": "nanoseconds since 1970-01-01"}
 
 if __name__ == "__main__":
@@ -105,7 +105,7 @@ if __name__ == "__main__":
         for hour in range(0, 24):
             timestamps.append(day + pd.Timedelta(hours=hour))
 
-    path = "gmgsi.zarr"
+    path = "gmgsi_v3.zarr"
 
     data = get_global_mosaic(timestamps[0])
     data = data.rename({"lat": "latitude", "lon": "longitude"})
