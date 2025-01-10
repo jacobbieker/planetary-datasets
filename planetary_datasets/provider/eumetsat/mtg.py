@@ -200,6 +200,17 @@ def save_datatree(high_res_500m: xr.Dataset, high_res_1km: xr.Dataset, low_res_1
     return full_dataset
 
 
+def open_datatree_v3_mtg(root_zarr: str) -> xr.DataTree:
+    time_ds = xr.open_zarr(root_zarr)
+    high_res_1km = xr.open_zarr(root_zarr, group="hr_1km")
+    high_res_500m = xr.open_zarr(root_zarr, group="hr_05km")
+    low_res_1km = xr.open_zarr(root_zarr, group="1km")
+    low_res_2km = xr.open_zarr(root_zarr, group="2km")
+    full_dataset = xr.DataTree.from_dict(
+        {"/": time_ds, "/hr_1km": high_res_1km, "/hr_05km": high_res_500m, "/1km": low_res_1km, "/2km": low_res_2km})
+    return full_dataset
+
+
 low_res_files = sorted(list(glob.glob("/Users/jacob/Development/EUMETSAT_MTG/*FDHSI*.zip")))[:6]
 high_res_files = sorted(list(glob.glob("/Users/jacob/Development/EUMETSAT_MTG/*HRFI*.zip")))[:6]
 process_normal_and_high_res(low_res_files, high_res_files)
