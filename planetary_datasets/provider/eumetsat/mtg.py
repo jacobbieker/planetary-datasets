@@ -15,6 +15,7 @@ import eumdac
 import datetime
 import shutil
 
+
 # Insert your personal key and secret
 
 
@@ -24,11 +25,10 @@ token = eumdac.AccessToken(credentials)
 
 datastore = eumdac.DataStore(token)
 
-start = datetime.datetime(2025, 1, 2, 0, 0)
-end = datetime.datetime(2025, 1, 2, 0, 9)
+start = datetime.datetime(2025, 1, 1, 0, 0)
+end = datetime.datetime(2025, 1, 1, 23, 59)
 
-
-def download_and_process_normal_and_high_res(start, end) -> xr.DataTree:
+def download_mtg_data(start, end):
     token = eumdac.AccessToken(credentials)
 
     datastore = eumdac.DataStore(token)
@@ -53,6 +53,9 @@ def download_and_process_normal_and_high_res(start, end) -> xr.DataTree:
             shutil.copyfileobj(fsrc, fdst)
             high_res_output_filenames.append(fsrc.name)
             print(f'Download of high-res product {product} finished.')
+
+
+def process_normal_and_high_res(low_res_output_filenames: list, high_res_output_filenames: list) -> xr.DataTree:
     # Load the high and low resolution scenes
     # Sort both of them by name
     low_res_output_filenames.sort()
@@ -63,25 +66,41 @@ def download_and_process_normal_and_high_res(start, end) -> xr.DataTree:
     low_1 = []
     high_1 = []
     high_500 = []
+    time_ds = []
     for i in range(len(low_res_output_filenames)):
         low_res_output_filenames[i] = Path(low_res_output_filenames[i])
         high_res_output_filenames[i] = Path(high_res_output_filenames[i])
         mtg_datatree = unzip_folders_and_load_to_xarray(high_res_output_filenames[i], low_res_output_filenames[i])
-        print(mtg_datatree)
-        save_datatree(mtg_datatree["/hr_05km"], mtg_datatree["/hr_1km"], mtg_datatree["/1km"], mtg_datatree["/2km"])
-        low_1.append(mtg_datatree["/1km"])
-        low_2.append(mtg_datatree["/2km"])
-        high_1.append(mtg_datatree["/hr_1km"])
-        high_500.append(mtg_datatree["/hr_05km"])
+        low_1.append(mtg_datatree["/1km"].ds)
+        low_2.append(mtg_datatree["/2km"].ds)
+        high_1.append(mtg_datatree["/hr_1km"].ds)
+        high_500.append(mtg_datatree["/hr_05km"].ds)
+        time_ds.append(mtg_datatree["/"].ds)
+
     # Concatenate each of the nodes based on their time dimension, have to do each node on its own
     # works
     low_1_concatenated = xr.concat(low_1, dim="time").sortby("time")
     low_2_concatenated = xr.concat(low_2, dim="time").sortby("time")
     high_1_concatenated = xr.concat(high_1, dim="time").sortby("time")
     high_500_concatenated = xr.concat(high_500, dim="time").sortby("time")
-    concatenated_datatree = convert_to_datatree(high_500_concatenated, high_1_concatenated, low_1_concatenated, low_2_concatenated)
+    time_ds_concatenated = xr.concat(time_ds, dim="time").sortby("time")
+    concatenated_datatree = convert_to_datatree(high_500_concatenated, high_1_concatenated, low_1_concatenated, low_2_concatenated, time_ds_concatenated)
     print(concatenated_datatree)
     # Write to disk
+    encoding = {f"/hr_1km": {
+        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
+        for v in high_1_concatenated.data_vars}}
+    encoding.update({f"/hr_05km": {
+        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
+        for v in high_500_concatenated.data_vars}})
+    encoding.update({f"/1km": {
+        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
+        for v in low_1_concatenated.data_vars}})
+    encoding.update({f"/2km": {
+        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
+        for v in low_2_concatenated.data_vars}})
+    concatenated_datatree.to_zarr(f"mtg_datatree_v3.zarr", mode="w", compute=True, encoding=encoding, zarr_format=3)
+
 
 
 
@@ -140,9 +159,17 @@ def load_normal_res_scene(filenames: list[str]) -> tuple[xr.Dataset, xr.Dataset]
     return km_1_0_xr, km_2_0_xr
 
 
-def convert_to_datatree(high_res_500m: xr.Dataset, high_res_1km: xr.Dataset, low_res_1km: xr.Dataset, low_res_2km: xr.Dataset) -> xr.DataTree:
+def convert_to_datatree(high_res_500m: xr.Dataset, high_res_1km: xr.Dataset, low_res_1km: xr.Dataset, low_res_2km: xr.Dataset, time_ds: xr.Dataset = None) -> xr.DataTree:
     # Make DataArray of just the time coordinate for the root
-    time_ds = xr.Dataset({"time": high_res_1km["time"]}, coords={"time": high_res_1km["time"].values})
+    if time_ds is None:
+        print(high_res_1km["ir_105"].attrs["time_parameters"])
+        # Convert the string representation of a dictionary to a dictionary
+        time_parameter_dict = eval(high_res_1km["ir_105"].attrs["time_parameters"])
+        time_ds = xr.Dataset({"timestamps": high_res_1km["time"]}, coords={"time": high_res_1km["time"].values})
+        # Add observation_start_time as a data variable
+        time_ds["observation_start_time"] = xr.DataArray([pd.Timestamp(time_parameter_dict["observation_start_time"])], dims=["time"])
+        time_ds["observation_end_time"] = xr.DataArray([pd.Timestamp(time_parameter_dict["observation_end_time"])], dims=["time"])
+    # Also get the actual start of the scanning, and end of scanning, and include here too
     full_dataset = xr.DataTree.from_dict(
         {"/": time_ds, "/hr_1km": high_res_1km, "/hr_05km": high_res_500m, "/1km": low_res_1km, "/2km": low_res_2km})
     return full_dataset
@@ -158,18 +185,21 @@ def save_datatree(high_res_500m: xr.Dataset, high_res_1km: xr.Dataset, low_res_1
     # Get it as a string YYYYMMDDTHH:MM:SS
     timestamp = pd.Timestamp(timestamp).strftime("%Y%m%dT%H%M%S")
     encoding = {f"/hr_1km": {
-        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle), "shards": (5568,5568)}
+        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle), "shards": (1, 5568,5568)}
         for v in high_res_1km.data_vars if "mtg_fci" not in v}}
     encoding.update({f"/hr_05km": {
-        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle), "shards": (5568,5568)}
+        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle), "shards": (1, 5568,5568)}
         for v in high_res_500m.data_vars if "mtg_fci" not in v}})
     encoding.update({f"/1km": {
-        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle), "shards": (5568,5568)}
+        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle), "shards": (1, 5568,5568)}
         for v in low_res_1km.data_vars if "mtg_fci" not in v}})
     encoding.update({f"/2km": {
-        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle), "shards": (5568,5568)}
+        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle), "shards": (1, 5568,5568)}
         for v in low_res_2km.data_vars if "mtg_fci" not in v}})
     full_dataset.to_zarr(f"mtg_datatree_v3_{timestamp}.zarr", mode="w", compute=True, encoding=encoding, zarr_format=3)
     return full_dataset
 
-download_and_process_normal_and_high_res(start, end)
+
+low_res_files = sorted(list(glob.glob("/Users/jacob/Development/EUMETSAT_MTG/*FDHSI*.zip")))[:6]
+high_res_files = sorted(list(glob.glob("/Users/jacob/Development/EUMETSAT_MTG/*HRFI*.zip")))[:6]
+process_normal_and_high_res(low_res_files, high_res_files)
