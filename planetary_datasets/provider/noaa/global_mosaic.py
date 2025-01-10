@@ -84,9 +84,8 @@ if __name__ == "__main__":
         start="2021-07-13", end=(dt.datetime.now() - pd.Timedelta(days=1)).strftime("%Y-%m-%d"), freq="D"
     )
     # Check which days are complete (i.e. have 24 files in it, for all channels)
-    valid_days = []
+    timestamps = []
     for date in date_range:
-        all_exists = True
         for hour in range(0, 24):
             if not os.path.exists(
                 f"/run/media/jacob/Tester/gmgsi/GMGSI_VIS/{date.year}/{date.month:02}/{date.day:02}/{date.hour:02}/GLOBCOMPVIS_nc.{date.strftime('%Y%m%d%H')}"
@@ -95,15 +94,8 @@ if __name__ == "__main__":
                     or not os.path.exists(f"/run/media/jacob/Tester/gmgsi/GMGSI_LW/{date.year}/{date.month:02}/{date.day:02}/{date.hour:02}/GLOBCOMPLIR_nc.{date.strftime('%Y%m%d%H')}")\
                     or not os.path.exists(f"/run/media/jacob/Tester/gmgsi/GMGSI_SW/{date.year}/{date.month:02}/{date.day:02}/{date.hour:02}/GLOBCOMPSIR_nc.{date.strftime('%Y%m%d%H')}"):
                 print(f"Missing {date.strftime('%Y%m%d')} {hour:02}")
-                all_exists = False
-        if all_exists:
-            valid_days.append(date)
-
-    # Make all available days and datetime for time
-    timestamps = []
-    for day in valid_days:
-        for hour in range(0, 24):
-            timestamps.append(day + pd.Timedelta(hours=hour))
+            else:
+                timestamps.append(date + pd.Timedelta(hours=hour))
 
     path = "gmgsi_v3.zarr"
 
@@ -122,8 +114,9 @@ if __name__ == "__main__":
                                coords={"time": timestamps, "latitude": (["yc", "xc"], data.latitude.values), "longitude": (["yc", "xc"], data.longitude.values)})
     print(dummy_dataset)
     dummy_dataset.to_zarr(path, mode="w", compute=False, zarr_format=3, encoding=encoding)
-
-    for time_idx, day in tqdm(enumerate(timestamps)):
+    zarr_dates = xr.open_zarr(path).time.values
+    for day in tqdm(timestamps, total=len(timestamps)):
+        time_idx = np.where(zarr_dates == day)[0][0]
         try:
             data = get_global_mosaic(day)
             data.chunk({"time": 1, "yc": -1, "xc": -1}).rename({"lat": "latitude", "lon": "longitude"}).to_zarr(path,region={"time": slice(time_idx, time_idx+1),"xc": "auto", "yc": "auto"}, )
