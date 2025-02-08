@@ -4,9 +4,42 @@ version = "0.0.1"
 description = "Datasets for ML models for planetary use-cases (e.g. solar mapping, land use, forecasting)"
 authors = ["Jacob Bieker <jacob@bieker.tech>"]
 channels = ["conda-forge"]
-platforms = ["linux-64"]
+platforms = ["linux-64", "osx-arm64"]
 
 [tasks]
 
 [dependencies]
 python = ">=3.11,<3.13"
+fsspec = ">=2025.2.0,<2026"
+pandas = ">=2.2.3,<3"
+requests = ">=2.32.3,<3"
+aiohttp = ">=3.11.12,<4"
+pystac-client = ">=0.8.5,<0.9"
+dask = ">=2025.1.0,<2026"
+geojson = ">=3.2.0,<4"
+shapely = ">=2.0.7,<3"
+geopandas = ">=1.0.1,<2"
+pyproj = ">=3.7.0,<4"
+rasterio = ">=1.4.3,<2"
+xarray = ">=2025.1.2,<2026"
+s3fs = ">=2025.2.0,<2026"
+gcsfs = ">=2025.2.0,<2026"
+adlfs = ">=2024.12.0,<2025"
+zarr = ">=3.0.2,<4"
+datasets = ">=2.14.4,<3"
+cfgrib = ">=0.9.15.0,<0.10"
+h5py = ">=3.12.1,<4"
+pybufrkit = ">=0.2.22,<0.3"
+h5netcdf = ">=1.5.0,<2"
+
+[pypi-dependencies]
+odc-stac = ">=0.3.11, <0.4"
+planetary-computer = ">=1.0.0, <2"
+pystac-client = "*"
+lxml = ">=5.3.0, <6"
+meteostat = ">=1.6.8, <2"
+structlog = ">=25.1.0, <26"
+huggingface-hub = "*"
+psutil = "*"
+wetterdienst = ">=0.99.0, <0.100"
+isd = ">=0.1.0, <0.2"
