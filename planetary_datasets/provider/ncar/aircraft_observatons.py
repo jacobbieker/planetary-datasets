@@ -28,12 +28,13 @@ if __name__ == "__main__":
     date_range = pd.date_range(
         start="2016-01-01", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="6H"
     )
+    obs = AircraftObservationsSource(source_location=BASEURL, raw_location="aircraft_observations/", start_date=date_range[0], end_date=date_range[-1])
     start_idx = random.randint(0, len(date_range))
     for day in date_range[start_idx:]:
         day_outname = day.strftime("%Y%m%d%H")
         year = day.year
         try:
-            aircraft_obs = get_aircraft_observations(day)
+            aircraft_obs = obs.get(day)
         except Exception as e:
             print(e)
             continue

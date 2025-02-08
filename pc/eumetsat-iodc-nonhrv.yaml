@@ -1,8 +1,0 @@
-name: "eumetsat-iodc-nonhrv"
-code: "./"
-args:
-  - "/srv/conda/envs/notebook/bin/python"
-  - "eumetsat.py"
-  - "--product-id=EO:EUM:DAT:MSG:HRSEVIRI-IODC"
-  - "--bands=nonhrv"
-image: "mcr.microsoft.com/planetary-computer/python:latest"

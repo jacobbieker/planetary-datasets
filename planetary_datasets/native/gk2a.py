@@ -99,7 +99,7 @@ if __name__ == "__main__":
     parser.add_argument("--raw-location", type=str, default="s3://noaa-gk2a-pds")
     parser.add_argument("--output-location", type=str, default="gk2a")
     parser.add_argument("--upload-to-hf", action="store_false")
-    parser.add_argument("--hf-token", type=str, default="")
+    parser.add_argument("--hf-token", type=str, default="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")
     args = parser.parse_args()
     repo_id = "jacobbieker/gk2a-native"
     start_date = "2023-02-23"

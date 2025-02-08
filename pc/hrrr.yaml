@@ -1,6 +1,0 @@
-name: "preprocess-hrrr"
-code: "./"
-args:
-  - "/srv/conda/envs/notebook/bin/python"
-  - "hrrr.py"
-image: "mcr.microsoft.com/planetary-computer/python:latest"

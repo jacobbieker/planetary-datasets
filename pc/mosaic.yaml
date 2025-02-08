@@ -1,6 +1,0 @@
-name: "preprocess-data"
-code: "./"
-args:
-  - "/srv/conda/envs/notebook/bin/python"
-  - "global_mosaic.py"
-image: "mcr.microsoft.com/planetary-computer/python:latest"

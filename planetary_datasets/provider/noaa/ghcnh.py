@@ -7,11 +7,10 @@ import pandas as pd
 import xarray as xr
 import fsspec
 import requests
-import pooch
 
 STATION_LIST = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/doc/ghcnh-station-list.txt"
 FILE_PATH_TEMPLATE = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/by-year/{year}/parquet/GHCNh_{station_id}_{year}.parquet"
-FILE_PATH_TEMPLATE = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/by-station/GHCNh_{station_id}_por.psv"
+#FILE_PATH_TEMPLATE = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/by-station/GHCNh_{station_id}_por.psv"
 
 def load_ghcnh_data(station_id: str, year: int) -> xr.Dataset:
     """
@@ -68,7 +67,7 @@ def download_file(url):
     # NOTE the stream=True parameter below
     with requests.get(url, stream=True) as r:
         r.raise_for_status()
-        with open(local_filename, 'wb') as f:
+        with open("GHCNh_parquet/"+local_filename, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):
                 # If you have chunk encoded response uncomment if
                 # and set chunk_size parameter to None.
@@ -81,32 +80,31 @@ if __name__ == "__main__":
     possible_files = []
 
     station_df = get_list_of_stations()
-    for year in range(1950, 2024):
+    for year in range(1950, 2026):
         for station_id in station_df["station_id"]:
-            possible_files.append(FILE_PATH_TEMPLATE.format(station_id=station_id))
+            possible_files.append(FILE_PATH_TEMPLATE.format(station_id=station_id, year=year))
 
-    # Save to a file
-    with open("possible_files_por.txt", "w") as f:
-        for file in possible_files:
-            f.write(f"{file}\n")
-            """
-            if os.path.exists(f"{station_id}_{year}.parquet"):
-                continue
-            try:
-                download_file(FILE_PATH_TEMPLATE.format(station_id=station_id, year=year))
-            except Exception as e:
-                print(f"Failed to download {station_id} for {year}, {e}")
-                continue
-            """
-            """
-            try:
-                df = load_ghcnh_data(station_id, year=year)
-                df.to_parquet(f"{station_id}_{year}.parquet")
-            except FileNotFoundError:
-                print(f"Failed to download {station_id} for {year}")
-                continue
-            except Exception:
-                print(f"Failed to download {station_id} for {year} with error: {e}")
-                continue
-            """
+    for file in possible_files:
+        #print(file)
+        #if os.path.exists(f"{station_id}_{year}.parquet"):
+        #    continue
+        if os.path.exists("GHCNh_parquet/"+file.split('/')[-1]):
+            continue
+        try:
+            download_file(file)
+            print(f"Downloaded {file}")
+        except Exception as e:
+            print(f"Failed to download {file} for, {e}")
+            continue
+        """
+        try:
+            df = load_ghcnh_data(station_id, year=year)
+            df.to_parquet(f"{station_id}_{year}.parquet")
+        except FileNotFoundError:
+            print(f"Failed to download {station_id} for {year}")
+            continue
+        except Exception:
+            print(f"Failed to download {station_id} for {year} with error: {e}")
+            continue
+        """
 

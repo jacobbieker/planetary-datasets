@@ -1,8 +1,0 @@
-name: "eumetsat-clm"
-code: "./"
-args:
-  - "/srv/conda/envs/notebook/bin/python"
-  - "eumetsat.py"
-  - "--product-id=EO:EUM:DAT:MSG:CLM"
-  - "--bands=cloud"
-image: "mcr.microsoft.com/planetary-computer/python:latest"

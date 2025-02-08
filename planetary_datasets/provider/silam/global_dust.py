@@ -114,9 +114,9 @@ if __name__ == "__main__":
     date_range = pd.date_range(
         start="2024-11-14", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="D"
     )
-    #for day in date_range:
-    #    download_forecast(day)
-    #exit()
+    for day in date_range:
+        download_forecast(day)
+    exit()
 
     s3_path = "s3://bkr/silam-dust/silam_global_dust.zarr"
     path = "silam_global_dust.zarr"

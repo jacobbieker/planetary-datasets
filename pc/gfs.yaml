@@ -1,6 +1,0 @@
-name: "preprocess-gfs"
-code: "./"
-args:
-  - "/srv/conda/envs/notebook/bin/python"
-  - "gfs.py"
-image: "mcr.microsoft.com/planetary-computer/python:latest"

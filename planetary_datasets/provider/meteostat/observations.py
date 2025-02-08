@@ -1,30 +1,30 @@
-import subprocess
 import os
 import json
 import fsspec
-from planetary_datasets.base import AbstractSource, AbstractConvertor
-import datetime as dt
-from typing import Optional, Union
 from pathlib import Path
 
 
-class MeteostatObservationsSource(AbstractSource):
-    def get(self, timestamp: dt.datetime, station_ids: Optional[Union[str, list[str]]] = None) -> str:
-        if station_ids is None:
-            station_ids = [station["id"] for station in self.gather_stations()]
-        elif isinstance(station_ids, str):
-            station_ids = [station_ids]
-        for station_id in station_ids:
-            remote_path = f"https://bulk.meteostat.net/v2/hourly/{station_id}.csv.gz"
-            local_path = Path(os.path.basename(remote_path))
-            self.download_file(Path(remote_path), local_path)
+def download_file(remote_path, local_path):
+    full_local_path = local_path
+    print(remote_path)
+    if full_local_path.exists():
+        return full_local_path
+    with fsspec.open(remote_path, "rb") as infile:
+        with fsspec.open(str(full_local_path), "wb") as outfile:
+            outfile.write(infile.read())
 
-    @staticmethod
-    def gather_stations():
-        with fsspec.open("https://bulk.meteostat.net/v2/stations/full.json.gz", compression="infer") as f:
-            weather_stations = json.load(f)
-        return weather_stations
 
-    def process(self) -> str:
-        pass
+def download_meteostat():
+    with fsspec.open("https://bulk.meteostat.net/v2/stations/full.json.gz", compression="infer") as f:
+        weather_stations = json.load(f)
+    station_ids = [s['id'] for s in weather_stations]
+    for station_id in station_ids:
+        remote_path = f"https://bulk.meteostat.net/v2/hourly/{station_id}.csv.gz"
+        #local_path = Path(os.path.basename(remote_path))
+        local_path = Path(f"data/{station_id}.csv.gz")
+        try:
+            download_file(remote_path, local_path)
+        except FileNotFoundError:
+            continue
 
+download_meteostat()

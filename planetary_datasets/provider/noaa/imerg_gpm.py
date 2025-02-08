@@ -10,6 +10,9 @@ import subprocess
 import glob
 # import numcodecs.zarr3
 import xbitinfo as xb
+import numpy as np
+from tqdm import tqdm
+import os
 
 """
 wget --load-cookies ~/.urs_cookies --save-cookies ~/.urs_cookies --keep-session-cookies --content-disposition -r -c --no-parent https://gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07/
@@ -54,7 +57,7 @@ if __name__ == "__main__":
         start="2000-01-01", end="2025-12-31", freq="30min"
     )
     path = "gpm_early.zarr"
-    data = open_h5("/Users/jacob/Development/3B-HHR.MS.MRG.3IMERG.20001230-S143000-E145959.0870.V07B.HDF5")
+    #data = open_h5("/Users/jacob/Development/3B-HHR.MS.MRG.3IMERG.20001230-S143000-E145959.0870.V07B.HDF5")
     #bitinfo = xb.get_bitinformation(data, dim="longitude", implementation="python")  # calling bitinformation.jl.bitinformation
     #keepbits = xb.get_keepbits(bitinfo, inflevel=0.99)  # get number of mantissa bits to keep fo
     #print(keepbits)
@@ -64,21 +67,21 @@ if __name__ == "__main__":
     #dset_time = pd.Timestamp(t[0].isoformat())
     #time_idx = np.where(date_range == dset_time)[0][0]
     #print(time_idx)
-    exit()
-    data = open_h5("/run/media/jacob/Tester/GPM_final/gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07/1998/001/3B-HHR.MS.MRG.3IMERG.19980101-S120000-E122959.0720.V07B.HDF5")
+    #exit()
+    #data = open_h5("/run/media/jacob/Tester/GPM_final/gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07/1998/001/3B-HHR.MS.MRG.3IMERG.19980101-S120000-E122959.0720.V07B.HDF5")
 
     # Create empty dask arrays of the same size as the data
     dask_arrays = []
-    dummies = dask.array.zeros((len(date_range), data.latitude.shape[0], data.longitude.shape[0]), chunks=(1, -1, -1), dtype=np.float32)
-    default_dataarray = xr.DataArray(dummies, coords={"time": date_range, "latitude": data.latitude.values, "longitude": data.longitude.values},
-                     dims=["time", "latitude", "longitude"])
-    dummy_dataset = xr.Dataset({v: default_dataarray for v in variables},
-                               coords={"time": date_range, "latitude": data.latitude.values, "longitude": data.longitude.values})
-    print(dummy_dataset)
-    dummy_dataset.to_zarr(path, mode="w", compute=False, zarr_format=3, consolidated=True, encoding=encoding)
+    #dummies = dask.array.zeros((len(date_range), data.latitude.shape[0], data.longitude.shape[0]), chunks=(1, -1, -1), dtype=np.float32)
+    #default_dataarray = xr.DataArray(dummies, coords={"time": date_range, "latitude": data.latitude.values, "longitude": data.longitude.values},
+    #                 dims=["time", "latitude", "longitude"])
+    #dummy_dataset = xr.Dataset({v: default_dataarray for v in variables},
+    #                           coords={"time": date_range, "latitude": data.latitude.values, "longitude": data.longitude.values})
+    #print(dummy_dataset)
+    #dummy_dataset.to_zarr(path, mode="w", compute=False, zarr_format=3, consolidated=True, encoding=encoding)
 
     day_range = pd.date_range(
-        start="2000-01-01", end="2025-12-31", freq="1D"
+        start="2024-11-29", end="2025-12-31", freq="1D"
     )
     for day in tqdm(day_range):
         file_list = get_gpm(day)

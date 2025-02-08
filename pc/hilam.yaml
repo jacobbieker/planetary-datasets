@@ -1,7 +1,0 @@
-name: "preprocess-hilam"
-code: "./"
-args:
-  - "/srv/conda/envs/notebook/bin/python"
-  - "hilam.py"
-  - "--level=surface"
-image: "mcr.microsoft.com/planetary-computer/python:latest"
