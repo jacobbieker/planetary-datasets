@@ -14,7 +14,6 @@ import os
 from typing import TYPE_CHECKING
 
 import dagster as dg
-from dagster_docker import PipesDockerClient
 
 if TYPE_CHECKING:
     import datetime as dt

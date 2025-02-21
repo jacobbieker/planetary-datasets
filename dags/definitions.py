@@ -4,10 +4,6 @@ import dagster as dg
 from dagster_docker import PipesDockerClient
 
 from .assets import nwp, pv, sat
-from .resources import (
-    HuggingfacePartitionedParquetIOManager,
-    SheffieldSolarAPIResource,
-)
 
 nwp_assets = dg.load_assets_from_package_module(
     package_module=nwp,
@@ -17,14 +13,14 @@ nwp_assets = dg.load_assets_from_package_module(
 
 sat_assets = dg.load_assets_from_package_module(
     package_module=sat,
-    group_name="sat",
-    key_prefix="sat",
+    group_name="satellite",
+    key_prefix="satellite",
 )
 
 pv_assets = dg.load_assets_from_package_module(
     package_module=pv,
-    group_name="pv",
-    key_prefix="pv",
+    group_name="observation",
+    key_prefix="observation",
 )
 
 defs = dg.Definitions(
