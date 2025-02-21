@@ -1,18 +1,130 @@
 """This gather and uses the global mosaic of geostationary satellites from NOAA on AWS"""
 import xarray as xr
-import s3fs
-import os
 import pandas as pd
 import datetime as dt
-from huggingface_hub import HfApi, HfFileSystem
-import random
 import zarr
 from typing import Optional
-from numcodecs import Blosc
 import dask.array
-from tqdm import tqdm
 import numpy as np
+import os
+from typing import TYPE_CHECKING
+
+import dagster as dg
 import fsspec
+
+if TYPE_CHECKING:
+    import datetime as dt
+
+"""Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
+
+ARCHIVE_FOLDER = "/var/dagster-storage/sat/eumetsat-iodc-lrv"
+BASE_URL = "s3://noaa-gmgsi-pds/"
+ZARR_PATH = "gmgsi.zarr"
+if os.getenv("ENVIRONMENT", "local") == "pb":
+    ARCHIVE_FOLDER = "/data/gmgsi/"
+
+partitions_def: dg.TimeWindowPartitionsDefinition = dg.HourlyPartitionsDefinition(
+    start_date="2021-07-13",
+    end_offset=-1,
+)
+
+
+@dg.asset(name="gmgsi-dummy-zarr", description="Dummy Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS",)
+def gmgsi_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+    variables = ["vis", "ssr", "wv", "lwir", "swir"]
+    encoding = {
+        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
+        for v in variables}
+    encoding["time"] = {"units": "nanoseconds since 1970-01-01"}
+    # Get the number of partitions to create
+    date_range = pd.date_range(start="2021-07-13", end="2026-12-31", freq="H")
+    dummies = dask.array.zeros((len(date_range), data.xc.shape[0], data.yc.shape[0]), chunks=(1, -1, -1),
+                               dtype=np.uint8)
+    default_dataarray = xr.DataArray(dummies,
+                                     coords={"time": date_range, "latitude": (["yc", "xc"], data.latitude.values),
+                                             "longitude": (["yc", "xc"], data.longitude.values)},
+                                     dims=["time", "xc", "yc"])
+    dummy_dataset = xr.Dataset({v: default_dataarray for v in variables},
+                               coords={"time": date_range, "latitude": (["yc", "xc"], data.latitude.values),
+                                       "longitude": (["yc", "xc"], data.longitude.values)})
+    dummy_dataset.to_zarr(ZARR_PATH, mode="w", compute=False, zarr_format=3, encoding=encoding)
+    return dg.MaterializeResult(
+        metadata={"zarr_path": ZARR_PATH},
+        description="Materialized dummy Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS",
+    )
+
+
+
+@dg.asset(name="gmgsi-download", description="Download GMGSI global mosaic of geostationary satellites from NOAA on AWS",
+          tags={
+              "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
+              "dagster/priority": "1",
+              "dagster/concurrency_key": "aws",
+          },
+          partitions_def=partitions_def,
+          )
+def gmgsi_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+    """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
+    it: dt.datetime = context.partition_time_window.start
+
+    fs = fsspec.filesystem("s3")
+    fs.get(f"{BASE_URL}GLOBCOMP_VIS/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPVIS_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_VIS/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPVIS_nc.{it.strftime('%Y%m%d%H')}")
+    fs.get(f"{BASE_URL}GMGSI_SSR/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSSR_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_SSR/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSSR_nc.{it.strftime('%Y%m%d%H')}")
+    fs.get(f"{BASE_URL}GMGSI_WV/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPWV_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_WV/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPWV_nc.{it.strftime('%Y%m%d%H')}")
+    fs.get(f"{BASE_URL}GMGSI_LW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPLIR_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_LW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPLIR_nc.{it.strftime('%Y%m%d%H')}")
+    fs.get(f"{BASE_URL}GMGSI_SW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSIR_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_SW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSIR_nc.{it.strftime('%Y%m%d%H')}")
+
+    # Return the paths as a materialization
+    return dg.MaterializeResult(
+        metadata={
+            "vis": f"{ARCHIVE_FOLDER}GMGSI_VIS/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPVIS_nc.{it.strftime('%Y%m%d%H')}",
+            "ssr": f"{ARCHIVE_FOLDER}GMGSI_SSR/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSSR_nc.{it.strftime('%Y%m%d%H')}",
+            "wv": f"{ARCHIVE_FOLDER}GMGSI_WV/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPWV_nc.{it.strftime('%Y%m%d%H')}",
+            "lwir": f"{ARCHIVE_FOLDER}GMGSI_LW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPLIR_nc.{it.strftime('%Y%m%d%H')}",
+            "swir": f"{ARCHIVE_FOLDER}GMGSI_SW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSIR_nc.{it.strftime('%Y%m%d%H')}",
+        },
+        description=f"Downloaded GMGSI global mosaic of geostationary satellites from NOAA on AWS for {it.strftime('%Y-%m-%d %H')}",
+    )
+
+@dg.asset(
+        name="gmgsi-zarr",
+        description=__doc__,
+        metadata={
+            "archive_folder": dg.MetadataValue.text(ARCHIVE_FOLDER),
+            "area": dg.MetadataValue.text("global"),
+            "source": dg.MetadataValue.text("noaa-aws"),
+            "expected_runtime": dg.MetadataValue.text("1 hour"),
+        },
+        deps=[gmgsi_download_asset],
+        tags={
+            "dagster/max_runtime": str(60 * 60 * 10), # Should take 6 ish hours
+            "dagster/priority": "1",
+            "dagster/concurrency_key": "aws",
+        },
+    partitions_def=partitions_def,
+)
+def gmgsi_zarr_asset(
+    context: dg.AssetExecutionContext,
+) -> dg.MaterializeResult:
+    """Dagster asset for NOAA's GMGSI global mosaic of geostationary satellites."""
+    it: dt.datetime = context.partition_time_window.start
+    dataset: xr.Dataset = get_global_mosaic(it)
+    zarr_dates = xr.open_zarr(ZARR_PATH).time.values
+    time_idx = np.where(zarr_dates == it)[0][0]
+    dataset.chunk({"time": 1, "yc": -1, "xc": -1}).rename({"lat": "latitude", "lon": "longitude"}).to_zarr(ZARR_PATH,
+                                                                                                                region={
+                                                                                                                    "time": slice(
+                                                                                                                        time_idx,
+                                                                                                                        time_idx + 1),
+                                                                                                                    "xc": "auto",
+                                                                                                                    "yc": "auto"}, )
+
+
+    return dg.MaterializeResult(
+        metadata={"zarr_path": ZARR_PATH},
+        description=f"Materialized GMGSI global mosaic of geostationary satellites from NOAA on AWS for {it.strftime('%Y-%m-%d %H')}",
+    )
+
 
 
 def get_global_mosaic(time: dt.datetime, channels: Optional[list[str]] = None) -> xr.Dataset:
@@ -74,52 +186,3 @@ def get_global_mosaic(time: dt.datetime, channels: Optional[list[str]] = None) -
     ds = xr.merge(datasets_to_merge)
     return ds
 
-
-variables = ["vis", "ssr", "wv", "lwir", "swir"]
-encoding = {v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle)} for v in variables}
-encoding["time"] = {"units": "nanoseconds since 1970-01-01"}
-
-if __name__ == "__main__":
-    date_range = pd.date_range(
-        start="2021-07-13", end=(dt.datetime.now() - pd.Timedelta(days=1)).strftime("%Y-%m-%d"), freq="D"
-    )
-    # Check which days are complete (i.e. have 24 files in it, for all channels)
-    timestamps = []
-    for date in date_range:
-        for hour in range(0, 24):
-            if not os.path.exists(
-                f"/run/media/jacob/Tester/gmgsi/GMGSI_VIS/{date.year}/{date.month:02}/{date.day:02}/{date.hour:02}/GLOBCOMPVIS_nc.{date.strftime('%Y%m%d%H')}"
-            ) or not os.path.exists(f"/run/media/jacob/Tester/gmgsi/GMGSI_SSR/{date.year}/{date.month:02}/{date.day:02}/{date.hour:02}/GLOBCOMPSSR_nc.{date.strftime('%Y%m%d%H')}")\
-                    or not os.path.exists(f"/run/media/jacob/Tester/gmgsi/GMGSI_WV/{date.year}/{date.month:02}/{date.day:02}/{date.hour:02}/GLOBCOMPWV_nc.{date.strftime('%Y%m%d%H')}")\
-                    or not os.path.exists(f"/run/media/jacob/Tester/gmgsi/GMGSI_LW/{date.year}/{date.month:02}/{date.day:02}/{date.hour:02}/GLOBCOMPLIR_nc.{date.strftime('%Y%m%d%H')}")\
-                    or not os.path.exists(f"/run/media/jacob/Tester/gmgsi/GMGSI_SW/{date.year}/{date.month:02}/{date.day:02}/{date.hour:02}/GLOBCOMPSIR_nc.{date.strftime('%Y%m%d%H')}"):
-                print(f"Missing {date.strftime('%Y%m%d')} {hour:02}")
-            else:
-                timestamps.append(date + pd.Timedelta(hours=hour))
-
-    path = "gmgsi_v3.zarr"
-
-    data = get_global_mosaic(timestamps[0])
-    data = data.rename({"lat": "latitude", "lon": "longitude"})
-    print(data)
-    print(data["vis"])
-    # Create empty dask arrays of the same size as the data
-    dask_arrays = []
-
-    dummies = dask.array.zeros((len(timestamps), data.xc.shape[0], data.yc.shape[0]), chunks=(1, -1, -1), dtype=np.uint8)
-    default_dataarray = xr.DataArray(dummies, coords={"time": timestamps, "latitude": (["yc", "xc"], data.latitude.values),
-                                       "longitude": (["yc", "xc"], data.longitude.values)},
-                     dims=["time", "xc", "yc"])
-    dummy_dataset = xr.Dataset({v: default_dataarray for v in variables},
-                               coords={"time": timestamps, "latitude": (["yc", "xc"], data.latitude.values), "longitude": (["yc", "xc"], data.longitude.values)})
-    print(dummy_dataset)
-    dummy_dataset.to_zarr(path, mode="w", compute=False, zarr_format=3, encoding=encoding)
-    zarr_dates = xr.open_zarr(path).time.values
-    for day in tqdm(timestamps, total=len(timestamps)):
-        time_idx = np.where(zarr_dates == day)[0][0]
-        try:
-            data = get_global_mosaic(day)
-            data.chunk({"time": 1, "yc": -1, "xc": -1}).rename({"lat": "latitude", "lon": "longitude"}).to_zarr(path,region={"time": slice(time_idx, time_idx+1),"xc": "auto", "yc": "auto"}, )
-        except Exception as e:
-            print(e)
-            continue
