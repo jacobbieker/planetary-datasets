@@ -29,32 +29,6 @@ partitions_def: dg.TimeWindowPartitionsDefinition = dg.HourlyPartitionsDefinitio
 )
 
 
-@dg.asset(name="gmgsi-dummy-zarr", description="Dummy Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS",)
-def gmgsi_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
-    variables = ["vis", "ssr", "wv", "lwir", "swir"]
-    encoding = {
-        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=5, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
-        for v in variables}
-    encoding["time"] = {"units": "nanoseconds since 1970-01-01"}
-    # Get the number of partitions to create
-    date_range = pd.date_range(start="2021-07-13", end="2026-12-31", freq="H")
-    dummies = dask.array.zeros((len(date_range), data.xc.shape[0], data.yc.shape[0]), chunks=(1, -1, -1),
-                               dtype=np.uint8)
-    default_dataarray = xr.DataArray(dummies,
-                                     coords={"time": date_range, "latitude": (["yc", "xc"], data.latitude.values),
-                                             "longitude": (["yc", "xc"], data.longitude.values)},
-                                     dims=["time", "xc", "yc"])
-    dummy_dataset = xr.Dataset({v: default_dataarray for v in variables},
-                               coords={"time": date_range, "latitude": (["yc", "xc"], data.latitude.values),
-                                       "longitude": (["yc", "xc"], data.longitude.values)})
-    dummy_dataset.to_zarr(ZARR_PATH, mode="w", compute=False, zarr_format=3, encoding=encoding)
-    return dg.MaterializeResult(
-        metadata={"zarr_path": ZARR_PATH},
-        description="Materialized dummy Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS",
-    )
-
-
-
 @dg.asset(name="gmgsi-download", description="Download GMGSI global mosaic of geostationary satellites from NOAA on AWS",
           tags={
               "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
@@ -86,6 +60,40 @@ def gmgsi_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeRes
         description=f"Downloaded GMGSI global mosaic of geostationary satellites from NOAA on AWS for {it.strftime('%Y-%m-%d %H')}",
     )
 
+
+@dg.asset(name="gmgsi-dummy-zarr",
+          deps=[gmgsi_download_asset],
+          description="Dummy Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS", )
+def gmgsi_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+    if os.path.exists(ZARR_PATH):
+        return dg.MaterializeResult(
+            metadata={"zarr_path": ZARR_PATH},
+            description="Zarr archive already exists",
+        )
+
+    data = get_global_mosaic(context.partition_time_window.start)
+    variables = ["vis", "ssr", "wv", "lwir", "swir"]
+    encoding = {
+        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
+        for v in variables}
+    encoding["time"] = {"units": "nanoseconds since 1970-01-01"}
+    # Get the number of partitions to create
+    date_range = pd.date_range(start="2021-07-13", end="2026-12-31", freq="H")
+    dummies = dask.array.zeros((len(date_range), data.xc.shape[0], data.yc.shape[0]), chunks=(1, -1, -1),
+                               dtype=np.uint8)
+    default_dataarray = xr.DataArray(dummies,
+                                     coords={"time": date_range, "latitude": (["yc", "xc"], data.latitude.values),
+                                             "longitude": (["yc", "xc"], data.longitude.values)},
+                                     dims=["time", "xc", "yc"])
+    dummy_dataset = xr.Dataset({v: default_dataarray for v in variables},
+                               coords={"time": date_range, "latitude": (["yc", "xc"], data.latitude.values),
+                                       "longitude": (["yc", "xc"], data.longitude.values)})
+    dummy_dataset.to_zarr(ZARR_PATH, mode="w", compute=False, zarr_format=3, encoding=encoding)
+    return dg.MaterializeResult(
+        metadata={"zarr_path": ZARR_PATH},
+        description="Materialized dummy Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS",
+    )
+
 @dg.asset(
         name="gmgsi-zarr",
         description=__doc__,
@@ -95,7 +103,7 @@ def gmgsi_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeRes
             "source": dg.MetadataValue.text("noaa-aws"),
             "expected_runtime": dg.MetadataValue.text("1 hour"),
         },
-        deps=[gmgsi_download_asset],
+        deps=[gmgsi_download_asset, gmgsi_dummy_zarr_asset],
         tags={
             "dagster/max_runtime": str(60 * 60 * 10), # Should take 6 ish hours
             "dagster/priority": "1",
