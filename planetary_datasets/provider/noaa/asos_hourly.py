@@ -90,23 +90,26 @@ def download_alldata():
 
     Service supports up to 24 hours worth of data at a time."""
     # timestamps in UTC to request data for
-    startts = datetime(2000, 1, 1)
-    endts = datetime(2025, 12, 31)
+    startts = datetime(1950, 1, 1)
+    endts = datetime(2025, 1, 31)
     interval = timedelta(hours=24)
 
     service = SERVICE + "data=all&tz=Etc/UTC&format=comma&latlon=yes&"
 
-    now = startts
-    while now < endts:
+    now = endts
+    while now > startts:
         thisurl = service
-        thisurl += now.strftime("year1=%Y&month1=%m&day1=%d&")
-        thisurl += (now + interval).strftime("year2=%Y&month2=%m&day2=%d&")
+        thisurl += (now - interval).strftime("year1=%Y&month1=%m&day1=%d&")
+        thisurl += now.strftime("year2=%Y&month2=%m&day2=%d&")
         print(f"Downloading: {now}")
+        outfn = f"/Volumes/T7/asos_hourly/{(now - interval):%Y%m%d}.txt"
+        if os.path.exists(outfn):
+            now -= interval
+            continue
         data = download_data(thisurl)
-        outfn = f"/Volumes/T7/asos_hourly/{now:%Y%m%d}.txt"
         with open(outfn, "w", encoding="ascii") as fh:
             fh.write(data)
-        now += interval
+        now -= interval
 
 
 if __name__ == "__main__":

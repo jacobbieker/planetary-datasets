@@ -100,8 +100,7 @@ def get_silam_dust_forecast_xr(date: dt.datetime) -> xr.Dataset | None:
     ds = ds.expand_dims("init_time")
     # Rename lat/lon to latitude and longitude
     ds = ds.rename({"lat": "latitude", "lon": "longitude"})
-    ds = ds.chunk({"init_time": 1, "step": -1, "latitude": -1, "longitude": -1})
-    print(ds)
+    ds = ds.chunk({"init_time": 1, "step": 1, "latitude": -1, "longitude": -1})
     return ds
 
 
@@ -114,9 +113,8 @@ if __name__ == "__main__":
     date_range = pd.date_range(
         start="2024-11-14", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="D"
     )
-    for day in date_range:
-        download_forecast(day)
-    exit()
+    #for day in date_range:
+    #    download_forecast(day)
 
     s3_path = "s3://bkr/silam-dust/silam_global_dust.zarr"
     path = "silam_global_dust.zarr"
@@ -161,7 +159,9 @@ if __name__ == "__main__":
         # Local path of the downloaded files
         files = list(sorted(glob.glob(f"*{day.strftime('%Y%m%d00')}*.nc4")))
         if not files:
-            continue
+            files = list(sorted(glob.glob(f"{day.strftime('%Y%m%d00')}/*.nc4")))
+            if not files:
+                continue
         ds = []
         failed = False
         for f in files:
@@ -183,7 +183,7 @@ if __name__ == "__main__":
         time_idx = np.where(zarr_dates == day)[0][0]
         print(time_idx)
         # Write the data to the zarr
-        data.to_zarr(path, region={"init_time": slice(time_idx, time_idx+1),"latitude": "auto", "longitude": "auto", "step": slice(0, None)},)
+        data.to_zarr(path, region={"init_time": slice(time_idx, time_idx+1),"latitude": "auto", "longitude": "auto", "step": 1},)
         print(f"Finished Writing: {day} to location: {time_idx}")
         # Now close the dataset to close all files
         data.close()

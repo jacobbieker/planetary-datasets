@@ -31,6 +31,8 @@ cfgrib = ">=0.9.15.0,<0.10"
 h5py = ">=3.12.1,<4"
 pybufrkit = ">=0.2.22,<0.3"
 h5netcdf = ">=1.5.0,<2"
+dagster = ">=1.10.2,<2"
+dagster-webserver = ">=1.10.2,<2"
 
 [pypi-dependencies]
 odc-stac = ">=0.3.11, <0.4"
