@@ -23,7 +23,7 @@ def download_forecast_step(date: dt.datetime, step: int) -> list[str]:
     if not os.path.exists(url_dir):
         os.makedirs(url_dir)
     downloaded_url_path = os.path.join(url_dir, url.split("/")[-1])
-    if os.path.exists(downloaded_url_path):
+    if not os.path.exists(downloaded_url_path):
         with fsspec.open(url, "rb") as f:
             with open(downloaded_url_path, "wb") as f2:
                 f2.write(f.read())
