@@ -1,10 +1,12 @@
-import icechunk
-import zarr
-import os
 import glob
-import xarray as xr
-import tqdm
+import os
+
+import icechunk
 import pandas as pd
+import tqdm
+import xarray as xr
+import zarr
+
 
 def get_timestamps_from_name(name) -> list[pd.Timestamp]:
     # 20210814.zarr.zip

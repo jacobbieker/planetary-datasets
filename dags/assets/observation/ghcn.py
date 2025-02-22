@@ -3,10 +3,10 @@ GHCNh is the hourly global historical climatology network dataset. It is the rep
 """
 import os.path
 
-import pandas as pd
-import xarray as xr
 import fsspec
+import pandas as pd
 import requests
+import xarray as xr
 
 STATION_LIST = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/doc/ghcnh-station-list.txt"
 FILE_PATH_TEMPLATE = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/by-year/{year}/parquet/GHCNh_{station_id}_{year}.parquet"

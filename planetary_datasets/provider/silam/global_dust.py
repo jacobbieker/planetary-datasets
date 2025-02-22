@@ -1,11 +1,13 @@
-import zarr
-import xarray as xr
-import pandas as pd
 import datetime as dt
-import fsspec
 import os
+
 import dask.array
+import fsspec
 import numpy as np
+import pandas as pd
+import xarray as xr
+import zarr
+
 FSSPEC_S3_ENDPOINT_URL="https://data.source.coop"
 
 
@@ -72,7 +74,7 @@ def download_forecast(date: dt.datetime) -> list[str]:
                 finished = True
                 downloaded_paths.append(downloaded_url_path)
                 break
-            except Exception as e:
+            except Exception:
                 continue
         if not finished:
             print(f"Failed to download {url}")

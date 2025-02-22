@@ -1,13 +1,13 @@
 import datetime as dt
-import fsspec
-import zipfile
-import pandas as pd
-import random
-import shutil
-from huggingface_hub import HfApi
 import os
+import shutil
+import zipfile
+
+import fsspec
+import pandas as pd
 import xarray as xr
 import zarr
+from huggingface_hub import HfApi
 
 """
 --raw-location /run/media/jacob/Square1/europe_clouds_raw --output-location /run/media/jacob/Square1/europe_clouds_zarr --product-id EO:EUM:DAT:MSG:CLM --bands cloud
@@ -91,6 +91,7 @@ def upload_to_hf(zip_name, hf_token, repo_id):
 
 if __name__ == "__main__":
     import argparse
+
     from dask.distributed import LocalCluster
 
     cluster = LocalCluster()

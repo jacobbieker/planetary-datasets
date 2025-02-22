@@ -1,15 +1,14 @@
-import xarray as xr
-import pandas as pd
 import datetime as dt
-import zarr
-from typing import Optional
-import dask.array
-import numpy as np
 import os
 from typing import TYPE_CHECKING
 
 import dagster as dg
+import dask.array
 import fsspec
+import numpy as np
+import pandas as pd
+import xarray as xr
+import zarr
 
 if TYPE_CHECKING:
     import datetime as dt

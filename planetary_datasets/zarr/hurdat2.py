@@ -1,5 +1,5 @@
-import csv
 import xarray as xr
+
 """
 This is to convert the HURDAT2 hurricane track and wind speed data into a more useful format
 """

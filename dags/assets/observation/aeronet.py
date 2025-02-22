@@ -1,8 +1,9 @@
+import datetime as dt
+from typing import Optional
+
 import pandas as pd
 import xarray as xr
 from monetio import aeronet
-import datetime as dt
-from typing import Optional
 
 
 def get_aeronet_observations(

@@ -1,12 +1,13 @@
-import monetio
-import pandas as pd
-import xarray as xr
-from monetio.obs import ish
 import datetime as dt
-import s3fs
-from planetary_datasets.base import AbstractSource, AbstractConvertor
-from isd import Batch
 from pathlib import Path
+
+import pandas as pd
+import s3fs
+import xarray as xr
+from isd import Batch
+from monetio.obs import ish
+
+from planetary_datasets.base import AbstractSource
 
 
 class ISDSource(AbstractSource):

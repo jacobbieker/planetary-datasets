@@ -1,9 +1,8 @@
-import pandas as pd
 import datetime as dt
-import fsspec
 import os
-from subprocess import Popen
-import subprocess
+
+import fsspec
+import pandas as pd
 
 """
 https://thredds.silam.fmi.fi/thredds/fileServer/dust_glob01_v5_7_2/files/SILAM-dust-glob01_v5_7_2_2024111300_001.nc4
@@ -66,7 +65,7 @@ if __name__ == "__main__":
     )
 
     date_range = pd.date_range(
-        start="2025-02-14", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="D"
+        start="2025-02-21", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="D"
     )
     for day in date_range:
         download_forecast(day)

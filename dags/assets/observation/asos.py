@@ -89,7 +89,8 @@ def get_stations_from_networks():
 def download_alldata():
     """An alternative method that fetches all available data.
 
-    Service supports up to 24 hours worth of data at a time."""
+    Service supports up to 24 hours worth of data at a time.
+    """
     # timestamps in UTC to request data for
     startts = datetime(2013, 1, 1)
     endts = datetime(2025, 12, 31)
