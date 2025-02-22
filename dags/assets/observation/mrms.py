@@ -64,7 +64,6 @@ def mrms_preciprate_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
         metadata={
             "files": downloaded_files
         },
-        description=f"Downloaded MRMS PrecipRate from Iowa State University for {it.strftime('%Y-%m-%d')}",
     )
 
 @dg.asset(name="mrms-flag-download", description="Download MRMS radar precipitation from Iowa State University",
@@ -84,7 +83,6 @@ def mrms_precipflag_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
         metadata={
             "files": downloaded_files
         },
-        description=f"Downloaded MRMS PrecipFlag from Iowa State University for {it.strftime('%Y-%m-%d')}",
     )
 
 
@@ -95,7 +93,6 @@ def mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Ma
     if os.path.exists(ZARR_PATH):
         return dg.MaterializeResult(
             metadata={"zarr_path": ZARR_PATH},
-            description="Zarr archive already exists",
         )
 
     files = get_mrms(context.partition_time_window.start, "PrecipFlag")
@@ -118,7 +115,6 @@ def mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Ma
 
     return dg.MaterializeResult(
         metadata={"zarr_path": ZARR_PATH},
-        description="Materialized dummy Zarr archive of MRMS",
     )
 
 @dg.asset(
@@ -163,7 +159,6 @@ def mrms_zarr_asset(
 
     return dg.MaterializeResult(
         metadata={"zarr_path": ZARR_PATH},
-        description=f"Materialized MRMS for {it.strftime('%Y-%m-%d')}",
     )
 
 def construct_timestamps_from_filename(filename):

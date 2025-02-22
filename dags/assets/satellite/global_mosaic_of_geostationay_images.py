@@ -56,7 +56,6 @@ def gmgsi_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeRes
             "lwir": f"{ARCHIVE_FOLDER}GMGSI_LW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPLIR_nc.{it.strftime('%Y%m%d%H')}",
             "swir": f"{ARCHIVE_FOLDER}GMGSI_SW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSIR_nc.{it.strftime('%Y%m%d%H')}",
         },
-        description=f"Downloaded GMGSI global mosaic of geostationary satellites from NOAA on AWS for {it.strftime('%Y-%m-%d %H')}",
     )
 
 
@@ -67,7 +66,6 @@ def gmgsi_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeR
     if os.path.exists(ZARR_PATH):
         return dg.MaterializeResult(
             metadata={"zarr_path": ZARR_PATH},
-            description="Zarr archive already exists",
         )
 
     data = get_global_mosaic(context.partition_time_window.start)
@@ -90,7 +88,6 @@ def gmgsi_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeR
     dummy_dataset.to_zarr(ZARR_PATH, mode="w", compute=False, zarr_format=3, encoding=encoding)
     return dg.MaterializeResult(
         metadata={"zarr_path": ZARR_PATH},
-        description="Materialized dummy Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS",
     )
 
 @dg.asset(
@@ -125,11 +122,8 @@ def gmgsi_zarr_asset(
                                                                                                                         time_idx + 1),
                                                                                                                     "xc": "auto",
                                                                                                                     "yc": "auto"}, )
-
-
     return dg.MaterializeResult(
         metadata={"zarr_path": ZARR_PATH},
-        description=f"Materialized GMGSI global mosaic of geostationary satellites from NOAA on AWS for {it.strftime('%Y-%m-%d %H')}",
     )
 
 

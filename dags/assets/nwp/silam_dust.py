@@ -107,7 +107,6 @@ def silam_dust_download_asset(context: dg.AssetExecutionContext) -> dg.Materiali
         downloaded_paths.append(download_forecast_step(it, i))
     return dg.MaterializeResult(
         metadata={"downloaded_paths": downloaded_paths},
-        description=f"Downloaded SILAM 10km dust forecast from FMI Thredds server for {it.strftime('%Y-%m-%d')}",
     )
 
 @dg.asset(name="silam-dust-dummy-zarr",
@@ -117,7 +116,6 @@ def silam_dust_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Materia
     if os.path.exists(ZARR_PATH):
         return dg.MaterializeResult(
             metadata={"zarr_path": ZARR_PATH},
-            description="Zarr archive already exists",
         )
 
     zarr_date_range = pd.date_range(
@@ -162,7 +160,6 @@ def silam_dust_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Materia
                                                                                               encoding=encoding, )  # storage_options={"endpoint_url": "https://data.source.coop"})
     return dg.MaterializeResult(
         metadata={"zarr_path": ZARR_PATH},
-        description="Materialized dummy Zarr archive of SILAM Dust",
     )
 
 @dg.asset(
@@ -206,5 +203,4 @@ def gmgsi_zarr_asset(
 
     return dg.MaterializeResult(
         metadata={"zarr_path": ZARR_PATH},
-        description=f"Materialized SILAM Dust Zarr for {it.strftime('%Y-%m-%d %H')}",
     )
