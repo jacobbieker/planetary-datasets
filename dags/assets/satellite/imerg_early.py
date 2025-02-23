@@ -61,6 +61,8 @@ partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition
               "dagster/concurrency_key": "download",
           },
           partitions_def=partitions_def,
+        automation_condition=dg.AutomationCondition.eager(),
+
           )
 def imerg_early_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
@@ -76,7 +78,8 @@ def imerg_early_download_asset(context: dg.AssetExecutionContext) -> dg.Material
 
 @dg.asset(name="imerg-early-dummy-zarr",
           deps=[imerg_early_download_asset],
-          description="Dummy Zarr archive of satellite image data from IMERG early precipitation", )
+          description="Dummy Zarr archive of satellite image data from IMERG early precipitation",
+          automation_condition=dg.AutomationCondition.eager(),)
 def imerg_early_dummy_zarr(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     if os.path.exists(ZARR_PATH):
         return dg.MaterializeResult(
@@ -120,6 +123,7 @@ def imerg_early_dummy_zarr(context: dg.AssetExecutionContext) -> dg.MaterializeR
             "dagster/concurrency_key": "zarr-creation",
         },
     partitions_def=partitions_def,
+automation_condition=dg.AutomationCondition.eager(),
 )
 def imerg_early_zarr_asset(
     context: dg.AssetExecutionContext,
@@ -141,7 +145,8 @@ def imerg_early_zarr_asset(
     )
 
 @dg.asset(name="imerg-early-cleanup",
-          deps=[imerg_early_zarr_asset])
+          deps=[imerg_early_zarr_asset],
+          automation_condition=dg.AutomationCondition.eager(),)
 def cleanup(context: dg.AssetExecutionContext,) -> dg.MaterializeResult:
     it: dt.datetime = context.partition_time_window.start
     files = get_imerg_early_files(it)
@@ -150,7 +155,8 @@ def cleanup(context: dg.AssetExecutionContext,) -> dg.MaterializeResult:
 
 @dg.asset(name="imerg-early-upload-source-coop",
           deps=[imerg_early_zarr_asset],
-          description="Upload GPM IMERG Early to Source Coop")
+          description="Upload GPM IMERG Early to Source Coop",
+          automation_condition=dg.AutomationCondition.eager(),)
 def silam_upload_source_coop(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     # Sync the Zarr to Source Coop
     args = ["aws", "s3", "sync", ZARR_PATH+"/", SOURCE_COOP_PATH+"/", "--profile=sc"]

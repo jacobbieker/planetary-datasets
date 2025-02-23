@@ -44,7 +44,6 @@ def download_mrms(day: dt.datetime, measurement_type: str) -> list[str]:
 def get_mrms(day: dt.datetime, measurement_type: str) -> list[str]:
     return sorted(list(glob.glob(f"{ARCHIVE_FOLDER}/mtarchive.geol.iastate.edu/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/mrms/ncep/{measurement_type}/*.grib2.gz")))
 
-
 @dg.asset(name="mrms-precip-download", description="Download MRMS radar precipitation from Iowa State University",
           tags={
               "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
@@ -52,6 +51,7 @@ def get_mrms(day: dt.datetime, measurement_type: str) -> list[str]:
               "dagster/concurrency_key": "download",
           },
           partitions_def=partitions_def,
+automation_condition=dg.AutomationCondition.eager(),
           )
 def mrms_preciprate_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
@@ -71,6 +71,7 @@ def mrms_preciprate_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
               "dagster/concurrency_key": "download",
           },
           partitions_def=partitions_def,
+        automation_condition=dg.AutomationCondition.eager(),
           )
 def mrms_precipflag_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
@@ -86,7 +87,8 @@ def mrms_precipflag_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
 
 @dg.asset(name="mrms-dummy-zarr",
           deps=[mrms_precipflag_download_asset, mrms_preciprate_download_asset],
-          description="Dummy Zarr archive of MRMS PrecipFlag", )
+          description="Dummy Zarr archive of MRMS PrecipFlag",
+          automation_condition=dg.AutomationCondition.eager(),)
 def mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     if os.path.exists(ZARR_PATH):
         return dg.MaterializeResult(
@@ -134,6 +136,7 @@ def mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Ma
             "dagster/concurrency_key": "zarr-creation",
         },
     partitions_def=partitions_def,
+automation_condition=dg.AutomationCondition.eager(),
 )
 def mrms_zarr_asset(
     context: dg.AssetExecutionContext,
@@ -163,7 +166,8 @@ def mrms_zarr_asset(
 
 @dg.asset(name="mrms-upload-source-coop",
           deps=[mrms_zarr_asset],
-          description="Upload MRMS radar precipitation to Source Coop")
+          description="Upload MRMS radar precipitation to Source Coop",
+          automation_condition=dg.AutomationCondition.eager(),)
 def mrms_upload_source_coop(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     # Sync the Zarr to Source Coop
     args = ["aws", "s3", "sync", ZARR_PATH+"/", SOURCE_COOP_PATH+"/", "--profile=sc"]

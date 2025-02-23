@@ -35,6 +35,7 @@ partitions_def: dg.TimeWindowPartitionsDefinition = dg.HourlyPartitionsDefinitio
               "dagster/concurrency_key": "aws",
           },
           partitions_def=partitions_def,
+automation_condition=dg.AutomationCondition.eager(),
           )
 def gmgsi_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
@@ -61,7 +62,8 @@ def gmgsi_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeRes
 
 @dg.asset(name="gmgsi-dummy-zarr",
           deps=[gmgsi_download_asset],
-          description="Dummy Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS", )
+          description="Dummy Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS",
+          automation_condition=dg.AutomationCondition.eager(),)
 def gmgsi_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     if os.path.exists(ZARR_PATH):
         return dg.MaterializeResult(
@@ -106,6 +108,7 @@ def gmgsi_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeR
             "dagster/concurrency_key": "aws",
         },
     partitions_def=partitions_def,
+automation_condition=dg.AutomationCondition.eager(),
 )
 def gmgsi_zarr_asset(
     context: dg.AssetExecutionContext,

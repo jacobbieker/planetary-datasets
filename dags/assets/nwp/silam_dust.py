@@ -101,6 +101,8 @@ partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition
               "dagster/concurrency_key": "download",
           },
           partitions_def=partitions_def,
+automation_condition=dg.AutomationCondition.eager(),
+
           )
 def silam_dust_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
@@ -114,7 +116,8 @@ def silam_dust_download_asset(context: dg.AssetExecutionContext) -> dg.Materiali
 
 @dg.asset(name="silam-dust-dummy-zarr",
           deps=[silam_dust_download_asset],
-          description="Dummy Zarr archive of SILAM Dust from FMI", )
+          description="Dummy Zarr archive of SILAM Dust from FMI",
+          automation_condition=dg.AutomationCondition.eager(),)
 def silam_dust_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     if os.path.exists(ZARR_PATH):
         return dg.MaterializeResult(
@@ -179,6 +182,7 @@ def silam_dust_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Materia
             "dagster/concurrency_key": "zarr-creation",
         },
     partitions_def=partitions_def,
+automation_condition=dg.AutomationCondition.eager(),
 )
 def silam_zarr_asset(
     context: dg.AssetExecutionContext,
@@ -208,7 +212,8 @@ def silam_zarr_asset(
 
 @dg.asset(name="silam-dust-upload-source-coop",
           deps=[silam_zarr_asset],
-          description="Upload SILAM Dust to Source Coop")
+          description="Upload SILAM Dust to Source Coop",
+          automation_condition=dg.AutomationCondition.eager(),)
 def silam_upload_source_coop(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     # Sync the Zarr to Source Coop
     args = ["aws", "s3", "sync", ZARR_PATH+"/", SOURCE_COOP_PATH+"/", "--profile=sc"]
