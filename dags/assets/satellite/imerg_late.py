@@ -39,7 +39,7 @@ IMERG Late
 
 """
 
-ARCHIVE_FOLDER = "/ext_data/GPM_final/"
+ARCHIVE_FOLDER = "/run/media/jacob/Tester/IMERG_final/"
 BASE_URL = "s3://noaa-gmgsi-pds/"
 SOURCE_COOP_PATH = "s3://bkr/imerg/imerg_final.zarr"
 ZARR_PATH = "/ext_data/GPM_final/imerg-late.zarr"
