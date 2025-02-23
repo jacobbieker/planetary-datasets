@@ -6,11 +6,10 @@ import gzip
 import shutil
 import datetime as dt
 import os
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import dagster as dg
 import dask.array
-import fsspec
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -21,11 +20,10 @@ if TYPE_CHECKING:
 
 """Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
 
-ARCHIVE_FOLDER = "/var/dagster-storage/sat/eumetsat-iodc-lrv"
-BASE_URL = "s3://noaa-gmgsi-pds/"
+ARCHIVE_FOLDER = "MRMS/"
 ZARR_PATH = "mrms.zarr"
 if os.getenv("ENVIRONMENT", "local") == "pb":
-    ARCHIVE_FOLDER = "/data/MRMS/"
+    ARCHIVE_FOLDER = "MRMS/"
 
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition(
     start_date="2000-01-01",
@@ -41,10 +39,10 @@ def download_mrms(day: dt.datetime, measurement_type: str) -> list[str]:
     process = Popen(args)
     process.wait()
     # Get the paths that have been downloaded
-    return sorted(list(glob.glob(f"{Path.home()}/mtarchive.geol.iastate.edu/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/mrms/ncep/{measurement_type}/*.grib2.gz")))
+    return sorted(list(glob.glob(f"{ARCHIVE_FOLDER}/mtarchive.geol.iastate.edu/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/mrms/ncep/{measurement_type}/*.grib2.gz")))
 
 def get_mrms(day: dt.datetime, measurement_type: str) -> list[str]:
-    return sorted(list(glob.glob(f"{Path.home()}/mtarchive.geol.iastate.edu/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/mrms/ncep/{measurement_type}/*.grib2.gz")))
+    return sorted(list(glob.glob(f"{ARCHIVE_FOLDER}/mtarchive.geol.iastate.edu/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/mrms/ncep/{measurement_type}/*.grib2.gz")))
 
 
 @dg.asset(name="mrms-precip-download", description="Download MRMS radar precipitation from Iowa State University",
@@ -88,6 +86,7 @@ def mrms_precipflag_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
 
 @dg.asset(name="mrms-dummy-zarr",
           deps=[mrms_precipflag_download_asset, mrms_preciprate_download_asset],
+        partitions_def=partitions_def,
           description="Dummy Zarr archive of MRMS PrecipFlag", )
 def mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     if os.path.exists(ZARR_PATH):
@@ -126,7 +125,7 @@ def mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Ma
             "source": dg.MetadataValue.text("noaa-aws"),
             "expected_runtime": dg.MetadataValue.text("1 hour"),
         },
-        deps=[mrms_precipflag_dummy_zarr_asset, mrms_precipflag_download_asset],
+        deps=[mrms_precipflag_dummy_zarr_asset, mrms_precipflag_download_asset, mrms_preciprate_download_asset],
         tags={
             "dagster/max_runtime": str(60 * 60 * 10), # Should take 6 ish hours
             "dagster/priority": "1",
@@ -173,7 +172,7 @@ def load_mrms_flag(filepath) -> xr.Dataset:
         with gzip.open(filepath, 'rb') as f:
             with open(os.path.join(tmp, f'{rand_num}.grib2'), 'wb') as f_out:
                 shutil.copyfileobj(f, f_out)
-        data = xr.load_dataset(os.path.join(tmp, f'{rand_num}.grib2'), engine="cfgrib")
+        data = xr.load_dataset(os.path.join(tmp, f'{rand_num}.grib2'), engine="cfgrib", decode_timedelta=False)
         data = data.rename({"unknown": "precipitation_flag"})
         data = data.expand_dims(dim="time")
         data["time"] = [timestamp]
@@ -193,7 +192,7 @@ def load_mrms_rate(filepath) -> xr.Dataset:
         with gzip.open(filepath, 'rb') as f:
             with open(os.path.join(tmp, f'{rand_num}.grib2'), 'wb') as f_out:
                 shutil.copyfileobj(f, f_out)
-        data = xr.load_dataset(os.path.join(tmp, f'{rand_num}.grib2'), engine="cfgrib")
+        data = xr.load_dataset(os.path.join(tmp, f'{rand_num}.grib2'), engine="cfgrib", decode_timedelta=False)
         data = data.rename({"unknown": "precipitation_rate"})
         data = data.expand_dims(dim="time")
         data["time"] = [timestamp]

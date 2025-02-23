@@ -48,4 +48,4 @@ def download_meteostat():
             except:
                 continue
 
-download_meteostat()
+#download_meteostat()

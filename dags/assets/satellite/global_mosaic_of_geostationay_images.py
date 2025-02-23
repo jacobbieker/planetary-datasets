@@ -23,7 +23,7 @@ if os.getenv("ENVIRONMENT", "local") == "pb":
     ARCHIVE_FOLDER = "/data/gmgsi/"
 
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.HourlyPartitionsDefinition(
-    start_date="2021-07-13",
+    start_date="2021-07-13-00:00",
     end_offset=-1,
 )
 

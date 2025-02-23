@@ -103,7 +103,7 @@ def imerg_late_dummy_zarr(context: dg.AssetExecutionContext) -> dg.MaterializeRe
     )
 
 @dg.asset(
-        name="imerg-early-zarr",
+        name="imerg-late-zarr",
         description=__doc__,
         metadata={
             "archive_folder": dg.MetadataValue.text(ARCHIVE_FOLDER),
