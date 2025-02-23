@@ -1,6 +1,5 @@
 from subprocess import Popen
 import glob
-from pathlib import Path
 import tempfile
 import gzip
 import shutil
@@ -20,10 +19,11 @@ if TYPE_CHECKING:
 
 """Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
 
-ARCHIVE_FOLDER = "MRMS/"
-ZARR_PATH = "mrms.zarr"
+ARCHIVE_FOLDER = "/data/MRMS/"
+ZARR_PATH = "/data/MRMS/mrms.zarr"
+SOURCE_COOP_PATH = "s3://bkr/mrms/mrms.zarr"
 if os.getenv("ENVIRONMENT", "local") == "pb":
-    ARCHIVE_FOLDER = "MRMS/"
+    ARCHIVE_FOLDER = "/data/MRMS/"
 
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition(
     start_date="2000-01-01",
@@ -86,16 +86,18 @@ def mrms_precipflag_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
 
 @dg.asset(name="mrms-dummy-zarr",
           deps=[mrms_precipflag_download_asset, mrms_preciprate_download_asset],
-        partitions_def=partitions_def,
           description="Dummy Zarr archive of MRMS PrecipFlag", )
 def mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     if os.path.exists(ZARR_PATH):
         return dg.MaterializeResult(
             metadata={"zarr_path": ZARR_PATH},
         )
-
-    files = get_mrms(context.partition_time_window.start, "PrecipFlag")
-
+    for date in zarr_date_range:
+        files = get_mrms(date, "PrecipFlag")
+        if len(files) > 0:
+            break
+    if len(files) == 0:
+        raise FileNotFoundError("No files found")
     timestamps = zarr_date_range
     # open a single file and get the coordinate metadata
     data = load_mrms_flag(files[0])
@@ -143,22 +145,31 @@ def mrms_zarr_asset(
     zarr_dates = xr.open_zarr(ZARR_PATH).time.values
     for f in files:
         data = load_mrms_flag(f)
-        time_idx = np.where(zarr_dates == data.time.values)[0][0]
         data.transpose("time", "latitude", "longitude").to_zarr(ZARR_PATH,
                                                         region={
                                                             "time": "auto",
                                                             "latitude": "auto", "longitude": "auto"}, )
     for f in rate_files:
         data = load_mrms_rate(f)
-        time_idx = np.where(zarr_dates == data.time.values)[0][0]
         data.transpose("time", "latitude", "longitude").to_zarr(ZARR_PATH,
                                                         region={
                                                             "time": "auto",
                                                             "latitude": "auto", "longitude": "auto"}, )
 
     return dg.MaterializeResult(
-        metadata={"zarr_path": ZARR_PATH},
+        metadata={"zarr_path": ZARR_PATH,
+                  "time": it.strftime("%Y-%m-%d")},
     )
+
+@dg.asset(name="mrms-upload-source-coop",
+          deps=[mrms_zarr_asset],
+          description="Upload MRMS radar precipitation to Source Coop")
+def mrms_upload_source_coop(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+    # Sync the Zarr to Source Coop
+    args = ["aws", "s3", "sync", ZARR_PATH+"/", SOURCE_COOP_PATH+"/", "--profile=sc"]
+    process = Popen(args)
+    process.wait()
+    return dg.MaterializeResult(metadata={"zarr_path": SOURCE_COOP_PATH})
 
 def construct_timestamps_from_filename(filename):
     # 20160122-194600

@@ -16,11 +16,11 @@ if TYPE_CHECKING:
 
 """Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
 
-ARCHIVE_FOLDER = "/var/dagster-storage/sat/eumetsat-iodc-lrv"
+ARCHIVE_FOLDER = "/ext_data/gmgsi/"
 BASE_URL = "s3://noaa-gmgsi-pds/"
-ZARR_PATH = "gmgsi.zarr"
+ZARR_PATH = "/ext_data/gmgsi.zarr"
 if os.getenv("ENVIRONMENT", "local") == "pb":
-    ARCHIVE_FOLDER = "/data/gmgsi/"
+    ARCHIVE_FOLDER = "/ext_data/gmgsi/"
 
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.HourlyPartitionsDefinition(
     start_date="2021-07-13-00:00",
@@ -113,13 +113,9 @@ def gmgsi_zarr_asset(
     """Dagster asset for NOAA's GMGSI global mosaic of geostationary satellites."""
     it: dt.datetime = context.partition_time_window.start
     dataset: xr.Dataset = get_global_mosaic(it)
-    zarr_dates = xr.open_zarr(ZARR_PATH).time.values
-    time_idx = np.where(zarr_dates == it)[0][0]
     dataset.chunk({"time": 1, "yc": -1, "xc": -1}).rename({"lat": "latitude", "lon": "longitude"}).to_zarr(ZARR_PATH,
                                                                                                                 region={
-                                                                                                                    "time": slice(
-                                                                                                                        time_idx,
-                                                                                                                        time_idx + 1),
+                                                                                                                    "time": "auto",
                                                                                                                     "xc": "auto",
                                                                                                                     "yc": "auto"}, )
     return dg.MaterializeResult(

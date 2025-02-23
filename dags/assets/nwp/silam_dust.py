@@ -1,5 +1,6 @@
 import datetime as dt
 import os
+from subprocess import Popen
 from typing import TYPE_CHECKING
 
 import dagster as dg
@@ -19,6 +20,7 @@ def construct_url_from_datetime(date: dt.datetime, step: int) -> list[str]:
 def download_forecast_step(date: dt.datetime, step: int) -> list[str]:
     url = construct_url_from_datetime(date, step)
     url_dir = url.split("/")[-1].split("_")[-2]
+    url_dir = os.path.join(ARCHIVE_FOLDER, url_dir)
     if not os.path.exists(url_dir):
         os.makedirs(url_dir)
     downloaded_url_path = os.path.join(url_dir, url.split("/")[-1])
@@ -79,11 +81,12 @@ def get_silam_dust_forecast_xr(downloaded_paths) -> xr.Dataset | None:
 
 """Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
 
-ARCHIVE_FOLDER = "/var/dagster-storage/sat/eumetsat-iodc-lrv"
+ARCHIVE_FOLDER = "/ext_data/SILAM_Dust/silam/"
 BASE_URL = "s3://noaa-gmgsi-pds/"
-ZARR_PATH = "silam_dust.zarr"
+SOURCE_COOP_PATH = "s3://bkr/silam-dust/silam_global.zarr"
+ZARR_PATH = "/ext_data/SILAM_Dust/silam/silam_dust.zarr"
 if os.getenv("ENVIRONMENT", "local") == "pb":
-    ARCHIVE_FOLDER = "/data/silam_dust/"
+    ARCHIVE_FOLDER = "/ext_data/SILAM_Dust/silam/"
 
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition(
     start_date="2021-07-13",
@@ -91,7 +94,7 @@ partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition
 )
 
 
-@dg.asset(name="silam-aero-download", description="Download SILAM 10km dust forecast from FMI Thredds server",
+@dg.asset(name="silam-dust-download", description="Download SILAM 10km dust forecast from FMI Thredds server",
           tags={
               "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
               "dagster/priority": "1",
@@ -152,8 +155,6 @@ def silam_dust_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Materia
                                coords={"init_time": zarr_date_range, "step": data.step.values,
                                        "latitude": data.latitude.values,
                                        "longitude": data.longitude.values})
-    print(dummy_dataset)
-    # storage_options={"endpoint_url": "https://data.source.coop"}
     dummy_dataset.chunk({"init_time": 1, "step": 1, "latitude": -1, "longitude": -1}).to_zarr(ZARR_PATH, mode="w",
                                                                                               compute=False,
                                                                                               zarr_format=3,
@@ -179,7 +180,7 @@ def silam_dust_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Materia
         },
     partitions_def=partitions_def,
 )
-def gmgsi_zarr_asset(
+def silam_zarr_asset(
     context: dg.AssetExecutionContext,
 ) -> dg.MaterializeResult:
     """Dagster asset for NOAA's GMGSI global mosaic of geostationary satellites."""
@@ -204,3 +205,13 @@ def gmgsi_zarr_asset(
     return dg.MaterializeResult(
         metadata={"zarr_path": ZARR_PATH},
     )
+
+@dg.asset(name="silam-dust-upload-source-coop",
+          deps=[silam_zarr_asset],
+          description="Upload SILAM Dust to Source Coop")
+def silam_upload_source_coop(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+    # Sync the Zarr to Source Coop
+    args = ["aws", "s3", "sync", ZARR_PATH+"/", SOURCE_COOP_PATH+"/", "--profile=sc"]
+    process = Popen(args)
+    process.wait()
+    return dg.MaterializeResult(metadata={"zarr_path": SOURCE_COOP_PATH})

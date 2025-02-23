@@ -39,9 +39,10 @@ IMERG Late
 
 """
 
-ARCHIVE_FOLDER = "/var/dagster-storage/sat/eumetsat-iodc-lrv"
+ARCHIVE_FOLDER = "/ext_data/GPM_final/"
 BASE_URL = "s3://noaa-gmgsi-pds/"
-ZARR_PATH = "imerg-late.zarr"
+SOURCE_COOP_PATH = "s3://bkr/imerg/imerg_final.zarr"
+ZARR_PATH = "/ext_data/GPM_final/imerg-late.zarr"
 ZARR_DATE_RANGE = pd.date_range("2000-01-01", "2026-12-31", freq="30min")
 if os.getenv("ENVIRONMENT", "local") == "pb":
     ARCHIVE_FOLDER = "/data/imerg-late/"
@@ -145,6 +146,16 @@ def cleanup(context: dg.AssetExecutionContext,) -> dg.MaterializeResult:
     files = get_imerg_late_files(it)
     for f in files:
         os.remove(f)
+
+@dg.asset(name="imerg-final-upload-source-coop",
+          deps=[imerg_late_zarr_asset],
+          description="Upload GPM IMERG Final to Source Coop")
+def silam_upload_source_coop(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+    # Sync the Zarr to Source Coop
+    args = ["aws", "s3", "sync", ZARR_PATH+"/", SOURCE_COOP_PATH+"/", "--profile=sc"]
+    process = Popen(args)
+    process.wait()
+    return dg.MaterializeResult(metadata={"zarr_path": SOURCE_COOP_PATH})
 
 def downlod_gpm_late(day: dt.datetime) -> list[str]:
     # Get day of year from day
