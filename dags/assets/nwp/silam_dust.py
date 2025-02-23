@@ -184,7 +184,8 @@ def silam_dust_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Materia
         tags={
             "dagster/max_runtime": str(60 * 60 * 10), # Should take 6 ish hours
             "dagster/priority": "1",
-            "dagster/concurrency_key": "zarr-creation",
+            "dagster/concurrency_key": "heavy-zarr-creation",
+            "large_zarr_creation": "true",
         },
     partitions_def=partitions_def,
 automation_condition=dg.AutomationCondition.eager(),

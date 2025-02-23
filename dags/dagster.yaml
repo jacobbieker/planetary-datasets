@@ -1,0 +1,21 @@
+auto_materialize:
+  enabled: true
+  minimum_interval_seconds: 3600
+  respect_materialization_data_versions: true
+  max_tick_retries: 3
+  use_sensors: false
+  use_threads: false
+  num_workers: 4
+
+run_queue:
+  max_concurrent_runs: 15
+  tag_concurrency_limits:
+    - key: 'large_zarr_creation'
+      limit: 1
+    - key: 'dagster/backfill'
+      limit: 10
+
+run_retries:
+  enabled: true
+  max_retries: 3
+  retry_on_asset_or_op_failure: true
