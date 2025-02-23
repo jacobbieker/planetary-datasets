@@ -42,12 +42,10 @@ def gmgsi_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeRes
     it: dt.datetime = context.partition_time_window.start
 
     fs = fsspec.filesystem("s3")
-    fs.get(f"{BASE_URL}GLOBCOMP_VIS/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPVIS_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_VIS/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPVIS_nc.{it.strftime('%Y%m%d%H')}")
-    fs.get(f"{BASE_URL}GMGSI_SSR/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSSR_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_SSR/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSSR_nc.{it.strftime('%Y%m%d%H')}")
-    fs.get(f"{BASE_URL}GMGSI_WV/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPWV_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_WV/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPWV_nc.{it.strftime('%Y%m%d%H')}")
-    fs.get(f"{BASE_URL}GMGSI_LW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPLIR_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_LW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPLIR_nc.{it.strftime('%Y%m%d%H')}")
-    fs.get(f"{BASE_URL}GMGSI_SW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSIR_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_SW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSIR_nc.{it.strftime('%Y%m%d%H')}")
-
+    # Check if the local file exists before downloading
+    for channel in ["VIS", "SSR", "WV", "LW", "SW"]:
+        if not os.path.exists(f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}"):
+            fs.get(f"{BASE_URL}GLOBCOMP_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}")
     # Return the paths as a materialization
     return dg.MaterializeResult(
         metadata={
