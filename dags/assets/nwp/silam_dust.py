@@ -3,6 +3,7 @@ import os
 from subprocess import Popen
 from typing import TYPE_CHECKING
 
+import aiohttp.client_exceptions
 import dagster as dg
 import dask.array
 import fsspec
@@ -25,9 +26,13 @@ def download_forecast_step(date: dt.datetime, step: int) -> list[str]:
         os.makedirs(url_dir)
     downloaded_url_path = os.path.join(url_dir, url.split("/")[-1])
     if not os.path.exists(downloaded_url_path):
-        with fsspec.open(url, "rb") as f:
-            with open(downloaded_url_path, "wb") as f2:
-                f2.write(f.read())
+        try:
+            with fsspec.open(url, "rb") as f:
+                with open(downloaded_url_path, "wb") as f2:
+                    f2.write(f.read())
+        except aiohttp.client_exceptions.ClientPayloadError:
+            os.remove(downloaded_url_path)
+            raise Exception(f"Failed to download {url}")
     else:
         print(f"Already Downloaded {url}")
     return downloaded_url_path
