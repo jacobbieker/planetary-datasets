@@ -140,24 +140,16 @@ def imerg_early_zarr_asset(
         data.chunk({"time": 1, "longitude": -1, "latitude": -1}).to_zarr(ZARR_PATH,
                                                                          region={"time": slice(time_idx, time_idx + 1),
                                                                                  "latitude": "auto", "longitude": "auto"})
+        os.remove(f)
     return dg.MaterializeResult(
         metadata={"zarr_path": ZARR_PATH},
     )
-
-@dg.asset(name="imerg-early-cleanup",
-          deps=[imerg_early_zarr_asset],
-          automation_condition=dg.AutomationCondition.eager(),)
-def cleanup(context: dg.AssetExecutionContext,) -> dg.MaterializeResult:
-    it: dt.datetime = context.partition_time_window.start
-    files = get_imerg_early_files(it)
-    for f in files:
-        os.remove(f)
 
 @dg.asset(name="imerg-early-upload-source-coop",
           deps=[imerg_early_zarr_asset],
           description="Upload GPM IMERG Early to Source Coop",
           automation_condition=dg.AutomationCondition.eager(),)
-def silam_upload_source_coop(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+def imerg_early_upload_source_coop(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     # Sync the Zarr to Source Coop
     args = ["aws", "s3", "sync", ZARR_PATH+"/", SOURCE_COOP_PATH+"/", "--profile=sc"]
     process = Popen(args)

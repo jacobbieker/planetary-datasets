@@ -139,18 +139,10 @@ def imerg_late_zarr_asset(
         data.chunk({"time": 1, "longitude": -1, "latitude": -1}).to_zarr(ZARR_PATH,
                                                                          region={"time": slice(time_idx, time_idx + 1),
                                                                                  "latitude": "auto", "longitude": "auto"})
+        os.remove(f)
     return dg.MaterializeResult(
         metadata={"zarr_path": ZARR_PATH},
     )
-
-@dg.asset(name="imerg-late-cleanup",
-          deps=[imerg_late_zarr_asset],
-          automation_condition=dg.AutomationCondition.eager(),)
-def cleanup(context: dg.AssetExecutionContext,) -> dg.MaterializeResult:
-    it: dt.datetime = context.partition_time_window.start
-    files = get_imerg_late_files(it)
-    for f in files:
-        os.remove(f)
 
 @dg.asset(name="imerg-final-upload-source-coop",
           deps=[imerg_late_zarr_asset],
