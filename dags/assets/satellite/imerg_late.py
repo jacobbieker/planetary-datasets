@@ -117,12 +117,8 @@ def imerg_late_zarr_asset(
     files = get_imerg_late_files(it)
     for f in files:
         data = open_h5(f)
-        # Get the IDX of the timestamp in the dataset
-        dset_time = pd.Timestamp(data['time'].values[0].isoformat())
-        time_idx = np.where(ZARR_DATE_RANGE == dset_time)
-        time_idx = time_idx[0][0]
         data.chunk({"time": 1, "longitude": -1, "latitude": -1}).to_zarr(ZARR_PATH,
-                                                                         region={"time": slice(time_idx, time_idx + 1),
+                                                                         region={"time": "auto",
                                                                                  "latitude": "auto", "longitude": "auto"})
         os.remove(f)
     return dg.MaterializeResult(
