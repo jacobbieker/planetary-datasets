@@ -40,13 +40,23 @@ def ghe_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResul
     it: dt.datetime = context.partition_time_window.start
 
     fs = s3fs.S3FileSystem(anon=True)
-    # Check if the local file exists before downloading
-    if not os.path.exists(f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz"):
-        fs.get(f"{BASE_URL}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz", f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz")
+    # Get it for the full hour for each one of the 15 minute intervals
+    files_downloaded = []
+    for minute_offset in range(0, 60, 15):
+        it = it.replace(minute=minute_offset)
+        # Check if the local file exists before downloading
+        if not os.path.exists(f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz"):
+            try:
+                fs.get(f"{BASE_URL}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz", f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz")
+                files_downloaded.append(f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz")
+            except FileNotFoundError:
+                continue
+    if len(files_downloaded) == 0:
+        raise FileNotFoundError("No files downloaded")
     # Return the paths as a materialization
     return dg.MaterializeResult(
         metadata={
-            "file": f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz",
+            "files": files_downloaded,
         },
     )
 
@@ -144,17 +154,22 @@ def get_ghe_mosaic(time: dt.datetime) -> xr.Dataset:
     Returns:
         xarray object with global mosaic
     """
-    ds = xr.open_dataset(f"{ARCHIVE_FOLDER}rain_rate/{time.year}/{time.month:02}/{time.day:02}/NPR.GEO.GHE.v1.S{time.strftime('%Y%m%d%H%M')}.nc.gz").load()
-    # rename data to vis
-    ds = ds.rename({"data": "vis"})
-    # Convert fill value to NaN
-    ds = ds.where(ds.vis != ds.vis.attrs["_FillValue"])
-    # Add in coordinates from navigation one
-    nav = xr.open_dataset(f"{ARCHIVE_FOLDER}NPR.GEO.GHE.v1.Navigation.netcdf").load()
-    ds = ds.assign_coords({"latitude": nav.latitude, "longitude": nav.longitude})
-    # Add in timestamp
-    ds = ds.assign_coords({"time": pd.Timestamp(time)})
-    ds = ds.rename({"rain": "rainfall_estimate"})
-    # Convert to float16 to save some space
-    ds = ds.astype(np.float16)
-    return ds
+    # Do it for each of the 4 files for the hour interval
+    dses = []
+    for minute_offset in range(0, 60, 15):
+        time = time.replace(minute=minute_offset)
+        ds = xr.open_dataset(f"{ARCHIVE_FOLDER}rain_rate/{time.year}/{time.month:02}/{time.day:02}/NPR.GEO.GHE.v1.S{time.strftime('%Y%m%d%H%M')}.nc.gz").load()
+        # rename data to vis
+        ds = ds.rename({"data": "vis"})
+        # Convert fill value to NaN
+        ds = ds.where(ds.vis != ds.vis.attrs["_FillValue"])
+        # Add in coordinates from navigation one
+        nav = xr.open_dataset(f"{ARCHIVE_FOLDER}NPR.GEO.GHE.v1.Navigation.netcdf").load()
+        ds = ds.assign_coords({"latitude": nav.latitude, "longitude": nav.longitude})
+        # Add in timestamp
+        ds = ds.assign_coords({"time": pd.Timestamp(time)})
+        ds = ds.rename({"rain": "rainfall_estimate"})
+        # Convert to float16 to save some space
+        ds = ds.astype(np.float16)
+        dses.append(ds)
+    return xr.concat(dses, dim="time").sortby("time")
