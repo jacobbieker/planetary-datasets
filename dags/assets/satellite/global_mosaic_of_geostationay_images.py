@@ -141,7 +141,7 @@ def get_global_mosaic(time: dt.datetime, channels: Optional[list[str]] = None) -
     """
     if channels is None:
         channels = ["vis", "ssr", "wv", "lwir", "swir"]
-    base_url = "/run/media/jacob/Tester/gmgsi/"
+    base_url = ARCHIVE_FOLDER
     datasets_to_merge = []
     for channel in channels:
         if channel == "vis":
