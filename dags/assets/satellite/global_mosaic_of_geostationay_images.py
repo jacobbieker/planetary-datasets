@@ -44,9 +44,12 @@ def gmgsi_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeRes
 
     fs = s3fs.S3FileSystem(anon=True)
     # Check if the local file exists before downloading
-    for channel in ["VIS", "SSR", "WV", "LW", "SW"]:
+    for channel in ["VIS", "SSR", "WV"]:
         if not os.path.exists(f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}"):
             fs.get(f"{BASE_URL}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}")
+    for channel, name in [("LW", "LIR"), ("SW", "SIR")]:
+        if not os.path.exists(f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{name}_nc.{it.strftime('%Y%m%d%H')}"):
+            fs.get(f"{BASE_URL}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{name}_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{name}_nc.{it.strftime('%Y%m%d%H')}")
     # Return the paths as a materialization
     return dg.MaterializeResult(
         metadata={
