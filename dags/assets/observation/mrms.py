@@ -1,4 +1,5 @@
 from subprocess import Popen
+import subprocess
 import glob
 import tempfile
 import gzip
@@ -36,7 +37,10 @@ def download_mrms(day: dt.datetime, measurement_type: str) -> list[str]:
     assert measurement_type in ["GaugeCorr_QPE_01H", "PrecipFlag", "PrecipRate", "RadarOnly_QPE_01H", "MultiSensor_QPE_01H_Pass2"]
     path = f"https://mtarchive.geol.iastate.edu/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/mrms/ncep/{measurement_type}/"
     args = ["wget", "-r", "-nc", "--no-parent", path, "-P", ARCHIVE_FOLDER]
-    process = Popen(args)
+    process = Popen(args,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                    )
     process.wait()
     # Get the paths that have been downloaded
     return sorted(list(glob.glob(f"{ARCHIVE_FOLDER}/mtarchive.geol.iastate.edu/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/mrms/ncep/{measurement_type}/*.grib2.gz")))
