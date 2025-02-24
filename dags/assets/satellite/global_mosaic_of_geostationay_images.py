@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Optional
 import dagster as dg
 import dask.array
 import fsspec
+import s3fs
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -41,11 +42,11 @@ def gmgsi_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeRes
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     it: dt.datetime = context.partition_time_window.start
 
-    fs = fsspec.filesystem("s3")
+    fs = s3fs.S3FileSystem(anon=True)
     # Check if the local file exists before downloading
     for channel in ["VIS", "SSR", "WV", "LW", "SW"]:
         if not os.path.exists(f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}"):
-            fs.get(f"{BASE_URL}GLOBCOMP_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}", storage_options={"anon": True})
+            fs.get(f"{BASE_URL}GLOBCOMP_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}")
     # Return the paths as a materialization
     return dg.MaterializeResult(
         metadata={
