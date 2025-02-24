@@ -8,12 +8,14 @@ auto_materialize:
   num_workers: 4
 
 run_queue:
-  max_concurrent_runs: 15
+  max_concurrent_runs: 50
   tag_concurrency_limits:
-    - key: 'large_zarr_creation'
+    - key: 'heavy-zarr-creation'
       limit: 1
+    - key: 'download'
+      limit: 49
     - key: 'dagster/backfill'
-      limit: 10
+      limit: 45
 
 run_retries:
   enabled: true

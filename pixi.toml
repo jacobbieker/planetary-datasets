@@ -38,6 +38,7 @@ dagster-docker = ">=0.26.2,<0.27"
 virtualizarr = ">=1.3.1,<2"
 icechunk = ">=0.2.1,<0.3"
 cdsapi = ">=0.7.5,<0.8"
+sqlite = ">=3.49.1,<4"
 
 [pypi-dependencies]
 odc-stac = ">=0.3.11, <0.4"

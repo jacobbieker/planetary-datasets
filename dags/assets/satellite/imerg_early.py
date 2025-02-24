@@ -1,30 +1,15 @@
 """This gather and uses the global mosaic of geostationary satellites from NOAA on AWS"""
-import datetime
-import xarray as xr
-import s3fs
-import os
-import pandas as pd
-import datetime as dt
-from huggingface_hub import HfApi, HfFileSystem
-import random
-import zarr
-from typing import Optional
-from numcodecs import Blosc
 import dask.array
-from tqdm import tqdm
-import numpy as np
-import fsspec
 from subprocess import Popen
 import subprocess
 import glob
 """This gather and uses the global mosaic of geostationary satellites from NOAA on AWS"""
 import datetime as dt
 import os
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import dagster as dg
 import dask.array
-import fsspec
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -160,7 +145,7 @@ def downlod_gpm_early(day: dt.datetime) -> list[str]:
     # Get day of year from day
     day_of_year = day.timetuple().tm_yday
     path = f"https://gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHHE.07/{day.strftime('%Y')}/{str(day_of_year).zfill(3)}/"
-    args = ["wget", "--load-cookies", "~/.urs_cookies", "--save-cookies", "~/.urs_cookies", "--keep-session-cookies", "--content-disposition", "-r", "-c", "--no-parent", path]
+    args = ["wget2", "--load-cookies", "~/.urs_cookies", "--save-cookies", "~/.urs_cookies", "--keep-session-cookies", "--content-disposition", "-r", "-c", "--no-parent", path, "-P", ARCHIVE_FOLDER]
     process = Popen(args,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
