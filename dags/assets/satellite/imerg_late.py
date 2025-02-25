@@ -140,7 +140,7 @@ def downlod_gpm_late(day: dt.datetime) -> list[str]:
     # Get day of year from day
     day_of_year = day.timetuple().tm_yday
     path = f"https://gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07/{day.strftime('%Y')}/{str(day_of_year).zfill(3)}/"
-    args = ["wget2", "--load-cookies", "~/.urs_cookies", "--save-cookies", "~/.urs_cookies", "--keep-session-cookies", "--content-disposition", "-r", "-c", "--no-parent", path, "-P", ARCHIVE_FOLDER]
+    args = ["wget", "--load-cookies", "~/.urs_cookies", "--save-cookies", "~/.urs_cookies", "--keep-session-cookies", "--content-disposition", "-r", "-c", "--no-parent", path, "-P", ARCHIVE_FOLDER]
     process = Popen(args,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
