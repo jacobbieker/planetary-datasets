@@ -121,6 +121,10 @@ def imerg_late_zarr_asset(
                                                                          region={"time": "auto",
                                                                                  "latitude": "auto", "longitude": "auto"})
         os.remove(f)
+        # Remove xml additional file if available
+        xml_file = f.replace(".HDF5", ".HDF5.xml")
+        if os.path.exists(xml_file):
+            os.remove(xml_file)
     return dg.MaterializeResult(
         metadata={"zarr_path": ZARR_PATH},
     )
