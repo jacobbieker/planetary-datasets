@@ -152,7 +152,7 @@ def downlod_gpm_early(day: dt.datetime) -> list[str]:
 def get_imerg_early_files(day: dt.datetime) -> list[str]:
     day_of_year = day.timetuple().tm_yday
     return sorted(list(glob.glob(
-        f"gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHHE.07/{day.strftime('%Y')}/{str(day_of_year).zfill(3)}/*.HDF5")))
+        f"{ARCHIVE_FOLDER}gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHHE.07/{day.strftime('%Y')}/{str(day_of_year).zfill(3)}/*.HDF5")))
 
 
 def open_h5(filename: str) -> xr.Dataset:

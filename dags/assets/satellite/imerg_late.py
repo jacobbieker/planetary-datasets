@@ -150,7 +150,7 @@ def downlod_gpm_late(day: dt.datetime) -> list[str]:
 
 def get_imerg_late_files(day: dt.datetime) -> list[str]:
     day_of_year = day.timetuple().tm_yday
-    return sorted(list(glob.glob(f"gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07/{day.strftime('%Y')}/{str(day_of_year).zfill(3)}/*.HDF5")))
+    return sorted(list(glob.glob(f"{ARCHIVE_FOLDER}gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07/{day.strftime('%Y')}/{str(day_of_year).zfill(3)}/*.HDF5")))
 
 
 def open_h5(filename: str) -> xr.Dataset:
