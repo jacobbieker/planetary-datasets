@@ -37,12 +37,14 @@ def gpds_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResu
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     it: dt.datetime = context.partition_time_window.start
     downloaded_files = download_gpds(it)
-    # Return the paths as a materialization
-    return dg.MaterializeResult(
-        metadata={
-            "files": downloaded_files,
-        }
-    )
+    if len(downloaded_files) > 0:
+        return dg.MaterializeResult(
+            metadata={
+                "files": downloaded_files,
+            }
+        )
+    else:
+        raise FileNotFoundError("No files downloaded")
 
 def download_gpds(day: dt.datetime) -> list[str]:
     # Get day of year from day
