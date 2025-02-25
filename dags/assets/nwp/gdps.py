@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 ARCHIVE_FOLDER = "/ext_data/GPDS/"
 ZARR_PATH = "/ext_data/GPDS/gpds.zarr"
-ZARR_DATE_RANGE = pd.date_range("2023-01-01", "2026-12-31", freq="12H")
+ZARR_DATE_RANGE = pd.date_range("2023-01-01", "2026-12-31", freq="12h")
 if os.getenv("ENVIRONMENT", "local") == "pb":
     ARCHIVE_FOLDER = "/ext_data/GPDS/"
 
