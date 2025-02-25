@@ -5,6 +5,7 @@ import glob
 import datetime as dt
 import os
 from typing import TYPE_CHECKING
+import pandas as pd
 
 import dagster as dg
 if TYPE_CHECKING:
