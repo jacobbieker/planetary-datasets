@@ -214,7 +214,7 @@ def metoffice_zarr_asset(
     """Dagster asset for NOAA's GMGSI global mosaic of geostationary satellites."""
     it: dt.datetime = context.partition_time_window.start
     downloaded_files = list_metoffice_downloaded_files(it)
-    dataset: xr.Dataset = combine_metoffice_to_dataset()
+    dataset: xr.Dataset = combine_metoffice_to_dataset(downloaded_files)
     dataset.chunk({"init_time": 1, "step": 1, "pressure": -1, "latitude": -1, "longitude": -1}).to_zarr(ZARR_PATH,
                                                                                                                 region={
                                                                                                                     "init_time": "auto",
