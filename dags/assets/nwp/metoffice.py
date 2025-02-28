@@ -1,4 +1,6 @@
+import xarray as xr
 import glob
+import os
 from numcodecs.zarr3 import BitRound
 import zarr.codecs
 
@@ -9,6 +11,7 @@ from typing import TYPE_CHECKING, Optional
 
 import dagster as dg
 import dask.array
+import fsspec
 import s3fs
 import numpy as np
 import pandas as pd
@@ -24,7 +27,7 @@ if os.getenv("ENVIRONMENT", "local") == "pb":
     ARCHIVE_FOLDER = "/ext_data/metoffice/"
 
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition(
-    start_date="2023-03-01",
+    start_date="2023-03-01-00:00",
     end_offset=-1,
 )
 
@@ -51,7 +54,7 @@ def preprocess(ds: xr.Dataset) -> xr.Dataset:
 
 VARIABLES = { # Value is the number of bits to round in float32, based off https://www.metoffice.gov.uk/binaries/content/assets/metofficegovuk/pdf/data/global-nwp-asdi-datasheet.pdf
     "precipitation_rate": 9,
-    "pressure_at_mean_sea_level": 0,
+    "pressure_at_mean_sea_level": 4,
     "cloud_amount_of_total_cloud": 2,
     "cloud_amount_of_low_cloud": 2,
     "cloud_amount_of_medium_cloud": 2,
@@ -142,7 +145,11 @@ automation_condition=dg.AutomationCondition.eager(),
 def metoffice_global_download_asset(context: dg.AssetExecutionContext) -> list[str]:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     it: dt.datetime = context.partition_time_window.start
-    downloaded_files = download_metoffice_global_init_time(it)
+    # Need to do it 4 times per day, for 0, 6, 12, and 18
+    downloaded_files = []
+    for i in range(0, 24, 6):
+        it = it.replace(hour=i)
+        downloaded_files.append(download_metoffice_global_init_time(it))
 
     return downloaded_files
 
@@ -156,7 +163,7 @@ def metoffice_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Material
         return dg.MaterializeResult(
             metadata={"zarr_path": ZARR_PATH},
         )
-    files = list_metoffice_downloaded_files(it=context.partition_time_window.start)
+    files = list_metoffice_downloaded_files(it=pd.Timestamp("2023-03-01T00:00"))
     data, encodings = combine_metoffice_to_dataset(files)
     encodings["init_time"] = {"units": "nanoseconds since 1970-01-01"}
     # Get the number of partitions to create
@@ -212,18 +219,16 @@ def metoffice_zarr_asset(
 ) -> dg.MaterializeResult:
     """Dagster asset for NOAA's GMGSI global mosaic of geostationary satellites."""
     it: dt.datetime = context.partition_time_window.start
-    downloaded_files = list_metoffice_downloaded_files(it)
-    dataset: xr.Dataset = combine_metoffice_to_dataset(downloaded_files)
-    dataset.chunk({"init_time": 1, "step": 1, "pressure": -1, "latitude": -1, "longitude": -1}).to_zarr(ZARR_PATH,
+    for i in range(0, 24, 6):
+        it = it.replace(hour=i)
+        dataset: xr.Dataset = list_metoffice_downloaded_files(it)
+        dataset.chunk({"init_time": 1, "step": 1, "pressure": -1, "latitude": -1, "longitude": -1}).to_zarr(ZARR_PATH,
                                                                                                                 region={
                                                                                                                     "init_time": "auto",
                                                                                                                     "step": "auto",
                                                                                                                     "latitude": "auto",
                                                                                                                     "longitude": "auto",
                                                                                                                     "pressure": "auto"}, )
-    # Remove downloaded files after zarr creation
-    for f in downloaded_files:
-        os.remove(f)
     return dg.MaterializeResult(
         metadata={"zarr_path": ZARR_PATH},
     )
@@ -240,7 +245,7 @@ def combine_metoffice_to_dataset(downloaded_files: str) -> tuple[xr.Dataset, dic
             ds = ds.rename({"wind_speed_of_gust_10.0": "wind_gust_at_10.0_max_1h"})
         for dv in ds.data_vars:
             encoding[dv] = {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
-            encoding[dv]["filters"] = [BitRound(keepbits=v+1)]
+            encoding[dv]["filters"] = [BitRound(keepbits=9)]
         surface_dses.append(ds)
     # Merge them
     surface_ds = xr.merge(surface_dses)
@@ -253,7 +258,7 @@ def combine_metoffice_to_dataset(downloaded_files: str) -> tuple[xr.Dataset, dic
         for dv in ds.data_vars:
             encoding[dv] = {
                 "compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
-            encoding[dv]["filters"] = [BitRound(keepbits=v+1)]
+            encoding[dv]["filters"] = [BitRound(keepbits=9)]
         pressure_dses.append(ds)
     # Merge them
     pressure_ds = xr.merge(pressure_dses)
