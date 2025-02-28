@@ -50,6 +50,8 @@ def ghe_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResul
                 files_downloaded.append(f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz")
             except FileNotFoundError:
                 continue
+        else:
+            files_downloaded.append(f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz")
     if len(files_downloaded) == 0:
         raise FileNotFoundError("No files downloaded")
     # Return the paths as a materialization
