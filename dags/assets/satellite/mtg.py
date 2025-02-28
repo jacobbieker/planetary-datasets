@@ -6,9 +6,7 @@ import os
 from typing import TYPE_CHECKING, Optional
 
 import dagster as dg
-
-if TYPE_CHECKING:
-    import datetime as dt
+import datetime as dt
 
 consumer_key = os.getenv("EUMETSAT_CONSUMER_KEY")
 consumer_secret = os.getenv("EUMETSAT_CONSUMER_SECRET")

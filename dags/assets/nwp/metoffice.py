@@ -15,8 +15,7 @@ import pandas as pd
 import xarray as xr
 import zarr
 
-if TYPE_CHECKING:
-    import datetime as dt
+import datetime as dt
 
 ARCHIVE_FOLDER = "/ext_data/metoffice/"
 BASE_URL = "s3://met-office-atmospheric-model-data/global-deterministic-10km"

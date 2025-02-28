@@ -14,9 +14,7 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 import zarr
-
-if TYPE_CHECKING:
-    import datetime as dt
+import datetime as dt
 
 """Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
 

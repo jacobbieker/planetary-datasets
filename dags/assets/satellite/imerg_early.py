@@ -15,8 +15,7 @@ import pandas as pd
 import xarray as xr
 import zarr
 
-if TYPE_CHECKING:
-    import datetime as dt
+import datetime as dt
 
 """
 wget --load-cookies ~/.urs_cookies --save-cookies ~/.urs_cookies --keep-session-cookies --content-disposition -r -c --no-parent https://gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07/
