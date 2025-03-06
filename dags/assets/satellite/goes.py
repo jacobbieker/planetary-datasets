@@ -20,8 +20,6 @@ if TYPE_CHECKING:
 """Icechunk of virtualizarr of the GOES satellites from NOAA on AWS"""
 
 ARCHIVE_FOLDER = "/ext_data/goes/"
-BASE_URL = "s3://noaa-goes/"
-ICECHUNK_BASE_PATH = "/ext_data/goes.icechunk"
 
 goes19_partitions_def: dg.TimeWindowPartitionsDefinition = dg.HourlyPartitionsDefinition(
     start_date="2024-10-10-00:00",
@@ -242,15 +240,17 @@ def create_and_write_virtualizarr(
         combine_attrs='override'
     )
 
+    store_location = os.path.join(f'{ARCHIVE_FOLDER}', f'{satellite}_band{str(band).zfill(2)}')
+
     # Try loading existing store
-    if os.path.exists(f'{satellite}_band{str(band).zfill(2)}'):
-        repo = icechunk.Repository.open(icechunk.local_filesystem_storage(f'{satellite}_band{str(band).zfill(2)}'))
+    if os.path.exists(store_location):
+        repo = icechunk.Repository.open(icechunk.local_filesystem_storage(store_location))
         session = repo.writable_session("main")
         # write the virtual dataset to the session with the IcechunkStore
         vd.virtualize.to_icechunk(session.store, append_dim="t")
     else:
         storage = icechunk.local_filesystem_storage(
-            path=f'{satellite}_band{str(band).zfill(2)}',
+            path=store_location,
         )
         config = icechunk.RepositoryConfig.default()
         config.set_virtual_chunk_container(icechunk.VirtualChunkContainer("s3", "s3://", icechunk.s3_store(region="us-east-1")))
