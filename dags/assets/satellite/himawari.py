@@ -75,7 +75,7 @@ def himawari8_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materi
                   "band": band},
     )
 
-@dg.asset(name="himawari8-virtualizarr", description="Create Virtualizarr reference of Himawari-8 satellite data from NOAA on AWS",
+@dg.asset(name="himawari9-virtualizarr", description="Create Virtualizarr reference of Himawari-9 satellite data from NOAA on AWS",
           tags={
               "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
               "dagster/priority": "1",
