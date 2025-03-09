@@ -106,8 +106,8 @@ partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition
               "dagster/concurrency_key": "download",
           },
           partitions_def=partitions_def,
+          retry_policy=dg.RetryPolicy(max_retries=10, delay=30),
 automation_condition=dg.AutomationCondition.eager(),
-
           )
 def silam_dust_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
@@ -122,7 +122,8 @@ def silam_dust_download_asset(context: dg.AssetExecutionContext) -> dg.Materiali
 @dg.asset(name="silam-dust-dummy-zarr",
           deps=[silam_dust_download_asset],
           description="Dummy Zarr archive of SILAM Dust from FMI",
-          automation_condition=dg.AutomationCondition.eager(),)
+          automation_condition=dg.AutomationCondition.eager(),
+          partitions_def=partitions_def)
 def silam_dust_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     if os.path.exists(ZARR_PATH):
         return dg.MaterializeResult(

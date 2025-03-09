@@ -33,7 +33,7 @@ if os.getenv("ENVIRONMENT", "local") == "pb":
 
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition(
     start_date="2000-01-01",
-    end_offset=-1,
+    end_offset=-2,
 )
 
 
@@ -51,6 +51,9 @@ def imerg_late_download_asset(context: dg.AssetExecutionContext) -> dg.Materiali
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     it: dt.datetime = context.partition_time_window.start
     downloaded_files = downlod_gpm_late(it)
+    # Check that there is more than 0 files downloaded
+    if len(downloaded_files) == 0:
+        raise FileNotFoundError(f"No files downloaded for {it}")
     # Return the paths as a materialization
     return dg.MaterializeResult(
         metadata={
@@ -61,6 +64,7 @@ def imerg_late_download_asset(context: dg.AssetExecutionContext) -> dg.Materiali
 
 @dg.asset(name="imerg-late-dummy-zarr",
           deps=[imerg_late_download_asset],
+          partitions_def=partitions_def,
           description="Dummy Zarr archive of satellite image data from IMERG late precipitation",
           automation_condition=dg.AutomationCondition.eager(),)
 def imerg_late_dummy_zarr(context: dg.AssetExecutionContext) -> dg.MaterializeResult:

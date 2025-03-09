@@ -95,7 +95,7 @@ PRESSURE_VARIABLES = {
 }
 
 
-def download_metoffice_global_init_time(it: dt.datetime) -> list[str]:
+def download_metoffice_global_init_time(it: dt.datetime, context: dg.AssetExecutionContext) -> list[str]:
     # Get the year, month, day, and hour
     year, month, day, hour = it.year, it.month, it.day, it.hour
     # Get the path
@@ -107,6 +107,7 @@ def download_metoffice_global_init_time(it: dt.datetime) -> list[str]:
     downloaded_files = []
     if not os.path.exists(f"{ARCHIVE_FOLDER}{it.strftime("%Y%m%dT%H%MZ")}"):
         os.makedirs(f"{ARCHIVE_FOLDER}{it.strftime("%Y%m%dT%H%MZ")}")
+        context.log.info(msg=f"Created folder {ARCHIVE_FOLDER}{it.strftime('%Y%m%dT%H%MZ')}")
     # Download each of the pressure level ones
     for forecast_time in range(0, 55):
         for k, v in PRESSURE_VARIABLES.items():
@@ -116,6 +117,7 @@ def download_metoffice_global_init_time(it: dt.datetime) -> list[str]:
             if file in available_files:
                 fs.get(file, f"{ARCHIVE_FOLDER}{it.strftime("%Y%m%dT%H%MZ")}/{valid}-PT{str(forecast_time).zfill(4)}H00M-{k}.nc")
                 downloaded_files.append(f"{ARCHIVE_FOLDER}{it.strftime("%Y%m%dT%H%MZ")}/{valid}-PT{str(forecast_time).zfill(4)}H00M-{k}.nc")
+                context.log.info(msg=f"Downloaded {file}")
         # Download each of the surface ones
         for k, v in VARIABLES.items():
             valid_time = it + dt.timedelta(hours=forecast_time)
@@ -124,6 +126,7 @@ def download_metoffice_global_init_time(it: dt.datetime) -> list[str]:
             if file in available_files:
                 fs.get(file, f"{ARCHIVE_FOLDER}{it.strftime("%Y%m%dT%H%MZ")}/{valid}-PT{str(forecast_time).zfill(4)}H00M-{k}.nc")
                 downloaded_files.append(f"{ARCHIVE_FOLDER}{it.strftime("%Y%m%dT%H%MZ")}/{valid}-PT{str(forecast_time).zfill(4)}H00M-{k}.nc")
+                context.log.info(msg=f"Downloaded {file}")
     return downloaded_files
 
 
@@ -150,6 +153,7 @@ def metoffice_global_download_asset(context: dg.AssetExecutionContext) -> list[s
     for i in range(0, 24, 6):
         it = it.replace(hour=i)
         downloaded_files.append(download_metoffice_global_init_time(it))
+        context.log.info(msg=f"Downloaded MetOffice files for {it}")
 
     return downloaded_files
 

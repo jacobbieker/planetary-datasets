@@ -3,6 +3,7 @@ import datetime as dt
 import os
 from typing import TYPE_CHECKING, Optional
 
+import dagster
 import dagster as dg
 import dask.array
 import fsspec
@@ -25,7 +26,7 @@ if os.getenv("ENVIRONMENT", "local") == "pb":
 
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.HourlyPartitionsDefinition(
     start_date="2021-07-13-00:00",
-    end_offset=-1,
+    end_offset=-2,
 )
 
 
@@ -45,11 +46,21 @@ def gmgsi_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeRes
     fs = s3fs.S3FileSystem(anon=True)
     # Check if the local file exists before downloading
     for channel in ["VIS", "SSR", "WV"]:
-        if not os.path.exists(f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}"):
-            fs.get(f"{BASE_URL}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}")
+        s3_uri = f"{BASE_URL}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}"
+        local_uri = f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}"
+        if not os.path.exists(local_uri):
+            fs.get(s3_uri, local_uri)
+            context.log.info(msg=f"Downloaded {s3_uri} to {local_uri}")
+        else:
+            context.log.info(msg=f"Already downloaded {s3_uri} to {local_uri}")
     for channel, name in [("LW", "LIR"), ("SW", "SIR")]:
-        if not os.path.exists(f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{name}_nc.{it.strftime('%Y%m%d%H')}"):
-            fs.get(f"{BASE_URL}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{name}_nc.{it.strftime('%Y%m%d%H')}", f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{name}_nc.{it.strftime('%Y%m%d%H')}")
+        s3_uri = f"{BASE_URL}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{name}_nc.{it.strftime('%Y%m%d%H')}"
+        local_uri = f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{name}_nc.{it.strftime('%Y%m%d%H')}"
+        if not os.path.exists(local_uri):
+            fs.get(s3_uri, local_uri)
+            context.log.info(msg=f"Downloaded {s3_uri} to {local_uri}")
+        else:
+            context.log.info(msg=f"Already downloaded {s3_uri} to {local_uri}")
     # Return the paths as a materialization
     return dg.MaterializeResult(
         metadata={
@@ -65,6 +76,7 @@ def gmgsi_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeRes
 @dg.asset(name="gmgsi-dummy-zarr",
           deps=[gmgsi_download_asset],
           description="Dummy Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS",
+          partitions_def=partitions_def,
           automation_condition=dg.AutomationCondition.eager(),)
 def gmgsi_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     if os.path.exists(ZARR_PATH):

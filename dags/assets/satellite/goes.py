@@ -47,7 +47,8 @@ goes16_reproc_partitions_def: dg.TimeWindowPartitionsDefinition = dg.HourlyParti
 ) # Day 059 of 2017 00:00 is first day of data, '-Reproc' data is available from 2018 004 until 2024 363 22:00
 
 # Add a different partition, by band
-band_partition: dg.StaticPartitionsDefinition = dg.StaticPartitionsDefinition(list(range(1, 17)))
+bands = [str(i) for i in range(1,17)]
+band_partition: dg.StaticPartitionsDefinition = dg.StaticPartitionsDefinition(bands)
 
 goes16_two_dimensional_partitions = dg.MultiPartitionsDefinition(
     {"date": goes16_partitions_def, "band": band_partition}
@@ -136,7 +137,7 @@ def goes17_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materiali
           partitions_def=goes18_two_dimensional_partitions,
 automation_condition=dg.AutomationCondition.eager(),
           )
-def goes17_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+def goes18_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     it: dt.datetime = context.partition_time_window.start
     # partition_key looks like "2024-01-01|us"
@@ -167,7 +168,7 @@ def goes17_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materiali
           partitions_def=goes18_two_dimensional_partitions,
 automation_condition=dg.AutomationCondition.eager(),
           )
-def goes17_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+def goes19_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     it: dt.datetime = context.partition_time_window.start
     # partition_key looks like "2024-01-01|us"
@@ -198,7 +199,7 @@ def goes17_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materiali
           partitions_def=goes16_reproc_two_dimensional_partitions,
 automation_condition=dg.AutomationCondition.eager(),
           )
-def goes17_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+def goes16_virtualizarr_reproc_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     it: dt.datetime = context.partition_time_window.start
     # partition_key looks like "2024-01-01|us"

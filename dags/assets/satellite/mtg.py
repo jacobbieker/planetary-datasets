@@ -23,7 +23,7 @@ ZARR_PATH = "/run/media/jacob/Square1/mtg.zarr"
 
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.HourlyPartitionsDefinition(
     start_date="2024-09-01-00:00",
-    end_offset=-1,
+    end_offset=-3,
 )
 
 
@@ -65,12 +65,14 @@ def mtg_high_res_download_asset(context: dg.AssetExecutionContext) -> dg.Materia
         # Make directories if needed
         if not os.path.exists(os.path.join(ARCHIVE_FOLDER, it.strftime("%Y%m%d%H"), "FDHI")):
             os.makedirs(os.path.join(ARCHIVE_FOLDER, it.strftime("%Y%m%d%H"), "FDHI"))
+            context.log.info(f"Created directory {os.path.join(ARCHIVE_FOLDER, it.strftime('%Y%m%d%H'), 'FDHI')}")
         product = datastore.get_product(product_id=product, collection_id='EO:EUM:DAT:0665')
         for file in select_netcdf(product.entries):
             with product.open(entry=file) as fsrc, \
                     open(os.path.join(ARCHIVE_FOLDER, it.strftime("%Y%m%d%H"), "FDHI", fsrc.name), mode='wb') as fdst:
                 shutil.copyfileobj(fsrc, fdst)
                 downloaded_files.append(os.path.join(ARCHIVE_FOLDER, it.strftime("%Y%m%d%H"), "FDHI", fsrc.name))
+                context.log.info(f"Downloaded {fsrc.name} to {os.path.join(ARCHIVE_FOLDER, it.strftime('%Y%m%d%H'), 'FDHI', fsrc.name)}")
 
     # Return the paths as a materialization
     return dg.MaterializeResult(
@@ -117,12 +119,14 @@ def mtg_low_res_download_asset(context: dg.AssetExecutionContext) -> dg.Material
         # Make directories if needed
         if not os.path.exists(os.path.join(ARCHIVE_FOLDER, it.strftime("%Y%m%d%H"), "FDLR")):
             os.makedirs(os.path.join(ARCHIVE_FOLDER, it.strftime("%Y%m%d%H"), "FDLR"))
+            context.log.info(f"Created directory {os.path.join(ARCHIVE_FOLDER, it.strftime('%Y%m%d%H'), 'FDLR')}")
         product = datastore.get_product(product_id=product, collection_id='EO:EUM:DAT:0662')
         for file in select_netcdf(product.entries):
             with product.open(entry=file) as fsrc, \
                     open(os.path.join(ARCHIVE_FOLDER, it.strftime("%Y%m%d%H"), "FDLR", fsrc.name), mode='wb') as fdst:
                 shutil.copyfileobj(fsrc, fdst)
                 downloaded_files.append(os.path.join(ARCHIVE_FOLDER, it.strftime("%Y%m%d%H"), "FDLR", fsrc.name))
+                context.log.info(f"Downloaded {fsrc.name} to {os.path.join(ARCHIVE_FOLDER, it.strftime('%Y%m%d%H'), 'FDLR', fsrc.name)}")
 
     # Return the paths as a materialization
     return dg.MaterializeResult(

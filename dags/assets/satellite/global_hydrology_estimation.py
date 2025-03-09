@@ -21,7 +21,7 @@ ZARR_PATH = "/run/media/jacob/Tester/ghe.zarr"
 
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.HourlyPartitionsDefinition(
     start_date="2019-06-24-19:00",
-    end_offset=-1,
+    end_offset=-2,
 )
 
 
@@ -43,15 +43,20 @@ def ghe_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResul
     files_downloaded = []
     for minute_offset in range(0, 60, 15):
         it = it.replace(minute=minute_offset)
+        local_uri = f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz"
+        s3_uri = f"{BASE_URL}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz"
         # Check if the local file exists before downloading
-        if not os.path.exists(f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz"):
+        if not os.path.exists(local_uri):
             try:
-                fs.get(f"{BASE_URL}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz", f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz")
-                files_downloaded.append(f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz")
+                fs.get(s3_uri, local_uri)
+                files_downloaded.append(local_uri)
+                context.log.info(msg=f"Downloaded {s3_uri} to {local_uri}")
             except FileNotFoundError:
+                context.log.error(f"File not found {s3_uri}")
                 continue
         else:
-            files_downloaded.append(f"{ARCHIVE_FOLDER}rain_rate/{it.year}/{it.month:02}/{it.day:02}/NPR.GEO.GHE.v1.S{it.strftime('%Y%m%d%H%M')}.nc.gz")
+            files_downloaded.append(local_uri)
+            context.log.info(msg=f"Already downloaded {s3_uri} to {local_uri}")
     if len(files_downloaded) == 0:
         raise FileNotFoundError("No files downloaded")
     # Return the paths as a materialization
@@ -84,6 +89,7 @@ def ghe_download_navigation(context: dg.AssetExecutionContext) -> dg.Materialize
 
 @dg.asset(name="ghe-dummy-zarr",
           deps=[ghe_download_asset, ghe_download_navigation],
+          partitions_def=partitions_def,
           description="Dummy Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS",
           automation_condition=dg.AutomationCondition.eager(),)
 def ghe_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
