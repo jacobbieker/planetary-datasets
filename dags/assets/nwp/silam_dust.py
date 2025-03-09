@@ -184,7 +184,7 @@ def silam_dust_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Materia
         deps=[silam_dust_download_asset, silam_dust_dummy_zarr_asset],
         tags={
             "dagster/max_runtime": str(60 * 60 * 10), # Should take 6 ish hours
-            "dagster/priority": "1",
+            "dagster/priority": "2",
             "dagster/concurrency_key": "heavy-zarr-creation",
             "large_zarr_creation": "true",
         },

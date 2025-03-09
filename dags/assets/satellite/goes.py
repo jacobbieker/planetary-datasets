@@ -70,7 +70,7 @@ goes16_reproc_two_dimensional_partitions = dg.MultiPartitionsDefinition(
           tags={
               "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
               "dagster/priority": "1",
-              "dagster/concurrency_key": "icechunk",
+              "dagster/concurrency_key": "goes-icechunk",
           },
           partitions_def=goes16_two_dimensional_partitions,
 automation_condition=dg.AutomationCondition.eager(),
@@ -101,7 +101,7 @@ def goes16_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materiali
           tags={
               "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
               "dagster/priority": "1",
-              "dagster/concurrency_key": "icechunk",
+              "dagster/concurrency_key": "goes-icechunk",
           },
           partitions_def=goes17_two_dimensional_partitions,
 automation_condition=dg.AutomationCondition.eager(),
@@ -132,7 +132,7 @@ def goes17_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materiali
           tags={
               "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
               "dagster/priority": "1",
-              "dagster/concurrency_key": "icechunk",
+              "dagster/concurrency_key": "goes-icechunk",
           },
           partitions_def=goes18_two_dimensional_partitions,
 automation_condition=dg.AutomationCondition.eager(),
@@ -163,7 +163,7 @@ def goes18_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materiali
           tags={
               "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
               "dagster/priority": "1",
-              "dagster/concurrency_key": "icechunk",
+              "dagster/concurrency_key": "goes-icechunk",
           },
           partitions_def=goes18_two_dimensional_partitions,
 automation_condition=dg.AutomationCondition.eager(),
@@ -194,7 +194,7 @@ def goes19_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materiali
           tags={
               "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
               "dagster/priority": "1",
-              "dagster/concurrency_key": "icechunk",
+              "dagster/concurrency_key": "goes-icechunk",
           },
           partitions_def=goes16_reproc_two_dimensional_partitions,
 automation_condition=dg.AutomationCondition.eager(),

@@ -34,7 +34,7 @@ partitions_def: dg.TimeWindowPartitionsDefinition = dg.HourlyPartitionsDefinitio
           tags={
               "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
               "dagster/priority": "1",
-              "dagster/concurrency_key": "aws",
+              "dagster/concurrency_key": "download",
           },
           partitions_def=partitions_def,
 automation_condition=dg.AutomationCondition.eager(),
@@ -119,7 +119,7 @@ def gmgsi_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeR
         tags={
             "dagster/max_runtime": str(60 * 60 * 10), # Should take 6 ish hours
             "dagster/priority": "1",
-            "dagster/concurrency_key": "aws",
+            "dagster/concurrency_key": "zarr-creation",
         },
     partitions_def=partitions_def,
 automation_condition=dg.AutomationCondition.eager(),

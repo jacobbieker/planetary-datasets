@@ -42,6 +42,7 @@ sqlite = ">=3.49.1,<4"
 netcdf4 = ">=1.7.2,<2"
 eumdac = ">=3.0.0,<4"
 pip = ">=25.0.1,<26"
+kerchunk = ">=0.2.8,<0.3"
 
 [pypi-dependencies]
 odc-stac = ">=0.3.11, <0.4"

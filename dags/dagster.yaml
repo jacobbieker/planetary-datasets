@@ -13,9 +13,18 @@ run_queue:
     - key: 'heavy-zarr-creation'
       limit: 1
     - key: 'download'
-      limit: 49
+      limit: 46
     - key: 'dagster/backfill'
-      limit: 45
+      limit: 35
+    - key: 'dagster/concurrency_key'
+      value: 'goes-icechunk'
+      limit: 4
+    - key: 'dagster/concurrency_key'
+      value: 'heavy-zarr-creation'
+      limit: 1
+    - key: 'dagster/concurrency_key'
+      value: 'download'
+      limit: 46
 
 run_retries:
   enabled: true

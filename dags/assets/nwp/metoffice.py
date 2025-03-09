@@ -139,7 +139,7 @@ def list_metoffice_downloaded_files(it: dt.datetime) -> list[str]:
 @dg.asset(name="metoffice-global-download", description="Download MetOffice 10km Deterministic global model on AWS",
           tags={
               "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
-              "dagster/priority": "1",
+              "dagster/priority": "2",
               "dagster/concurrency_key": "download",
           },
           partitions_def=partitions_def,
