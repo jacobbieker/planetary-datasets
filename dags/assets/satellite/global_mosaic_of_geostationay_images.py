@@ -85,6 +85,7 @@ def gmgsi_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeR
         )
 
     data = get_global_mosaic(context.partition_time_window.start)
+    data = data.rename({"lat": "latitude", "lon": "longitude"})
     variables = ["vis", "ssr", "wv", "lwir", "swir"]
     encoding = {
         v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
