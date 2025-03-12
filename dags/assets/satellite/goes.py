@@ -73,7 +73,7 @@ goes16_reproc_two_dimensional_partitions = dg.MultiPartitionsDefinition(
               "dagster/concurrency_key": "goes-icechunk",
           },
           partitions_def=goes16_two_dimensional_partitions,
-automation_condition=dg.AutomationCondition.eager(),
+# automation_condition=dg.AutomationCondition.eager(),
           )
 def goes16_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
@@ -104,7 +104,7 @@ def goes16_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materiali
               "dagster/concurrency_key": "goes-icechunk",
           },
           partitions_def=goes17_two_dimensional_partitions,
-automation_condition=dg.AutomationCondition.eager(),
+# automation_condition=dg.AutomationCondition.eager(),
           )
 def goes17_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
@@ -135,7 +135,7 @@ def goes17_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materiali
               "dagster/concurrency_key": "goes-icechunk",
           },
           partitions_def=goes18_two_dimensional_partitions,
-automation_condition=dg.AutomationCondition.eager(),
+# automation_condition=dg.AutomationCondition.eager(),
           )
 def goes18_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
@@ -166,7 +166,7 @@ def goes18_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materiali
               "dagster/concurrency_key": "goes-icechunk",
           },
           partitions_def=goes18_two_dimensional_partitions,
-automation_condition=dg.AutomationCondition.eager(),
+# automation_condition=dg.AutomationCondition.eager(),
           )
 def goes19_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
@@ -197,7 +197,7 @@ def goes19_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materiali
               "dagster/concurrency_key": "goes-icechunk",
           },
           partitions_def=goes16_reproc_two_dimensional_partitions,
-automation_condition=dg.AutomationCondition.eager(),
+# automation_condition=dg.AutomationCondition.eager(),
           )
 def goes16_virtualizarr_reproc_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
@@ -225,7 +225,6 @@ def create_and_write_virtualizarr(
         files: list[str],
         satellite: str,
         band: int,
-
 ):
     files = ["s3://" + f for f in files]
     virtual_datasets = [

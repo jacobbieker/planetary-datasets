@@ -51,7 +51,7 @@ himawari9_two_dimensional_partitions = dg.MultiPartitionsDefinition(
               "dagster/concurrency_key": "icechunk",
           },
           partitions_def=himawari8_two_dimensional_partitions,
-automation_condition=dg.AutomationCondition.eager(),
+# automation_condition=dg.AutomationCondition.eager(),
           )
 def himawari8_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
@@ -82,7 +82,7 @@ def himawari8_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.Materi
               "dagster/concurrency_key": "icechunk",
           },
           partitions_def=himawari9_two_dimensional_partitions,
-automation_condition=dg.AutomationCondition.eager(),
+# automation_condition=dg.AutomationCondition.eager(),
           )
 def himawari9_virtualizarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
