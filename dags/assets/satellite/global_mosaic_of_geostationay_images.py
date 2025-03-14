@@ -93,30 +93,31 @@ def gmgsi_v3_download_asset(context: dg.AssetExecutionContext) -> dg.Materialize
 
     fs = s3fs.S3FileSystem(anon=True)
     # Check if the local file exists before downloading
+    downloaded_files = []
     for channel in ["VIS", "SSR", "WV"]:
-        s3_uri = f"{BASE_URL}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}"
-        local_uri = f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_nc.{it.strftime('%Y%m%d%H')}"
+        # Get the S3 URI by glob, as it has extra info in it
+        s3_uri = "s3://"+list(fs.glob(f"{BASE_URL}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_v3r0_blend_s{it.strftime('%Y%m%d%H')}*"))[0]
+        local_uri = s3_uri.replace(BASE_URL, ARCHIVE_FOLDER)
         if not os.path.exists(local_uri):
             fs.get(s3_uri, local_uri)
             context.log.info(msg=f"Downloaded {s3_uri} to {local_uri}")
+            downloaded_files.append(local_uri)
         else:
             context.log.info(msg=f"Already downloaded {s3_uri} to {local_uri}")
     for channel, name in [("LW", "LIR"), ("SW", "SIR")]:
-        s3_uri = f"{BASE_URL}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{name}_nc.{it.strftime('%Y%m%d%H')}"
-        local_uri = f"{ARCHIVE_FOLDER}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{name}_nc.{it.strftime('%Y%m%d%H')}"
+        # Get the S3 URI by glob, as it has extra info in it
+        s3_uri = "s3://"+list(fs.glob(f"{BASE_URL}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{name}_v3r0_blend_s{it.strftime('%Y%m%d%H')}*"))[0]
+        local_uri = s3_uri.replace(BASE_URL, ARCHIVE_FOLDER)
         if not os.path.exists(local_uri):
             fs.get(s3_uri, local_uri)
             context.log.info(msg=f"Downloaded {s3_uri} to {local_uri}")
+            downloaded_files.append(local_uri)
         else:
             context.log.info(msg=f"Already downloaded {s3_uri} to {local_uri}")
     # Return the paths as a materialization
     return dg.MaterializeResult(
         metadata={
-            "vis": f"{ARCHIVE_FOLDER}GMGSI_VIS/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPVIS_nc.{it.strftime('%Y%m%d%H')}",
-            "ssr": f"{ARCHIVE_FOLDER}GMGSI_SSR/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSSR_nc.{it.strftime('%Y%m%d%H')}",
-            "wv": f"{ARCHIVE_FOLDER}GMGSI_WV/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPWV_nc.{it.strftime('%Y%m%d%H')}",
-            "lwir": f"{ARCHIVE_FOLDER}GMGSI_LW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPLIR_nc.{it.strftime('%Y%m%d%H')}",
-            "swir": f"{ARCHIVE_FOLDER}GMGSI_SW/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMPSIR_nc.{it.strftime('%Y%m%d%H')}",
+            "files": downloaded_files
         },
     )
 
