@@ -94,7 +94,7 @@ def gmgsi_v3_download_asset(context: dg.AssetExecutionContext) -> dg.Materialize
     fs = s3fs.S3FileSystem(anon=True)
     # Check if the local file exists before downloading
     downloaded_files = []
-    for channel in ["VIS", "SSR", "WV"]:
+    for channel in ["VIS", "WV"]:
         # Get the S3 URI by glob, as it has extra info in it
         s3_uri = "s3://"+list(fs.glob(f"{BASE_URL}GMGSI_{channel}/{it.year}/{it.month:02}/{it.day:02}/{it.hour:02}/GLOBCOMP{channel}_v3r0_blend_s{it.strftime('%Y%m%d%H')}*"))[0]
         local_uri = s3_uri.replace(BASE_URL, ARCHIVE_FOLDER)
