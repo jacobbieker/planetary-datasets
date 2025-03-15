@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 ARCHIVE_FOLDER = "/ext_data/gmgsi/"
 BASE_URL = "s3://noaa-gmgsi-pds/"
 ZARR_PATH = "/ext_data/gmgsi.zarr"
+ZARR_V3_PATH = "/ext_data/gmgsi_v3blend.zarr"
 if os.getenv("ENVIRONMENT", "local") == "pb":
     ARCHIVE_FOLDER = "/ext_data/gmgsi/"
 
@@ -161,9 +162,9 @@ def gmgsi_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeR
           partitions_def=partitions_def_v3,
           automation_condition=dg.AutomationCondition.eager(),)
 def gmgsi_v3_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
-    if os.path.exists(ZARR_PATH):
+    if os.path.exists(ZARR_V3_PATH):
         return dg.MaterializeResult(
-            metadata={"zarr_path": ZARR_PATH},
+            metadata={"zarr_path": ZARR_V3_PATH},
         )
 
     data = get_global_mosaic_v3(context.partition_time_window.start)
@@ -184,9 +185,9 @@ def gmgsi_v3_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Materiali
     dummy_dataset = xr.Dataset({v: default_dataarray for v in variables},
                                coords={"time": date_range, "latitude": (["yc", "xc"], data.latitude.values),
                                        "longitude": (["yc", "xc"], data.longitude.values)})
-    dummy_dataset.to_zarr(ZARR_PATH, mode="w", compute=False, zarr_format=3, encoding=encoding)
+    dummy_dataset.to_zarr(ZARR_V3_PATH, mode="w", compute=False, zarr_format=3, encoding=encoding)
     return dg.MaterializeResult(
-        metadata={"zarr_path": ZARR_PATH},
+        metadata={"zarr_path": ZARR_V3_PATH},
     )
 
 @dg.asset(
@@ -246,7 +247,7 @@ def gmgsi_v3_zarr_asset(
     """Dagster asset for NOAA's GMGSI global mosaic of geostationary satellites."""
     it: dt.datetime = context.partition_time_window.start
     dataset: xr.Dataset = get_global_mosaic_v3(it)
-    dataset.chunk({"time": 1, "yc": -1, "xc": -1}).rename({"lat": "latitude", "lon": "longitude"}).to_zarr(ZARR_PATH,
+    dataset.chunk({"time": 1, "yc": -1, "xc": -1}).rename({"lat": "latitude", "lon": "longitude"}).to_zarr(ZARR_V3_PATH,
                                                                                                                 region={
                                                                                                                     "time": "auto",
                                                                                                                     "xc": "auto",
@@ -273,7 +274,7 @@ def get_global_mosaic_v3(time: dt.datetime, channels: Optional[list[str]] = None
     for channel in channels:
         if channel == "vis":
             # Get the full file name
-            filepath = list(glob.glob(f"{base_url}GMGSI_VIS/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPVIS_v3r0_blend_s{time.strftime('%Y%m%d%H')}_*.nc"))[0]
+            filepath = list(glob.glob(f"{base_url}GMGSI_VIS/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPVIS_v3r0_blend_s{time.strftime('%Y%m%d%H')}*"))[0]
             with fsspec.open(filepath) as f:
                 ds = xr.open_dataset(f).load()
                 ds["dqf"] = ds["dqf"].fillna(255)
@@ -281,7 +282,7 @@ def get_global_mosaic_v3(time: dt.datetime, channels: Optional[list[str]] = None
                 datasets_to_merge.append(ds)
         elif channel == "wv":
             filepath = list(glob.glob(
-                                f"{base_url}GMGSI_WV/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPWV_v3r0_blend_s{time.strftime('%Y%m%d%H')}_*.nc"))[0]
+                                f"{base_url}GMGSI_WV/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPWV_v3r0_blend_s{time.strftime('%Y%m%d%H')}*"))[0]
             with fsspec.open(filepath) as f:
                 ds_wv = xr.open_dataset(f).load()
                 ds_wv = ds_wv["dqf"].fillna(255)
@@ -289,7 +290,7 @@ def get_global_mosaic_v3(time: dt.datetime, channels: Optional[list[str]] = None
                 datasets_to_merge.append(ds_wv)
         elif channel == "lwir":
             filepath = list(glob.glob(
-                                f"{base_url}GMGSI_LW/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPLIR_v3r0_blend_s{time.strftime('%Y%m%d%H')}_*.nc"))[0]
+                                f"{base_url}GMGSI_LW/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPLIR_v3r0_blend_s{time.strftime('%Y%m%d%H')}*"))[0]
             with fsspec.open(filepath) as f:
                 ds_lw = xr.open_dataset(f).load()
                 ds_lw = ds_lw["dqf"].fillna(255)
@@ -297,7 +298,7 @@ def get_global_mosaic_v3(time: dt.datetime, channels: Optional[list[str]] = None
                 datasets_to_merge.append(ds_lw)
         elif channel == "swir":
             filepath = list(glob.glob(
-                                f"{base_url}GMGSI_SW/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPSIR_v3r0_blend_s{time.strftime('%Y%m%d%H')}_*.nc"))[0]
+                                f"{base_url}GMGSI_SW/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPSIR_v3r0_blend_s{time.strftime('%Y%m%d%H')}*"))[0]
             with fsspec.open(filepath) as f:
                 ds_sw = xr.open_dataset(f).load()
                 ds_sw = ds_sw["dqf"].fillna(255)
