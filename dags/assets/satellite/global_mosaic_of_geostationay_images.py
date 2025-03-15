@@ -278,32 +278,45 @@ def get_global_mosaic_v3(time: dt.datetime, channels: Optional[list[str]] = None
             with fsspec.open(filepath) as f:
                 ds = xr.open_dataset(f).load()
                 ds["dqf"] = ds["dqf"].fillna(255)
-                ds = ds.rename({"data": "vis", "dqf": "vis_dqf"}).astype(np.uint8)
-                datasets_to_merge.append(ds)
+                ds = ds.rename({"data": "vis", "dqf": "vis_dqf"})
+                # Drop other variables
+                for dv in ds.data_vars:
+                    if dv not in ["vis", "vis_dqf"]:
+                        ds = ds.drop_vars(dv)
+                datasets_to_merge.append(ds.astype(np.uint8))
         elif channel == "wv":
             filepath = list(glob.glob(
                                 f"{base_url}GMGSI_WV/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPWV_v3r0_blend_s{time.strftime('%Y%m%d%H')}*"))[0]
             with fsspec.open(filepath) as f:
                 ds_wv = xr.open_dataset(f).load()
                 ds_wv = ds_wv["dqf"].fillna(255)
-                ds_wv = ds_wv.rename({"data": "wv", "dqf": "wv_dqf"}).astype(np.uint8)
-                datasets_to_merge.append(ds_wv)
+                ds_wv = ds_wv.rename({"data": "wv", "dqf": "wv_dqf"})
+                for dv in ds_wv.data_vars:
+                    if dv not in ["wv", "wv_dqf"]:
+                        ds_wv = ds_wv.drop_vars(dv)
+                datasets_to_merge.append(ds_wv.astype(np.uint8))
         elif channel == "lwir":
             filepath = list(glob.glob(
                                 f"{base_url}GMGSI_LW/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPLIR_v3r0_blend_s{time.strftime('%Y%m%d%H')}*"))[0]
             with fsspec.open(filepath) as f:
                 ds_lw = xr.open_dataset(f).load()
                 ds_lw = ds_lw["dqf"].fillna(255)
-                ds_lw = ds_lw.rename({"data": "lwir", "dqf": "lwir_dqf"}).astype(np.uint8)
-                datasets_to_merge.append(ds_lw)
+                ds_lw = ds_lw.rename({"data": "lwir", "dqf": "lwir_dqf"})
+                for dv in ds_lw.data_vars:
+                    if dv not in ["lwir", "lwir_dqf"]:
+                        ds_lw = ds_lw.drop_vars(dv)
+                datasets_to_merge.append(ds_lw.astype(np.uint8))
         elif channel == "swir":
             filepath = list(glob.glob(
                                 f"{base_url}GMGSI_SW/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPSIR_v3r0_blend_s{time.strftime('%Y%m%d%H')}*"))[0]
             with fsspec.open(filepath) as f:
                 ds_sw = xr.open_dataset(f).load()
                 ds_sw = ds_sw["dqf"].fillna(255)
-                ds_sw = ds_sw.rename({"data": "swir", "dqf": "swir_dqf"}).astype(np.uint8)
-                datasets_to_merge.append(ds_sw)
+                ds_sw = ds_sw.rename({"data": "swir", "dqf": "swir_dqf"})
+                for dv in ds_sw.data_vars:
+                    if dv not in ["swir", "swir_dqf"]:
+                        ds_sw = ds_sw.drop_vars(dv)
+                datasets_to_merge.append(ds_sw.astype(np.uint8))
         else:
             raise ValueError(f"Channel {channel=} not recognized")
 
