@@ -36,26 +36,26 @@ def try_download_file(url: str, local_path: str) -> bool:
         return False
 
 # TODO Get all the POINTS and lengths of each set of points for the partitioning
-himawari8_partitions_def: dg.PartitionsDefinition = dg.PartitionsDefinition(
-    partition_fn=list(range(len(generate_points(8683127)))),
+himawari8_partitions_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
+    list(range(len(generate_points(8683127)))),
 )
-himawari7_partition_def: dg.PartitionsDefinition = dg.PartitionsDefinition(
-    partition_fn=list(range(len(generate_points(2170781)))),
+himawari7_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
+    list(range(len(generate_points(2170781)))),
 )
-iodc_partitions_def: dg.PartitionsDefinition = dg.PartitionsDefinition(
-    partition_fn=list(range(len(generate_points(102299)))),
+iodc_partitions_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
+    list(range(len(generate_points(102299)))),
 )
-goes_10min_partition_def: dg.PartitionsDefinition = dg.PartitionsDefinition(
-    partition_fn=list(range(len(generate_points(9462459)))),
+goes_10min_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
+    list(range(len(generate_points(9462459)))),
 )
-goes_30min_partition_def: dg.PartitionsDefinition = dg.PartitionsDefinition(
-    partition_fn=list(range(len(generate_points(2018266, chunks=50)))),
+goes_30min_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
+   list(range(len(generate_points(2018266, chunks=50)))),
 )
-mtg_recent_partition_def: dg.PartitionsDefinition = dg.PartitionsDefinition(
-    partition_fn=list(range(len(generate_points(3869543)))),
+mtg_recent_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
+    list(range(len(generate_points(3869543)))),
 )
-mtg_longer_partition_def: dg.PartitionsDefinition = dg.PartitionsDefinition(
-    partition_fn=list(range(len(generate_points(2693286)))),
+mtg_longer_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
+    list(range(len(generate_points(2693286)))),
 )
 
 def get_response_json_and_handle_errors(response: requests.Response) -> dict:
