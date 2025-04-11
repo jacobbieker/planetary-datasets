@@ -124,7 +124,7 @@ def nsrdb_himawari8_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
-                time.sleep(600)  # Wait for 10 minutes before retrying again
+            time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -170,7 +170,7 @@ def nsrdb_himawari7_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
-                time.sleep(600)  # Wait for 10 minutes before retrying again
+            time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -216,7 +216,7 @@ def nsrdb_goes10min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
-                time.sleep(600)  # Wait for 10 minutes before retrying again
+            time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -262,7 +262,7 @@ def nsrdb_goes30min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
-                time.sleep(600)  # Wait for 10 minutes before retrying again
+            time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -308,7 +308,7 @@ def nsrdb_iodc_60min_download_asset(context: dg.AssetExecutionContext) -> dg.Mat
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
-                time.sleep(600)  # Wait for 10 minutes before retrying again
+            time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -354,7 +354,7 @@ def nsrdb_mtg_15min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
-                time.sleep(600)  # Wait for 10 minutes before retrying again
+            time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -364,7 +364,6 @@ def nsrdb_mtg_15min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             "files": downloaded_files
         },
     )
-
 @dg.asset(name="nsrdb-mtg-15min-longer", description="Download NSRDB data for GOES 10min",
           tags={
               "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
