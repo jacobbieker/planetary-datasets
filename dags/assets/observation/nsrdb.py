@@ -6,7 +6,7 @@ import requests
 
 """Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
 
-ARCHIVE_FOLDER = "/data/NSRDB/"
+ARCHIVE_FOLDER = "/Users/jacob/Development/planetary-datasets/dags/assets/observation/NSRDB/"
 if os.getenv("ENVIRONMENT", "local") == "pb":
     ARCHIVE_FOLDER = "/data/NSRDB/"
 
@@ -35,7 +35,6 @@ def try_download_file(url: str, local_path: str) -> bool:
         print(f"Failed to download {url}: {e}")
         return False
 
-# TODO Get all the POINTS and lengths of each set of points for the partitioning
 himawari8_partitions_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
     [str(i) for i in range(len(generate_points(8683127)))],
 )
@@ -125,6 +124,7 @@ def nsrdb_himawari8_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
+                time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -170,6 +170,7 @@ def nsrdb_himawari7_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
+                time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -215,6 +216,7 @@ def nsrdb_goes10min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
+                time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -260,6 +262,7 @@ def nsrdb_goes30min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
+                time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -305,6 +308,7 @@ def nsrdb_iodc_60min_download_asset(context: dg.AssetExecutionContext) -> dg.Mat
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
+                time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -350,6 +354,7 @@ def nsrdb_mtg_15min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
+                time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -395,6 +400,7 @@ def nsrdb_mtg_15min_longer_download_asset(context: dg.AssetExecutionContext) -> 
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
+                time.sleep(600)  # Wait for 10 minutes before retrying again
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
