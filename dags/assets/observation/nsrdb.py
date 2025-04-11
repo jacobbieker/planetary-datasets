@@ -124,7 +124,7 @@ def nsrdb_himawari8_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             local_path = os.path.join(ARCHIVE_FOLDER, f"himawari8_key_{partition_key}.zip")
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
-            not_downloaded = False
+                not_downloaded = False
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -169,7 +169,7 @@ def nsrdb_himawari7_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             local_path = os.path.join(ARCHIVE_FOLDER, f"himawari7_key_{partition_key}.zip")
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
-            not_downloaded = False
+                not_downloaded = False
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -214,7 +214,7 @@ def nsrdb_goes10min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             local_path = os.path.join(ARCHIVE_FOLDER, f"goes_10min_key_{partition_key}.zip")
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
-            not_downloaded = False
+                not_downloaded = False
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -259,7 +259,7 @@ def nsrdb_goes30min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             local_path = os.path.join(ARCHIVE_FOLDER, f"goes_30min_key_{partition_key}.zip")
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
-            not_downloaded = False
+                not_downloaded = False
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -304,7 +304,7 @@ def nsrdb_iodc_60min_download_asset(context: dg.AssetExecutionContext) -> dg.Mat
             local_path = os.path.join(ARCHIVE_FOLDER, f"iodc_60min_key_{partition_key}.zip")
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
-            not_downloaded = False
+                not_downloaded = False
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -349,7 +349,7 @@ def nsrdb_mtg_15min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
             local_path = os.path.join(ARCHIVE_FOLDER, f"mtg_15min_recent_key_{partition_key}.zip")
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
-            not_downloaded = False
+                not_downloaded = False
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
@@ -394,7 +394,7 @@ def nsrdb_mtg_15min_longer_download_asset(context: dg.AssetExecutionContext) -> 
             local_path = os.path.join(ARCHIVE_FOLDER, f"mtg_15min_recent_key_{partition_key}.zip")
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
-            not_downloaded = False
+                not_downloaded = False
         except Exception as e:
             print(f"Failed to download {download_url}: {e}")
             time.sleep(600)  # Wait for 10 minutes before retrying again
