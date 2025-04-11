@@ -37,25 +37,25 @@ def try_download_file(url: str, local_path: str) -> bool:
 
 # TODO Get all the POINTS and lengths of each set of points for the partitioning
 himawari8_partitions_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
-    list(range(len(generate_points(8683127)))),
+    [str(i) for i in range(len(generate_points(8683127)))],
 )
 himawari7_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
-    list(range(len(generate_points(2170781)))),
+    [str(i) for i in range(len(generate_points(2170781)))],
 )
 iodc_partitions_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
-    list(range(len(generate_points(102299)))),
+    [str(i) for i in range(len(generate_points(102299)))],
 )
 goes_10min_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
-    list(range(len(generate_points(9462459)))),
+    [str(i) for i in range(len(generate_points(9462459)))],
 )
 goes_30min_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
-   list(range(len(generate_points(2018266, chunks=50)))),
+   [str(i) for i in range(len(generate_points(2018266, chunks=50)))],
 )
 mtg_recent_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
-    list(range(len(generate_points(3869543)))),
+    [str(i) for i in range(len(generate_points(3869543)))],
 )
 mtg_longer_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
-    list(range(len(generate_points(2693286)))),
+    [str(i) for i in range(len(generate_points(2693286)))],
 )
 
 def get_response_json_and_handle_errors(response: requests.Response) -> dict:
@@ -100,7 +100,7 @@ automation_condition=dg.AutomationCondition.eager(),
           )
 def nsrdb_himawari8_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
-    partition_key = context.partition_key
+    partition_key = int(context.partition_key)
     BASE_URL = "https://developer.nrel.gov/api/nsrdb/v2/solar/himawari-download.json?"
     input_data = {
         'attributes': 'dhi,dni,ghi,solar_zenith_angle,cloud_type',
@@ -146,7 +146,7 @@ automation_condition=dg.AutomationCondition.eager(),
           )
 def nsrdb_himawari7_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
-    partition_key = context.partition_key
+    partition_key = int(context.partition_key)
     BASE_URL = "https://developer.nrel.gov/api/nsrdb/v2/solar/himawari7-download.json?"
     input_data = {
         'attributes': 'dhi,dni,ghi,cloud_type,solar_zenith_angle',
@@ -191,7 +191,7 @@ automation_condition=dg.AutomationCondition.eager(),
           )
 def nsrdb_goes10min_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
-    partition_key = context.partition_key
+    partition_key = int(context.partition_key)
     BASE_URL = "https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-GOES-full-disc-v4-0-0-download.json?"
     input_data = {
         'attributes': 'aod,cloud_type,dhi,dni,ghi,solar_zenith_angle',
@@ -236,7 +236,7 @@ automation_condition=dg.AutomationCondition.eager(),
           )
 def nsrdb_goes30min_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
-    partition_key = context.partition_key
+    partition_key = int(context.partition_key)
     BASE_URL = "https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-GOES-aggregated-v4-0-0-download.json?"
     input_data = {
         'attributes': 'dhi,ghi,dni,cloud_type,solar_zenith_angle',
@@ -281,7 +281,7 @@ automation_condition=dg.AutomationCondition.eager(),
           )
 def nsrdb_iodc_60min_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
-    partition_key = context.partition_key
+    partition_key = int(context.partition_key)
     BASE_URL = "https://developer.nrel.gov/api/nsrdb/v2/solar/suny-india-download.json?"
     input_data = {
         'attributes': 'dhi,dni,ghi,solar_zenith_angle',
@@ -326,7 +326,7 @@ automation_condition=dg.AutomationCondition.eager(),
           )
 def nsrdb_mtg_15min_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
-    partition_key = context.partition_key
+    partition_key = int(context.partition_key)
     BASE_URL = "https://developer.nrel.gov/api/nsrdb/v2/solar/msg-iodc-download.json?"
     input_data = {
         'attributes': 'ghi,dhi,dni,solar_zenith_angle,cloud_type',
@@ -371,7 +371,7 @@ automation_condition=dg.AutomationCondition.eager(),
           )
 def nsrdb_mtg_15min_longer_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
-    partition_key = context.partition_key
+    partition_key = int(context.partition_key)
     BASE_URL = "https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-msg-v1-0-0-download.json?"
     input_data = {
         'attributes': 'ghi,dhi,dni,solar_zenith_angle,cloud_type',
