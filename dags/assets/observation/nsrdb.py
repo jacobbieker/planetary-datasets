@@ -24,6 +24,9 @@ def generate_points(last_point: int, chunks: int = 200) -> list[list[str]]:
 
 def try_download_file(url: str, local_path: str) -> bool:
     """Try to download the file from the given url and save it to the local path"""
+    if os.path.exists(local_path):
+        print(f"Already downloaded {url}")
+        return True
     try:
         with requests.get(url, stream=True) as r:
             r.raise_for_status()
@@ -36,7 +39,7 @@ def try_download_file(url: str, local_path: str) -> bool:
         return False
 
 himawari8_partitions_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
-    [str(i) for i in range(len(generate_points(8683127)))],
+    [str(i) for i in range(len(generate_points(8683127, chunks=50)))],
 )
 himawari7_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
     [str(i) for i in range(len(generate_points(2170781)))],
@@ -45,7 +48,7 @@ iodc_partitions_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
     [str(i) for i in range(len(generate_points(102299)))],
 )
 goes_10min_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
-    [str(i) for i in range(len(generate_points(9462459)))],
+    [str(i) for i in range(len(generate_points(9462459, chunks=50)))],
 )
 goes_30min_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
    [str(i) for i in range(len(generate_points(2018266, chunks=50)))],
@@ -54,7 +57,7 @@ mtg_recent_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinitio
     [str(i) for i in range(len(generate_points(3869543)))],
 )
 mtg_longer_partition_def: dg.PartitionsDefinition = dg.StaticPartitionsDefinition(
-    [str(i) for i in range(len(generate_points(2693286)))],
+    [str(i) for i in range(len(generate_points(2693286, chunks=50)))],
 )
 
 def get_response_json_and_handle_errors(response: requests.Response) -> dict:
@@ -74,6 +77,8 @@ def get_response_json_and_handle_errors(response: requests.Response) -> dict:
     if response.status_code != 200:
         print(f"An error has occurred with the server or the request. The request response code/status: {response.status_code} {response.reason}")
         print(f"The response body: {response.text}")
+        if response.status_code == 400:
+            return False
         exit(1)
 
     try:
@@ -108,19 +113,33 @@ def nsrdb_himawari8_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
         'email': EMAIL,
     }
     name = ['2016,2017,2018,2019,2020']
-    location_ids = generate_points(8683127)[partition_key]
+    location_ids = generate_points(8683127, chunks=50)[partition_key]
     input_data['years'] = [name]
     input_data['location_ids'] = location_ids
     headers = {
         'x-api-key': API_KEY
     }
-    data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+    data = False
+    local_path = os.path.join(ARCHIVE_FOLDER, f"himawari8_key_{partition_key}.zip")
+    while data == False:
+        if os.path.exists(local_path):
+            print(f"Already downloaded {local_path}")
+            return dg.MaterializeResult(
+                metadata={
+                    "files": [local_path]
+                },
+            )
+        data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+        if data == False:
+            print("The request failed, retrying in a long time...")
+            time.sleep(3600)
+
     download_url = data['outputs']['downloadUrl']
     not_downloaded = True
     while not_downloaded:
         try:
             downloaded_files = []
-            local_path = os.path.join(ARCHIVE_FOLDER, f"himawari8_key_{partition_key}.zip")
+
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
@@ -160,7 +179,12 @@ def nsrdb_himawari7_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
     headers = {
         'x-api-key': API_KEY
     }
-    data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+    data = False
+    while data == False:
+        data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+        if data == False:
+            print("The request failed, retrying in a long time...")
+            time.sleep(3600)
     download_url = data['outputs']['downloadUrl']
     not_downloaded = True
     while not_downloaded:
@@ -200,19 +224,31 @@ def nsrdb_goes10min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
         'api_key': API_KEY,
         'email': EMAIL,
     }
-    location_ids = generate_points(9462459)[partition_key]
+    location_ids = generate_points(9462459, chunks=50)[partition_key]
     input_data['years'] = ['2019,2020,2021']
     input_data['location_ids'] = location_ids
     headers = {
         'x-api-key': API_KEY
     }
-    data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+    data = False
+    local_path = os.path.join(ARCHIVE_FOLDER, f"goes_10min_key_{partition_key}.zip")
+    while data == False:
+        if os.path.exists(local_path):
+            print(f"Already downloaded {local_path}")
+            return dg.MaterializeResult(
+                metadata={
+                    "files": [local_path]
+                },
+            )
+        data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+        if data == False:
+            print("The request failed, retrying in a long time...")
+            time.sleep(3600)
     download_url = data['outputs']['downloadUrl']
     not_downloaded = True
     while not_downloaded:
         try:
             downloaded_files = []
-            local_path = os.path.join(ARCHIVE_FOLDER, f"goes_10min_key_{partition_key}.zip")
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
@@ -252,13 +288,25 @@ def nsrdb_goes30min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
     headers = {
         'x-api-key': API_KEY
     }
-    data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+    data = False
+    local_path = os.path.join(ARCHIVE_FOLDER, f"goes_30min_key_{partition_key}.zip")
+    while data == False:
+        if os.path.exists(local_path):
+            print(f"Already downloaded {local_path}")
+            return dg.MaterializeResult(
+                metadata={
+                    "files": [local_path]
+                },
+            )
+        data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+        if data == False:
+            print("The request failed, retrying in a long time...")
+            time.sleep(3600)
     download_url = data['outputs']['downloadUrl']
     not_downloaded = True
     while not_downloaded:
         try:
             downloaded_files = []
-            local_path = os.path.join(ARCHIVE_FOLDER, f"goes_30min_key_{partition_key}.zip")
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
@@ -298,13 +346,25 @@ def nsrdb_iodc_60min_download_asset(context: dg.AssetExecutionContext) -> dg.Mat
     headers = {
         'x-api-key': API_KEY
     }
-    data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+    data = False
+    local_path = os.path.join(ARCHIVE_FOLDER, f"iodc_60min_key_{partition_key}.zip")
+    while data == False:
+        if os.path.exists(local_path):
+            print(f"Already downloaded {local_path}")
+            return dg.MaterializeResult(
+                metadata={
+                    "files": [local_path]
+                },
+            )
+        data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+        if data == False:
+            print("The request failed, retrying in a long time...")
+            time.sleep(3600)
     download_url = data['outputs']['downloadUrl']
     not_downloaded = True
     while not_downloaded:
         try:
             downloaded_files = []
-            local_path = os.path.join(ARCHIVE_FOLDER, f"iodc_60min_key_{partition_key}.zip")
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
@@ -344,13 +404,25 @@ def nsrdb_mtg_15min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
     headers = {
         'x-api-key': API_KEY
     }
-    data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+    data = False
+    local_path = os.path.join(ARCHIVE_FOLDER, f"mtg_15min_recent_key_{partition_key}.zip")
+    while data == False:
+        if os.path.exists(local_path):
+            print(f"Already downloaded {local_path}")
+            return dg.MaterializeResult(
+                metadata={
+                    "files": [local_path]
+                },
+            )
+        data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+        if data == False:
+            print("The request failed, retrying in a long time...")
+            time.sleep(3600)
     download_url = data['outputs']['downloadUrl']
     not_downloaded = True
     while not_downloaded:
         try:
             downloaded_files = []
-            local_path = os.path.join(ARCHIVE_FOLDER, f"mtg_15min_recent_key_{partition_key}.zip")
             if try_download_file(download_url, local_path):
                 downloaded_files.append(local_path)
                 not_downloaded = False
@@ -383,13 +455,18 @@ def nsrdb_mtg_15min_longer_download_asset(context: dg.AssetExecutionContext) -> 
         'api_key': API_KEY,
         'email': EMAIL,
     }
-    location_ids = generate_points(2693286)[partition_key]
+    location_ids = generate_points(2693286, chunks=50)[partition_key]
     input_data['years'] = ['2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019,2020,2021,2022']
     input_data['location_ids'] = location_ids
     headers = {
         'x-api-key': API_KEY
     }
-    data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+    data = False
+    while data == False:
+        data = get_response_json_and_handle_errors(requests.post(BASE_URL, input_data, headers=headers))
+        if data == False:
+            print("The request failed, retrying in a long time...")
+            time.sleep(3600)
     download_url = data['outputs']['downloadUrl']
     not_downloaded = True
     while not_downloaded:
