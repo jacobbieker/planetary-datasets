@@ -138,6 +138,7 @@ def mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Ma
             "dagster/concurrency_key": "zarr-creation",
         },
     partitions_def=partitions_def,
+    #executor=dg.multiprocess_executor.configured({"max_concurrent": 10}),
 automation_condition=dg.AutomationCondition.eager(),
 )
 def mrms_zarr_asset(

@@ -289,7 +289,7 @@ def get_global_mosaic_v3(time: dt.datetime, channels: Optional[list[str]] = None
                                 f"{base_url}GMGSI_WV/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPWV_v3r0_blend_s{time.strftime('%Y%m%d%H')}*"))[0]
             with fsspec.open(filepath) as f:
                 ds_wv = xr.open_dataset(f).load()
-                ds_wv = ds_wv["dqf"].fillna(255)
+                ds_wv["dqf"] = ds_wv["dqf"].fillna(255)
                 ds_wv = ds_wv.rename({"data": "wv", "dqf": "wv_dqf"})
                 for dv in ds_wv.data_vars:
                     if dv not in ["wv", "wv_dqf"]:
@@ -300,7 +300,7 @@ def get_global_mosaic_v3(time: dt.datetime, channels: Optional[list[str]] = None
                                 f"{base_url}GMGSI_LW/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPLIR_v3r0_blend_s{time.strftime('%Y%m%d%H')}*"))[0]
             with fsspec.open(filepath) as f:
                 ds_lw = xr.open_dataset(f).load()
-                ds_lw = ds_lw["dqf"].fillna(255)
+                ds_lw["dqf"] = ds_lw["dqf"].fillna(255)
                 ds_lw = ds_lw.rename({"data": "lwir", "dqf": "lwir_dqf"})
                 for dv in ds_lw.data_vars:
                     if dv not in ["lwir", "lwir_dqf"]:
@@ -311,7 +311,7 @@ def get_global_mosaic_v3(time: dt.datetime, channels: Optional[list[str]] = None
                                 f"{base_url}GMGSI_SW/{time.year}/{time.month:02}/{time.day:02}/{time.hour:02}/GLOBCOMPSIR_v3r0_blend_s{time.strftime('%Y%m%d%H')}*"))[0]
             with fsspec.open(filepath) as f:
                 ds_sw = xr.open_dataset(f).load()
-                ds_sw = ds_sw["dqf"].fillna(255)
+                ds_sw["dqf"] = ds_sw["dqf"].fillna(255)
                 ds_sw = ds_sw.rename({"data": "swir", "dqf": "swir_dqf"})
                 for dv in ds_sw.data_vars:
                     if dv not in ["swir", "swir_dqf"]:
