@@ -20,6 +20,10 @@ import datetime as dt
 
 ARCHIVE_FOLDER = "/data/MRMS/"
 ZARR_PATH = "/data/MRMS/mrms.zarr"
+CARIB_ZARR_PATH = "/nvme/mrms_caribbean.zarr"
+ALASKA_ZARR_PATH = "/nvme/mrms_alaska.zarr"
+HAWAII_ZARR_PATH = "/nvme/mrms_hawaii.zarr"
+GUAM_ZARR_PATH = "/nvme/mrms_guam.zarr"
 SOURCE_COOP_PATH = "s3://bkr/mrms/mrms.zarr"
 if os.getenv("ENVIRONMENT", "local") == "pb":
     ARCHIVE_FOLDER = "/data/MRMS/"
@@ -30,6 +34,15 @@ partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition
 )
 zarr_date_range = pd.date_range("2000-01-01", "2026-12-31", freq="2min")
 
+aws_partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition(
+    start_date="2020-10-14",
+    end_date="2024-05-28",
+)
+region_partitions = dg.StaticPartitionsDefinition(["HAWAII", "CARIB", "GUAM", "ALASKA"])
+two_dimensional_partitions = dg.MultiPartitionsDefinition(
+    {"date": aws_partitions_def, "region": region_partitions}
+)
+aws_zarr_date_range = pd.date_range("2020-10-14", "2026-12-31", freq="2min")
 
 def download_mrms(day: dt.datetime, measurement_type: str) -> list[str]:
     assert measurement_type in ["GaugeCorr_QPE_01H", "PrecipFlag", "PrecipRate", "RadarOnly_QPE_01H", "MultiSensor_QPE_01H_Pass2"]
@@ -45,6 +58,9 @@ def download_mrms(day: dt.datetime, measurement_type: str) -> list[str]:
 
 def get_mrms(day: dt.datetime, measurement_type: str) -> list[str]:
     return sorted(list(glob.glob(f"{ARCHIVE_FOLDER}/mtarchive.geol.iastate.edu/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/mrms/ncep/{measurement_type}/*.grib2.gz")))
+
+def get_aws_mrms(day: dt.datetime, measurement_type: str, area: str) -> list[str]:
+    return sorted(list(glob.glob(f"{ARCHIVE_FOLDER}/{area}/{day.strftime('%Y')}{day.strftime('%m')}{day.strftime('%d')}/MRMS_{measurement_type}_*.grib2.gz")))
 
 @dg.asset(name="mrms-precip-download", description="Download MRMS radar precipitation from Iowa State University",
           tags={
@@ -120,6 +136,111 @@ def mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Ma
 
     return dg.MaterializeResult(
         metadata={"zarr_path": ZARR_PATH},
+    )
+
+@dg.asset(name="mrms-area-dummy-zarr",
+          partitions_def=two_dimensional_partitions,
+          description="Dummy Zarr archive of MRMS PrecipFlag Area",
+          automation_condition=dg.AutomationCondition.eager(),)
+def aws_mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+    # partition_key looks like "2024-01-01|us"
+    keys_by_dimension: dg.MultiPartitionKey = context.partition_key.keys_by_dimension
+
+    date = keys_by_dimension["date"]
+    region = keys_by_dimension["region"]
+    if region == "HAWAII":
+        zarr_path = HAWAII_ZARR_PATH
+    elif region == "CARIB":
+        zarr_path = CARIB_ZARR_PATH
+    elif region == "GUAM":
+        zarr_path = GUAM_ZARR_PATH
+    elif region == "ALASKA":
+        zarr_path = ALASKA_ZARR_PATH
+    if os.path.exists(zarr_path):
+        return dg.MaterializeResult(
+            metadata={"zarr_path": zarr_path},
+        )
+    for date in zarr_date_range:
+        files = get_aws_mrms(date, "PrecipFlag", region)
+        if len(files) > 0:
+            break
+    if len(files) == 0:
+        raise FileNotFoundError("No files found")
+    timestamps = zarr_date_range
+    # open a single file and get the coordinate metadata
+    data = load_mrms_flag(files[0])
+    latitudes = data.latitude.values
+    longitudes = data.longitude.values
+    dummies = -99 * dask.array.ones((len(timestamps), len(latitudes), len(longitudes)),
+                                    chunks=(1, len(latitudes), len(longitudes)), dtype="int8")
+    rate_dummies = dask.array.zeros((len(timestamps), len(latitudes), len(longitudes)),
+                               chunks=(1, len(latitudes), len(longitudes)), dtype="float16")
+    ds = xr.Dataset({"precipitation_flag": (("time", "latitude", "longitude"), dummies),
+                     "precipitation_rate": (("time", "latitude", "longitude"), rate_dummies)},
+                    coords={"time": timestamps, "latitude": latitudes, "longitude": longitudes})
+    encoding = {v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle)} for v in ds.data_vars}
+    encoding["time"] = {"units": "nanoseconds since 1970-01-01"}
+    ds.to_zarr(zarr_path, compute=False, zarr_format=3, encoding=encoding)
+
+    return dg.MaterializeResult(
+        metadata={"zarr_path": zarr_path},
+    )
+
+@dg.asset(
+        name="region-mrms-zarr",
+        description=__doc__,
+        metadata={
+            "archive_folder": dg.MetadataValue.text(ARCHIVE_FOLDER),
+            "area": dg.MetadataValue.text("global"),
+            "source": dg.MetadataValue.text("noaa-aws"),
+            "expected_runtime": dg.MetadataValue.text("1 hour"),
+        },
+        deps=[aws_mrms_precipflag_dummy_zarr_asset],
+        tags={
+            "dagster/max_runtime": str(60 * 60 * 10), # Should take 6 ish hours
+            "dagster/priority": "1",
+            "dagster/concurrency_key": "zarr-creation",
+        },
+    partitions_def=two_dimensional_partitions,
+    #executor=dg.multiprocess_executor.configured({"max_concurrent": 10}),
+automation_condition=dg.AutomationCondition.eager(),
+)
+def aws_mrms_zarr_asset(
+    context: dg.AssetExecutionContext,
+) -> dg.MaterializeResult:
+    """Dagster asset for NOAA's GMGSI global mosaic of geostationary satellites."""
+    keys_by_dimension: dg.MultiPartitionKey = context.partition_key.keys_by_dimension
+
+    date = keys_by_dimension["date"]
+    region = keys_by_dimension["region"]
+    if region == "HAWAII":
+        zarr_path = HAWAII_ZARR_PATH
+    elif region == "CARIB":
+        zarr_path = CARIB_ZARR_PATH
+    elif region == "GUAM":
+        zarr_path = GUAM_ZARR_PATH
+    elif region == "ALASKA":
+        zarr_path = ALASKA_ZARR_PATH
+    it: dt.datetime = context.partition_time_window.start
+    files = get_mrms(it, "PrecipFlag")
+    rate_files = get_mrms(it, "PrecipRate")
+    zarr_dates = xr.open_zarr(zarr_path).time.values
+    for f in files:
+        data = load_mrms_flag(f)
+        data.transpose("time", "latitude", "longitude").to_zarr(zarr_path,
+                                                        region={
+                                                            "time": "auto",
+                                                            "latitude": "auto", "longitude": "auto"}, )
+    for f in rate_files:
+        data = load_mrms_rate(f)
+        data.transpose("time", "latitude", "longitude").to_zarr(zarr_path,
+                                                        region={
+                                                            "time": "auto",
+                                                            "latitude": "auto", "longitude": "auto"}, )
+
+    return dg.MaterializeResult(
+        metadata={"zarr_path": zarr_path,
+                  "time": it.strftime("%Y-%m-%d")},
     )
 
 @dg.asset(

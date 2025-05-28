@@ -21,7 +21,7 @@ ZARR_PATH = "/run/media/jacob/Tester/ghe.zarr"
 
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.HourlyPartitionsDefinition(
     start_date="2019-06-24-19:00",
-    end_offset=-2,
+    end_date="2025-03-05-19:00",
 )
 
 
