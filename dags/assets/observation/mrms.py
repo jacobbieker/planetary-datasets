@@ -222,8 +222,8 @@ def aws_mrms_zarr_asset(
     elif region == "ALASKA":
         zarr_path = ALASKA_ZARR_PATH
     it: dt.datetime = context.partition_time_window.start
-    files = get_mrms(it, "PrecipFlag")
-    rate_files = get_mrms(it, "PrecipRate")
+    files = get_aws_mrms(it, "PrecipFlag", region)
+    rate_files = get_aws_mrms(it, "PrecipRate", region)
     zarr_dates = xr.open_zarr(zarr_path).time.values
     for f in files:
         data = load_mrms_flag(f)
@@ -301,7 +301,11 @@ def mrms_upload_source_coop(context: dg.AssetExecutionContext) -> dg.Materialize
 
 def construct_timestamps_from_filename(filename):
     # 20160122-194600
-    timestamp = filename.split("_")[-1].split(".")[0]
+    if "_00.00_" in filename:
+        # Extract the timestamp from the filename
+        timestamp = filename.split("/")[-1].split("_00.00_")[-1].split(".")[0]
+    else:
+        timestamp = filename.split("_")[-1].split(".")[0]
     return pd.to_datetime(timestamp, format="%Y%m%d-%H%M%S")
 
 def load_mrms_flag(filepath) -> xr.Dataset:
