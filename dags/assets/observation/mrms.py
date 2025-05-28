@@ -24,6 +24,7 @@ CARIB_ZARR_PATH = "/nvme/mrms_caribbean.zarr"
 ALASKA_ZARR_PATH = "/nvme/mrms_alaska.zarr"
 HAWAII_ZARR_PATH = "/nvme/mrms_hawaii.zarr"
 GUAM_ZARR_PATH = "/nvme/mrms_guam.zarr"
+AWS_ARCHIVE_FOLDER = "/data/MRMS/aws/"
 SOURCE_COOP_PATH = "s3://bkr/mrms/mrms.zarr"
 if os.getenv("ENVIRONMENT", "local") == "pb":
     ARCHIVE_FOLDER = "/data/MRMS/"
@@ -60,7 +61,7 @@ def get_mrms(day: dt.datetime, measurement_type: str) -> list[str]:
     return sorted(list(glob.glob(f"{ARCHIVE_FOLDER}/mtarchive.geol.iastate.edu/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/mrms/ncep/{measurement_type}/*.grib2.gz")))
 
 def get_aws_mrms(day: dt.datetime, measurement_type: str, area: str) -> list[str]:
-    return sorted(list(glob.glob(f"{ARCHIVE_FOLDER}/{area}/{day.strftime('%Y')}{day.strftime('%m')}{day.strftime('%d')}/MRMS_{measurement_type}_*.grib2.gz")))
+    return sorted(list(glob.glob(f"{AWS_ARCHIVE_FOLDER}/{area}/{day.strftime('%Y')}{day.strftime('%m')}{day.strftime('%d')}/MRMS_{measurement_type}_*.grib2.gz")))
 
 @dg.asset(name="mrms-precip-download", description="Download MRMS radar precipitation from Iowa State University",
           tags={
