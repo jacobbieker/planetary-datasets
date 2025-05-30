@@ -9,6 +9,16 @@ import icechunk
 from icechunk.xarray import to_icechunk
 import zarr
 import tqdm
+import h5py
+
+data = h5py.File("/Users/jacob/Development/planetary-datasets/202505292000_ODIM_ng_radar_rainrate_composite_1km_UK.h5", 'r')
+print(data.keys())
+exit()
+
+data = xr.open_dataset("/Users/jacob/Development/planetary-datasets/202505292000_ODIM_ng_radar_rainrate_composite_1km_UK.h5", engine="h5netcdf")
+print(data)
+
+exit()
 
 data = xr.open_dataset("/Users/jacob/Development/planetary-datasets/nsrdb_india_2014.h5")
 print(data.time_index.values)
