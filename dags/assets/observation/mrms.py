@@ -37,7 +37,7 @@ zarr_date_range = pd.date_range("2000-01-01", "2026-12-31", freq="2min")
 
 aws_partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition(
     start_date="2020-10-14",
-    end_date="2024-05-28",
+    end_offset=-1,
 )
 region_partitions = dg.StaticPartitionsDefinition(["HAWAII", "CARIB", "GUAM", "ALASKA"])
 two_dimensional_partitions = dg.MultiPartitionsDefinition(
@@ -56,6 +56,17 @@ def download_mrms(day: dt.datetime, measurement_type: str) -> list[str]:
     process.wait()
     # Get the paths that have been downloaded
     return sorted(list(glob.glob(f"{ARCHIVE_FOLDER}/mtarchive.geol.iastate.edu/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/mrms/ncep/{measurement_type}/*.grib2.gz")))
+
+def download_aws_mrms(day: dt.datetime, measurement_type: str, area: str) -> list[str]:
+    path = f"s3://noaa-mrms-pds/{area}/{measurement_type}_00.00/{day.strftime('%Y')}{day.strftime('%m')}{day.strftime('%d')}/"
+    args = ["aws", "s3", "cp", "--recursive", "--no-sign-request", path, f"{AWS_ARCHIVE_FOLDER}/{area}/{day.strftime('%Y')}{day.strftime('%m')}{day.strftime('%d')}/"]
+    process = Popen(args,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                    )
+    process.wait()
+    # Get the paths that have been downloaded
+    return sorted(list(glob.glob(f"{AWS_ARCHIVE_FOLDER}/{area}/{day.strftime('%Y')}{day.strftime('%m')}{day.strftime('%d')}/*.grib2.gz")))
 
 def get_mrms(day: dt.datetime, measurement_type: str) -> list[str]:
     return sorted(list(glob.glob(f"{ARCHIVE_FOLDER}/mtarchive.geol.iastate.edu/{day.strftime('%Y')}/{day.strftime('%m')}/{day.strftime('%d')}/mrms/ncep/{measurement_type}/*.grib2.gz")))
@@ -80,6 +91,32 @@ def mrms_preciprate_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
     return dg.MaterializeResult(
         metadata={
             "files": downloaded_files
+        },
+    )
+
+@dg.asset(name="aws-mrms-download", description="Download MRMS radar precipitation from Iowa State University",
+          tags={
+              "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
+              "dagster/priority": "1",
+              "dagster/concurrency_key": "download",
+          },
+          partitions_def=two_dimensional_partitions,
+automation_condition=dg.AutomationCondition.eager(),
+          )
+def aws_mrms_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+    """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
+    it: dt.datetime = context.partition_time_window.start
+    keys_by_dimension: dg.MultiPartitionKey = context.partition_key.keys_by_dimension
+
+    date = keys_by_dimension["date"]
+    region = keys_by_dimension["region"]
+    downloaded_files = download_aws_mrms(it, "PrecipRate", region)
+    download_flag_files = download_aws_mrms(it, "PrecipFlag", region)
+    # Return the paths as a materialization
+    return dg.MaterializeResult(
+        metadata={
+            "rate_files": downloaded_files,
+            "flag_files": download_flag_files,
         },
     )
 
@@ -141,6 +178,7 @@ def mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.Ma
 
 @dg.asset(name="mrms-area-dummy-zarr",
           partitions_def=two_dimensional_partitions,
+        # deps=[aws_mrms_download_asset],
           description="Dummy Zarr archive of MRMS PrecipFlag Area",
           automation_condition=dg.AutomationCondition.eager(),)
 def aws_mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
@@ -167,7 +205,7 @@ def aws_mrms_precipflag_dummy_zarr_asset(context: dg.AssetExecutionContext) -> d
             break
     if len(files) == 0:
         raise FileNotFoundError("No files found")
-    timestamps = zarr_date_range
+    timestamps = aws_zarr_date_range
     # open a single file and get the coordinate metadata
     data = load_mrms_flag(files[0])
     latitudes = data.latitude.values
