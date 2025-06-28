@@ -10,16 +10,13 @@ per variable. It is downloaded using the cdsapi Python package
 """
 
 import datetime as dt
-import os
 import pathlib
 from typing import Any
 
 import cdsapi
 import dagster as dg
 
-ARCHIVE_FOLDER = "/var/dagster-storage/air/cams-europe"
-if os.getenv("ENVIRONMENT", "local") == "leo":
-    ARCHIVE_FOLDER = "/mnt/storage_ssd_4tb/air/cams-europe"
+ARCHIVE_FOLDER = "/ext_data/cams-europe"
 
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.WeeklyPartitionsDefinition(
     start_date="2020-02-08",
