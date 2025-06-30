@@ -4,8 +4,13 @@ import fsspec
 import pandas as pd
 import xarray as xr
 import tempfile
+import dask.array
+import numpy as np
+import multiprocessing as mp
+from pathlib import Path
 import zarr
 from icechunk.xarray import to_icechunk
+import icechunk as ic
 
 def get_geos_day(day: pd.Timestamp, archive_folder: str | None = None) -> list[str]:
     """
@@ -68,42 +73,82 @@ def preprocess_geos(ds: xr.Dataset) -> xr.Dataset:
         xr.Dataset: The preprocessed dataset.
     """
     ds = ds.rename({"lon": "longitude", "lat": "latitude"})
-    ds = ds.drop_vars(["lev"])
+    ds = ds.isel(lev=0)
+    ds = ds.drop_vars("lev")
     # Cut precision in half, for everything other than SLP
     for var in ds.data_vars:
         if var != "SLP":
             ds[var] = ds[var].astype("float16")
     return ds
 
-def save_to_icechunk(ds: xr.Dataset) -> None:
+def write_single_timestep(file: str) -> None:
+    storage = icechunk.local_filesystem_storage("/Volumes/T7/geos_15min.icechunk")
+    repo = ic.Repository.open(storage)
+    data = xr.open_dataset(file)
+    data = preprocess_geos(data)
+    data.load()
+    session = repo.writable_session("main")
+    to_icechunk(data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, region="auto")
+    session.commit(f"add {data.time.values} data to store", rebase_with=icechunk.ConflictDetector())
 
-    pass
 
-ds = xr.open_dataset(
-    "/Users/jacob/Downloads/GEOS-CF.v01.rpl.htf_inst_15mn_g1440x721_x1.20180101_0015z.nc4")
-data = preprocess_geos(ds)
-print(ds)
-
-# Make encoding
-variables = list(data.data_vars)
-encoding = {
-    "time": {
-        "units": "seconds since 1970-01-01",
-        "calendar": "standard",
-        "dtype": "int64",
+if __name__ == "__main__":
+    ds = xr.open_dataset(
+        "/Volumes/T9/portal.nccs.nasa.gov/datashare/gmao/geos-cf/v1/ana/Y2018/M01/D01/GEOS-CF.v01.rpl.htf_inst_15mn_g1440x721_x1.20180101_0000z.nc4")
+    data = preprocess_geos(ds)
+    print(data)
+    variables = list(data.data_vars)
+    encoding = {
+        "time": {
+            "units": "seconds since 1970-01-01",
+            "calendar": "standard",
+            "dtype": "int64",
+        }
     }
-}
-encoding = {
-    v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9,
-                                              shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
-    for v in variables}
+    encoding.update({
+        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
+        for v in variables})
 
-repo = icechunk.Repository.create(storage)
-print(repo)
-session = repo.writable_session("main")
-#to_icechunk(data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, append_dim="time")
-to_icechunk(data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, encoding=encoding)
-session.commit("Add second timestep")
+    timestamps = pd.date_range(start="2018-01-01", end="2025-01-01", freq="15min")
+    dummies_float16_var = dask.array.zeros(
+            (len(timestamps), data.latitude.shape[0], data.longitude.shape[0]), chunks=(1, -1, -1),
+            dtype=np.float16)
+    dummies_float32_var = dask.array.zeros(
+            (len(timestamps), data.latitude.shape[0], data.longitude.shape[0]), chunks=(1, -1, -1),
+            dtype=np.float32)
+    default_dataarray = xr.DataArray(dummies_float16_var, coords={"time": timestamps,
+                                                                 "latitude": data.latitude.values,
+                                                                 "longitude": data.longitude.values},
+                                         dims=["time", "latitude", "longitude"])
+    default_float32_dataarray = xr.DataArray(dummies_float32_var, coords={"time": timestamps,
+                                                                 "latitude": data.latitude.values,
+                                                                 "longitude": data.longitude.values},
+                                         dims=["time", "latitude", "longitude"], attrs=data["SLP"].attrs)
+    float16_dataarrays = {var: default_dataarray for var in data.data_vars if var != "SLP"}
+    for var in float16_dataarrays:
+        float16_dataarrays[var].attrs = data[var].attrs
+    float16_dataarrays["SLP"] = default_float32_dataarray
+    dummy_dataset = xr.Dataset(float16_dataarrays,
+                                   coords={"time": timestamps,
+                                           "latitude": data.latitude.values,
+                                           "longitude": data.longitude.values},
+                                   attrs=data.attrs)
 
-# TODO: Idea: Write each day in parallel, so write out metadata to the store once, with the day added, then parallelize writing the data, or do for 1 week at a time?
-# Should be fairly quick, and not have same issues as for MRMS or others where the metadata is written out to years in advance, and is just NaNs if loaded.
+    mp.set_start_method('forkserver')
+    storage = icechunk.local_filesystem_storage("/Volumes/T7/geos_15min.icechunk")
+    if Path("/Volumes/T7/geos_15min.icechunk").exists():
+        print("Found existing icechunk repository, using it.")
+        repo = icechunk.Repository.open(storage)
+    else:
+        print("No existing icechunk repository, creating it it.")
+        repo = icechunk.Repository.create(storage)
+
+        session = repo.writable_session("main")
+        dummy_dataset.chunk({"time": 1, "latitude": -1, "longitude": -1}).to_zarr(session.store, compute=False, encoding=encoding)
+        session.commit("Wrote metadata")
+
+    files = sorted(list(Path("/Volumes/T9/portal.nccs.nasa.gov/").rglob("*.nc4")))
+    pool = mp.Pool(mp.cpu_count())
+    import tqdm
+    for _ in tqdm.tqdm(pool.imap_unordered(write_single_timestep, files), total=len(files)):
+        pass
