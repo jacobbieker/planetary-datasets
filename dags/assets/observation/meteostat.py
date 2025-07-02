@@ -16,23 +16,25 @@ def download_file(remote_path, local_path):
 
 import tqdm
 def download_meteostat():
-    with fsspec.open("https://data.meteostat.net/stations/lite.json.gz", compression="infer") as f:
+    with fsspec.open("https://bulk.meteostat.net/v2/stations/lite.json.gz", compression="infer") as f:
         weather_stations = json.load(f)
     station_ids = [s['id'] for s in weather_stations]
-    for station_id in tqdm.tqdm(station_ids, total=len(station_ids)):
-        remote_path = f"https://data.meteostat.net/hourly/{station_id}.csv.gz"
-        #local_path = Path(os.path.basename(remote_path))
-        local_path = Path(f"/Users/jacob/Development/meteostat_data/{station_id}.csv.gz")
-        try:
-            download_file(remote_path, local_path)
-        except FileNotFoundError:
-            continue
-        except ClientPayloadError:
-            # Try once more
+    for year in range(2024, 1999, -1):
+        for station_id in tqdm.tqdm(station_ids, total=len(station_ids)):
+            remote_path = f"https://data.meteostat.net/hourly/{year}/{station_id}.csv.gz"
+            #local_path = Path(os.path.basename(remote_path))
+            local_path = Path(f"/Users/jacob/Development/meteostat_data/{year}_{station_id}.csv.gz")
             try:
                 download_file(remote_path, local_path)
-            except:
+            except FileNotFoundError:
+                print(f"File {remote_path} not found.")
                 continue
+            except ClientPayloadError:
+                # Try once more
+                try:
+                    download_file(remote_path, local_path)
+                except:
+                    continue
     for station_id in tqdm.tqdm(station_ids, total=len(station_ids)):
         remote_path = f"https://data.meteostat.net/hourly/{station_id}.map.csv.gz"
         # local_path = Path(os.path.basename(remote_path))
