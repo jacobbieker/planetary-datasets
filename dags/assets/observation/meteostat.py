@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import pandas as pd
-
+import aiohttp
 import fsspec
 from aiohttp.client_exceptions import ClientPayloadError
 
@@ -10,9 +10,12 @@ def download_file(remote_path, local_path):
     full_local_path = local_path
     if full_local_path.exists():
         return
-    with fsspec.open(remote_path, "rb") as infile:
-        with fsspec.open(str(full_local_path), "wb") as outfile:
-            outfile.write(infile.read())
+    try:
+        with fsspec.open(remote_path, "rb") as infile:
+            with fsspec.open(str(full_local_path), "wb") as outfile:
+                outfile.write(infile.read())
+    except aiohttp.client_exceptions.ClientResponseError:
+        os.remove(full_local_path)
 
 import tqdm
 import os
@@ -42,7 +45,6 @@ def download_meteostat():
             try:
                 download_file(remote_path, local_path)
             except FileNotFoundError:
-                print(f"File {remote_path} not found.")
                 continue
             except ClientPayloadError:
                 # Try once more
