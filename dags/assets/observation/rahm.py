@@ -46,7 +46,7 @@ for year in range(2019, 1978, -1):
                     }
 
                     client = cdsapi.Client()
-                    client.retrieve(dataset, request, target=f"rahm_{year}_{month}.nc").download()
+                    client.retrieve(dataset, request, target=f"rahm_{year}_{month}.nc")
                 except Exception as e:
                     print(e)
                     continue
@@ -87,7 +87,7 @@ for year in range(2019, 1978, -1):
                 }
 
                 client = cdsapi.Client()
-                client.retrieve(dataset, request, target=f"rahm_{year}_{month}.nc").download()
+                client.retrieve(dataset, request, target=f"rahm_{year}_{month}.nc")
             except Exception as e:
                 print(e)
                 continue
