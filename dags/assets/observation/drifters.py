@@ -17,10 +17,19 @@ for date in date_range[::-1]:
     drifter_url = base_url+drifters+time_part_of_url
     moored_url = base_url+moored+time_part_of_url
 
-    if os.path.exists(f"Ships/{date.strftime('%Y-%m')}_ships.nc"):
-        try:
-            xr.open_dataset(f"Ships/{date.strftime('%Y-%m')}_ships.nc").load() # If this succeeds, it was successful
-        except:
+    try:
+        if os.path.exists(f"Ships/{date.strftime('%Y-%m')}_ships.nc"):
+            try:
+                xr.open_dataset(f"Ships/{date.strftime('%Y-%m')}_ships.nc").load() # If this succeeds, it was successful
+            except:
+                # Request and save the ship data
+                print(f"Requesting Ships data for {start_month} - {end_month}")
+                ship_response = requests.get(ship_url)
+                print(f"Got Ship data for {start_month} - {end_month}")
+                # Write binary file to disk
+                with open(f"Ships/{date.strftime('%Y-%m')}_ships.nc", "wb") as f:
+                    f.write(ship_response.content)
+        else:
             # Request and save the ship data
             print(f"Requesting Ships data for {start_month} - {end_month}")
             ship_response = requests.get(ship_url)
@@ -28,50 +37,44 @@ for date in date_range[::-1]:
             # Write binary file to disk
             with open(f"Ships/{date.strftime('%Y-%m')}_ships.nc", "wb") as f:
                 f.write(ship_response.content)
-    else:
-        # Request and save the ship data
-        print(f"Requesting Ships data for {start_month} - {end_month}")
-        ship_response = requests.get(ship_url)
-        print(f"Got Ship data for {start_month} - {end_month}")
-        # Write binary file to disk
-        with open(f"Ships/{date.strftime('%Y-%m')}_ships.nc", "wb") as f:
-            f.write(ship_response.content)
 
-    if os.path.exists(f"Drifters/{date.strftime('%Y-%m')}_drifters.nc"):
-        try:
-            xr.open_dataset(f"Drifters/{date.strftime('%Y-%m')}_drifters.nc").load()  # If this succeeds, it was successful
-        except:
+        if os.path.exists(f"Drifters/{date.strftime('%Y-%m')}_drifters.nc"):
+            try:
+                xr.open_dataset(f"Drifters/{date.strftime('%Y-%m')}_drifters.nc").load()  # If this succeeds, it was successful
+            except:
+                # Do for drifters
+                print(f"Requesting Drifter data for {start_month} - {end_month}")
+                drifter_response = requests.get(drifter_url)
+                print(f"Got Drifter data for {start_month} - {end_month}")
+                with open(f"Drifters/{date.strftime('%Y-%m')}_drifters.nc", "wb") as f:
+                    f.write(drifter_response.content)
+        else:
             # Do for drifters
             print(f"Requesting Drifter data for {start_month} - {end_month}")
             drifter_response = requests.get(drifter_url)
             print(f"Got Drifter data for {start_month} - {end_month}")
             with open(f"Drifters/{date.strftime('%Y-%m')}_drifters.nc", "wb") as f:
                 f.write(drifter_response.content)
-    else:
-        # Do for drifters
-        print(f"Requesting Drifter data for {start_month} - {end_month}")
-        drifter_response = requests.get(drifter_url)
-        print(f"Got Drifter data for {start_month} - {end_month}")
-        with open(f"Drifters/{date.strftime('%Y-%m')}_drifters.nc", "wb") as f:
-            f.write(drifter_response.content)
 
-    if os.path.exists(f"Moored/{date.strftime('%Y-%m')}_moored.nc"):
-        try:
-            xr.open_dataset(f"Moored/{date.strftime('%Y-%m')}_moored.nc").load()  # If this succeeds, it was successful
-        except:
+        if os.path.exists(f"Moored/{date.strftime('%Y-%m')}_moored.nc"):
+            try:
+                xr.open_dataset(f"Moored/{date.strftime('%Y-%m')}_moored.nc").load()  # If this succeeds, it was successful
+            except:
+                # Do for drifters
+                print(f"Requesting Moored data for {start_month} - {end_month}")
+                drifter_response = requests.get(moored_url)
+                print(f"Got Moored data for {start_month} - {end_month}")
+                with open(f"Moored/{date.strftime('%Y-%m')}_moored.nc", "wb") as f:
+                    f.write(drifter_response.content)
+        else:
             # Do for drifters
             print(f"Requesting Moored data for {start_month} - {end_month}")
             drifter_response = requests.get(moored_url)
             print(f"Got Moored data for {start_month} - {end_month}")
             with open(f"Moored/{date.strftime('%Y-%m')}_moored.nc", "wb") as f:
                 f.write(drifter_response.content)
-    else:
-        # Do for drifters
-        print(f"Requesting Moored data for {start_month} - {end_month}")
-        drifter_response = requests.get(moored_url)
-        print(f"Got Moored data for {start_month} - {end_month}")
-        with open(f"Moored/{date.strftime('%Y-%m')}_moored.nc", "wb") as f:
-            f.write(drifter_response.content)
+    except:
+        continue
 
 
 
