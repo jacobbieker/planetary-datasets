@@ -72,7 +72,13 @@ def write_single_timestamp(file):
     data = open_and_process_eeps_file(file)
     data.load()
     session = repo.writable_session("main")
-    to_icechunk(data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, region="auto")
+    # Read the timestamps
+    timestamps = xr.open_zarr(session.store).time.values
+    if data["time"].values[0] not in timestamps:
+        # Append instead of write to region
+        to_icechunk(data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, append_dim="time")
+    else:
+        to_icechunk(data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, region="auto")
     session.commit(f"add {data.time.values} data to store", rebase_with=icechunk.ConflictDetector())
     # keep trying until it succeeds
     """
@@ -146,14 +152,14 @@ if __name__ == "__main__":
 
         session = repo.writable_session("main")
         dummy_dataset.chunk({"time": 1, "latitude": -1, "longitude": -1}).to_zarr(session.store, compute=False, encoding=encoding)
-        session.commit("Wrote metadata")
+        session.commit("Wrote updated metadata")
 
     # Make the metadata
     current_ds = xr.open_zarr(repo.writable_session("main").store, consolidated=False)
     print(current_ds)
     current_times = current_ds.time.values
     num_inputs = current_ds.number_of_inputs.values
-    pool = mp.Pool(mp.cpu_count())
+    pool = mp.Pool(1)
     import tqdm
-    for _ in tqdm.tqdm(pool.imap_unordered(write_single_timestamp, files), total=len(files)):
+    for _ in tqdm.tqdm(pool.imap_unordered(write_single_timestamp, files[5870+1590+5600+1000+5470+16:]), total=len(files[5870+1590+5600+1000+5470+16:])):
         pass
