@@ -4,10 +4,10 @@ import os
 import requests
 import pandas as pd
 
-date_range = pd.date_range("2000-01-01", "2025-06-30", freq="1ME")
+date_range = pd.date_range("2000-01-01", "2025-06-30", freq="3ME")
 for date in date_range[::-1]:
     start_month = date.strftime("%Y-%m-01")
-    end_month = (date + pd.DateOffset(months=1)).strftime("%Y-%m-%d")
+    end_month = (date + pd.DateOffset(months=3)).strftime("%Y-%m-%d")
     time_part_of_url = f"%22&time%3E={start_month}T00%3A00%3A00Z&time%3C={end_month}T23%3A59%3A59Z"
     ships = "&platform_type=%22SHIPS%20(GENERIC)"
     drifters = "&platform_type=%22SHIPS%20(GENERIC)"
