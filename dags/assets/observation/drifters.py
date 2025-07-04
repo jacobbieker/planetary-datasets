@@ -16,12 +16,13 @@ for date in date_range[::-1]:
     tide = "&platform_type=%22TIDE%20GAUGE%20STATIONS%20(GENERIC)"
     glider = "&platform_type=%22PROFILING%20FLOATS%20AND%20GLIDERS%20(GENERIC)"
     base_url = "https://erddap.aoml.noaa.gov/gdp/erddap/tabledap/OSMC_RealTime.nc?platform_type%2Ctime%2Clatitude%2Clongitude%2Csst%2Catmp%2Cprecip%2Csss%2Cslp%2Cwindspd%2Cwinddir%2Cdewpoint%2Cuo%2Cvo%2Cwo%2Crainfall_rate%2Chur"
-    ship_url = base_url+ships + time_part_of_url
-    drifter_url = base_url+drifters+time_part_of_url
-    moored_url = base_url+moored+time_part_of_url
-    shore_url = base_url+shore+time_part_of_url
-    tide_url = base_url+tide+time_part_of_url
-    glider_url = base_url+glider+time_part_of_url
+    extended_url = "https://erddap.aoml.noaa.gov/gdp/erddap/tabledap/OSMC_RealTime.htmlTable?platform_id%2Cplatform_code%2Cplatform_type%2Ccountry%2Ctime%2Clatitude%2Clongitude%2Cobservation_depth%2Csst%2Catmp%2Cprecip%2Csss%2Cztmp%2Czsal%2Cslp%2Cwindspd%2Cwinddir%2Cwvht%2Cwaterlevel%2Cclouds%2Cdewpoint%2Cuo%2Cvo%2Cwo%2Crainfall_rate%2Chur%2Csea_water_elec_conductivity%2Csea_water_pressure%2Crlds%2Crsds%2Cwaterlevel_met_res%2Cwaterlevel_wrt_lcd%2Cwater_col_ht%2Cwind_to_direction%2Clon360"
+    ship_url = extended_url+ships + time_part_of_url
+    drifter_url = extended_url+drifters+time_part_of_url
+    moored_url = extended_url+moored+time_part_of_url
+    shore_url = extended_url+shore+time_part_of_url
+    tide_url = extended_url+tide+time_part_of_url
+    glider_url = extended_url+glider+time_part_of_url
 
     try:
         if os.path.exists(f"Glider/{date.strftime('%Y-%m')}_glider.nc"):
@@ -32,7 +33,7 @@ for date in date_range[::-1]:
                 print(f"Requesting Glider data for {start_month} - {end_month}")
                 drifter_response = requests.get(glider_url)
                 print(f"Got Glider data for {start_month} - {end_month}")
-                with open(f"Tide/{date.strftime('%Y-%m')}_glider.nc", "wb") as f:
+                with open(f"Glider/{date.strftime('%Y-%m')}_glider.nc", "wb") as f:
                     f.write(drifter_response.content)
         else:
             # Do for drifters
@@ -133,9 +134,6 @@ for date in date_range[::-1]:
             print(f"Got Tide data for {start_month} - {end_month}")
             with open(f"Tide/{date.strftime('%Y-%m')}_tide.nc", "wb") as f:
                 f.write(drifter_response.content)
-
-
-
     except:
         continue
 
