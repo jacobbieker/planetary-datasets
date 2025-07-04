@@ -7,15 +7,19 @@ import pandas as pd
 date_range = pd.date_range("2000-01-01", "2025-06-30", freq="3ME")
 for date in date_range[::-1]:
     start_month = date.strftime("%Y-%m-01")
-    end_month = (date + pd.DateOffset(months=3)).strftime("%Y-%m-%d")
+    end_month = (date + pd.DateOffset(months=2)).strftime("%Y-%m-%d")
     time_part_of_url = f"%22&time%3E={start_month}T00%3A00%3A00Z&time%3C={end_month}T23%3A59%3A59Z"
     ships = "&platform_type=%22SHIPS%20(GENERIC)"
     drifters = "&platform_type=%22DRIFTING%20BUOYS%20(GENERIC)"
     moored = "&platform_type=%22MOORED%20BUOYS%20(GENERIC)"
+    shore = "&platform_type=%22SHORE%20AND%20BOTTOM%20STATIONS%20(GENERIC)"
+    tide = "&platform_type=%22TIDE%20GAUGE%20STATIONS%20(GENERIC)"
     base_url = "https://erddap.aoml.noaa.gov/gdp/erddap/tabledap/OSMC_RealTime.nc?platform_type%2Ctime%2Clatitude%2Clongitude%2Csst%2Catmp%2Cprecip%2Csss%2Cslp%2Cwindspd%2Cwinddir%2Cdewpoint%2Cuo%2Cvo%2Cwo%2Crainfall_rate%2Chur"
     ship_url = base_url+ships + time_part_of_url
     drifter_url = base_url+drifters+time_part_of_url
     moored_url = base_url+moored+time_part_of_url
+    shore_url = base_url+shore+time_part_of_url
+    tide_url = base_url+tide+time_part_of_url
 
     try:
         if os.path.exists(f"Ships/{date.strftime('%Y-%m')}_ships.nc"):
@@ -73,6 +77,43 @@ for date in date_range[::-1]:
             print(f"Got Moored data for {start_month} - {end_month}")
             with open(f"Moored/{date.strftime('%Y-%m')}_moored.nc", "wb") as f:
                 f.write(drifter_response.content)
+
+        if os.path.exists(f"Shore/{date.strftime('%Y-%m')}_shore.nc"):
+            try:
+                xr.open_dataset(f"Shore/{date.strftime('%Y-%m')}_shore.nc").load()  # If this succeeds, it was successful
+            except:
+                # Do for drifters
+                print(f"Requesting Shore data for {start_month} - {end_month}")
+                drifter_response = requests.get(shore_url)
+                print(f"Got Shore data for {start_month} - {end_month}")
+                with open(f"Shore/{date.strftime('%Y-%m')}_shore.nc", "wb") as f:
+                    f.write(drifter_response.content)
+        else:
+            # Do for drifters
+            print(f"Requesting Shore data for {start_month} - {end_month}")
+            drifter_response = requests.get(shore_url)
+            print(f"Got Shore data for {start_month} - {end_month}")
+            with open(f"Shore/{date.strftime('%Y-%m')}_shore.nc", "wb") as f:
+                f.write(drifter_response.content)
+
+        if os.path.exists(f"Tide/{date.strftime('%Y-%m')}_tide.nc"):
+            try:
+                xr.open_dataset(f"Tide/{date.strftime('%Y-%m')}_tide.nc").load()  # If this succeeds, it was successful
+            except:
+                # Do for drifters
+                print(f"Requesting Tide data for {start_month} - {end_month}")
+                drifter_response = requests.get(tide_url)
+                print(f"Got Tide data for {start_month} - {end_month}")
+                with open(f"Tide/{date.strftime('%Y-%m')}_tide.nc", "wb") as f:
+                    f.write(drifter_response.content)
+        else:
+            # Do for drifters
+            print(f"Requesting Tide data for {start_month} - {end_month}")
+            drifter_response = requests.get(tide_url)
+            print(f"Got Tide data for {start_month} - {end_month}")
+            with open(f"Tide/{date.strftime('%Y-%m')}_tide.nc", "wb") as f:
+                f.write(drifter_response.content)
+
     except:
         continue
 
