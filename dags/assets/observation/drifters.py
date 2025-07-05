@@ -17,6 +17,8 @@ for date in date_range[::-1]:
     glider = "&platform_type=%22PROFILING%20FLOATS%20AND%20GLIDERS%20(GENERIC)"
     weather = "&platform_type=%22WEATHER%20BUOYS"
     station = "&platform_type=%22C-MAN%20WEATHER%20STATIONS"
+    volunteer_ships = "&platform_type=%22VOLUNTEER%20OBSERVING%20SHIPS%20(GENERIC)"
+    vosclim = "&platform_type=%22VOSCLIM"
     base_url = "https://erddap.aoml.noaa.gov/gdp/erddap/tabledap/OSMC_RealTime.nc?platform_type%2Ctime%2Clatitude%2Clongitude%2Csst%2Catmp%2Cprecip%2Csss%2Cslp%2Cwindspd%2Cwinddir%2Cdewpoint%2Cuo%2Cvo%2Cwo%2Crainfall_rate%2Chur"
     complementary_url = "https://erddap.aoml.noaa.gov/gdp/erddap/tabledap/OSMC_RealTime.nc?platform_id%2Cplatform_code%2Cplatform_type%2Ctime%2Clatitude%2Clongitude%2Cobservation_depth%2Csss%2Cztmp%2Czsal%2Cwindspd%2Cwinddir%2Cwvht%2Cwaterlevel%2Cclouds%2Csea_water_elec_conductivity%2Csea_water_pressure%2Crlds%2Crsds%2Cwaterlevel_met_res%2Cwaterlevel_wrt_lcd%2Cwater_col_ht%2Cwind_to_direction"
     no_id_complementary_url = "https://erddap.aoml.noaa.gov/gdp/erddap/tabledap/OSMC_RealTime.nc?platform_type%2Ctime%2Clatitude%2Clongitude%2Cobservation_depth%2Csss%2Cztmp%2Czsal%2Cwindspd%2Cwinddir%2Cwvht%2Cwaterlevel%2Cclouds%2Csea_water_elec_conductivity%2Csea_water_pressure%2Crlds%2Crsds%2Cwaterlevel_met_res%2Cwaterlevel_wrt_lcd%2Cwater_col_ht%2Cwind_to_direction"
@@ -29,13 +31,52 @@ for date in date_range[::-1]:
     glider_url = extended_url+glider+time_part_of_url
     weather_url = extended_url+weather+time_part_of_url
     station_url = extended_url+station+time_part_of_url
+    volunteer_ships_url = extended_url+volunteer_ships+time_part_of_url
+    vosclim_url = extended_url+vosclim+time_part_of_url
 
     pre_thing = "Extended"
-    for folder in ["Glider", "Ships", "Drifters", "Moored", "Shore", "Tide", "Weather", "Station"]:
+    for folder in ["Glider", "Ships", "Drifters", "Moored", "Shore", "Tide", "Weather", "Station", "VolunteerShips", "Vosclim"]:
         if not os.path.exists(f"{pre_thing}{folder}"):
             os.makedirs(f"{pre_thing}{folder}")
 
     try:
+        if os.path.exists(f"{pre_thing}VolunteerShips/{date.strftime('%Y-%m')}_volunteership.nc"):
+            try:
+                xr.open_dataset(f"{pre_thing}VolunteerShips/{date.strftime('%Y-%m')}_volunteership.nc").load()  # If this succeeds, it was successful
+            except:
+                # Do for drifters
+                print(f"Requesting VolunteerShips data for {start_month} - {end_month}")
+                drifter_response = requests.get(volunteer_ships_url)
+                print(f"Got VolunteerShips data for {start_month} - {end_month}")
+                with open(f"{pre_thing}VolunteerShips/{date.strftime('%Y-%m')}_volunteership.nc", "wb") as f:
+                    f.write(drifter_response.content)
+        else:
+            # Do for drifters
+            print(f"Requesting VolunteerShips data for {start_month} - {end_month}")
+            drifter_response = requests.get(volunteer_ships_url)
+            print(f"Got VolunteerShips data for {start_month} - {end_month}")
+            with open(f"{pre_thing}VolunteerShips/{date.strftime('%Y-%m')}_volunteership.nc", "wb") as f:
+                f.write(drifter_response.content)
+
+        if os.path.exists(f"{pre_thing}Vosclim/{date.strftime('%Y-%m')}_vosclim.nc"):
+            try:
+                xr.open_dataset(f"{pre_thing}Vosclim/{date.strftime('%Y-%m')}_vosclim.nc").load()  # If this succeeds, it was successful
+            except:
+                # Do for drifters
+                print(f"Requesting VOSCLIM data for {start_month} - {end_month}")
+                drifter_response = requests.get(vosclim_url)
+                print(f"Got VOSCLIM data for {start_month} - {end_month}")
+                with open(f"{pre_thing}Vosclim/{date.strftime('%Y-%m')}_vosclim.nc", "wb") as f:
+                    f.write(drifter_response.content)
+        else:
+            # Do for drifters
+            print(f"Requesting VOSCLIM data for {start_month} - {end_month}")
+            drifter_response = requests.get(vosclim_url)
+            print(f"Got VOSCLIM data for {start_month} - {end_month}")
+            with open(f"{pre_thing}Vosclim/{date.strftime('%Y-%m')}_vosclim.nc", "wb") as f:
+                f.write(drifter_response.content)
+
+
         if os.path.exists(f"{pre_thing}Station/{date.strftime('%Y-%m')}_station.nc"):
             try:
                 xr.open_dataset(f"{pre_thing}Station/{date.strftime('%Y-%m')}_station.nc").load()  # If this succeeds, it was successful
