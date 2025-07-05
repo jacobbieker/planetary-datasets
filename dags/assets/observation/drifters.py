@@ -121,7 +121,7 @@ for date in date_range[::-1]:
             print(f"Requesting Shore data for {start_month} - {end_month}")
             drifter_response = requests.get(shore_url)
             print(f"Got Shore data for {start_month} - {end_month}")
-            with open(f"Shore/{date.strftime('%Y-%m')}_shore.nc", "wb") as f:
+            with open(f"{pre_thing}Shore/{date.strftime('%Y-%m')}_shore.nc", "wb") as f:
                 f.write(drifter_response.content)
 
         if os.path.exists(f"{pre_thing}Tide/{date.strftime('%Y-%m')}_tide.nc"):
