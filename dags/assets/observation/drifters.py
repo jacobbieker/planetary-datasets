@@ -4,25 +4,26 @@ import os
 import requests
 import pandas as pd
 
-date_range = pd.date_range("2011-01-01", "2025-06-30", freq="3ME")
+date_range = pd.date_range("2012-01-01", "2025-12-30", freq="1ME")
 for date in date_range[::-1]:
     start_month = date.strftime("%Y-%m-01")
-    end_month = (date + pd.DateOffset(months=2)).strftime("%Y-%m-%d")
-    time_part_of_url = f"%22&time%3E={start_month}T00%3A00%3A00Z&time%3C={end_month}T23%3A59%3A59Z"
-    ships = "&platform_type=%22SHIPS%20(GENERIC)"
-    drifters = "&platform_type=%22DRIFTING%20BUOYS%20(GENERIC)"
-    moored = "&platform_type=%22MOORED%20BUOYS%20(GENERIC)"
-    shore = "&platform_type=%22SHORE%20AND%20BOTTOM%20STATIONS%20(GENERIC)"
-    tide = "&platform_type=%22TIDE%20GAUGE%20STATIONS%20(GENERIC)"
-    glider = "&platform_type=%22PROFILING%20FLOATS%20AND%20GLIDERS%20(GENERIC)"
-    weather = "&platform_type=%22WEATHER%20BUOYS"
-    station = "&platform_type=%22C-MAN%20WEATHER%20STATIONS"
-    volunteer_ships = "&platform_type=%22VOLUNTEER%20OBSERVING%20SHIPS%20(GENERIC)"
-    vosclim = "&platform_type=%22VOSCLIM"
+    end_month = (date + pd.DateOffset(months=1)).strftime("%Y-%m-%d")
+    end_month = date.strftime("%Y-%m-%d")
+    time_part_of_url = f"&time%3E={start_month}T00%3A00%3A00Z&time%3C={end_month}T23%3A59%3A59Z"
+    ships = "&platform_type=%22SHIPS%20(GENERIC)%22"
+    drifters = "&platform_type=%22DRIFTING%20BUOYS%20(GENERIC)%22"
+    moored = "&platform_type=%22MOORED%20BUOYS%20(GENERIC)%22"
+    shore = "&platform_type=%22SHORE%20AND%20BOTTOM%20STATIONS%20(GENERIC)%22"
+    tide = "&platform_type=%22TIDE%20GAUGE%20STATIONS%20(GENERIC)%22"
+    glider = "&platform_type=%22PROFILING%20FLOATS%20AND%20GLIDERS%20(GENERIC)%22"
+    weather = "&platform_type=%22WEATHER%20BUOYS%22"
+    station = "&platform_type=%22C-MAN%20WEATHER%20STATIONS%22"
+    volunteer_ships = "&platform_type=%22VOLUNTEER%20OBSERVING%20SHIPS%20(GENERIC)%22"
+    vosclim = "&platform_type=%22VOSCLIM%22"
     base_url = "https://erddap.aoml.noaa.gov/gdp/erddap/tabledap/OSMC_RealTime.nc?platform_type%2Ctime%2Clatitude%2Clongitude%2Csst%2Catmp%2Cprecip%2Csss%2Cslp%2Cwindspd%2Cwinddir%2Cdewpoint%2Cuo%2Cvo%2Cwo%2Crainfall_rate%2Chur"
     complementary_url = "https://erddap.aoml.noaa.gov/gdp/erddap/tabledap/OSMC_RealTime.nc?platform_id%2Cplatform_code%2Cplatform_type%2Ctime%2Clatitude%2Clongitude%2Cobservation_depth%2Csss%2Cztmp%2Czsal%2Cwindspd%2Cwinddir%2Cwvht%2Cwaterlevel%2Cclouds%2Csea_water_elec_conductivity%2Csea_water_pressure%2Crlds%2Crsds%2Cwaterlevel_met_res%2Cwaterlevel_wrt_lcd%2Cwater_col_ht%2Cwind_to_direction"
     no_id_complementary_url = "https://erddap.aoml.noaa.gov/gdp/erddap/tabledap/OSMC_RealTime.nc?platform_type%2Ctime%2Clatitude%2Clongitude%2Cobservation_depth%2Csss%2Cztmp%2Czsal%2Cwindspd%2Cwinddir%2Cwvht%2Cwaterlevel%2Cclouds%2Csea_water_elec_conductivity%2Csea_water_pressure%2Crlds%2Crsds%2Cwaterlevel_met_res%2Cwaterlevel_wrt_lcd%2Cwater_col_ht%2Cwind_to_direction"
-    extended_url = "https://erddap.aoml.noaa.gov/gdp/erddap/tabledap/OSMC_RealTime.nc?platform_id%2Cplatform_code%2Cplatform_type%2Ccountry%2Ctime%2Clatitude%2Clongitude%2Cobservation_depth%2Csst%2Catmp%2Cprecip%2Csss%2Cztmp%2Czsal%2Cslp%2Cwindspd%2Cwinddir%2Cwvht%2Cwaterlevel%2Cclouds%2Cdewpoint%2Cuo%2Cvo%2Cwo%2Crainfall_rate%2Chur%2Csea_water_elec_conductivity%2Csea_water_pressure%2Crlds%2Crsds%2Cwaterlevel_met_res%2Cwaterlevel_wrt_lcd%2Cwater_col_ht%2Cwind_to_direction%2Clon360"
+    extended_url = "https://erddap.aoml.noaa.gov/gdp/erddap/tabledap/OSMC_RealTime.nc?platform_id%2Cplatform_code%2Cplatform_type%2Ccountry%2Ctime%2Clatitude%2Clongitude%2Cobservation_depth%2Csst%2Catmp%2Cprecip%2Csss%2Cztmp%2Czsal%2Cslp%2Cwindspd%2Cwinddir%2Cwvht%2Cwaterlevel%2Cclouds%2Cdewpoint%2Cuo%2Cvo%2Cwo%2Crainfall_rate%2Chur%2Csea_water_elec_conductivity%2Csea_water_pressure%2Crlds%2Crsds%2Cwaterlevel_met_res%2Cwaterlevel_wrt_lcd%2Cwater_col_ht%2Cwind_to_direction"
     ship_url = extended_url+ships + time_part_of_url
     drifter_url = extended_url+drifters+time_part_of_url
     moored_url = extended_url+moored+time_part_of_url
@@ -33,13 +34,34 @@ for date in date_range[::-1]:
     station_url = extended_url+station+time_part_of_url
     volunteer_ships_url = extended_url+volunteer_ships+time_part_of_url
     vosclim_url = extended_url+vosclim+time_part_of_url
+    all_url = extended_url+time_part_of_url
 
     pre_thing = "Extended"
-    for folder in ["Glider", "Ships", "Drifters", "Moored", "Shore", "Tide", "Weather", "Station", "VolunteerShips", "Vosclim"]:
-        if not os.path.exists(f"{pre_thing}{folder}"):
-            os.makedirs(f"{pre_thing}{folder}")
+    base_path = "/Volumes/T7/"
+    for folder in ["Glider", "Ships", "Drifters", "Moored", "Shore", "Tide", "Weather", "Station", "VolunteerShips", "Vosclim", "All"]:
+        if not os.path.exists(f"{base_path}{pre_thing}{folder}"):
+            os.makedirs(f"{base_path}{pre_thing}{folder}")
 
     try:
+        if os.path.exists(f"{base_path}{pre_thing}All/{date.strftime('%Y-%m')}_all.nc"):
+            try:
+                xr.open_dataset(f"{base_path}{pre_thing}All/{date.strftime('%Y-%m')}_all.nc").load()  # If this succeeds, it was successful
+            except:
+                # Do for drifters
+                print(f"Requesting All data for {start_month} - {end_month}")
+                drifter_response = requests.get(all_url)
+                print(f"Got All data for {start_month} - {end_month}")
+                with open(f"{base_path}{pre_thing}All/{date.strftime('%Y-%m')}_all.nc", "wb") as f:
+                    f.write(drifter_response.content)
+        else:
+            # Do for drifters
+            print(f"Requesting All data for {start_month} - {end_month}")
+            drifter_response = requests.get(all_url)
+            print(f"Got All data for {start_month} - {end_month}")
+            with open(f"{base_path}{pre_thing}All/{date.strftime('%Y-%m')}_all.nc", "wb") as f:
+                f.write(drifter_response.content)
+        continue
+
         if os.path.exists(f"{pre_thing}VolunteerShips/{date.strftime('%Y-%m')}_volunteership.nc"):
             try:
                 xr.open_dataset(f"{pre_thing}VolunteerShips/{date.strftime('%Y-%m')}_volunteership.nc").load()  # If this succeeds, it was successful

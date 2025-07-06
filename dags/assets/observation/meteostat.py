@@ -27,7 +27,7 @@ def download_meteostat():
     starts = [s['hourly']['start'] for s in inventory]
     ends = [s['hourly']['end'] for s in inventory]
 
-    for year in range(2024, 1999, -1):
+    for year in range(2025, 1990, -1):
         for i, station_id in tqdm.tqdm(enumerate(station_ids), total=len(station_ids)):
             try:
                 starts[i] = pd.to_datetime(starts[i]).strftime("%Y-%m-%d")
