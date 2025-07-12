@@ -47,6 +47,7 @@ fastparquet = ">=2024.11.0,<2025"
 pvlib = ">=0.13.0,<0.14"
 iris = ">=3.12.2,<4"
 rioxarray = ">=0.19.0,<0.20"
+satpy = ">=0.57.0,<0.58"
 
 [pypi-dependencies]
 odc-stac = ">=0.4.0, <0.5"
@@ -59,3 +60,4 @@ huggingface-hub = "*"
 psutil = "*"
 wetterdienst = ">=0.109.0, <0.110"
 isd = ">=0.1.0, <0.2"
+ocf-blosc2 = ">=0.0.14, <0.0.15"
