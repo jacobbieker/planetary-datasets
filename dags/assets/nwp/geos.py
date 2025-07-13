@@ -1,3 +1,5 @@
+import os
+os.environ["AWS_REQUEST_CHECKSUM_CALCULATION"] = "WHEN_REQUIRED"
 import icechunk
 import os
 import fsspec
@@ -90,6 +92,29 @@ def write_single_timestep(file: str) -> None:
     session = repo.writable_session("main")
     to_icechunk(data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, region="auto")
     session.commit(f"add {data.time.values} data to store", rebase_with=icechunk.ConflictDetector())
+    try:
+        storage = icechunk.s3_storage(bucket="bkr",
+                                      prefix="geos/geos_15min.icechunk",
+                                      endpoint_url="https://data.source.coop",
+                                      allow_http=True,
+                                      region="us-west-2",
+                                      force_path_style=True, )
+        repo = ic.Repository.open(storage)
+        data = xr.open_dataset(file)
+        data = preprocess_geos(data)
+        data.load()
+    except:
+        print(f"Failed to open {file}")
+        return
+    while True:
+        try:
+            session = repo.writable_session("main")
+            to_icechunk(data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, region="auto")
+            session.commit(f"add {data.time.values} data to store", rebase_with=icechunk.ConflictDetector())
+            os.remove(file)
+            break
+        except Exception as e:
+            print(f"Failed to write {file}: {e}, trying again")
 
 
 if __name__ == "__main__":
@@ -137,17 +162,32 @@ if __name__ == "__main__":
     mp.set_start_method('forkserver')
     storage = icechunk.local_filesystem_storage("/Volumes/T7/geos_15min.icechunk")
     if Path("/Volumes/T7/geos_15min.icechunk").exists():
+    #mp.set_start_method('forkserver')
+    #storage = icechunk.local_filesystem_storage("/run/media/jacob/Tester/geos_15min2.icechunk")
+    storage = icechunk.s3_storage(bucket="bkr",
+                                  prefix="geos/geos_15min.icechunk",
+                                  endpoint_url="https://data.source.coop",
+                                  allow_http=True,
+                                  region="us-west-2",
+                                  force_path_style=True, )
+    if True: #Path("/run/media/jacob/Tester/geos_15min2.icechunk").exists():
         print("Found existing icechunk repository, using it.")
         repo = icechunk.Repository.open(storage)
     else:
         print("No existing icechunk repository, creating it it.")
         repo = icechunk.Repository.create(storage)
-
+        print(dummy_dataset)
         session = repo.writable_session("main")
         dummy_dataset.chunk({"time": 1, "latitude": -1, "longitude": -1}).to_zarr(session.store, compute=False, encoding=encoding)
         session.commit("Wrote metadata")
 
-    files = sorted(list(Path("/Volumes/T9/portal.nccs.nasa.gov/").rglob("*.nc4")))
+    files = sorted(list(Path("/Volumes/T7 Shield/portal.nccs.nasa.gov/datashare/gmao/geos-cf/v1/ana/Y2020/").rglob("*.nc4")))
+    files = files + sorted(
+        list(Path("/Volumes/T7 Shield/portal.nccs.nasa.gov/datashare/gmao/geos-cf/v1/ana/Y2023/").rglob("*.nc4")))
+    #files = files + sorted(
+    #    list(Path("/Volumes/T7 Shield/portal.nccs.nasa.gov/datashare/gmao/geos-cf/v1/ana/Y2020/").rglob("*.nc4")))
+    # Filter out the ones that have /._ in the names
+    files = [f for f in files if "._GEOS" not in str(f)]
     pool = mp.Pool(mp.cpu_count())
     import tqdm
     for _ in tqdm.tqdm(pool.imap_unordered(write_single_timestep, files), total=len(files)):
