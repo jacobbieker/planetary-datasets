@@ -90,17 +90,35 @@ def process_avhrr(filename) -> xr.Dataset:
     ds = ds.drop_vars("crs")
     return ds
 
+date_range = pd.date_range("2008-03-01", "2025-06-30", freq="4h")[::-1]
+
 # Icechunk
 storage = icechunk.local_filesystem_storage("metop_avhrr.icechunk")
 repo = icechunk.Repository.open_or_create(storage)
-
+session = repo.readonly_session("main")
+try:
+    ds = xr.open_zarr(session.store, consolidated=False)
+    print(ds)
+    times = ds.time.values
+    # Check number of unique times
+    print(f"Number of unique times in the store: {len(np.unique(times))}")
+    # Check to when the last one is in there
+    for d in date_range:
+        if d > ds.time.values[-1]:
+            print(f"Last date in the store is {ds.time.values[-1]}, skipping dates after {d}")
+            date_range = date_range[date_range <= ds.time.values[-1]]
+            print(date_range)
+            break
+except:
+    times = []
 
 # Insert your personal key and secret
-
+consumer_key = 'SWdEnLvOlVTVGli1An1nKJ3NcV0a'
+consumer_secret = 'gUQe0ej7H_MqQVGF4cd7wfQWcawa'
 
 credentials = (consumer_key, consumer_secret)
 
-for idx, date in enumerate(pd.date_range("2008-03-01", "2025-06-30", freq="4h")[::-1]):
+for idx, date in enumerate(date_range):
     # If it exists, check if times are already covered, if so, then skip
     token = eumdac.AccessToken(credentials)
 
@@ -121,16 +139,27 @@ for idx, date in enumerate(pd.date_range("2008-03-01", "2025-06-30", freq="4h")[
     dses = []
     for product in products:
         product_tmpdir = tempfile.mkdtemp()
-        with product.open() as fsrc:
-            # Download the file if it does not exist
-            if not os.path.exists(fsrc.name):
-                with open(os.path.join(product_tmpdir, fsrc.name), mode='wb') as fdst:
-                    shutil.copyfileobj(fsrc, fdst)
+        finished = False
+        while not finished:
+            try:
+                with product.open() as fsrc:
+                    # Download the file if it does not exist
+                    with open(os.path.join(product_tmpdir, fsrc.name), mode='wb') as fdst:
+                        shutil.copyfileobj(fsrc, fdst)
+                        finished = True
+            except Exception as e:
+                print(f"Failed to download {fsrc.name}: {e}, trying again")
+                continue
         tmpdir = tempfile.mkdtemp()
         with zipfile.ZipFile(os.path.join(product_tmpdir, fsrc.name), 'r') as zip_ref:
             zip_ref.extractall(tmpdir)
         path_to_filename = os.path.join(tmpdir, fsrc.name.replace('.zip', '.nat'))
         ds = process_avhrr(path_to_filename)
+        if ds["time"].values[0] in times:
+            print(f"Dataset for {date} already exists, skipping...")
+            shutil.rmtree(tmpdir)
+            shutil.rmtree(product_tmpdir)
+            continue
         dses.append(ds)
         shutil.rmtree(tmpdir)
         shutil.rmtree(product_tmpdir)
@@ -170,7 +199,7 @@ for idx, date in enumerate(pd.date_range("2008-03-01", "2025-06-30", freq="4h")[
         v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
         for v in variables})
 
-    if idx == 0:
+    if len(times) == 0:
         session = repo.writable_session("main")
         to_icechunk(ds.chunk({"time": 1, "x": -1, "y": -1}), session, encoding=encoding)
         print(session.commit(f"add {date} data to store"))
@@ -178,3 +207,6 @@ for idx, date in enumerate(pd.date_range("2008-03-01", "2025-06-30", freq="4h")[
         session = repo.writable_session("main")
         to_icechunk(ds.chunk({"time": 1, "x": -1, "y": -1}), session, append_dim="time")
         print(session.commit(f"add {date} data to store"))
+    session = repo.readonly_session("main")
+    ds = xr.open_zarr(session.store, consolidated=False)
+    times = ds.time.values
