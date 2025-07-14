@@ -168,28 +168,37 @@ if __name__ == "__main__":
     n_21 = start_uri + "N21/"
     n_20 = start_uri + "N20/"
     snpp = start_uri + "SNPP/"
-    date_range = pd.date_range("2022-11-07", "2025-06-30", freq="1D")
+    date_range = pd.date_range("2022-11-08", "2025-06-30", freq="1D")
     storage = icechunk.local_filesystem_storage("jpss_atms.icechunk")
     repo = icechunk.Repository.open_or_create(storage)
-    session = repo.readonly_session("main")
     pool = mp.Pool(mp.cpu_count())
-    for date in tqdm.tqdm(date_range, total=len(date_range)):
+    times = []
+    first_write = True
+    for time_idx, date in tqdm.tqdm(enumerate(date_range), total=len(date_range)):
         day = date.to_pydatetime()
         satellite_dses = []
         for satellite in ["n21", "n20", "snpp"]:
-            if day > HISTORY_RANGE[satellite][0]:
+            if day >= HISTORY_RANGE[satellite][0]:
                 files = sorted(list(glob.glob(f"{start_uri}/{satellite.upper()}/ATMS-SDR/{day.year:04d}/{day.month:02d}/{day.day:02d}/*")))
                 geo_files = sorted(list(glob.glob(f"{start_uri}/{satellite.upper()}/ATMS-SDR-GEO/{day.year:04d}/{day.month:02d}/{day.day:02d}/*")))
-                assert len(files) == len(geo_files), f"Expected files and geo files to be the same, for {satellite} {date} got {len(files)}, {len(geo_files)}"
-                dses = pool.map(wrap_process_atms, zip(files, geo_files))
-                ds = xr.concat(dses, "time")
-                satellite_dses.append(ds)
+                try:
+                    assert len(files) == len(
+                        geo_files), f"Expected files and geo files to be the same, for {satellite} {date} got {len(files)}, {len(geo_files)}"
+
+                    dses = pool.map(wrap_process_atms, zip(files, geo_files))
+                    ds = xr.concat(dses, "time")
+                    satellite_dses.append(ds)
+                except AssertionError as e:
+                    print(f"Assertion error for {satellite} on {date}: {e}")
+                    continue
         if len(satellite_dses) == 0:
+            print("No data found for", date)
             continue
         elif len(satellite_dses) == 1:
-            ds = satellite_dses[0]
+            satellite_ds = satellite_dses[0]
         else:
-            ds = xr.concat(satellite_dses, "time").sortby("time")
+            satellite_ds = xr.concat(satellite_dses, "time").sortby("time")
+        times += satellite_ds.time.values.tolist()
         encoding = {
             "time": {
                 "units": "nanoseconds since 2020-01-01",
@@ -198,18 +207,24 @@ if __name__ == "__main__":
             }
         }
         variables = []
-        for var in ds.data_vars:
+        for var in satellite_ds.data_vars:
             if var not in ["orbital_parameters", "start_time", "end_time", "area"]:
                 variables.append(var)
         encoding.update({
             v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9,
                                                       shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
             for v in variables})
+        print(satellite_ds)
         try:
-            session = repo.writable_session("main")
-            to_icechunk(ds.chunk({"time": 100, "x": -1, "y": -1}), session, encoding=encoding)
-            session.commit(f"add {date} data to store")
-        except FileExistsError:
-            session = repo.writable_session("main")
-            to_icechunk(ds.chunk({"time": 100, "x": -1, "y": -1}), session, append_dim="time")
-            session.commit(f"add {date} data to store")
+            if first_write:
+                session = repo.writable_session("main")
+                to_icechunk(satellite_ds.chunk({"time": 1, "x": -1, "y": -1}), session, encoding=encoding)
+                print(session.commit(f"add {date} data to store"))
+                first_write = False
+            else:
+                session = repo.writable_session("main")
+                to_icechunk(satellite_ds.chunk({"time": 1, "x": -1, "y": -1}), session, append_dim="time")
+                print(session.commit(f"add {date} data to store"))
+        except Exception as e:
+            print(f"Failed to write data for {date}: {e}")
+            continue
