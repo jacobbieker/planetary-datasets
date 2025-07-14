@@ -48,6 +48,7 @@ pvlib = ">=0.13.0,<0.14"
 iris = ">=3.12.2,<4"
 rioxarray = ">=0.19.0,<0.20"
 satpy = ">=0.57.0,<0.58"
+harp = ">=1.26,<2"
 
 [pypi-dependencies]
 odc-stac = ">=0.4.0, <0.5"
