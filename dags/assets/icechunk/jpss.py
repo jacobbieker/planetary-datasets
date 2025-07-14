@@ -150,33 +150,39 @@ def process_atms(filename, geo_filename) -> xr.Dataset:
     dataset = dataset.drop_vars("crs")
     return dataset
 
+def wrap_process_atms(filenames):
+    """
+    Wraps the process_atms function to handle a list of filenames.
+    """
+    filename, geo_filename = filenames
+    return process_atms(filename, geo_filename)
 
 if __name__ == "__main__":
     import icechunk
     from icechunk.xarray import to_icechunk
     import glob
     import zarr
+    import multiprocessing as mp
+    import tqdm
     start_uri = "/run/media/jacob/Tester/"
     n_21 = start_uri + "N21/"
     n_20 = start_uri + "N20/"
     snpp = start_uri + "SNPP/"
     date_range = pd.date_range("2022-11-07", "2025-06-30", freq="1D")
-    storage = icechunk.local_filesystem_storage("/run/media/jacob/Tester/jpss_atms.icechunk")
+    storage = icechunk.local_filesystem_storage("jpss_atms.icechunk")
     repo = icechunk.Repository.open_or_create(storage)
     session = repo.readonly_session("main")
-    for date in date_range:
+    pool = mp.Pool(mp.cpu_count())
+    for date in tqdm.tqdm(date_range, total=len(date_range)):
         day = date.to_pydatetime()
         satellite_dses = []
         for satellite in ["n21", "n20", "snpp"]:
             if day > HISTORY_RANGE[satellite][0]:
                 files = sorted(list(glob.glob(f"{start_uri}/{satellite.upper()}/ATMS-SDR/{day.year:04d}/{day.month:02d}/{day.day:02d}/*")))
                 geo_files = sorted(list(glob.glob(f"{start_uri}/{satellite.upper()}/ATMS-SDR-GEO/{day.year:04d}/{day.month:02d}/{day.day:02d}/*")))
-                dses = []
                 assert len(files) == len(geo_files), f"Expected files and geo files to be the same, for {satellite} {date} got {len(files)}, {len(geo_files)}"
-                for i in range(len(files)):
-                    dses.append(process_atms(files[i], geo_files[i]))
+                dses = pool.map(wrap_process_atms, zip(files, geo_files))
                 ds = xr.concat(dses, "time")
-                print(ds)
                 satellite_dses.append(ds)
         if len(satellite_dses) == 0:
             continue
@@ -184,10 +190,9 @@ if __name__ == "__main__":
             ds = satellite_dses[0]
         else:
             ds = xr.concat(satellite_dses, "time").sortby("time")
-        print(ds)
         encoding = {
             "time": {
-                "units": "milliseconds since 1970-01-01",
+                "units": "nanoseconds since 2020-01-01",
                 "calendar": "standard",
                 "dtype": "int64",
             }
@@ -203,8 +208,8 @@ if __name__ == "__main__":
         try:
             session = repo.writable_session("main")
             to_icechunk(ds.chunk({"time": 100, "x": -1, "y": -1}), session, encoding=encoding)
-            print(session.commit(f"add {date} data to store"))
+            session.commit(f"add {date} data to store")
         except FileExistsError:
             session = repo.writable_session("main")
             to_icechunk(ds.chunk({"time": 100, "x": -1, "y": -1}), session, append_dim="time")
-            print(session.commit(f"add {date} data to store"))
+            session.commit(f"add {date} data to store")
