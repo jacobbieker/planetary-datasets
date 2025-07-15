@@ -94,6 +94,12 @@ date_range = pd.date_range("2008-03-01", "2025-06-30", freq="4h")[::-1]
 
 # Icechunk
 storage = icechunk.local_filesystem_storage("metop_avhrr.icechunk")
+storage = icechunk.s3_storage(bucket="bkr",
+                                      prefix="polar/metop_avhrr.icechunk",
+                                      endpoint_url="https://data.source.coop",
+                                      allow_http=True,
+                                      region="us-west-2",
+                                      force_path_style=True, )
 repo = icechunk.Repository.open_or_create(storage)
 session = repo.readonly_session("main")
 try:

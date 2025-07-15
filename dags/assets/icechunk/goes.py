@@ -358,7 +358,7 @@ class GOES(VirtualDataset):
         scn.load(
             self.GOES_CHANNELS
         )  # Nice 2km resolution data, could go to L1b and get native resolution, although mostly larger
-        dataset = scn.to_xarray_dataset(datasets=variable_to_load).astype(np.float16)
+        dataset = scn.to_xarray_dataset(datasets=variable_to_load).load().astype(np.float16)
         orbit_params = scn.to_xarray_dataset(datasets=high_res_channels).attrs["orbital_parameters"]
         import pandas as pd
         start_time = pd.Timestamp(dataset.attrs['start_time'])
@@ -380,7 +380,6 @@ class GOES(VirtualDataset):
             [str(dataset.attrs["area"])],
             dims=("time",),
         ).astype(f"U512")
-        dataset = dataset.load()
         # Now reduce to float16 for everything other than latitude/longitude
         for var in dataset.data_vars:
             if var not in ['latitude', 'longitude', 'start_time', 'end_time', 'platform_name', "area",
@@ -505,24 +504,36 @@ if __name__ == "__main__":
     for name in names:
         storage = icechunk.local_filesystem_storage(f"{name}.icechunk")
         repo = icechunk.Repository.open_or_create(storage)
+        #storage = icechunk.local_filesystem_storage(f"{name}.icechunk")
+        storage = icechunk.s3_storage(bucket="bkr",
+                                      prefix=f"geo/{name}.icechunk",
+                                      secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
+                                      allow_http=True,
+                                      region="us-west-2",
+                                      force_path_style=True, )
+        repo = icechunk.Repository.open(storage)
         session = repo.readonly_session("main")
-        try:
-            ds = xr.open_zarr(session.store, consolidated=False)
-            print(ds)
-            times[name] = ds.time.values
-            # Check number of unique times
-            print(f"Number of unique times in the store: {len(np.unique(times))}")
-            # Check to when the last one is in there
-            for d in date_range:
-                if d > ds.time.values[-1]:
-                    date_ranges[name] = date_range[date_range <= ds.time.values[-1]]
-                    break
-        except:
-            times[name] = []
+        ds = xr.open_zarr(session.store, consolidated=False)
+        print(ds)
+        times[name] = ds.time.values
+        # Check number of unique times
+        print(f"Number of unique times in the store: {len(np.unique(times))}")
+        # Check to when the last one is in there
+        for d in date_range:
+            if d > ds.time.values[-1]:
+                date_ranges[name] = date_range[date_range <= ds.time.values[-1]]
+                break
     for date_idx in range(len(date_range)):
         for idx, channel_set in enumerate([high_res_channels, medium_res_channels, low_res_channels,high_res_channels, medium_res_channels, low_res_channels]):
             sat = "goes-west" if "goes_west" in names[idx] else "goes-east"
             storage = icechunk.local_filesystem_storage(f"{names[idx]}.icechunk")
+            #storage = icechunk.local_filesystem_storage(f"{names[idx]}.icechunk")
+            storage = icechunk.s3_storage(bucket="bkr",
+                                          prefix=f"geo/{names[idx]}.icechunk",
+                                          secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
+                                          allow_http=True,
+                                          region="us-west-2",
+                                          force_path_style=True, )
             repo = icechunk.Repository.open_or_create(storage)
             date = date_ranges[names[idx]][date_idx] if names[idx] in date_ranges else date_range[date_idx]
             himwari = GOES(satellite=sat, max_workers=24, cache=True, verbose=True, variables= channel_set, source="l1")
@@ -559,3 +570,7 @@ if __name__ == "__main__":
                 session = repo.writable_session("main")
                 to_icechunk(ds.chunk({"time": 1, "x": -1, "y": -1}), session, append_dim="time")
                 print(session.commit(f"add {date} data to store"))
+            if names[idx] == "goes_west_2km" or names[idx] == "goes_east_2km":
+                # Clear out the cache
+                import shutil
+                shutil.rmtree(himwari.cache, ignore_errors=True)

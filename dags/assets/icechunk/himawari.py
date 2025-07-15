@@ -235,7 +235,11 @@ class Himawari(VirtualDataset):
         datasets = await tqdm.gather(
             *func_map, desc="Fetching Himawari data", disable=(not self._verbose)
         )
-
+        # Check for any None and filter them out
+        datasets = [ds for ds in datasets if ds is not None]
+        if len(datasets) == 0:
+            logger.warning("No Himawari data found for the given time range.")
+            return None
         datasets = xr.concat(datasets, "time")
 
         # Close aiohttp client if s3fs
@@ -279,6 +283,8 @@ class Himawari(VirtualDataset):
         # Smooth out the list of lists to a single list
         himawari_uris = [item for sublist in himawari_uris for item in sublist]
         logger.debug(f"Fetching Himawari file: {himawari_uris}")
+        if len(himawari_uris) == 0:
+            return None
 
         # Download the file to cache
         func_map = map(self._fetch_remote_file, himawari_uris)
@@ -294,7 +300,7 @@ class Himawari(VirtualDataset):
         )  # Nice 2km resolution data, could go to L1b and get native resolution, although mostly larger
         print(scn.get("orbital_parameters"))
         # Add latitude/longitude to coordinates
-        dataset = scn.to_xarray_dataset(datasets=variable_to_load).astype(np.float16)
+        dataset = scn.to_xarray_dataset(datasets=variable_to_load).load().astype(np.float16)
         orbit_params = scn.to_xarray_dataset(datasets=high_res_channels).attrs["orbital_parameters"]
         import pandas as pd
         start_time = pd.Timestamp(dataset.attrs['start_time'])
@@ -316,7 +322,6 @@ class Himawari(VirtualDataset):
             [str(dataset.attrs["area"])],
             dims=("time",),
         ).astype(f"U512")
-        dataset = dataset.load()
         # Now reduce to float16 for everything other than latitude/longitude
         for var in dataset.data_vars:
             if var not in ['latitude', 'longitude', 'start_time', 'end_time', 'platform_name', "area", "orbital_parameters"]:
@@ -379,8 +384,15 @@ class Himawari(VirtualDataset):
 
         # List files in the directory to find the most recent one
         # This is all the bands for the given 10 minutely observation
-        files = await self.fs._ls(base_url)
-        return files
+        try:
+            files = await self.fs._ls(base_url)
+            return files
+        except FileNotFoundError:
+            logger.error(
+                f"No Himawari data found for {time} in {base_url}. "
+                "Please check the date and time."
+            )
+            return []
 
 
 if __name__ == "__main__":
@@ -413,26 +425,39 @@ if __name__ == "__main__":
     date_ranges = {}
     names = ["himawari_500m", "himawari_1km", "himawari_2km"]
     for name in names:
-        storage = icechunk.local_filesystem_storage(f"{name}.icechunk")
-        repo = icechunk.Repository.open_or_create(storage)
+        #storage = icechunk.local_filesystem_storage(f"{name}.icechunk")
+        storage = icechunk.s3_storage(bucket="bkr",
+                                      prefix=f"geo/{name}.icechunk",
+                                      endpoint_url="https://data.source.coop",
+                                      access_key_id="SC11A9JDAZLVTF959664D1NI",
+                                      secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
+                                      allow_http=True,
+                                      region="us-west-2",
+                                      force_path_style=True, )
+        repo = icechunk.Repository.open(storage)
         session = repo.readonly_session("main")
-        try:
-            ds = xr.open_zarr(session.store, consolidated=False)
-            print(ds)
-            times[name] = ds.time.values
-            # Check number of unique times
-            print(f"Number of unique times in the store: {len(np.unique(times))}")
-            # Check to when the last one is in there
-            for d in date_range:
-                if d > ds.time.values[-1]:
-                    date_ranges[name] = date_range[date_range <= ds.time.values[-1]]
-                    break
-        except:
-            times[name] = []
+        ds = xr.open_zarr(session.store, consolidated=False)
+        print(ds)
+        times[name] = ds.time.values
+        # Check number of unique times
+        print(f"Number of unique times in the store: {len(np.unique(times[name]))}")
+        print(times[name])
+        # Check to when the last one is in there
+        for d in date_range:
+            if d > ds.time.values[-1]:
+                date_ranges[name] = date_range[date_range <= ds.time.values[-1]]
+                break
     for date_idx in range(len(date_range)):
         names = ["himawari_500m", "himawari_1km", "himawari_2km"]
         for idx, channel_set in enumerate([high_res_channels, medium_res_channels, low_res_channels]):
             storage = icechunk.local_filesystem_storage(f"{names[idx]}.icechunk")
+            #storage = icechunk.local_filesystem_storage(f"{names[idx]}.icechunk")
+            storage = icechunk.s3_storage(bucket="bkr",
+                                          prefix=f"geo/{names[idx]}.icechunk",
+                                          endpoint_url="https://data.source.coop",
+                                          allow_http=True,
+                                          region="us-west-2",
+                                          force_path_style=True, )
             repo = icechunk.Repository.open_or_create(storage)
             date = date_ranges[names[idx]][date_idx] if names[idx] in date_ranges else date_range[date_idx]
             himwari = Himawari(satellite="himawari", max_workers=24, cache=True, verbose=True, variables= channel_set,)
@@ -446,6 +471,8 @@ if __name__ == "__main__":
             }
             print(date)
             ds = himwari([date.to_pydatetime()])
+            if ds is None:
+                continue
             variables = []
             for var in ds.data_vars:
                 if var not in ["orbital_parameters", "start_time", "end_time", "area"]:
@@ -469,3 +496,7 @@ if __name__ == "__main__":
                 session = repo.writable_session("main")
                 to_icechunk(ds.chunk({"time": 1, "x": -1, "y": -1}), session, append_dim="time")
                 print(session.commit(f"add {date} data to store"))
+            if names[idx] == "himawari_2km":
+                # Clear out the cache
+                import shutil
+                shutil.rmtree(himwari.cache, ignore_errors=True)
