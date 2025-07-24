@@ -43,12 +43,13 @@ def preprocess(vds: xr.Dataset) -> xr.Dataset:
     vds = vds.rename({"t": "time"})
     return vds
 
-storage = icechunk.local_filesystem_storage("/raid/goes19_mcmipf.icechunk")
+storage = icechunk.local_filesystem_storage("/raid/goes19_mcmipf_2025.icechunk")
 repo = icechunk.Repository.open_or_create(storage)
 
 for day_of_year in range(1, 205):
     # Format the day of year as a three-digit string
     day_str = f"{day_of_year:03d}"
+    files = []
     for hour in range(0, 24):
         # Format the hour as a two-digit string
         hour_str = f"{hour:02d}"
@@ -56,34 +57,36 @@ for day_of_year in range(1, 205):
         path = f"ABI-L2-MCMIPF/2025/{day_str}/{hour_str}/"
         # List files in the directory
         try:
-            files = fs.ls(f"{bucket}/{path}")
-            vds = open_virtual_mfdataset(
-                ["s3://" + f for f in files],
-                parser=parser,
-                registry=registry,
-                loadable_variables=["y", "x", "t", "number_of_time_bounds", "number_of_image_bounds", "band"],
-                decode_times=True,
-                combine="nested",
-                concat_dim="time",
-                data_vars="minimal",
-                coords="minimal",
-                compat="override",
-                parallel=ThreadPoolExecutor,
-                preprocess=preprocess,
-            )
-            print(vds)
-
-            # By default, local virtual references and public remote virtual references can be read without extra configuration.
-            session = repo.writable_session("main")
-
-            # write the virtual dataset to the session with the IcechunkStore
-            if day_of_year == 1 and hour == 0:
-                # If this is the first dataset, write it without appending
-                vds.vz.to_icechunk(session.store)
-            else:
-                vds.vz.to_icechunk(session.store, append_dim="time")
-            snapshot_id = session.commit(f"Wrote {day_str} {hour_str}")
-            print(snapshot_id)
+            new_files = fs.ls(f"{bucket}/{path}")
+            files.extend(new_files)
         except FileNotFoundError:
             print(f"Directory {path} not found, skipping.")
             continue
+    if len(files) == 0:
+        continue
+    vds = open_virtual_mfdataset(
+        ["s3://" + f for f in files],
+        parser=parser,
+        registry=registry,
+        loadable_variables=["y", "x", "t", "number_of_time_bounds", "number_of_image_bounds", "band"],
+        decode_times=True,
+        combine="nested",
+        concat_dim="time",
+        data_vars="minimal",
+        coords="minimal",
+        compat="override",
+        parallel=ThreadPoolExecutor,
+        preprocess=preprocess,
+    )
+    print(vds)
+
+    # By default, local virtual references and public remote virtual references can be read without extra configuration.
+    session = repo.writable_session("main")
+    # write the virtual dataset to the session with the IcechunkStore
+    if day_of_year == 1:
+        # If this is the first dataset, write it without appending
+        vds.vz.to_icechunk(session.store)
+    else:
+        vds.vz.to_icechunk(session.store, append_dim="time")
+    snapshot_id = session.commit(f"Wrote {day_str} {hour_str}")
+    print(snapshot_id)
