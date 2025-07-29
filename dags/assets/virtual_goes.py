@@ -75,66 +75,77 @@ def preprocess(vds: xr.Dataset) -> xr.Dataset:
     return vds
 
 
-def process_year(year: str, satellite: str, start_day: int = 1):
+def process_year(satellite: str):
     fs = s3fs.S3FileSystem(anon=True, client_kwargs={}, asynchronous=False)
     bucket = f"s3://noaa-{satellite}"
     store = from_url(bucket, skip_signature=True)
     registry = ObjectStoreRegistry({bucket: store})
+    start_day = 1
     """Process a year of GOES data."""
-    print(f"Processing {satellite} data for the year {year} starting from day {start_day}.")
-    # Iterate over each day of the year
-    day_of_year = start_day
-    # Format the day of year as a three-digit string
-    day_str = f"{day_of_year:03d}"
-    files = []
-    for day in range(start_day, start_day + 30):
-        day_str = f"{day:03d}"
-        for hour in range(0, 24):
-            # Format the hour as a two-digit string
-            hour_str = f"{hour:02d}"
-            if os.path.exists(f"/raid/icechunk_30/{satellite}_mcmipf_{year}_{start_day}_{start_day+30}.icechunk"):
-                print(f"Dataset for {year}-{day_str} hour {hour} already exists, skipping...")
-                continue
-            # Construct the path for the current day and hour
-            path = f"ABI-L2-MCMIPF/{year}/{day_str}/{hour_str}/"
-            # List files in the directory
-            try:
-                new_files = fs.ls(f"{bucket}/{path}")
-                files.extend(new_files)
-            except FileNotFoundError:
-                print(f"Directory {path} not found, skipping.")
-                continue
-    if len(files) == 0:
-        return
-    try:
-        vds = open_virtual_mfdataset(
-            ["s3://" + f for f in files],
-            parser=parser,
-            registry=registry,
-            loadable_variables=coords,
-            decode_times=True,
-            combine="nested",
-            concat_dim="time",
-            data_vars="minimal",
-            coords="minimal",
-            compat="override",
-            parallel=ThreadPoolExecutor,
-            preprocess=preprocess,
-        )
-    except Exception as e:
-        print(f"Failed to process {year}-{day_str}: {e}")
-        return
-
-    print(vds)
+    print(f"Processing {satellite}")
     # By default, local virtual references and public remote virtual references can be read without extra configuration.
+    config = icechunk.RepositoryConfig.default()
+    config.set_virtual_chunk_container(
+        icechunk.VirtualChunkContainer(f"s3://noaa-{satellite}", icechunk.s3_store(region="us-east-1", anonymous=True)),
+    )
     storage = icechunk.local_filesystem_storage(
-        f"/raid/icechunk_30/{satellite}_mcmipf_{year}_{start_day}_{start_day+30}.icechunk")
-    repo = icechunk.Repository.open_or_create(storage)
-    session = repo.writable_session("main")
-    # write the virtual dataset to the session with the IcechunkStore
-    vds.vz.to_icechunk(session.store)
-    snapshot_id = session.commit(f"Wrote {start_day} - {start_day + 30} days of {satellite} data for {year}")
-    print(snapshot_id)
+        f"/raid/icechunk_append/{satellite}_mcmipf.icechunk")
+    repo = icechunk.Repository.open_or_create(
+        storage, config=config, authorize_virtual_chunk_access={f"s3://noaa-{satellite}": None},
+    )
+    repo.save_config()
+    first_write = True
+    for year in range(2018, 2026):
+        files = []
+        for day in range(start_day, 366):
+            day_str = f"{day:03d}"
+            for hour in range(0, 24):
+                # Format the hour as a two-digit string
+                hour_str = f"{hour:02d}"
+                # Construct the path for the current day and hour
+                path = f"ABI-L2-MCMIPF/{year}/{day_str}/{hour_str}/"
+                # List files in the directory
+                try:
+                    new_files = fs.ls(f"{bucket}/{path}")
+                    files = new_files
+                except FileNotFoundError:
+                    print(f"Directory {path} not found, skipping.")
+                    continue
+            if len(files) == 0:
+                return
+            try:
+                print(f"Processing {len(files)} files...")
+                vds = open_virtual_mfdataset(
+                    ["s3://" + f for f in files],
+                    parser=parser,
+                    registry=registry,
+                    loadable_variables=coords,
+                    decode_times=True,
+                    combine="nested",
+                    concat_dim="time",
+                    data_vars="minimal",
+                    coords="minimal",
+                    compat="override",
+                    parallel=ThreadPoolExecutor,
+                    preprocess=preprocess,
+                )
+            except Exception as e:
+                print(f"Failed to process {year}-{day_str}: {e}")
+                return
+
+            session = repo.writable_session("main")
+            # write the virtual dataset to the session with the IcechunkStore
+            try:
+                if first_write:
+                    vds.vz.to_icechunk(session.store)
+                    first_write = False
+                else:
+                    vds.vz.to_icechunk(session.store, append_dim="time")
+                snapshot_id = session.commit(f"Wrote {year} {start_day} day of {satellite} data for {year}")
+                print(snapshot_id)
+            except Exception as e:
+                print(f"Failed to write {year}-{day_str} data: {e}")
+                continue
 
 def process_year_wrapper(args):
     """Wrapper function to unpack arguments for multiprocessing."""
@@ -148,10 +159,8 @@ if __name__ == "__main__":
     year = arg
     start_day = sys.argv[3] if len(sys.argv) > 3 else 1
     start_day = int(start_day)
-    satellites = ["goes17", "goes18", "goes19", "goes16"]
-    years = ["2020", "2021", "2022", "2023", "2024", "2025"]
-    start_days = list(range(1, 366, 30))
+    satellites = [ "goes18", "goes19", "goes16", "goes17",]
     import multiprocessing as mp
     pool = mp.Pool(mp.cpu_count())
-    for _ in pool.imap_unordered(process_year_wrapper, [(y, sat, sd) for y in years for sat in satellites for sd in start_days]):
+    for _ in pool.imap_unordered(process_year, satellites):
         pass
