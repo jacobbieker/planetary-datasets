@@ -147,18 +147,7 @@ def process_year(satellite: str):
                 print(f"Failed to write {year}-{day_str} data: {e}")
                 continue
 
-def process_year_wrapper(args):
-    """Wrapper function to unpack arguments for multiprocessing."""
-    year, satellite, start_day = args
-    process_year(year, satellite, start_day)
-
 if __name__ == "__main__":
-    arg = sys.argv[1] if len(sys.argv) > 1 else "2022"
-    arg2 = sys.argv[2] if len(sys.argv) > 2 else "goes16"
-    satellite = arg2.lower()
-    year = arg
-    start_day = sys.argv[3] if len(sys.argv) > 3 else 1
-    start_day = int(start_day)
     satellites = [ "goes18", "goes19", "goes16", "goes17",]
     import multiprocessing as mp
     pool = mp.Pool(mp.cpu_count())
