@@ -15,8 +15,6 @@ import warnings
 import numpy as np
 import pyproj
 
-from dags.assets import satellite
-
 warnings.filterwarnings(
     "ignore",
     message="Numcodecs codecs are not in the Zarr version 3 specification*",
