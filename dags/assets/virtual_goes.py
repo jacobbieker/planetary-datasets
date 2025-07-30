@@ -89,7 +89,7 @@ def process_year(satellite: str):
         icechunk.VirtualChunkContainer(f"s3://noaa-{satellite}", icechunk.s3_store(region="us-east-1", anonymous=True)),
     )
     storage = icechunk.local_filesystem_storage(
-        f"/raid/icechunk_append/{satellite}_mcmipf.icechunk")
+        f"icechunk_append/{satellite}_mcmipf.icechunk")
     repo = icechunk.Repository.open_or_create(
         storage, config=config, authorize_virtual_chunk_access={f"s3://noaa-{satellite}": None},
     )
@@ -112,7 +112,7 @@ def process_year(satellite: str):
                     print(f"Directory {path} not found, skipping.")
                     continue
             if len(files) == 0:
-                return
+                continue
             try:
                 print(f"Processing {len(files)} files...")
                 vds = open_virtual_mfdataset(
@@ -131,7 +131,7 @@ def process_year(satellite: str):
                 )
             except Exception as e:
                 print(f"Failed to process {year}-{day_str}: {e}")
-                return
+                continue
 
             session = repo.writable_session("main")
             # write the virtual dataset to the session with the IcechunkStore
@@ -148,8 +148,13 @@ def process_year(satellite: str):
                 continue
 
 if __name__ == "__main__":
-    satellites = [ "goes18", "goes19", "goes16", "goes17",]
     import multiprocessing as mp
+    #mp.set_start_method("forkserver")
+    satellites = [ "goes18", "goes19", "goes16", "goes17",]
+    #satellites = [ "goes18"]
+    #satellites = ["goes19"]
+    #satellites = ["goes16"]
+    #satellites = ["goes17"]
     pool = mp.Pool(mp.cpu_count())
-    for _ in pool.imap_unordered(process_year, satellites):
+    for _ in pool.map(process_year, satellites):
         pass
