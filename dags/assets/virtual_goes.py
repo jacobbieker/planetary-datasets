@@ -151,10 +151,6 @@ if __name__ == "__main__":
     import multiprocessing as mp
     #mp.set_start_method("forkserver")
     satellites = [ "goes18", "goes19", "goes16", "goes17",]
-    #satellites = [ "goes18"]
-    #satellites = ["goes19"]
-    #satellites = ["goes16"]
-    #satellites = ["goes17"]
     pool = mp.Pool(mp.cpu_count())
     for _ in pool.map(process_year, satellites):
         pass
