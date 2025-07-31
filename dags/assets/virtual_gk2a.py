@@ -89,8 +89,6 @@ def preprocess(vds: xr.Dataset) -> xr.Dataset:
     )
     base = dt.datetime(2000, 1, 1, 12, 0, 0)
     mid_time = (dt.timedelta(seconds=vds.attrs["observation_start_time"]) + dt.timedelta(seconds=vds.attrs["observation_end_time"])) / 2
-    #vds["time"] = [base + mid_time]
-    #vds = vds.assign_coords({"time": vds["time"]})
     vds = vds.drop_dims(["dim_boa_swaths", "dim_matched_lmks"])
     vds = vds.expand_dims({"time": [base + mid_time]})
     vds["start_time"] = xr.DataArray([base + dt.timedelta(seconds=vds.attrs["observation_start_time"])], coords={"time": vds.coords["time"]})
@@ -102,7 +100,7 @@ def preprocess(vds: xr.Dataset) -> xr.Dataset:
     vds["orbital_parameters"] = xr.DataArray(
         [orbital_parameters],
         dims=("time",),
-    ).astype(f"U16")
+    ).astype(f"U512")
     vds["area"] = xr.DataArray(
         [str(area_def)],
         dims=("time",),
@@ -126,7 +124,7 @@ def process_year(band: str):
         icechunk.VirtualChunkContainer("s3://noaa-gk2a-pds/", icechunk.s3_store(region="us-east-1", anonymous=True)),
     )
     storage = icechunk.local_filesystem_storage(
-        f"/raid/icechunk/gk2a_{band}.icechunk")
+        f"/data/virtual_icechunk/gk2a_{band}.icechunk")
     repo = icechunk.Repository.open_or_create(
         storage, config=config, authorize_virtual_chunk_access={"s3://noaa-gk2a-pds": None},
     )
