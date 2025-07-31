@@ -22,45 +22,6 @@ warnings.filterwarnings(
 )
 
 parser = HDFParser()
-coords = [
-    'y',
-    'x',
-    't',
-    'y_image',
-    'x_image',
-    'band_wavelength_C01',
-    'band_wavelength_C02',
-    'band_wavelength_C03',
-    'band_wavelength_C04',
-    'band_wavelength_C05',
-    'band_wavelength_C06',
-    'band_wavelength_C07',
-    'band_wavelength_C08',
-    'band_wavelength_C09',
-    'band_wavelength_C10',
-    'band_wavelength_C11',
-    'band_wavelength_C12',
-    'band_wavelength_C13',
-    'band_wavelength_C14',
-    'band_wavelength_C15',
-    'band_wavelength_C16',
-    'band_id_C01',
-    'band_id_C02',
-    'band_id_C03',
-    'band_id_C04',
-    'band_id_C05',
-    'band_id_C06',
-    'band_id_C07',
-    'band_id_C08',
-    'band_id_C09',
-    'band_id_C10',
-    'band_id_C11',
-    'band_id_C12',
-    'band_id_C13',
-    'band_id_C14',
-    'band_id_C15',
-    'band_id_C16'
-]
 
 def get_area_def(vds):
     """Get area definition for this file."""
@@ -128,13 +89,15 @@ def preprocess(vds: xr.Dataset) -> xr.Dataset:
     )
     base = dt.datetime(2000, 1, 1, 12, 0, 0)
     mid_time = (dt.timedelta(seconds=vds.attrs["observation_start_time"]) + dt.timedelta(seconds=vds.attrs["observation_end_time"])) / 2
-    vds["time"] = base + mid_time
-    vds = vds.assign_coords({"time": vds["time"]})
-    vds = vds.expand_dims("time")
+    #vds["time"] = [base + mid_time]
+    #vds = vds.assign_coords({"time": vds["time"]})
+    vds = vds.drop_dims(["dim_boa_swaths", "dim_matched_lmks"])
+    vds = vds.expand_dims({"time": [base + mid_time]})
     vds["start_time"] = xr.DataArray([base + dt.timedelta(seconds=vds.attrs["observation_start_time"])], coords={"time": vds.coords["time"]})
     vds["end_time"] = xr.DataArray([base + dt.timedelta(seconds=vds.attrs["observation_end_time"])], coords={"time": vds.coords["time"]})
     orbital_parameters = get_orbital_parameters(vds)
     area_def = get_area_def(vds)
+    #"""
     # Expand coords for data to have time dimension
     vds["orbital_parameters"] = xr.DataArray(
         [orbital_parameters],
@@ -144,7 +107,7 @@ def preprocess(vds: xr.Dataset) -> xr.Dataset:
         [str(area_def)],
         dims=("time",),
     ).astype(f"U512")
-
+    #"""
     return vds
 
 
@@ -160,10 +123,10 @@ def process_year(band: str):
     # By default, local virtual references and public remote virtual references can be read without extra configuration.
     config = icechunk.RepositoryConfig.default()
     config.set_virtual_chunk_container(
-        icechunk.VirtualChunkContainer("s3://noaa-gk2a-pds", icechunk.s3_store(region="us-east-1", anonymous=True)),
+        icechunk.VirtualChunkContainer("s3://noaa-gk2a-pds/", icechunk.s3_store(region="us-east-1", anonymous=True)),
     )
     storage = icechunk.local_filesystem_storage(
-        f"icechunk_append/gk2a_{band}.icechunk")
+        f"/raid/icechunk/gk2a_{band}.icechunk")
     repo = icechunk.Repository.open_or_create(
         storage, config=config, authorize_virtual_chunk_access={"s3://noaa-gk2a-pds": None},
     )
@@ -184,7 +147,7 @@ def process_year(band: str):
                         new_files = [f for f in new_files if band in f]
                         files = new_files
                     except FileNotFoundError:
-                        print(f"Directory {path} not found, skipping.")
+                        #print(f"Directory {path} not found, skipping.")
                         continue
                 if len(files) == 0:
                     continue
@@ -194,7 +157,6 @@ def process_year(band: str):
                         ["s3://" + f for f in files],
                         parser=parser,
                         registry=registry,
-                        loadable_variables=coords,
                         decode_times=True,
                         combine="nested",
                         concat_dim="time",

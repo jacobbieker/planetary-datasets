@@ -86,7 +86,7 @@ def process_year(satellite: str):
     # By default, local virtual references and public remote virtual references can be read without extra configuration.
     config = icechunk.RepositoryConfig.default()
     config.set_virtual_chunk_container(
-        icechunk.VirtualChunkContainer(f"s3://noaa-{satellite}", icechunk.s3_store(region="us-east-1", anonymous=True)),
+        icechunk.VirtualChunkContainer(f"s3://noaa-{satellite}/", icechunk.s3_store(region="us-east-1", anonymous=True)),
     )
     storage = icechunk.local_filesystem_storage(
         f"icechunk_append/{satellite}_mcmipf.icechunk")
@@ -109,7 +109,7 @@ def process_year(satellite: str):
                     new_files = fs.ls(f"{bucket}/{path}")
                     files = new_files
                 except FileNotFoundError:
-                    print(f"Directory {path} not found, skipping.")
+                    #print(f"Directory {path} not found, skipping.")
                     continue
             if len(files) == 0:
                 continue
