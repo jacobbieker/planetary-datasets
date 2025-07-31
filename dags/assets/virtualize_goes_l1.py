@@ -14,6 +14,7 @@ import numpy as np
 import xarray as xr
 from pyresample import geometry
 import datetime as dt
+import functools
 
 import warnings
 
@@ -207,6 +208,7 @@ def process_year(satellite: str, channel: str):
     )
     repo.save_config()
     first_write = True
+    pre_func = functools.partial(preprocess, satellite=satellite)
     for year in range(2018, 2026):
         files = []
         for day in range(start_day, 366):
@@ -240,7 +242,7 @@ def process_year(satellite: str, channel: str):
                     compat="override",
                     parallel=ThreadPoolExecutor,
                     loadable_variables=coords,
-                    preprocess=preprocess,
+                    preprocess=pre_func,
                 )
             except Exception as e:
                 print(f"Failed to process {year}-{day_str}: {e}")
