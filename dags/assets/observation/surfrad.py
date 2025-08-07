@@ -1,7 +1,8 @@
 import pvlib
 import pandas as pd
 import os
-filename = 'https://gml.noaa.gov/aftp/data/radiation/surfrad/bon/2020/bon20115.dat'
+
+filename = "https://gml.noaa.gov/aftp/data/radiation/surfrad/bon/2020/bon20115.dat"
 
 # Possible years are 1995 to present
 # Each is the day of the year in terms of <location>/<year>/<location><year><dayofyear>.dat

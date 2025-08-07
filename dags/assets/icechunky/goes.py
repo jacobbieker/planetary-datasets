@@ -40,7 +40,8 @@ from typing import Any
 import yaml
 import pyresample
 import datetime as dt
-from dags.assets.icechunk.virtual_datasource import VirtualDataset
+from dags.assets.icechunky.virtual_datasource import VirtualDataset
+
 
 def _serialize(d: dict[str, Any]) -> dict[str, Any]:
     sd: dict[str, Any] = {}
@@ -56,6 +57,7 @@ def _serialize(d: dict[str, Any]) -> dict[str, Any]:
         else:
             sd[key] = str(value)
     return sd
+
 
 class GOES(VirtualDataset):
     """GOES (Geostationary Operational Environmental Satellite) data source.
@@ -291,6 +293,15 @@ class GOES(VirtualDataset):
             *func_map, desc="Fetching GOES data", disable=(not self._verbose)
         )
 
+        datasets = [ds for ds in datasets if ds is not None]  # Filter out None results
+
+        if not datasets:
+            logger.error(
+                f"No GOES data found for {time} with variables {variable}. "
+                "Check if the time is within the operational range of the satellite."
+            )
+            return None
+
         dataset = xr.concat(datasets, dim="time")
 
         # Close aiohttp client if s3fs
@@ -331,8 +342,15 @@ class GOES(VirtualDataset):
         variable_to_load = self.channels if variable is None else variable
         # If l2, different from l1b data loading
         if self.source == "l1":
-            func_map = map(functools.partial(self._get_s3_path, time=time), self.GOES_CHANNELS)
+            func_map = map(functools.partial(self._get_s3_path, time=time), variable_to_load)
             goes_uris = await asyncio.gather(*func_map)
+            goes_uris = [uri for uri in goes_uris if uri is not None]
+            if not goes_uris:
+                logger.error(
+                    f"No GOES L1b data found for {time} with variables {variable_to_load}. "
+                    "Check if the time is within the operational range of the satellite."
+                )
+                return None
             func_map = map(self._fetch_remote_file, goes_uris)
             # Get the S3 path for the GOES data file
             logger.debug(f"Fetching GOES file: {goes_uris}")
@@ -347,6 +365,12 @@ class GOES(VirtualDataset):
             goes_uri = await self._get_s3_path(
                 variable=f"OR_ABI-L2-MCMIP{self._scan_mode}", time=time
             )
+            if goes_uri is None:
+                logger.error(
+                    f"No GOES L2 data found for {time} with variables {variable_to_load}. "
+                    "Check if the time is within the operational range of the satellite."
+                )
+                return None
             logger.debug(f"Fetching GOES file: {goes_uri}")
             # Download the file to cache
             goes_file = await self._fetch_remote_file(goes_uri)
@@ -361,17 +385,20 @@ class GOES(VirtualDataset):
         dataset = scn.to_xarray_dataset(datasets=variable_to_load).load().astype(np.float16)
         orbit_params = scn.to_xarray_dataset(datasets=high_res_channels).attrs["orbital_parameters"]
         import pandas as pd
-        start_time = pd.Timestamp(dataset.attrs['start_time'])
-        end_time = pd.Timestamp(dataset.attrs['end_time'])
+
+        start_time = pd.Timestamp(dataset.attrs["start_time"])
+        end_time = pd.Timestamp(dataset.attrs["end_time"])
         # Get the middle time of two times
         mid_time = start_time + (end_time - start_time) / 2
-        dataset['time'] = mid_time
-        dataset = dataset.assign_coords({"time": dataset['time']})
+        dataset["time"] = mid_time
+        dataset = dataset.assign_coords({"time": dataset["time"]})
         # Expand coords for data to have time dimension
         dataset = dataset.expand_dims("time")
         dataset["start_time"] = xr.DataArray([start_time], coords={"time": dataset["time"]})
         dataset["end_time"] = xr.DataArray([end_time], coords={"time": dataset["time"]})
-        dataset["platform_name"] = xr.DataArray([dataset.attrs['platform_name']], coords={"time": dataset["time"]})
+        dataset["platform_name"] = xr.DataArray(
+            [dataset.attrs["platform_name"]], coords={"time": dataset["time"]}
+        )
         dataset["orbital_parameters"] = xr.DataArray(
             [orbit_params],
             dims=("time",),
@@ -382,29 +409,34 @@ class GOES(VirtualDataset):
         ).astype(f"U512")
         # Now reduce to float16 for everything other than latitude/longitude
         for var in dataset.data_vars:
-            if var not in ['latitude', 'longitude', 'start_time', 'end_time', 'platform_name', "area",
-                           "orbital_parameters"]:
+            if var not in [
+                "latitude",
+                "longitude",
+                "start_time",
+                "end_time",
+                "platform_name",
+                "area",
+                "orbital_parameters",
+            ]:
                 dataset[var] = dataset[var].astype(np.float16)
             if var in ["latitude", "longitude"]:
                 dataset[var] = dataset[var].astype(np.float32)
         # Drop a few attributes
-        dataset.attrs.pop('end_time')
-        dataset.attrs.pop('start_time')
-        dataset.attrs.pop('platform_name')
+        dataset.attrs.pop("end_time")
+        dataset.attrs.pop("start_time")
+        dataset.attrs.pop("platform_name")
         dataset.attrs = _serialize(dataset.attrs)
         for var in dataset.data_vars:
             dataset[var].attrs = _serialize(dataset[var].attrs)
         dataset = dataset.drop_vars("crs")
-        dataset = dataset.chunk(
-            {"time": 1, "y": -1, "x": -1}
-        )
+        dataset = dataset.chunk({"time": 1, "y": -1, "x": -1})
         # Add x and y coords per time as well, so that the exact location can be reconstructed
-        dataset["x_geostationary_coord"] = xr.DataArray(
+        dataset["x_geostationary_coordinates"] = xr.DataArray(
             [dataset.x.values],
             dims=("time", "x"),
             coords={"time": dataset.time, "x": dataset.x},
         )
-        dataset["y_geostationary_coord"] = xr.DataArray(
+        dataset["y_geostationary_coordinates"] = xr.DataArray(
             [dataset.y.values],
             dims=("time", "y"),
             coords={"time": dataset.time, "y": dataset.y},
@@ -445,9 +477,16 @@ class GOES(VirtualDataset):
             )
 
         # List files in the directory to find the most recent one
-        files = await self.fs._ls(base_url)
+        try:
+            # List files in the directory to find the most recent one
+            files = await self.fs._ls(base_url)
+        except Exception as e:
+            logger.error(f"Failed to list files in {base_url}: {e}")
+            return None
 
         matching_files = [f for f in files if variable in f]
+        if len(matching_files) == 0:
+            return None
 
         # Get time stamps from file names
         def get_time(file_name):
@@ -476,6 +515,7 @@ if __name__ == "__main__":
     import icechunk
     import zarr
     from icechunk.xarray import to_icechunk
+
     # Example usage
     high_res_channels = ["C02"]
     medium_res_channels = ["C01", "C03", "C05"]
@@ -500,18 +540,28 @@ if __name__ == "__main__":
     # Check date range once for the times
     times = {}
     date_ranges = {}
-    names = ["goes_west_500m", "goes_west_1km", "goes_west_2km","goes_east_500m", "goes_east_1km", "goes_east_2km"]
+    names = [
+        "goes_west_500m",
+        "goes_west_1km",
+        "goes_west_2km",
+        "goes_east_500m",
+        "goes_east_1km",
+        "goes_east_2km",
+    ]
+    """"
     for name in names:
-        storage = icechunk.local_filesystem_storage(f"{name}.icechunk")
+        storage = icechunk.local_filesystem_storage(f"/data/goes/{name}.icechunk")
         repo = icechunk.Repository.open_or_create(storage)
         #storage = icechunk.local_filesystem_storage(f"{name}.icechunk")
-        storage = icechunk.s3_storage(bucket="bkr",
-                                      prefix=f"geo/{name}.icechunk",
-                                      secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
-                                      allow_http=True,
-                                      region="us-west-2",
-                                      force_path_style=True, )
-        repo = icechunk.Repository.open(storage)
+        #storage = icechunk.s3_storage(
+        #    bucket="bkr",
+        #    prefix=f"geo/{name}.icechunk",
+        #    secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
+        #    allow_http=True,
+        #    region="us-west-2",
+        #    force_path_style=True,
+        #)
+        #repo = icechunk.Repository.open(storage)
         session = repo.readonly_session("main")
         ds = xr.open_zarr(session.store, consolidated=False)
         print(ds)
@@ -523,20 +573,43 @@ if __name__ == "__main__":
             if d > ds.time.values[-1]:
                 date_ranges[name] = date_range[date_range <= ds.time.values[-1]]
                 break
+    """
     for date_idx in range(len(date_range)):
-        for idx, channel_set in enumerate([high_res_channels, medium_res_channels, low_res_channels,high_res_channels, medium_res_channels, low_res_channels]):
+        for idx, channel_set in enumerate(
+            [
+                high_res_channels,
+                medium_res_channels,
+                low_res_channels,
+                high_res_channels,
+                medium_res_channels,
+                low_res_channels,
+            ]
+        ):
             sat = "goes-west" if "goes_west" in names[idx] else "goes-east"
-            storage = icechunk.local_filesystem_storage(f"{names[idx]}.icechunk")
-            #storage = icechunk.local_filesystem_storage(f"{names[idx]}.icechunk")
-            storage = icechunk.s3_storage(bucket="bkr",
-                                          prefix=f"geo/{names[idx]}.icechunk",
-                                          secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
-                                          allow_http=True,
-                                          region="us-west-2",
-                                          force_path_style=True, )
+            storage = icechunk.local_filesystem_storage(f"/data/geo/{names[idx]}.icechunk")
+            # storage = icechunk.local_filesystem_storage(f"{names[idx]}.icechunk")
+            #storage = icechunk.s3_storage(
+            #    bucket="bkr",
+            #    prefix=f"geo/{names[idx]}.icechunk",
+            #    secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
+            #    allow_http=True,
+            #    region="us-west-2",
+            #    force_path_style=True,
+            #)
             repo = icechunk.Repository.open_or_create(storage)
-            date = date_ranges[names[idx]][date_idx] if names[idx] in date_ranges else date_range[date_idx]
-            himwari = GOES(satellite=sat, max_workers=24, cache=True, verbose=True, variables= channel_set, source="l1")
+            date = (
+                date_ranges[names[idx]][date_idx]
+                if names[idx] in date_ranges
+                else date_range[date_idx]
+            )
+            himwari = GOES(
+                satellite=sat,
+                max_workers=24,
+                cache=True,
+                verbose=True,
+                variables=channel_set,
+                source="l1",
+            )
             # Save the dataset to a Zarr file
             encoding = {
                 "time": {
@@ -547,16 +620,25 @@ if __name__ == "__main__":
             }
             print(date)
             ds = himwari([date.to_pydatetime()])
+            if ds is None:
+                print(f"No data found for {date} with variables {channel_set}")
+                continue
             variables = []
             for var in ds.data_vars:
                 if var not in ["orbital_parameters", "start_time", "end_time", "area"]:
                     variables.append(var)
-            encoding.update({
-                v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9,
-                                                          shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
-                for v in variables})
+            encoding.update(
+                {
+                    v: {
+                        "compressors": zarr.codecs.BloscCodec(
+                            cname="zstd", clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle
+                        )
+                    }
+                    for v in variables
+                }
+            )
 
-            if len(times[names[idx]]) == 0 and date_idx == 0:
+            if date_idx == 0:
                 print(ds)
                 try:
                     session = repo.writable_session("main")
@@ -573,4 +655,5 @@ if __name__ == "__main__":
             if names[idx] == "goes_west_2km" or names[idx] == "goes_east_2km":
                 # Clear out the cache
                 import shutil
+
                 shutil.rmtree(himwari.cache, ignore_errors=True)

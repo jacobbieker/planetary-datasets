@@ -8,7 +8,6 @@ shapely
 geopandas
 pyproj
 rasterio
-kbatch
 xarray
 pyproj
 lxml

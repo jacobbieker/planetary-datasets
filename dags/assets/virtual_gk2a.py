@@ -89,7 +89,8 @@ def preprocess(vds: xr.Dataset) -> xr.Dataset:
     )
     base = dt.datetime(2000, 1, 1, 12, 0, 0)
     mid_time = (dt.timedelta(seconds=vds.attrs["observation_start_time"]) + dt.timedelta(seconds=vds.attrs["observation_end_time"])) / 2
-    vds = vds.drop_dims(["dim_boa_swaths", "dim_matched_lmks"])
+    vds = vds.drop_dims(["dim_boa_swaths", "dim_matched_lmks", "dim_inr_perform", "dim_vis_stars", "dim_ir_stars"])
+    # Drop any dims that are not time, y, x, or band
     vds = vds.expand_dims({"time": [base + mid_time]})
     vds["start_time"] = xr.DataArray([base + dt.timedelta(seconds=vds.attrs["observation_start_time"])], coords={"time": vds.coords["time"]})
     vds["end_time"] = xr.DataArray([base + dt.timedelta(seconds=vds.attrs["observation_end_time"])], coords={"time": vds.coords["time"]})
@@ -124,16 +125,16 @@ def process_year(band: str):
         icechunk.VirtualChunkContainer("s3://noaa-gk2a-pds/", icechunk.s3_store(region="us-east-1", anonymous=True)),
     )
     storage = icechunk.local_filesystem_storage(
-        f"/data/virtual_icechunk/gk2a_{band}.icechunk")
+        f"gk2a_{band}.icechunk")
     repo = icechunk.Repository.open_or_create(
         storage, config=config, authorize_virtual_chunk_access={"s3://noaa-gk2a-pds": None},
     )
     repo.save_config()
-    first_write = True
-    for year in range(2023, 2026):
+    first_write = False
+    for year in range(2024, 2026):
         for month in range(1, 13):
-            files = []
             for day in range(start_day, 31):
+                files = []
                 for hour in range(0, 24):
                     # Format the hour as a two-digit string
                     hour_str = f"{hour:02d}"
@@ -143,7 +144,7 @@ def process_year(band: str):
                     try:
                         new_files = fs.ls(f"{bucket}/{path}")
                         new_files = [f for f in new_files if band in f]
-                        files = new_files
+                        files.extend(new_files)
                     except FileNotFoundError:
                         #print(f"Directory {path} not found, skipping.")
                         continue
@@ -169,18 +170,19 @@ def process_year(band: str):
                     continue
 
                 session = repo.writable_session("main")
+                print(vds)
                 # write the virtual dataset to the session with the IcechunkStore
-                try:
-                    if first_write:
-                        vds.vz.to_icechunk(session.store)
-                        first_write = False
-                    else:
-                        vds.vz.to_icechunk(session.store, append_dim="time")
-                    snapshot_id = session.commit(f"Wrote {year} {start_day} day of {band} data for {year}")
-                    print(snapshot_id)
-                except Exception as e:
-                    print(f"Failed to write {year}-{day} data: {e}")
-                    continue
+                #try:
+                if first_write:
+                    vds.vz.to_icechunk(session.store)
+                    first_write = False
+                else:
+                    vds.vz.to_icechunk(session.store, append_dim="time")
+                snapshot_id = session.commit(f"Wrote {year} {start_day} day of {band} data for {year}")
+                print(snapshot_id)
+                #except Exception as e:
+                #    print(f"Failed to write {year}-{day} data: {e}")
+                #    continue
 
 if __name__ == "__main__":
     import multiprocessing as mp
@@ -198,5 +200,5 @@ if __name__ == "__main__":
         "WV069",
         "WV073",
     ]
-    pool = mp.Pool(16)
+    pool = mp.Pool(5)
     pool.map(process_year, high_res_channels)

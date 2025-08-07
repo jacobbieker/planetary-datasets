@@ -235,6 +235,11 @@ class GK2A(VirtualDataset):
             *func_map, desc="Fetching GK2A data", disable=(not self._verbose)
         )
 
+        datasets = [d for d in datasets if d is not None]  # Filter out None results
+        if not datasets:
+            logger.warning("No data fetched for the given time and variable.")
+            return None
+
         # Concatenate datasets along time dimension
         datasets = xr.concat(datasets, dim="time")
 
@@ -280,17 +285,27 @@ class GK2A(VirtualDataset):
 
         func_map = map(functools.partial(self._get_s3_path, time=time), file_variable_names)
         gk2a_uris = await asyncio.gather(*func_map)
+        gk2a_uris = [uri for uri in gk2a_uris if uri is not None]  # Filter out None results
         logger.debug(f"Fetching GK2A file: {gk2a_uris}")
         func_map = map(self._fetch_remote_file, gk2a_uris)
         # Get the S3 path for the GK2A data file
         gk2a_files = await asyncio.gather(*func_map)
-
-        scn = Scene(
-            reader="ami_l1b",
-            filenames=gk2a_files,
-            reader_kwargs={"storage_options": {"anon": True}},
-        )
-        scn.load(self.GK2A_CHANNELS)
+        # G2KA seems to have broken files sometimes, so if fails to load here, return None
+        try:
+            scn = Scene(
+                reader="ami_l1b",
+                filenames=gk2a_files,
+                reader_kwargs={"storage_options": {"anon": True}},
+            )
+            scn.load(
+                self.GK2A_CHANNELS
+            )  # Nice 2km resolution data, could go to L1b and get native resolution, although mostly larger
+            # Add latitude/longitude to coordinates
+        except:
+            logger.error(
+                f"Failed to load GK2A data for time {time} and variables {variable_to_load}."
+            )
+            return None
         dataset = scn.to_xarray_dataset(datasets=variable_to_load).astype(np.float16)
         orbit_params = scn.to_xarray_dataset(datasets=["VI006"]).attrs["orbital_parameters"]
         import pandas as pd
@@ -340,12 +355,12 @@ class GK2A(VirtualDataset):
         dataset = dataset.drop_vars("crs")
         dataset = dataset.chunk({"time": 1, "y": -1, "x": -1})
         # Add x and y coords per time as well, so that the exact location can be reconstructed
-        dataset["x_geostationary_coord"] = xr.DataArray(
+        dataset["x_geostationary_coordinates"] = xr.DataArray(
             [dataset.x.values],
             dims=("time", "x"),
             coords={"time": dataset.time, "x": dataset.x},
         )
-        dataset["y_geostationary_coord"] = xr.DataArray(
+        dataset["y_geostationary_coordinates"] = xr.DataArray(
             [dataset.y.values],
             dims=("time", "y"),
             coords={"time": dataset.time, "y": dataset.y},
@@ -369,11 +384,16 @@ class GK2A(VirtualDataset):
             day=day,
             hour=hour,
         )
-
-        # List files in the directory to find the most recent one
-        files = await self.fs._ls(base_url)
+        try:
+            # List files in the directory to find the most recent one
+            files = await self.fs._ls(base_url)
+        except Exception as e:
+            logger.error(f"Failed to list files in {base_url}: {e}")
+            return None
 
         files = [f for f in files if variable in f]
+        if len(files) == 0:
+            return None
 
         # Get time stamps from file names
         def get_time(file_name):
@@ -420,14 +440,15 @@ if __name__ == "__main__":
 
     # Fetch data for a specific time and variable
     # times = pd.date_range("2025-04-26T12:00:00Z", periods=10, freq="10m").to_list()
-    date_range = pd.date_range("2023-02-23T00:00:00", "2025-06-29T12:20:00", freq="10min")[::-1]
+    date_range = pd.date_range("2023-02-23T00:00:00", "2025-06-30T23:59:59", freq="10min")[::-1]
     # Check date range once for the times
     times = {}
     date_ranges = {}
     names = ["g2ka_500m", "g2ka_1km", "g2ka_2km"]
     first_write = True
+    """
     for name in names:
-        storage = icechunk.local_filesystem_storage(f"/run/media/jacob/Elements/{name}.icechunk")
+        storage = icechunk.local_filesystem_storage(f"/data/geo/{name}.icechunk")
         storage = icechunk.s3_storage(
             bucket="bkr",
             prefix=f"geo/{name}.icechunk",
@@ -455,24 +476,25 @@ if __name__ == "__main__":
                     break
         except Exception:
             first_write = False
+    """
     for date_idx in range(len(date_range)):
         names = ["g2ka_500m", "g2ka_1km", "g2ka_2km"]
         for idx, channel_set in enumerate(
             [high_res_channels, medium_res_channels, low_res_channels]
         ):
-            if names[idx] == "g2ka_1km":
-                storage = icechunk.local_filesystem_storage(f"{names[idx]}.icechunk")
-            else:
-                storage = icechunk.s3_storage(
-                    bucket="bkr",
-                    prefix=f"geo/{names[idx]}.icechunk",
-                    endpoint_url="https://data.source.coop",
-                    access_key_id="SC11A9JDAZLVTF959664D1NI",
-                    secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
-                    allow_http=True,
-                    region="us-west-2",
-                    force_path_style=True,
-                )
+            #if names[idx] == "g2ka_1km":
+            storage = icechunk.local_filesystem_storage(f"/data/geo/{names[idx]}.icechunk")
+            #else:
+            #    storage = icechunk.s3_storage(
+            #        bucket="bkr",
+            #        prefix=f"geo/{names[idx]}.icechunk",
+            #        endpoint_url="https://data.source.coop",
+            #        access_key_id="SC11A9JDAZLVTF959664D1NI",
+            #        secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
+            #        allow_http=True,
+            #        region="us-west-2",
+            #        force_path_style=True,
+            #    )
             repo = icechunk.Repository.open_or_create(storage)
             date = (
                 date_ranges[names[idx]][date_idx]
@@ -512,7 +534,7 @@ if __name__ == "__main__":
                 }
             )
             try:
-                if first_write:
+                if date_idx == 0:
                     print(ds)
                     try:
                         session = repo.writable_session("main")

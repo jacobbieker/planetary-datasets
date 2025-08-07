@@ -3,7 +3,7 @@ from typing import Optional
 
 import pandas as pd
 import xarray as xr
-#from monetio import aeronet
+# from monetio import aeronet
 
 
 def get_aeronet_observations(
@@ -26,14 +26,14 @@ def get_aeronet_observations(
             "TOT20",
         ], ValueError(f"Parameter {parameter=} not recognized")
     dates = pd.date_range(start=start_time, end=end_time, freq="H")
-    #if inversion:
+    # if inversion:
     #    df = aeronet.add_data(dates=dates, product="ALL", inv_type="ALM20")
-    #else:
+    # else:
     #    df = aeronet.add_data(dates=dates, product=parameter)
-    #ds = df.to_xarray()
-    #ds = ds.set_coords(("time", "siteid", "data_quality_level", "latitude", "longitude"))
+    # ds = df.to_xarray()
+    # ds = ds.set_coords(("time", "siteid", "data_quality_level", "latitude", "longitude"))
     # Rename data variables to not have spaces
-    #ds = ds.rename_vars({k: k.replace(" ", "_") for k in ds.data_vars.keys()})
+    # ds = ds.rename_vars({k: k.replace(" ", "_") for k in ds.data_vars.keys()})
     return None
 
 

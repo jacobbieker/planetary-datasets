@@ -25,6 +25,7 @@ def open_and_clean_india_nsrdb(filename: str) -> xr.Dataset:
     # Index the latitude and longitude on 'index'
     return data
 
+
 def open_and_clean_himawari_nsrdb(filename: str) -> xr.Dataset:
     data = xr.open_dataset(filename)
     # Set phony_dim_0 to time_index
@@ -37,10 +38,11 @@ def open_and_clean_himawari_nsrdb(filename: str) -> xr.Dataset:
     # Convert 'time' coordinate to datetime64
     data["time"] = [pd.to_datetime(t).to_datetime64() for t in data["time"].values]
     # Make 'coordinates' a coordinate
-    #data = data.set_coords("coordinates")
+    # data = data.set_coords("coordinates")
     data = data.rename({"phony_dim_1": "index"})
     # Index the latitude and longitude on 'index'
     return data
+
 
 def preprocess(ds: xr.Dataset) -> xr.Dataset:
     # Set longest phony_dim to index,
@@ -63,28 +65,68 @@ def preprocess(ds: xr.Dataset) -> xr.Dataset:
             ds = ds.rename({f"phony_dim_{d}": "index"})
     return ds
 
+
 def open_and_clean_meteostat_nsrdb(filename: str) -> xr.Dataset:
-    data = xr.open_mfdataset(["meteosat_ancillary_a_2019.h5", "meteosat_ancillary_b_2019.h5", "meteosat_csp_2019.h5", "meteosat_irradiance_2019.h5"], engine="h5netcdf", compat="override", preprocess=preprocess)
+    data = xr.open_mfdataset(
+        [
+            "meteosat_ancillary_a_2019.h5",
+            "meteosat_ancillary_b_2019.h5",
+            "meteosat_csp_2019.h5",
+            "meteosat_irradiance_2019.h5",
+        ],
+        engine="h5netcdf",
+        compat="override",
+        preprocess=preprocess,
+    )
     return data
 
 
 storage = icechunk.local_filesystem_storage("nsrdb_meteostat.icechunk")
 repo = icechunk.Repository.open_or_create(storage)
 for i, year in tqdm.tqdm(enumerate(range(2019, 2020))):
-    data = open_and_clean_meteostat_nsrdb(f"/run/media/jacob/Tester/NSRDB_AWS/meteostat_irradiance_{year}.h5").chunk({"time": 1, "index": -1,})
+    data = open_and_clean_meteostat_nsrdb(
+        f"/run/media/jacob/Tester/NSRDB_AWS/meteostat_irradiance_{year}.h5"
+    ).chunk(
+        {
+            "time": 1,
+            "index": -1,
+        }
+    )
     if i > 0:
         session = repo.writable_session("main")
-        to_icechunk(data.chunk({"time": 1, "index": -1,}), session, append_dim='time')
+        to_icechunk(
+            data.chunk(
+                {
+                    "time": 1,
+                    "index": -1,
+                }
+            ),
+            session,
+            append_dim="time",
+        )
         print(session.commit(f"add {year} data to store"))
     else:
         variables = list(data.data_vars)
         encoding = {
-            v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9,
-                                                      shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
-            for v in variables}
+            v: {
+                "compressors": zarr.codecs.BloscCodec(
+                    cname="zstd", clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle
+                )
+            }
+            for v in variables
+        }
         encoding["time"] = {"units": "nanoseconds since 1970-01-01"}
         session = repo.writable_session("main")
-        to_icechunk(data.chunk({"time": 1, "index": -1,}), session, encoding=encoding)
+        to_icechunk(
+            data.chunk(
+                {
+                    "time": 1,
+                    "index": -1,
+                }
+            ),
+            session,
+            encoding=encoding,
+        )
         print(session.commit(f"add {year} data to store"))
 
 exit()
@@ -97,9 +139,11 @@ print(data.attrs)
 # Convert GDAL metadata into a time and unit
 timestamp = pd.Timestamp(data.attrs["GDAL_METADATA"].split('hhmm">')[1].split("</")[0])
 print(timestamp)
-gain = float(data.attrs["GDAL_METADATA"].split('Gain">')[1].split('</')[0])
+gain = float(data.attrs["GDAL_METADATA"].split('Gain">')[1].split("</")[0])
 print(gain)
-accum_hour = str(int(data.attrs["GDAL_METADATA"].split('Accumulation time" unit="h">')[1].split('</')[0]))
+accum_hour = str(
+    int(data.attrs["GDAL_METADATA"].split('Accumulation time" unit="h">')[1].split("</")[0])
+)
 data_name = f"rainfall_rate_accumulation_{accum_hour}h"
 # Convert to xarray dataset
 data = data.to_dataset(name=data_name)
@@ -117,10 +161,13 @@ print(data)
 # Calculate the latitude and longitude from the affine transform
 
 exit()
-#data = xr.open_dataset(
+# data = xr.open_dataset(
 #    "/Users/jacob/Development/planetary-datasets/202505292000_ODIM_ng_radar_rainrate_composite_1km_UK.h5",
 #    engine="netcdf4",
-#)
+# )
 
-data = xr.open_dataset("/Users/jacob/Development/planetary-datasets/202505292000_ODIM_ng_radar_rainrate_composite_1km_UK.h5", engine="h5netcdf")
+data = xr.open_dataset(
+    "/Users/jacob/Development/planetary-datasets/202505292000_ODIM_ng_radar_rainrate_composite_1km_UK.h5",
+    engine="h5netcdf",
+)
 print(data)

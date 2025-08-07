@@ -14,6 +14,7 @@ from huggingface_hub import HfApi
 
 """
 
+
 def get_gk2a_files(time: dt.datetime, raw_location: str, output_location: str) -> list[str]:
     """
     Generate a Kerchunk file from a Himawari file
@@ -57,7 +58,7 @@ def make_gk2a_zarr(time: dt.datetime, files: list[str], output_location: str) ->
     api = HfApi(token="")
     api.upload_file(
         path_or_fileobj=zip_name,
-        path_in_repo=f"data/{time.strftime("%Y")}/{zip_name}",
+        path_in_repo=f"data/{time.strftime('%Y')}/{zip_name}",
         repo_id=repo_id,
         repo_type="dataset",
     )
@@ -108,6 +109,8 @@ if __name__ == "__main__":
     date_range = pd.date_range(start=start_date, end=end_date, freq="D")
     for day in date_range[::-1]:
         os.mkdir(args.output_location)
-        files = get_gk2a_files(day, raw_location=args.raw_location, output_location=args.output_location)
+        files = get_gk2a_files(
+            day, raw_location=args.raw_location, output_location=args.output_location
+        )
         make_gk2a_zarr(day, files, args.output_location)
         shutil.rmtree(args.output_location)

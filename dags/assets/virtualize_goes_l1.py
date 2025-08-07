@@ -207,11 +207,22 @@ def process_year(satellite: str, channel: str):
         storage, config=config, authorize_virtual_chunk_access={f"s3://noaa-{satellite}/": None},
     )
     repo.save_config()
-    first_write = True
+    # Try getting times from the repo, if any, then get those so it isn't written multiple times
+    first_write = False
+    try:
+        session = repo.readonly_session("main")
+        ds = xr.open_zarr(session.store, consolidated=False)
+        times = ds["time"].values
+        print(ds)
+        print(times)
+        first_write = False
+    except:
+        print(f"No existing data found for {satellite}, starting from scratch.")
+        times = []
     pre_func = functools.partial(preprocess, satellite=satellite)
-    for year in range(2018, 2026):
-        files = []
+    for year in range(2019, 2026):
         for day in range(start_day, 366):
+            files = []
             day_str = f"{day:03d}"
             for hour in range(0, 24):
                 # Format the hour as a two-digit string
@@ -222,16 +233,16 @@ def process_year(satellite: str, channel: str):
                 try:
                     new_files = fs.ls(f"{bucket}/{path}")
                     new_files = [f for f in new_files if channel in f]
-                    files = new_files
+                    files.extend(new_files)
                 except FileNotFoundError:
                     #print(f"Directory {path} not found, skipping.")
                     continue
             if len(files) == 0:
                 continue
             try:
-                print(f"Processing {len(files)} files...")
+                #print(f"Processing {len(files)} files...")
                 vds = open_virtual_mfdataset(
-                    ["s3://" + f for f in files],
+                    ["s3://" + f for f in files][:10],
                     parser=parser,
                     registry=registry,
                     decode_times=True,
@@ -247,20 +258,23 @@ def process_year(satellite: str, channel: str):
             except Exception as e:
                 print(f"Failed to process {year}-{day_str}: {e}")
                 continue
-
+            for time in vds["time"].values:
+                if time in times:
+                    print(f"Skipping {year}-{day_str} {time} as it already exists.")
+                    continue
             session = repo.writable_session("main")
             # write the virtual dataset to the session with the IcechunkStore
-            try:
-                if first_write:
-                    vds.vz.to_icechunk(session.store)
-                    first_write = False
-                else:
-                    vds.vz.to_icechunk(session.store, append_dim="time")
-                snapshot_id = session.commit(f"Wrote {year} {start_day} day of {satellite} data for {year}")
-                print(snapshot_id)
-            except Exception as e:
-                print(f"Failed to write {year}-{day_str} data: {e}")
-                continue
+            #try:
+            if first_write:
+                vds.vz.to_icechunk(session.store)
+                first_write = False
+            else:
+                vds.vz.to_icechunk(session.store, append_dim="time")
+            snapshot_id = session.commit(f"Wrote {year} {start_day} day of {satellite} data for {year}")
+            print(snapshot_id)
+            #except Exception as e:
+            #    print(f"Failed to write {year}-{day_str} data: {e}")
+            #    return
 
 def process_year_wrap(sat_and_channel):
     satellite, channel = sat_and_channel
@@ -269,7 +283,7 @@ def process_year_wrap(sat_and_channel):
 if __name__ == "__main__":
     import multiprocessing as mp
     #mp.set_start_method("forkserver")
-    satellites = [ "goes18", "goes19", "goes16", "goes17",]
+    satellites = [ "goes16", "goes19", "goes16", "goes18",]
     high_res_channels = ["C02", "C01", "C03", "C05",
         "C04",
         "C06",

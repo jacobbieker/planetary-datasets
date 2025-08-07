@@ -1,7 +1,7 @@
 from isd import Batch
 
 batch = Batch.from_path("/home/jacob/010020-99999-2016.gz").to_data_frame()
-#with isd.io.open("/home/jacob/010020-99999-2016.gz") as records_iterator:
+# with isd.io.open("/home/jacob/010020-99999-2016.gz") as records_iterator:
 #    records = records_iterator.to_data_frame()
 
 print(batch)

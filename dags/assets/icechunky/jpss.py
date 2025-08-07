@@ -31,20 +31,20 @@ import xarray as xr
 from tqdm.asyncio import tqdm
 
 HISTORY_RANGE = {
-        "n21": (datetime(2023, 2, 27), None),
-        "n20": (datetime(2022, 11, 7), None),
-        "snpp": (datetime(2022, 11, 7), None),
-        "jpss": (
-            datetime(2022, 11, 7),
-            None,
-        ),  # Load all of the JPSS data together, output would have extra dimension of "satellite"
-    }
+    "n21": (datetime(2023, 2, 27), None),
+    "n20": (datetime(2022, 11, 7), None),
+    "snpp": (datetime(2022, 11, 7), None),
+    "jpss": (
+        datetime(2022, 11, 7),
+        None,
+    ),  # Load all of the JPSS data together, output would have extra dimension of "satellite"
+}
 EXPECTED_RESOLUTIONS = {
-        "n21": {"y": 12, "x": 96},
-        "n20": {"y": 12, "x": 96},
-        "snpp": {"y": 12, "x": 96},
-        "jpss": {"y": 36, "x": 96},
-    }
+    "n21": {"y": 12, "x": 96},
+    "n20": {"y": 12, "x": 96},
+    "snpp": {"y": 12, "x": 96},
+    "jpss": {"y": 36, "x": 96},
+}
 BASE_URL = "s3://noaa-nesdis-{satellite}-pds/ATMS-SDR/{year:04d}/{month:02d}/{day:02d}/"
 BASE_GEO_URL = "s3://noaa-nesdis-{satellite}-pds/ATMS-SDR-GEO/{year:04d}/{month:02d}/{day:02d}/"
 ATMS_VARIABLES = [
@@ -84,6 +84,7 @@ import yaml
 import pyresample
 import datetime as dt
 
+
 def _serialize(d: dict[str, Any]) -> dict[str, Any]:
     sd: dict[str, Any] = {}
     for key, value in d.items():
@@ -98,6 +99,7 @@ def _serialize(d: dict[str, Any]) -> dict[str, Any]:
         else:
             sd[key] = str(value)
     return sd
+
 
 def process_atms(filename, geo_filename) -> xr.Dataset:
     # Download the file to cache
@@ -122,33 +124,37 @@ def process_atms(filename, geo_filename) -> xr.Dataset:
         dataset = dataset.pad({"x": (0, pad_x)}, mode="constant", constant_values=np.nan)
     # Add time coordinate as mid point of the start_time and end_time
     import pandas as pd
-    start_time = pd.Timestamp(dataset.attrs['start_time'])
-    end_time = pd.Timestamp(dataset.attrs['end_time'])
+
+    start_time = pd.Timestamp(dataset.attrs["start_time"])
+    end_time = pd.Timestamp(dataset.attrs["end_time"])
     # Get the middle time of two times
     mid_time = start_time + (end_time - start_time) / 2
-    dataset['time'] = mid_time
-    dataset = dataset.assign_coords({"time": dataset['time']})
+    dataset["time"] = mid_time
+    dataset = dataset.assign_coords({"time": dataset["time"]})
     # Expand coords for data to have time dimension
     dataset = dataset.expand_dims("time")
     dataset["start_time"] = xr.DataArray([start_time], coords={"time": dataset["time"]})
     dataset["end_time"] = xr.DataArray([end_time], coords={"time": dataset["time"]})
-    dataset["platform_name"] = xr.DataArray([dataset.attrs['platform_name']], coords={"time": dataset["time"]})
+    dataset["platform_name"] = xr.DataArray(
+        [dataset.attrs["platform_name"]], coords={"time": dataset["time"]}
+    )
     dataset = dataset.load()
     # Now reduce to float16 for everything other than latitude/longitude
     for var in dataset.data_vars:
-        if var not in ['latitude', 'longitude', 'start_time', 'end_time', 'platform_name']:
+        if var not in ["latitude", "longitude", "start_time", "end_time", "platform_name"]:
             dataset[var] = dataset[var].astype(np.float16)
         if var in ["latitude", "longitude"]:
             dataset[var] = dataset[var].astype(np.float32)
     # Drop a few attributes
-    dataset.attrs.pop('end_time')
-    dataset.attrs.pop('start_time')
-    dataset.attrs.pop('platform_name')
+    dataset.attrs.pop("end_time")
+    dataset.attrs.pop("start_time")
+    dataset.attrs.pop("platform_name")
     dataset.attrs = _serialize(dataset.attrs)
     for var in dataset.data_vars:
         dataset[var].attrs = _serialize(dataset[var].attrs)
     dataset = dataset.drop_vars("crs")
     return dataset
+
 
 def wrap_process_atms(filenames):
     """
@@ -157,6 +163,7 @@ def wrap_process_atms(filenames):
     filename, geo_filename = filenames
     return process_atms(filename, geo_filename)
 
+
 if __name__ == "__main__":
     import icechunk
     from icechunk.xarray import to_icechunk
@@ -164,6 +171,7 @@ if __name__ == "__main__":
     import zarr
     import multiprocessing as mp
     import tqdm
+
     start_uri = "/run/media/jacob/Tester/"
     n_21 = start_uri + "N21/"
     n_20 = start_uri + "N20/"
@@ -179,11 +187,24 @@ if __name__ == "__main__":
         satellite_dses = []
         for satellite in ["n21", "n20", "snpp"]:
             if day >= HISTORY_RANGE[satellite][0]:
-                files = sorted(list(glob.glob(f"{start_uri}/{satellite.upper()}/ATMS-SDR/{day.year:04d}/{day.month:02d}/{day.day:02d}/*")))
-                geo_files = sorted(list(glob.glob(f"{start_uri}/{satellite.upper()}/ATMS-SDR-GEO/{day.year:04d}/{day.month:02d}/{day.day:02d}/*")))
+                files = sorted(
+                    list(
+                        glob.glob(
+                            f"{start_uri}/{satellite.upper()}/ATMS-SDR/{day.year:04d}/{day.month:02d}/{day.day:02d}/*"
+                        )
+                    )
+                )
+                geo_files = sorted(
+                    list(
+                        glob.glob(
+                            f"{start_uri}/{satellite.upper()}/ATMS-SDR-GEO/{day.year:04d}/{day.month:02d}/{day.day:02d}/*"
+                        )
+                    )
+                )
                 try:
-                    assert len(files) == len(
-                        geo_files), f"Expected files and geo files to be the same, for {satellite} {date} got {len(files)}, {len(geo_files)}"
+                    assert len(files) == len(geo_files), (
+                        f"Expected files and geo files to be the same, for {satellite} {date} got {len(files)}, {len(geo_files)}"
+                    )
 
                     dses = pool.map(wrap_process_atms, zip(files, geo_files))
                     ds = xr.concat(dses, "time")
@@ -210,20 +231,30 @@ if __name__ == "__main__":
         for var in satellite_ds.data_vars:
             if var not in ["orbital_parameters", "start_time", "end_time", "area"]:
                 variables.append(var)
-        encoding.update({
-            v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9,
-                                                      shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
-            for v in variables})
+        encoding.update(
+            {
+                v: {
+                    "compressors": zarr.codecs.BloscCodec(
+                        cname="zstd", clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle
+                    )
+                }
+                for v in variables
+            }
+        )
         print(satellite_ds)
         try:
             if first_write:
                 session = repo.writable_session("main")
-                to_icechunk(satellite_ds.chunk({"time": 1, "x": -1, "y": -1}), session, encoding=encoding)
+                to_icechunk(
+                    satellite_ds.chunk({"time": 1, "x": -1, "y": -1}), session, encoding=encoding
+                )
                 print(session.commit(f"add {date} data to store"))
                 first_write = False
             else:
                 session = repo.writable_session("main")
-                to_icechunk(satellite_ds.chunk({"time": 1, "x": -1, "y": -1}), session, append_dim="time")
+                to_icechunk(
+                    satellite_ds.chunk({"time": 1, "x": -1, "y": -1}), session, append_dim="time"
+                )
                 print(session.commit(f"add {date} data to store"))
         except Exception as e:
             print(f"Failed to write data for {date}: {e}")

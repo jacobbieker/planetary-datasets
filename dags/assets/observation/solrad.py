@@ -1,5 +1,6 @@
 import pvlib
 import pandas as pd
+
 """
 for station_id in ['TLH', ]: #'STE', 'ORT',  'SLC', 'HNX', 'SEA', 'BIS', 'MSN',  'ABQ']:
     data, meta = pvlib.iotools.get_solrad(

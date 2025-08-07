@@ -24,7 +24,9 @@ if __name__ == "__main__":
             storage=storage_config,
             read_only=True,
         )
-        new_store = icechunk.IcechunkStore.create(icechunk.StorageConfig.filesystem("./global_mosaic_of_geostationary_images"))
+        new_store = icechunk.IcechunkStore.create(
+            icechunk.StorageConfig.filesystem("./global_mosaic_of_geostationary_images")
+        )
     files = sorted(list(glob.glob("data/*/*.zarr.zip")))
     # Get the first one
     first = files.pop(0)
@@ -32,11 +34,11 @@ if __name__ == "__main__":
         ds = xr.open_zarr(zipped_store)
         # Remove all chunking here
         for var in ds:
-            del ds[var].encoding['chunks']
-            del ds[var].encoding['compressor']
+            del ds[var].encoding["chunks"]
+            del ds[var].encoding["compressor"]
         for var in ds.coords:
-            del ds[var].encoding['chunks']
-            del ds[var].encoding['compressor']
+            del ds[var].encoding["chunks"]
+            del ds[var].encoding["compressor"]
         encoding = {
             variable: {
                 "codecs": [zarr.codecs.BytesCodec(), zarr.codecs.ZstdCodec()],
@@ -45,16 +47,25 @@ if __name__ == "__main__":
         }
         ds = ds.rename({"lat": "latitude", "lon": "longitude"}).load()
         print(ds)
-        ds.chunk({"time": 1, "yc": -1, "xc": -1}).to_zarr("global_mosaic.zarr", zarr_format=3, consolidated=True,encoding=encoding, mode="w", compute=True)
-        #store.commit(f"Append file: {first}")
+        ds.chunk({"time": 1, "yc": -1, "xc": -1}).to_zarr(
+            "global_mosaic.zarr",
+            zarr_format=3,
+            consolidated=True,
+            encoding=encoding,
+            mode="w",
+            compute=True,
+        )
+        # store.commit(f"Append file: {first}")
     for file in tqdm.tqdm(files, total=len(files)):
         with zarr.storage.ZipStore(first, mode="r") as zipped_store:
             ds = xr.open_zarr(zipped_store)
             for var in ds:
-                del ds[var].encoding['chunks']
-                del ds[var].encoding['compressor']
+                del ds[var].encoding["chunks"]
+                del ds[var].encoding["compressor"]
             ds = ds.rename({"lat": "latitude", "lon": "longitude"}).load()
             print(ds)
-            ds.chunk({"time": 1, "yc": -1, "xc": -1}).to_zarr("global_mosaic.zarr", append_dim='time', mode="a", compute=True)
-            #store.commit(f"Append file: {file}")
+            ds.chunk({"time": 1, "yc": -1, "xc": -1}).to_zarr(
+                "global_mosaic.zarr", append_dim="time", mode="a", compute=True
+            )
+            # store.commit(f"Append file: {file}")
             print(f"Append file: {file}")

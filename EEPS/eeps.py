@@ -25,7 +25,9 @@ from pathlib import Path
 import multiprocessing as mp
 import icechunk as ic
 import warnings
+
 warnings.simplefilter("ignore")
+
 
 def open_and_process_eeps_file(filename: str | Path) -> xr.Dataset:
     data = xr.open_dataset(filename)
@@ -62,9 +64,13 @@ def open_and_process_eeps_file(filename: str | Path) -> xr.Dataset:
         data[var] = data[var].expand_dims("time")
     return data
 
+
 def get_timestamp_from_filename(filename: str | Path) -> pd.Timestamp:
     start_time = str(filename).split("blend_s")[-1].split("_e")[0]
-    return pd.Timestamp(f"{start_time[:4]}-{start_time[4:6]}-{start_time[6:8]}T{start_time[8:10]}:{start_time[10:12]}:00")
+    return pd.Timestamp(
+        f"{start_time[:4]}-{start_time[4:6]}-{start_time[6:8]}T{start_time[8:10]}:{start_time[10:12]}:00"
+    )
+
 
 def write_single_timestamp(file):
     storage = icechunk.local_filesystem_storage("eeps.icechunk")
@@ -76,9 +82,13 @@ def write_single_timestamp(file):
     timestamps = xr.open_zarr(session.store).time.values
     if data["time"].values[0] not in timestamps:
         # Append instead of write to region
-        to_icechunk(data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, append_dim="time")
+        to_icechunk(
+            data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, append_dim="time"
+        )
     else:
-        to_icechunk(data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, region="auto")
+        to_icechunk(
+            data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, region="auto"
+        )
     session.commit(f"add {data.time.values} data to store", rebase_with=icechunk.ConflictDetector())
     # keep trying until it succeeds
     """
@@ -92,8 +102,15 @@ def write_single_timestamp(file):
             pass
     """
 
+
 if __name__ == "__main__":
-    files = sorted(list(Path("/Users/jacob/Development/planetary-datasets/EEPS/RainRate-Blend-INST/").rglob("*GLB-5*.nc")))
+    files = sorted(
+        list(
+            Path("/Users/jacob/Development/planetary-datasets/EEPS/RainRate-Blend-INST/").rglob(
+                "*GLB-5*.nc"
+            )
+        )
+    )
     timestamps = [get_timestamp_from_filename(f) for f in files]
     # Open up the first one, and use that to write Zarr
     data = open_and_process_eeps_file(files[0])
@@ -106,42 +123,77 @@ if __name__ == "__main__":
             "dtype": "int64",
         }
     }
-    encoding.update({
-        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
-        for v in variables})
+    encoding.update(
+        {
+            v: {
+                "compressors": zarr.codecs.BloscCodec(
+                    cname="zstd", clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle
+                )
+            }
+            for v in variables
+        }
+    )
     print(encoding)
     # Create empty dask arrays of the same size as the data
     dummies_4d_var = dask.array.zeros(
-        (len(timestamps), data.latitude.shape[0], data.longitude.shape[0]), chunks=(1, -1, -1),
-        dtype=np.float16)
+        (len(timestamps), data.latitude.shape[0], data.longitude.shape[0]),
+        chunks=(1, -1, -1),
+        dtype=np.float16,
+    )
     dummies_int_var = dask.array.zeros(
-        (len(timestamps), len(data.latitude), len(data.longitude)), chunks=(1, -1, -1),
-        dtype=np.uint8)
-    dummies_inputs_var = dask.array.zeros(
-        (len(timestamps),), chunks=(1,), dtype=np.int32)
+        (len(timestamps), len(data.latitude), len(data.longitude)),
+        chunks=(1, -1, -1),
+        dtype=np.uint8,
+    )
+    dummies_inputs_var = dask.array.zeros((len(timestamps),), chunks=(1,), dtype=np.int32)
     dummies_timestamp_var = dask.array.zeros(
-        (len(timestamps),), chunks=(1,), dtype="datetime64[ns]")
+        (len(timestamps),), chunks=(1,), dtype="datetime64[ns]"
+    )
     dummies_string_var = dask.array.empty(
-        (len(timestamps),), chunks=(1,), dtype=data["missing_inputs"].dtype)
-    default_dataarray = xr.DataArray(dummies_4d_var, coords={"time": timestamps,
-                                                             "latitude": data.latitude.values,
-                                                             "longitude": data.longitude.values},
-                                     dims=["time", "latitude", "longitude"], attrs=data["RRQPE"].attrs)
-    dqf_dataarray = xr.DataArray(dummies_int_var, coords={"time": timestamps,
-                                                             "latitude": data.latitude.values,
-                                                             "longitude": data.longitude.values},
-                                     dims=["time", "latitude", "longitude"], attrs=data["DQF"].attrs)
+        (len(timestamps),), chunks=(1,), dtype=data["missing_inputs"].dtype
+    )
+    default_dataarray = xr.DataArray(
+        dummies_4d_var,
+        coords={
+            "time": timestamps,
+            "latitude": data.latitude.values,
+            "longitude": data.longitude.values,
+        },
+        dims=["time", "latitude", "longitude"],
+        attrs=data["RRQPE"].attrs,
+    )
+    dqf_dataarray = xr.DataArray(
+        dummies_int_var,
+        coords={
+            "time": timestamps,
+            "latitude": data.latitude.values,
+            "longitude": data.longitude.values,
+        },
+        dims=["time", "latitude", "longitude"],
+        attrs=data["DQF"].attrs,
+    )
     time_array = xr.DataArray(dummies_timestamp_var, coords={"time": timestamps}, dims=["time"])
     inputs_dataarray = xr.DataArray(dummies_inputs_var, coords={"time": timestamps}, dims=["time"])
     string_dataarray = xr.DataArray(dummies_string_var, coords={"time": timestamps}, dims=["time"])
-    dummy_dataset = xr.Dataset({"RRQPE": default_dataarray, "DQF": dqf_dataarray, "time_start": time_array, "time_end": time_array, "number_of_inputs": inputs_dataarray, "missing_inputs": string_dataarray},
-                               coords={"time": timestamps,
-                                       "latitude": data.latitude.values,
-                                       "longitude": data.longitude.values},
-                               attrs=data.attrs)
+    dummy_dataset = xr.Dataset(
+        {
+            "RRQPE": default_dataarray,
+            "DQF": dqf_dataarray,
+            "time_start": time_array,
+            "time_end": time_array,
+            "number_of_inputs": inputs_dataarray,
+            "missing_inputs": string_dataarray,
+        },
+        coords={
+            "time": timestamps,
+            "latitude": data.latitude.values,
+            "longitude": data.longitude.values,
+        },
+        attrs=data.attrs,
+    )
     print(dummy_dataset)
 
-    mp.set_start_method('forkserver')
+    mp.set_start_method("forkserver")
     storage = icechunk.local_filesystem_storage("eeps.icechunk")
     if Path("eeps.icechunk").exists():
         print("Found existing icechunk repository, using it.")
@@ -151,7 +203,9 @@ if __name__ == "__main__":
         repo = icechunk.Repository.create(storage)
 
         session = repo.writable_session("main")
-        dummy_dataset.chunk({"time": 1, "latitude": -1, "longitude": -1}).to_zarr(session.store, compute=False, encoding=encoding)
+        dummy_dataset.chunk({"time": 1, "latitude": -1, "longitude": -1}).to_zarr(
+            session.store, compute=False, encoding=encoding
+        )
         session.commit("Wrote updated metadata")
 
     # Make the metadata
@@ -161,5 +215,9 @@ if __name__ == "__main__":
     num_inputs = current_ds.number_of_inputs.values
     pool = mp.Pool(1)
     import tqdm
-    for _ in tqdm.tqdm(pool.imap_unordered(write_single_timestamp, files[5870+1590+5600+1000+5470+16:]), total=len(files[5870+1590+5600+1000+5470+16:])):
+
+    for _ in tqdm.tqdm(
+        pool.imap_unordered(write_single_timestamp, files[5870 + 1590 + 5600 + 1000 + 5470 + 16 :]),
+        total=len(files[5870 + 1590 + 5600 + 1000 + 5470 + 16 :]),
+    ):
         pass

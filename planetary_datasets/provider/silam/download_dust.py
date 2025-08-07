@@ -12,11 +12,15 @@ https://thredds.silam.fmi.fi/thredds/fileServer/dust_glob01_v5_7_2/files/SILAM-d
 SILAM-dust-glob01_v5_7_2_2024111400
 """
 
+
 def construct_urls_from_datetime(date: dt.datetime) -> list[str]:
     urls = []
     for i in range(1, 121):
-        urls.append(f"https://thredds.silam.fmi.fi/thredds/fileServer/dust_glob01_v5_7_2/files/SILAM-dust-glob01_v5_7_2_{date.strftime('%Y%m%d00')}_{str(i).zfill(3)}.nc4")
+        urls.append(
+            f"https://thredds.silam.fmi.fi/thredds/fileServer/dust_glob01_v5_7_2/files/SILAM-dust-glob01_v5_7_2_{date.strftime('%Y%m%d00')}_{str(i).zfill(3)}.nc4"
+        )
     return urls
+
 
 def download_forecast(date: dt.datetime) -> list[str]:
     urls = construct_urls_from_datetime(date)
@@ -38,10 +42,10 @@ def download_forecast(date: dt.datetime) -> list[str]:
             finished = True
         while not finished:
             try:
-                #MERGE_COMMAND = f"/bin/zsh && wget -nc {url} -O {downloaded_url_path}"
-                #subprocess.run(MERGE_COMMAND, shell=True)
-                #args = ["wget2", "-nc", url, "-O", downloaded_url_path]
-                #process = Popen(args)
+                # MERGE_COMMAND = f"/bin/zsh && wget -nc {url} -O {downloaded_url_path}"
+                # subprocess.run(MERGE_COMMAND, shell=True)
+                # args = ["wget2", "-nc", url, "-O", downloaded_url_path]
+                # process = Popen(args)
                 # Run wget to get it
                 with fsspec.open(url, "rb") as f:
                     with open(downloaded_url_path, "wb") as f2:
@@ -51,21 +55,20 @@ def download_forecast(date: dt.datetime) -> list[str]:
                 break
             except Exception as e:
                 print(e)
-                #continue
-        #if not finished:
+                # continue
+        # if not finished:
         #    print(f"Failed to download {url}")
         else:
             print(f"Downloaded {url}")
     return downloaded_paths
 
+
 if __name__ == "__main__":
     # Do it from a week ago to now
-    zarr_date_range = pd.date_range(
-        start="2024-11-14", end="2026-12-31", freq="D"
-    )
+    zarr_date_range = pd.date_range(start="2024-11-14", end="2026-12-31", freq="D")
 
     date_range = pd.date_range(
-        start="2025-02-21", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="D"
+        start="2025-08-06", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="D"
     )
     for day in date_range:
         download_forecast(day)

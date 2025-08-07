@@ -8,7 +8,7 @@ import pandas as pd
 import xarray as xr
 import zarr
 
-FSSPEC_S3_ENDPOINT_URL="https://data.source.coop"
+FSSPEC_S3_ENDPOINT_URL = "https://data.source.coop"
 
 
 def open_netcdf(filename: str) -> xr.Dataset:
@@ -16,7 +16,9 @@ def open_netcdf(filename: str) -> xr.Dataset:
     data = data.rename({"lat": "latitude", "lon": "longitude"})
     # Add init time as a dimension
     timestamp = filename.split("/")[-1].split("_")[4]
-    data.coords["init_time"] = pd.Timestamp(f"{timestamp[:4]}-{timestamp[4:6]}-{timestamp[6:8]}T{timestamp[8:10]}:00:00")
+    data.coords["init_time"] = pd.Timestamp(
+        f"{timestamp[:4]}-{timestamp[4:6]}-{timestamp[6:8]}T{timestamp[8:10]}:00:00"
+    )
     # Change time to step by getting timedelta
     steps = data.time.values - data.init_time.values
     data["time"] = steps
@@ -42,11 +44,15 @@ https://thredds.silam.fmi.fi/thredds/fileServer/dust_glob01_v5_7_2/files/SILAM-d
 SILAM-dust-glob01_v5_7_2_2024111400
 """
 
+
 def construct_urls_from_datetime(date: dt.datetime) -> list[str]:
     urls = []
     for i in range(1, 121):
-        urls.append(f"https://thredds.silam.fmi.fi/thredds/fileServer/dust_glob01_v5_7_2/files/SILAM-dust-glob01_v5_7_2_{date.strftime('%Y%m%d00')}_{str(i).zfill(3)}.nc4")
+        urls.append(
+            f"https://thredds.silam.fmi.fi/thredds/fileServer/dust_glob01_v5_7_2/files/SILAM-dust-glob01_v5_7_2_{date.strftime('%Y%m%d00')}_{str(i).zfill(3)}.nc4"
+        )
     return urls
+
 
 def download_forecast(date: dt.datetime) -> list[str]:
     urls = construct_urls_from_datetime(date)
@@ -108,19 +114,18 @@ def get_silam_dust_forecast_xr(date: dt.datetime) -> xr.Dataset | None:
 
 if __name__ == "__main__":
     # Do it from a week ago to now
-    zarr_date_range = pd.date_range(
-        start="2024-11-14", end="2026-12-31", freq="D"
-    )
+    zarr_date_range = pd.date_range(start="2024-11-14", end="2026-12-31", freq="D")
 
     date_range = pd.date_range(
         start="2024-11-14", end=dt.datetime.now().strftime("%Y-%m-%d"), freq="D"
     )
-    #for day in date_range:
+    # for day in date_range:
     #    download_forecast(day)
 
     s3_path = "s3://bkr/silam-dust/silam_global_dust.zarr"
     path = "silam_global_dust.zarr"
     import glob
+
     if not os.path.exists(path):
         print("Path Not Existing")
         files = list(sorted(glob.glob("*2024111400*.nc4")))
@@ -135,29 +140,55 @@ if __name__ == "__main__":
 
         variables = list(data.data_vars)
 
-        encoding = {v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle)} for v in variables}
-
+        encoding = {
+            v: {
+                "compressors": zarr.codecs.BloscCodec(
+                    cname="zstd", clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle
+                )
+            }
+            for v in variables
+        }
 
         # Create empty dask arrays of the same size as the data
         dask_arrays = []
-        dummies_4d_var = dask.array.zeros((len(zarr_date_range), len(data.step), data.latitude.shape[0], data.longitude.shape[0]), chunks=(1, 1, -1, -1),
-                                          dtype=np.float32)
-        default_dataarray = xr.DataArray(dummies_4d_var, coords={"init_time": zarr_date_range, "step": data.step.values,
-                                                           "latitude": data.latitude.values,
-                                                          "longitude": data.longitude.values},
-                                         dims=["init_time", "step", "latitude", "longitude"])
-        dummy_dataset = xr.Dataset({v: default_dataarray for v in variables},
-                                   coords={"init_time": zarr_date_range,"step": data.step.values,
-                                                           "latitude": data.latitude.values,
-                                                          "longitude": data.longitude.values})
+        dummies_4d_var = dask.array.zeros(
+            (len(zarr_date_range), len(data.step), data.latitude.shape[0], data.longitude.shape[0]),
+            chunks=(1, 1, -1, -1),
+            dtype=np.float32,
+        )
+        default_dataarray = xr.DataArray(
+            dummies_4d_var,
+            coords={
+                "init_time": zarr_date_range,
+                "step": data.step.values,
+                "latitude": data.latitude.values,
+                "longitude": data.longitude.values,
+            },
+            dims=["init_time", "step", "latitude", "longitude"],
+        )
+        dummy_dataset = xr.Dataset(
+            {v: default_dataarray for v in variables},
+            coords={
+                "init_time": zarr_date_range,
+                "step": data.step.values,
+                "latitude": data.latitude.values,
+                "longitude": data.longitude.values,
+            },
+        )
         print(dummy_dataset)
         # storage_options={"endpoint_url": "https://data.source.coop"}
-        dummy_dataset.chunk({"init_time": 1, "step": 1, "latitude": -1, "longitude": -1}).to_zarr(path, mode="w", compute=False, zarr_format=3, encoding=encoding,) # storage_options={"endpoint_url": "https://data.source.coop"})
+        dummy_dataset.chunk({"init_time": 1, "step": 1, "latitude": -1, "longitude": -1}).to_zarr(
+            path,
+            mode="w",
+            compute=False,
+            zarr_format=3,
+            encoding=encoding,
+        )  # storage_options={"endpoint_url": "https://data.source.coop"})
     zarr_dates = xr.open_zarr(path).init_time.values
     for day in date_range:
         print(day)
         # If the day is in init_time, then skip it
-        #download_forecast(day)
+        # download_forecast(day)
         # Local path of the downloaded files
         files = list(sorted(glob.glob(f"*{day.strftime('%Y%m%d00')}*.nc4")))
         if not files:
@@ -178,14 +209,26 @@ if __name__ == "__main__":
                 continue
         if failed:
             continue
-        data = xr.concat(ds, dim="step").sortby("step").chunk({"step": 1, "latitude": -1, "longitude": -1, "init_time": 1})
-        #print(data)
+        data = (
+            xr.concat(ds, dim="step")
+            .sortby("step")
+            .chunk({"step": 1, "latitude": -1, "longitude": -1, "init_time": 1})
+        )
+        # print(data)
         # Get the time idx in the zarr in the init_time dimension
         # Get index of the day in the zarr times
         time_idx = np.where(zarr_dates == day)[0][0]
         print(time_idx)
         # Write the data to the zarr
-        data.to_zarr(path, region={"init_time": slice(time_idx, time_idx+1),"latitude": "auto", "longitude": "auto", "step": 1},)
+        data.to_zarr(
+            path,
+            region={
+                "init_time": slice(time_idx, time_idx + 1),
+                "latitude": "auto",
+                "longitude": "auto",
+                "step": 1,
+            },
+        )
         print(f"Finished Writing: {day} to location: {time_idx}")
         # Now close the dataset to close all files
         data.close()

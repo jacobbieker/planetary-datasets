@@ -62,19 +62,54 @@ def _serialize(d: dict[str, Any]) -> dict[str, Any]:
             sd[key] = str(value)
     return sd
 
+spacecrafts = {"_M01_": "Metop-B",
+                   "_M02_": "Metop-A",
+                   "_M03_": "Metop-C", }
+
 def process_iasi(filename) -> xr.Dataset:
+    # get platform_name from filename
+    for spacecraft, platform_name in spacecrafts.items():
+        if spacecraft in filename:
+            spacecraft_name = platform_name
+            break
     iasi_prod = harp.import_product(filename)
     tmp_file = tempfile.mktemp(suffix=".nc")
     harp.export_product(iasi_prod, tmp_file)
     ds = xr.open_dataset(tmp_file).load()
+    ds["platform_name"] = xr.DataArray(
+        [spacecraft_name] * len(ds.time),
+        dims=["time"],
+    )
+    ds["time"] = ds["datetime"]
+    ds = ds.drop_vars(["datetime", "orbit_index"])
+    # Pad to a multiple of 9180
+    if len(ds.time) % 9180 != 0:
+        print(ds)
+        padding_length = 9180 - (len(ds.time) % 9180)
+        padding_values = {v: (np.nan,) for v in ds.data_vars if v not in ["platform_name", "time", "index", "scan_subindex"]}
+        padding_values["platform_name"] = ("Metop-Z",)
+        padding_values["time"] = (np.datetime64("2000-01-01T00:00:00"),)
+        padding_values["index"] = (-1,)
+        padding_values["scan_subindex"] = (-1,)
+        ds = ds.pad({"time": (0, padding_length)}, mode="constant", constant_values=padding_values)
+        print(ds)
     os.remove(tmp_file)
     return ds
 
-date_range = pd.date_range("2008-03-01", "2025-06-30", freq="30min")[::-1]
+date_range = pd.date_range("2008-03-01", "2025-06-30", freq="2h")[::-1]
 
 # Icechunk
-storage = icechunk.local_filesystem_storage("metop_iasi.icechunk")
-repo = icechunk.Repository.open_or_create(storage)
+storage = icechunk.s3_storage(bucket="bkr",
+                                      prefix="polar/metop_iasi.icechunk",
+                                      endpoint_url="https://data.source.coop",
+                                      access_key_id="SC11A9JDAZLVTF959664D1NI",
+                                      secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
+                                      allow_http=True,
+                                      region="us-west-2",
+                                      force_path_style=True, )
+#repo = ic.Repository.open(storage)
+#storage = icechunk.local_filesystem_storage("/Volumes/Passport/metop_iasi.icechunk")
+repo = icechunk.Repository.open(storage)
 session = repo.readonly_session("main")
 try:
     ds = xr.open_zarr(session.store, consolidated=False)
@@ -89,7 +124,8 @@ try:
             date_range = date_range[date_range <= ds.time.values[-1]]
             print(date_range)
             break
-except:
+except Exception as e:
+    print(f"Could not open times from store: {e}")
     times = []
 
 # Insert your personal key and secret
@@ -97,8 +133,10 @@ except:
 
 credentials = (consumer_key, consumer_secret)
 used_product_names = []
+first_write = True
 # Read used product names from file if it exists
 if os.path.exists("used_product_names_iasi.txt"):
+    first_write = False
     with open("used_product_names_iasi.txt", "r") as f:
         used_product_names = [line.strip() for line in f.readlines()]
 for idx, date in enumerate(date_range):
@@ -111,7 +149,7 @@ for idx, date in enumerate(date_range):
 
     # Set sensing start and end time
     start = datetime.datetime(date.year, date.month, date.day, date.hour, 0)
-    end = datetime.datetime(date.year, date.month, date.day, (date+pd.Timedelta("30min")).hour, 0)
+    end = datetime.datetime(date.year, date.month, date.day, (date+pd.Timedelta("2h")).hour, 0)
 
     products = selected_collection.search(
         dtstart=start,
@@ -128,6 +166,7 @@ for idx, date in enumerate(date_range):
                 with product.open() as fsrc:
                     if fsrc.name in used_product_names:
                         print(f"Skipping {fsrc.name}, already downloaded")
+                        finished = True
                         continue
                     # Download the file if it does not exist
                     with open(os.path.join(product_tmpdir, fsrc.name), mode='wb') as fdst:
@@ -137,6 +176,8 @@ for idx, date in enumerate(date_range):
             except Exception as e:
                 print(f"Failed to download {fsrc.name}: {e}, trying again")
                 continue
+        if not os.path.exists(os.path.join(product_tmpdir, fsrc.name)):
+            continue
         tmpdir = tempfile.mkdtemp()
         with zipfile.ZipFile(os.path.join(product_tmpdir, fsrc.name), 'r') as zip_ref:
             zip_ref.extractall(tmpdir)
@@ -148,7 +189,10 @@ for idx, date in enumerate(date_range):
     if len(dses) == 0:
         print(f"No datasets found for {date}, skipping...")
         continue
-    ds = xr.concat(dses, dim="time")
+    elif len(dses) == 1:
+        ds = dses[0]
+    else:
+        ds = xr.concat(dses, dim="time")
     # Save the dataset to a Zarr file
     encoding = {
             "time": {
@@ -163,14 +207,15 @@ for idx, date in enumerate(date_range):
     encoding.update({
         v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
         for v in variables})
-
-    if len(times) == 0:
+    print(ds)
+    if first_write:
         session = repo.writable_session("main")
-        to_icechunk(ds.chunk({"time": 1000, "x": -1, "y": -1}), session, encoding=encoding)
+        to_icechunk(ds.chunk({"time": 9180, "spectral": -1}), session, encoding=encoding)
         print(session.commit(f"add {date} data to store"))
+        first_write = False
     else:
         session = repo.writable_session("main")
-        to_icechunk(ds.chunk({"time": 1000, "x": -1, "y": -1}), session, append_dim="time")
+        to_icechunk(ds.chunk({"time": 9180, "spectral": -1}), session, append_dim="time")
         print(session.commit(f"add {date} data to store"))
     # Write out the used product names to a file
     with open("used_product_names_iasi.txt", "w") as f:

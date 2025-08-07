@@ -43,6 +43,7 @@ import eumdac
 import icechunk
 from icechunk.xarray import to_icechunk
 
+
 def _serialize(d: dict[str, Any]) -> dict[str, Any]:
     sd: dict[str, Any] = {}
     for key, value in d.items():
@@ -58,6 +59,7 @@ def _serialize(d: dict[str, Any]) -> dict[str, Any]:
             sd[key] = str(value)
     return sd
 
+
 def process_gome(filename) -> xr.Dataset:
     iasi_prod = harp.import_product(filename)
     tmp_file = tempfile.mktemp(suffix=".nc")
@@ -65,6 +67,7 @@ def process_gome(filename) -> xr.Dataset:
     ds = xr.open_dataset(tmp_file).load()
     os.remove(tmp_file)
     return ds
+
 
 date_range = pd.date_range("2008-03-01", "2025-06-30", freq="15min")[::-1]
 
@@ -89,6 +92,8 @@ except:
     times = []
 
 # Insert your personal key and secret
+consumer_key = "SWdEnLvOlVTVGli1An1nKJ3NcV0a"
+consumer_secret = "gUQe0ej7H_MqQVGF4cd7wfQWcawa"
 
 credentials = (consumer_key, consumer_secret)
 used_product_names = []
@@ -102,17 +107,18 @@ for idx, date in enumerate(date_range):
 
     datastore = eumdac.DataStore(token)
 
-    selected_collection = datastore.get_collection('EO:EUM:DAT:METOP:GOMEL1')
+    selected_collection = datastore.get_collection("EO:EUM:DAT:METOP:GOMEL1")
 
     # Set sensing start and end time
     start = datetime.datetime(date.year, date.month, date.day, date.hour, 0)
-    end = datetime.datetime(date.year, date.month, date.day, (date+pd.Timedelta("15min")).hour, 0)
+    end = datetime.datetime(date.year, date.month, date.day, (date + pd.Timedelta("15min")).hour, 0)
 
     products = selected_collection.search(
         dtstart=start,
-        dtend=end,)
+        dtend=end,
+    )
 
-    print(f'Found Datasets: {products.total_results} datasets for the given time range')
+    print(f"Found Datasets: {products.total_results} datasets for the given time range")
 
     dses = []
     for product in products:
@@ -125,7 +131,7 @@ for idx, date in enumerate(date_range):
                         print(f"Skipping {fsrc.name}, already downloaded")
                         continue
                     # Download the file if it does not exist
-                    with open(os.path.join(product_tmpdir, fsrc.name), mode='wb') as fdst:
+                    with open(os.path.join(product_tmpdir, fsrc.name), mode="wb") as fdst:
                         shutil.copyfileobj(fsrc, fdst)
                         used_product_names.append(fsrc.name)
                         finished = True
@@ -133,9 +139,9 @@ for idx, date in enumerate(date_range):
                 print(f"Failed to download {fsrc.name}: {e}, trying again")
                 continue
         tmpdir = tempfile.mkdtemp()
-        with zipfile.ZipFile(os.path.join(product_tmpdir, fsrc.name), 'r') as zip_ref:
+        with zipfile.ZipFile(os.path.join(product_tmpdir, fsrc.name), "r") as zip_ref:
             zip_ref.extractall(tmpdir)
-        path_to_filename = os.path.join(tmpdir, fsrc.name.replace('.zip', '.nat'))
+        path_to_filename = os.path.join(tmpdir, fsrc.name.replace(".zip", ".nat"))
         ds = process_gome(path_to_filename)
         dses.append(ds)
         shutil.rmtree(tmpdir)
@@ -146,18 +152,25 @@ for idx, date in enumerate(date_range):
     ds = xr.concat(dses, dim="time")
     # Save the dataset to a Zarr file
     encoding = {
-            "time": {
-                "units": "nanoseconds since 2000-01-01",
-                "calendar": "standard",
-                "dtype": "int64",
-            }
+        "time": {
+            "units": "nanoseconds since 2000-01-01",
+            "calendar": "standard",
+            "dtype": "int64",
         }
+    }
     variables = []
     for var in ds.data_vars:
         variables.append(var)
-    encoding.update({
-        v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
-        for v in variables})
+    encoding.update(
+        {
+            v: {
+                "compressors": zarr.codecs.BloscCodec(
+                    cname="zstd", clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle
+                )
+            }
+            for v in variables
+        }
+    )
 
     if len(times) == 0:
         session = repo.writable_session("main")

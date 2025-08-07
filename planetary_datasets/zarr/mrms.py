@@ -28,7 +28,9 @@ def unzip_and_load_xarray(filepath_and_num):
     with gzip.open(filepath_and_num[0], "rb") as f:
         with open(os.path.join(tmp, f"{filepath_and_num[1]}.grib2"), "wb") as f_out:
             shutil.copyfileobj(f, f_out)
-    data = xr.load_dataset(os.path.join(tmp, f"{filepath_and_num[1]}.grib2"), engine="cfgrib").load()
+    data = xr.load_dataset(
+        os.path.join(tmp, f"{filepath_and_num[1]}.grib2"), engine="cfgrib"
+    ).load()
     os.remove(os.path.join(tmp, f"{filepath_and_num[1]}.grib2"))
     return data
 

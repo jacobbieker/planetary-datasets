@@ -17,15 +17,20 @@ def download_file(remote_path, local_path):
     except aiohttp.client_exceptions.ClientResponseError:
         os.remove(full_local_path)
 
+
 import tqdm
 import os
+
+
 def download_meteostat():
-    with fsspec.open("https://bulk.meteostat.net/v2/stations/lite.json.gz", compression="infer") as f:
+    with fsspec.open(
+        "https://bulk.meteostat.net/v2/stations/lite.json.gz", compression="infer"
+    ) as f:
         weather_stations = json.load(f)
-    station_ids = [s['id'] for s in weather_stations]
-    inventory = [s['inventory'] for s in weather_stations]
-    starts = [s['hourly']['start'] for s in inventory]
-    ends = [s['hourly']['end'] for s in inventory]
+    station_ids = [s["id"] for s in weather_stations]
+    inventory = [s["inventory"] for s in weather_stations]
+    starts = [s["hourly"]["start"] for s in inventory]
+    ends = [s["hourly"]["end"] for s in inventory]
 
     for year in range(2025, 1990, -1):
         for i, station_id in tqdm.tqdm(enumerate(station_ids), total=len(station_ids)):
@@ -35,10 +40,12 @@ def download_meteostat():
             except AttributeError:
                 # If the date conversion fails, skip this station
                 continue
-            if starts[i] > pd.to_datetime(f"{year}-12-31").strftime("%Y-%m-%d") or ends[i] < pd.to_datetime(f"{year}-01-01").strftime("%Y-%m-%d"):
+            if starts[i] > pd.to_datetime(f"{year}-12-31").strftime("%Y-%m-%d") or ends[
+                i
+            ] < pd.to_datetime(f"{year}-01-01").strftime("%Y-%m-%d"):
                 continue
             remote_path = f"https://data.meteostat.net/hourly/{year}/{station_id}.csv.gz"
-            #local_path = Path(os.path.basename(remote_path))
+            # local_path = Path(os.path.basename(remote_path))
             local_path = Path(f"/Users/jacob/Development/meteostat_data/{year}_{station_id}.csv.gz")
             if os.path.exists(local_path):
                 continue
@@ -66,5 +73,6 @@ def download_meteostat():
                 download_file(remote_path, local_path)
             except:
                 continue
+
 
 download_meteostat()

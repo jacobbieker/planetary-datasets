@@ -1,6 +1,7 @@
 """
 GHCNh is the hourly global historical climatology network dataset. It is the replacement for the Integrated Surface Dataset
 """
+
 import os.path
 
 import fsspec
@@ -10,7 +11,8 @@ import xarray as xr
 
 STATION_LIST = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/doc/ghcnh-station-list.txt"
 FILE_PATH_TEMPLATE = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/by-year/{year}/parquet/GHCNh_{station_id}_{year}.parquet"
-#FILE_PATH_TEMPLATE = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/by-station/GHCNh_{station_id}_por.psv"
+# FILE_PATH_TEMPLATE = "https://www.ncei.noaa.gov/oa/global-historical-climatology-network/hourly/access/by-station/GHCNh_{station_id}_por.psv"
+
 
 def load_ghcnh_data(station_id: str, year: int) -> xr.Dataset:
     """
@@ -62,21 +64,22 @@ def get_list_of_stations() -> pd.DataFrame:
     df["elevation"] = elevs
     return df
 
+
 def download_file(url):
-    local_filename = url.split('/')[-1]
+    local_filename = url.split("/")[-1]
     # NOTE the stream=True parameter below
     with requests.get(url, stream=True) as r:
         r.raise_for_status()
-        with open("GHCNh_parquet/"+local_filename, 'wb') as f:
+        with open("GHCNh_parquet/" + local_filename, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 # If you have chunk encoded response uncomment if
                 # and set chunk_size parameter to None.
-                #if chunk:
+                # if chunk:
                 f.write(chunk)
     return local_filename
 
-if __name__ == "__main__":
 
+if __name__ == "__main__":
     possible_files = []
 
     station_df = get_list_of_stations()
@@ -90,10 +93,10 @@ if __name__ == "__main__":
     exit()
 
     for file in possible_files:
-        #print(file)
-        #if os.path.exists(f"{station_id}_{year}.parquet"):
+        # print(file)
+        # if os.path.exists(f"{station_id}_{year}.parquet"):
         #    continue
-        if os.path.exists("GHCNh_parquet/"+file.split('/')[-1]):
+        if os.path.exists("GHCNh_parquet/" + file.split("/")[-1]):
             continue
         try:
             download_file(file)
@@ -112,4 +115,3 @@ if __name__ == "__main__":
             print(f"Failed to download {station_id} for {year} with error: {e}")
             continue
         """
-

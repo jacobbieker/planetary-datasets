@@ -28,33 +28,34 @@ partitions_def: dg.TimeWindowPartitionsDefinition = dg.MonthlyPartitionsDefiniti
     end_offset=-1,
 )
 
+
 @dg.asset(
-        name="ncep-gfs-global",
-        description=__doc__,
-        metadata={
-            "archive_folder": dg.MetadataValue.text(ARCHIVE_FOLDER),
-            "area": dg.MetadataValue.text("global"),
-            "source": dg.MetadataValue.text("noaa-s3"),
-            "model": dg.MetadataValue.text("ncep-gfs"),
-            "expected_runtime": dg.MetadataValue.text("6 hours"),
-        },
-        compute_kind="docker",
-        automation_condition=dg.AutomationCondition.on_cron(
-            cron_schedule=partitions_def.get_cron_schedule(
-                hour_of_day=21,
-                day_of_week=1,
-            ),
+    name="ncep-gfs-global",
+    description=__doc__,
+    metadata={
+        "archive_folder": dg.MetadataValue.text(ARCHIVE_FOLDER),
+        "area": dg.MetadataValue.text("global"),
+        "source": dg.MetadataValue.text("noaa-s3"),
+        "model": dg.MetadataValue.text("ncep-gfs"),
+        "expected_runtime": dg.MetadataValue.text("6 hours"),
+    },
+    compute_kind="docker",
+    automation_condition=dg.AutomationCondition.on_cron(
+        cron_schedule=partitions_def.get_cron_schedule(
+            hour_of_day=21,
+            day_of_week=1,
         ),
-        tags={
-            "dagster/max_runtime": str(60 * 60 * 10), # Should take 6 ish hours
-            "dagster/priority": "1",
-            "dagster/concurrency_key": "nwp-consumer",
-        },
+    ),
+    tags={
+        "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
+        "dagster/priority": "1",
+        "dagster/concurrency_key": "nwp-consumer",
+    },
 )
 def ncep_gfs_global_asset(
     context: dg.AssetExecutionContext,
     pipes_docker_client: PipesDockerClient,
-    ) -> dg.MaterializeResult:
+) -> dg.MaterializeResult:
     """Dagster asset for NCEP GFS global forecast model data."""
     it: dt.datetime = context.partition_time_window.start
     return pipes_docker_client.run(

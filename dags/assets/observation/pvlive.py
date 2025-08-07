@@ -5,7 +5,7 @@ import os
 import pandas as pd
 import warnings
 
-PVLIVE_BASE_URL = 'https://zenodo.org/record/15013388/files/'
+PVLIVE_BASE_URL = "https://zenodo.org/record/15013388/files/"
 
 
 def get_pvlive(station, start, end):
@@ -58,7 +58,7 @@ def get_pvlive(station, start, end):
        <https://doi.org/10.5281/zenodo.4036728>`_
     """  # noqa: E501
 
-    months = pd.date_range(start, end.replace(day=1) + pd.DateOffset(months=1), freq='1ME')
+    months = pd.date_range(start, end.replace(day=1) + pd.DateOffset(months=1), freq="1ME")
 
     dfs_inter_months = []  # Initialize list for holding dataframes
     for m in months:
@@ -67,9 +67,11 @@ def get_pvlive(station, start, end):
         try:
             remotezip = urllib.request.urlopen(url)
         except urllib.error.HTTPError as e:
-            if 'not found' in e.msg.lower():
-                warnings.warn('File was not found. The selected time period is probably '
-                              'outside the available time period')
+            if "not found" in e.msg.lower():
+                warnings.warn(
+                    "File was not found. The selected time period is probably "
+                    "outside the available time period"
+                )
                 continue
             else:
                 raise
@@ -80,21 +82,25 @@ def get_pvlive(station, start, end):
         for filename in zip.namelist():
             basename = os.path.basename(filename)  # Extract file basename
             # Parse file if extension is file starts wtih 'tng' and ends with '.tsv'
-            if basename.startswith('tng') & basename.endswith('.tsv'):
+            if basename.startswith("tng") & basename.endswith(".tsv"):
                 # Extract station number from file name
                 station_number = int(basename[6:8])
-                if (station == 'all') | (station == station_number):
+                if (station == "all") | (station == station_number):
                     # Read data into pandas dataframe
-                    dfi = pd.read_csv(io.StringIO(zip.read(filename).decode("utf-8")),
-                                      sep='\t', index_col=[0], parse_dates=[0])
+                    dfi = pd.read_csv(
+                        io.StringIO(zip.read(filename).decode("utf-8")),
+                        sep="\t",
+                        index_col=[0],
+                        parse_dates=[0],
+                    )
 
-                    if station == 'all':
+                    if station == "all":
                         # Add station number to column names (MultiIndex)
                         dfi.columns = [[station_number] * dfi.shape[1], dfi.columns]
                     # Add dataframe to list
                     dfs_intra_months.append(dfi)
-        dfs_inter_months.append(pd.concat(dfs_intra_months, axis='columns'))
-    data = pd.concat(dfs_inter_months, axis='rows')
+        dfs_inter_months.append(pd.concat(dfs_intra_months, axis="columns"))
+    data = pd.concat(dfs_inter_months, axis="rows")
 
     meta = {}
     return data, meta
@@ -102,6 +108,6 @@ def get_pvlive(station, start, end):
 
 if __name__ == "__main__":
     # Download for all the stations from 2020-09 to present
-    for date in pd.date_range('2020-09-01', pd.Timestamp.today(), freq='1ME'):
-        data, meta = get_pvlive('all', date, date + pd.DateOffset(months=1))
-        data.to_csv(f'pvlive_{date.year}-{date.month:02}.csv')
+    for date in pd.date_range("2020-09-01", pd.Timestamp.today(), freq="1ME"):
+        data, meta = get_pvlive("all", date, date + pd.DateOffset(months=1))
+        data.to_csv(f"pvlive_{date.year}-{date.month:02}.csv")

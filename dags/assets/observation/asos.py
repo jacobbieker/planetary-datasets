@@ -75,10 +75,7 @@ def get_stations_from_networks():
 
     for network in networks:
         # Get metadata
-        uri = (
-            "https://mesonet.agron.iastate.edu/"
-            f"geojson/network/{network}.geojson"
-        )
+        uri = f"https://mesonet.agron.iastate.edu/geojson/network/{network}.geojson"
         data = urlopen(uri)
         jdict = json.load(data)
         for site in jdict["features"]:
@@ -112,6 +109,7 @@ def download_alldata():
             fh.write(data)
         now += interval
 
+
 def main():
     """Our main method"""
     # timestamps in UTC to request data for
@@ -123,7 +121,10 @@ def main():
 
     # https://mesonet.agron.iastate.edu/cgi-bin/request/asos1min.py?station=AMW&vars=tmpf&sts=2022-01-01T00:00Z&ets=2023-01-01T00:00Z&sample=1hour&what=download&tz=UTC
 
-    service = SERVICE + "tz=UTC&vars=tmpf&vars=dwpf&vars=sknt&vars=drct&vars=gust_drct&vars=gust_sknt&vars=vis1_coeff&vars=vis1_nd&vars=vis2_coeff&vars=vis2_nd&vars=vis3_coeff&vars=vis3_nd&vars=ptype&vars=precip&vars=pres1&vars=pres2&vars=pres3&sample=1min&what=download&delim=comma&gis=yes&"
+    service = (
+        SERVICE
+        + "tz=UTC&vars=tmpf&vars=dwpf&vars=sknt&vars=drct&vars=gust_drct&vars=gust_sknt&vars=vis1_coeff&vars=vis1_nd&vars=vis2_coeff&vars=vis2_nd&vars=vis3_coeff&vars=vis3_nd&vars=ptype&vars=precip&vars=pres1&vars=pres2&vars=pres3&sample=1min&what=download&delim=comma&gis=yes&"
+    )
 
     stations = get_stations_from_networks()
     now = endts
@@ -133,10 +134,12 @@ def main():
         thisurl += now.strftime("year2=%Y&month2=%m&day2=%d&")
         for station in stations:
             uri = f"{thisurl}&station={station}"
-            print(f"Downloading: {station}: {(now-interval):%Y%m%d%H%M}_{now:%Y%m%d%H%M}, URL: {uri}")
+            print(
+                f"Downloading: {station}: {(now - interval):%Y%m%d%H%M}_{now:%Y%m%d%H%M}, URL: {uri}"
+            )
             try:
-                outfn = f"/Users/jacob/Development/asos_1min/{station}_{(now-interval):%Y%m%d%H%M}_{now:%Y%m%d%H%M}.txt"
-                outfn2 = f"/Volumes/Extreme SSD/asos_1min/{station}_{(now-interval):%Y%m%d%H%M}_{now:%Y%m%d%H%M}.txt"
+                outfn = f"/Users/jacob/Development/asos_1min/{station}_{(now - interval):%Y%m%d%H%M}_{now:%Y%m%d%H%M}.txt"
+                outfn2 = f"/Volumes/Extreme SSD/asos_1min/{station}_{(now - interval):%Y%m%d%H%M}_{now:%Y%m%d%H%M}.txt"
                 if os.path.exists(outfn) or os.path.exists(outfn2):
                     continue
                 data = download_data(uri)
@@ -151,4 +154,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    #download_alldata()
+    # download_alldata()

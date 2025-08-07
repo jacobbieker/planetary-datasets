@@ -28,21 +28,22 @@ partitions_def: dg.TimeWindowPartitionsDefinition = dg.MonthlyPartitionsDefiniti
     end_offset=-1,
 )
 
+
 @dg.asset(
-        name="eumetsat-iodc-lrv",
-        description=__doc__,
-        metadata={
-            "archive_folder": dg.MetadataValue.text(ARCHIVE_FOLDER),
-            "area": dg.MetadataValue.text("india"),
-            "source": dg.MetadataValue.text("eumetsat"),
-            "expected_runtime": dg.MetadataValue.text("6 hours"),
-        },
-        compute_kind="docker",
-        tags={
-            "dagster/max_runtime": str(60 * 60 * 10), # Should take 6 ish hours
-            "dagster/priority": "1",
-            "dagster/concurrency_key": "eumetsat",
-        },
+    name="eumetsat-iodc-lrv",
+    description=__doc__,
+    metadata={
+        "archive_folder": dg.MetadataValue.text(ARCHIVE_FOLDER),
+        "area": dg.MetadataValue.text("india"),
+        "source": dg.MetadataValue.text("eumetsat"),
+        "expected_runtime": dg.MetadataValue.text("6 hours"),
+    },
+    compute_kind="docker",
+    tags={
+        "dagster/max_runtime": str(60 * 60 * 10),  # Should take 6 ish hours
+        "dagster/priority": "1",
+        "dagster/concurrency_key": "eumetsat",
+    },
     partitions_def=partitions_def,
 )
 def eumetsat_seviri_lrv_asset(

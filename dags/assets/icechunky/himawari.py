@@ -36,7 +36,8 @@ from typing import Any
 import yaml
 import pyresample
 import datetime as dt
-from dags.assets.icechunk.virtual_datasource import VirtualDataset
+from dags.assets.icechunky.virtual_datasource import VirtualDataset
+
 
 def _serialize(d: dict[str, Any]) -> dict[str, Any]:
     sd: dict[str, Any] = {}
@@ -52,6 +53,7 @@ def _serialize(d: dict[str, Any]) -> dict[str, Any]:
         else:
             sd[key] = str(value)
     return sd
+
 
 class Himawari(VirtualDataset):
     """Himawari data source.
@@ -235,10 +237,14 @@ class Himawari(VirtualDataset):
         datasets = await tqdm.gather(
             *func_map, desc="Fetching Himawari data", disable=(not self._verbose)
         )
-        # Check for any None and filter them out
-        datasets = [ds for ds in datasets if ds is not None]
-        if len(datasets) == 0:
-            logger.warning("No Himawari data found for the given time range.")
+
+        datasets = [d for d in datasets if d is not None]
+
+        if not datasets:
+            logger.error(
+                f"No Himawari data found for {time} with variables {variable}. "
+                "Check if the time is within the operational range of the satellite."
+            )
             return None
         datasets = xr.concat(datasets, "time")
 
@@ -277,9 +283,16 @@ class Himawari(VirtualDataset):
             Himawari data array
         """
 
-        variable_to_load = self.channels if variable is None else variable
+        variable_to_load = self.HIMAWARI_CHANNELS #.channels if variable is None else variable
         func_map = map(functools.partial(self._get_s3_path, time=time), variable_to_load)
-        himawari_uris = await asyncio.gather(*func_map)
+        try:
+            himawari_uris = await asyncio.gather(*func_map)
+        except FileNotFoundError:
+            logger.error(
+                f"No Himawari data found for {time} with variables {variable_to_load}. "
+                "Check if the time is within the operational range of the satellite."
+            )
+            return None
         # Smooth out the list of lists to a single list
         himawari_uris = [item for sublist in himawari_uris for item in sublist]
         logger.debug(f"Fetching Himawari file: {himawari_uris}")
@@ -298,22 +311,24 @@ class Himawari(VirtualDataset):
         scn.load(
             self.HIMAWARI_CHANNELS
         )  # Nice 2km resolution data, could go to L1b and get native resolution, although mostly larger
-        print(scn.get("orbital_parameters"))
         # Add latitude/longitude to coordinates
         dataset = scn.to_xarray_dataset(datasets=variable_to_load).load().astype(np.float16)
         orbit_params = scn.to_xarray_dataset(datasets=high_res_channels).attrs["orbital_parameters"]
         import pandas as pd
-        start_time = pd.Timestamp(dataset.attrs['start_time'])
-        end_time = pd.Timestamp(dataset.attrs['end_time'])
+
+        start_time = pd.Timestamp(dataset.attrs["start_time"])
+        end_time = pd.Timestamp(dataset.attrs["end_time"])
         # Get the middle time of two times
         mid_time = start_time + (end_time - start_time) / 2
-        dataset['time'] = mid_time
-        dataset = dataset.assign_coords({"time": dataset['time']})
+        dataset["time"] = mid_time
+        dataset = dataset.assign_coords({"time": dataset["time"]})
         # Expand coords for data to have time dimension
         dataset = dataset.expand_dims("time")
         dataset["start_time"] = xr.DataArray([start_time], coords={"time": dataset["time"]})
         dataset["end_time"] = xr.DataArray([end_time], coords={"time": dataset["time"]})
-        dataset["platform_name"] = xr.DataArray([dataset.attrs['platform_name']], coords={"time": dataset["time"]})
+        dataset["platform_name"] = xr.DataArray(
+            [dataset.attrs["platform_name"]], coords={"time": dataset["time"]}
+        )
         dataset["orbital_parameters"] = xr.DataArray(
             [orbit_params],
             dims=("time",),
@@ -324,28 +339,34 @@ class Himawari(VirtualDataset):
         ).astype(f"U512")
         # Now reduce to float16 for everything other than latitude/longitude
         for var in dataset.data_vars:
-            if var not in ['latitude', 'longitude', 'start_time', 'end_time', 'platform_name', "area", "orbital_parameters"]:
+            if var not in [
+                "latitude",
+                "longitude",
+                "start_time",
+                "end_time",
+                "platform_name",
+                "area",
+                "orbital_parameters",
+            ]:
                 dataset[var] = dataset[var].astype(np.float16)
             if var in ["latitude", "longitude"]:
                 dataset[var] = dataset[var].astype(np.float32)
         # Drop a few attributes
-        dataset.attrs.pop('end_time')
-        dataset.attrs.pop('start_time')
-        dataset.attrs.pop('platform_name')
+        dataset.attrs.pop("end_time")
+        dataset.attrs.pop("start_time")
+        dataset.attrs.pop("platform_name")
         dataset.attrs = _serialize(dataset.attrs)
         for var in dataset.data_vars:
             dataset[var].attrs = _serialize(dataset[var].attrs)
         dataset = dataset.drop_vars("crs")
-        dataset = dataset.chunk(
-            {"time": 1, "y": -1, "x": -1}
-        )
+        dataset = dataset.chunk({"time": 1, "y": -1, "x": -1})
         # Add x and y coords per time as well, so that the exact location can be reconstructed
-        dataset["x_geostationary_coord"] = xr.DataArray(
+        dataset["x_geostationary_coordinates"] = xr.DataArray(
             [dataset.x.values],
             dims=("time", "x"),
             coords={"time": dataset.time, "x": dataset.x},
         )
-        dataset["y_geostationary_coord"] = xr.DataArray(
+        dataset["y_geostationary_coordinates"] = xr.DataArray(
             [dataset.y.values],
             dims=("time", "y"),
             coords={"time": dataset.time, "y": dataset.y},
@@ -366,10 +387,12 @@ class Himawari(VirtualDataset):
         hour = time.hour
 
         if self._satellite == "himawari":
-            if time >= datetime(2022, 11, 4):
-                satellite = "himawari9"
-            else:
+            # Check time is in himwari9 history range
+            start_date, end_date = self.HISTORY_RANGE["himawari8"]
+            if start_date <= time <= end_date:
                 satellite = "himawari8"
+            else:
+                satellite = "himawari9"
         else:
             satellite = self._satellite
 
@@ -384,21 +407,19 @@ class Himawari(VirtualDataset):
 
         # List files in the directory to find the most recent one
         # This is all the bands for the given 10 minutely observation
-        try:
-            files = await self.fs._ls(base_url)
-            return files
-        except FileNotFoundError:
-            logger.error(
-                f"No Himawari data found for {time} in {base_url}. "
-                "Please check the date and time."
-            )
-            return []
+        files = await self.fs._ls(base_url)
+
+        files = [f for f in files if variable in f]
+        if len(files) == 0:
+            return None
+        return files
 
 
 if __name__ == "__main__":
     import icechunk
     import zarr
     from icechunk.xarray import to_icechunk
+
     # Example usage
     high_res_channels = ["B03"]
     medium_res_channels = ["B01", "B02", "B04"]
@@ -424,16 +445,19 @@ if __name__ == "__main__":
     times = {}
     date_ranges = {}
     names = ["himawari_500m", "himawari_1km", "himawari_2km"]
+    """
     for name in names:
-        #storage = icechunk.local_filesystem_storage(f"{name}.icechunk")
-        storage = icechunk.s3_storage(bucket="bkr",
-                                      prefix=f"geo/{name}.icechunk",
-                                      endpoint_url="https://data.source.coop",
-                                      access_key_id="SC11A9JDAZLVTF959664D1NI",
-                                      secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
-                                      allow_http=True,
-                                      region="us-west-2",
-                                      force_path_style=True, )
+        storage = icechunk.local_filesystem_storage(f"/data/geo/{name}.icechunk")
+        #storage = icechunk.s3_storage(
+        #    bucket="bkr",
+        #    prefix=f"geo/{name}.icechunk",
+        #    endpoint_url="https://data.source.coop",
+        #    access_key_id="SC11A9JDAZLVTF959664D1NI",
+        #    secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
+        #    allow_http=True,
+        #    region="us-west-2",
+        #    force_path_style=True,
+        #)
         repo = icechunk.Repository.open(storage)
         session = repo.readonly_session("main")
         ds = xr.open_zarr(session.store, consolidated=False)
@@ -447,20 +471,35 @@ if __name__ == "__main__":
             if d > ds.time.values[-1]:
                 date_ranges[name] = date_range[date_range <= ds.time.values[-1]]
                 break
+    """
     for date_idx in range(len(date_range)):
         names = ["himawari_500m", "himawari_1km", "himawari_2km"]
-        for idx, channel_set in enumerate([high_res_channels, medium_res_channels, low_res_channels]):
-            storage = icechunk.local_filesystem_storage(f"{names[idx]}.icechunk")
-            #storage = icechunk.local_filesystem_storage(f"{names[idx]}.icechunk")
-            storage = icechunk.s3_storage(bucket="bkr",
-                                          prefix=f"geo/{names[idx]}.icechunk",
-                                          endpoint_url="https://data.source.coop",
-                                          allow_http=True,
-                                          region="us-west-2",
-                                          force_path_style=True, )
+        for idx, channel_set in enumerate(
+            [high_res_channels, medium_res_channels, low_res_channels]
+        ):
+            storage = icechunk.local_filesystem_storage(f"/data/geo/{names[idx]}.icechunk")
+            # storage = icechunk.local_filesystem_storage(f"{names[idx]}.icechunk")
+            #storage = icechunk.s3_storage(
+            #    bucket="bkr",
+            #    prefix=f"geo/{names[idx]}.icechunk",
+            #    endpoint_url="https://data.source.coop",
+            #    allow_http=True,
+            #    region="us-west-2",
+            #    force_path_style=True,
+            #)
             repo = icechunk.Repository.open_or_create(storage)
-            date = date_ranges[names[idx]][date_idx] if names[idx] in date_ranges else date_range[date_idx]
-            himwari = Himawari(satellite="himawari", max_workers=24, cache=True, verbose=True, variables= channel_set,)
+            date = (
+                date_ranges[names[idx]][date_idx]
+                if names[idx] in date_ranges
+                else date_range[date_idx]
+            )
+            himwari = Himawari(
+                satellite="himawari",
+                max_workers=24,
+                cache=True,
+                verbose=True,
+                variables=channel_set,
+            )
             # Save the dataset to a Zarr file
             encoding = {
                 "time": {
@@ -477,12 +516,18 @@ if __name__ == "__main__":
             for var in ds.data_vars:
                 if var not in ["orbital_parameters", "start_time", "end_time", "area"]:
                     variables.append(var)
-            encoding.update({
-                v: {"compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9,
-                                                          shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
-                for v in variables})
+            encoding.update(
+                {
+                    v: {
+                        "compressors": zarr.codecs.BloscCodec(
+                            cname="zstd", clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle
+                        )
+                    }
+                    for v in variables
+                }
+            )
 
-            if len(times[names[idx]]) == 0 and date_idx == 0:
+            if date_idx == 0:
                 print(ds)
                 try:
                     session = repo.writable_session("main")
@@ -499,4 +544,5 @@ if __name__ == "__main__":
             if names[idx] == "himawari_2km":
                 # Clear out the cache
                 import shutil
+
                 shutil.rmtree(himwari.cache, ignore_errors=True)

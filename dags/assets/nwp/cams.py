@@ -23,29 +23,30 @@ partitions_def: dg.TimeWindowPartitionsDefinition = dg.WeeklyPartitionsDefinitio
     end_offset=-2,
 )
 
+
 @dg.asset(
-        name="cams-europe",
-        description=__doc__,
-        key_prefix=["air"],
-        metadata={
-            "archive_folder": dg.MetadataValue.text(ARCHIVE_FOLDER),
-            "area": dg.MetadataValue.text("europe"),
-            "source": dg.MetadataValue.text("copernicus-ads"),
-            "model": dg.MetadataValue.text("cams"),
-            "format": dg.MetadataValue.text("netcdf"),
-            "expected_runtime": dg.MetadataValue.text("6 hours"),
-        },
-        compute_kind="python",
-        automation_condition=dg.AutomationCondition.on_cron(
-            cron_schedule=partitions_def.get_cron_schedule(
-                hour_of_day=7,
-            ),
+    name="cams-europe",
+    description=__doc__,
+    key_prefix=["air"],
+    metadata={
+        "archive_folder": dg.MetadataValue.text(ARCHIVE_FOLDER),
+        "area": dg.MetadataValue.text("europe"),
+        "source": dg.MetadataValue.text("copernicus-ads"),
+        "model": dg.MetadataValue.text("cams"),
+        "format": dg.MetadataValue.text("netcdf"),
+        "expected_runtime": dg.MetadataValue.text("6 hours"),
+    },
+    compute_kind="python",
+    automation_condition=dg.AutomationCondition.on_cron(
+        cron_schedule=partitions_def.get_cron_schedule(
+            hour_of_day=7,
         ),
-        tags={
-            "dagster/max_runtime": str(60 * 60 * 24 * 4), # Should take about 2 days
-            "dagster/priority": "1",
-            "dagster/concurrency_key": "copernicus-ads",
-        },
+    ),
+    tags={
+        "dagster/max_runtime": str(60 * 60 * 24 * 4),  # Should take about 2 days
+        "dagster/priority": "1",
+        "dagster/concurrency_key": "copernicus-ads",
+    },
     partitions_def=partitions_def,
 )
 def cams_eu_raw_asset(context: dg.AssetExecutionContext) -> dg.Output[list[pathlib.Path]]:
@@ -77,14 +78,18 @@ def cams_eu_raw_asset(context: dg.AssetExecutionContext) -> dg.Output[list[pathl
     ]
 
     for var in variables:
-        dst: pathlib.Path = pathlib.Path(ARCHIVE_FOLDER) \
-            / "raw" / f"{it_start:%Y%m%d}-{it_end:%Y%m%d}_{var}.nc.zip"
+        dst: pathlib.Path = (
+            pathlib.Path(ARCHIVE_FOLDER) / "raw" / f"{it_start:%Y%m%d}-{it_end:%Y%m%d}_{var}.nc.zip"
+        )
         dst.parent.mkdir(parents=True, exist_ok=True)
 
         if dst.exists():
-            context.log.info("File already exists, skipping download", extra={
-                "file": dst.as_posix(),
-            })
+            context.log.info(
+                "File already exists, skipping download",
+                extra={
+                    "file": dst.as_posix(),
+                },
+            )
             stored_files.append(dst)
             continue
 
@@ -96,7 +101,7 @@ def cams_eu_raw_asset(context: dg.AssetExecutionContext) -> dg.Output[list[pathl
             "leadtime_hour": [str(x) for x in range(0, 97)],
             "data_format": ["netcdf_zip"],
             "level": ["0", "50", "250", "500", "1000", "3000", "5000"],
-            "variable":  [var],
+            "variable": [var],
         }
 
         context.log.info(
