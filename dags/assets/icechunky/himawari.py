@@ -312,7 +312,7 @@ class Himawari(VirtualDataset):
             self.HIMAWARI_CHANNELS
         )  # Nice 2km resolution data, could go to L1b and get native resolution, although mostly larger
         # Add latitude/longitude to coordinates
-        dataset = scn.to_xarray_dataset(datasets=variable_to_load).load().astype(np.float16)
+        dataset = scn.to_xarray_dataset(datasets=variable).load().astype(np.float16)
         orbit_params = scn.to_xarray_dataset(datasets=high_res_channels).attrs["orbital_parameters"]
         import pandas as pd
 
