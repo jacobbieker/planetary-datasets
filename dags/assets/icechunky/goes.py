@@ -339,7 +339,7 @@ class GOES(VirtualDataset):
             GOES data array
         """
 
-        variable_to_load = self.channels if variable is None else variable
+        variable_to_load = self.GOES_CHANNELS # if variable is None else variable
         # If l2, different from l1b data loading
         if self.source == "l1":
             func_map = map(functools.partial(self._get_s3_path, time=time), variable_to_load)
@@ -382,7 +382,7 @@ class GOES(VirtualDataset):
         scn.load(
             self.GOES_CHANNELS
         )  # Nice 2km resolution data, could go to L1b and get native resolution, although mostly larger
-        dataset = scn.to_xarray_dataset(datasets=variable_to_load).load().astype(np.float16)
+        dataset = scn.to_xarray_dataset(datasets=variable).load().astype(np.float16)
         orbit_params = scn.to_xarray_dataset(datasets=high_res_channels).attrs["orbital_parameters"]
         import pandas as pd
 
