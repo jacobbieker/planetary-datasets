@@ -290,7 +290,7 @@ GLOBAL_CONFIG = Config(
     base_url="https://opendata.dwd.de/weather/nwp",
     model_url="icon/grib",
     var_url="icon_global_icosahedral",
-    f_steps=list(range(0, 73)), # + list(range(81, 183, 3)),
+    f_steps=list(range(0, 79)), # + list(range(81, 183, 3)),
     repo_id="openclimatefix/dwd-icon-global",
     chunking={
         "step": 37,
@@ -560,7 +560,18 @@ def run(path: str, config: Config, run: str, date: dt.date) -> None:
     storage = icechunk.local_filesystem_storage(f"{path}.icechunk")
     repo = icechunk.Repository.open_or_create(storage)
     session = repo.writable_session("main")
+    # First check which variables are already present, only append if all are present and time is not a duplicate
     if appending:
+        existing_ds = xr.open_zarr(session.store, consolidated=False)
+        if not all([v in existing_ds.data_vars for v in ds.data_vars]):
+            log.warning(
+                f"Not all variables present in existing dataset, cannot append. "
+                f"Existing: {list(existing_ds.data_vars)}, New: {list(ds.data_vars)}",
+            )
+            return
+        if ds.time.isin(existing_ds.time).any():
+            log.info(f"Data for {date} run {run} already present, skipping")
+            return
         to_icechunk(ds.chunk(config.chunking), session, append_dim="time")
     else:
         to_icechunk(ds.chunk(config.chunking), session, encoding=encoding)
