@@ -287,7 +287,7 @@ pressure_levels_global = [
     30,
 ]
 
-model_levels_global = list(range(122))
+model_levels_global = list(range(121))
 model_levels_europe = list(range(76))
 
 pressure_levels_europe = [
@@ -779,7 +779,11 @@ def run(path: str, config: Config, run: str, date: dt.date) -> None:
         if ds.time.isin(existing_ds.time).any():
             log.info(f"Data for {date} run {run} already present, skipping")
             return
-        to_icechunk(ds.chunk(config.chunking), session, append_dim="time")
+        try:
+            to_icechunk(ds.chunk(config.chunking), session, append_dim="time")
+        except Exception as e:
+            log.error(f"Failed to append data for {date} run {run}: {e}")
+            return
     else:
         to_icechunk(ds.chunk(config.chunking), session, encoding=encoding)
     session.commit(f"Added ICON data for {date} run {run}")
