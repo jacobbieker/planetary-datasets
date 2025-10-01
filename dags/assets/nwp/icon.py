@@ -547,7 +547,7 @@ def run(path: str, config: Config, run: str, date: dt.date) -> None:
     if config == GLOBAL_CONFIG:
         ds = ds.assign_coords({"latitude": lats, "longitude": lons})
     log.debug(f"Created final dataset for run {run}: {ds}")
-    encoding = {var: {"compressor": zarr.codecs.BloscCodec(
+    encoding = {var: {"compressors": zarr.codecs.BloscCodec(
                                         cname="zstd",
                                         clevel=9,
                                         shuffle=zarr.codecs.BloscShuffle.bitshuffle,
