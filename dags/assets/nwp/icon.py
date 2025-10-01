@@ -213,10 +213,56 @@ var_2d_list_global = [
     "z0",
 ]
 
+var_ensemble_list_global = [
+    "asob_s",
+    "aswdir_s",
+    "athb_s",
+    "relhum_2m",
+    "sobs_rad",
+    "t_2m",
+    "td_2m",
+    "thbs_rad",
+    "tot_prec",
+    "u_10m",
+    "v_10m",
+    "vmax_10m",
+    "clct"
+]
+
+var_ensemble_list_2d_eu = [
+    "aswdifd_s",
+    "aswdir_s",
+    "athb_s",
+    "t_2m",
+    "snow_con",
+    "snow_gsp",
+    "sobs_rad",
+    "thbs_rad",
+    "tot_prec",
+    "u_10m",
+    "v_10m",
+    "vmax_10m",
+    "tqv",
+    "ps",
+    "cape_ml",
+]
+
+var_ensemble_list_3d_eu = [
+    "fi",
+    "u",
+    "v",
+    "t"
+]
+
 # "p", "omega", "clc", "qv", "tke", "w" are model-level only in global so have been removed
 var_3d_list_global = ["fi", "relhum", "t", "u", "v"]
+
+var_model_list_global = ["u", "v", "w", "qv"]
+
 # "p", "omega", "qv", "tke", "w" are model-level only in europe so have been removed
 var_3d_list_europe = ["clc", "fi", "omega", "relhum", "t", "u", "v"]
+
+var_model_list_europe = ["u", "v", "w"]
 
 invarient_list = ["clat", "clon"]
 
@@ -240,6 +286,9 @@ pressure_levels_global = [
     50,
     30,
 ]
+
+model_levels_global = list(range(122))
+model_levels_europe = list(range(76))
 
 pressure_levels_europe = [
     1000,
@@ -272,12 +321,14 @@ class Config:
     vars_2d: list[str]
     vars_3d: list[str]
     vars_invarient: list[str]
+    vars_model: list[str]
     base_url: str
     model_url: str
     var_url: str
     chunking: dict[str, int]
     f_steps: list[int]
     repo_id: str
+    per_init_time: bool = False
 
 GLOBAL_CONFIG = Config(
     vars_2d=var_2d_list_global,
@@ -286,6 +337,7 @@ GLOBAL_CONFIG = Config(
         for v in var_3d_list_global
         for p in pressure_levels_global
     ],
+    vars_model=[],
     vars_invarient=invarient_list,
     base_url="https://opendata.dwd.de/weather/nwp",
     model_url="icon/grib",
@@ -299,6 +351,44 @@ GLOBAL_CONFIG = Config(
     },
 )
 
+GLOBAL_ENSEMBLE_CONFIG = Config(
+    vars_2d=var_2d_list_global,
+    vars_3d=[],
+    vars_model=[],
+    vars_invarient=invarient_list,
+    base_url="https://opendata.dwd.de/weather/nwp",
+    model_url="icon-eps/grib",
+    var_url="icon-eps_global_icosahedral",
+    f_steps=list(range(0, 49)), # + list(range(81, 183, 3)),
+    repo_id="openclimatefix/dwd-icon-global",
+    chunking={
+        "step": 24,
+        "values": 122500,
+        "number": -1,
+    },
+)
+
+GLOBAL_MODEL_CONFIG = Config(
+    vars_2d=[],
+    vars_model=[
+        v + "@" + str(p)
+        for v in var_model_list_global
+        for p in model_levels_global
+    ],
+    vars_3d=[],
+    vars_invarient=invarient_list,
+    base_url="https://opendata.dwd.de/weather/nwp",
+    model_url="icon/grib",
+    var_url="icon_global_icosahedral",
+    f_steps=list(range(0, 79)), # + list(range(81, 183, 3)),
+    repo_id="openclimatefix/dwd-icon-global",
+    chunking={
+        "step": 37,
+        "values": 122500,
+        "generalVertical": -1,
+    },
+)
+
 EUROPE_CONFIG = Config(
     vars_2d=var_2d_list_europe,
     vars_3d=[
@@ -306,6 +396,7 @@ EUROPE_CONFIG = Config(
         for v in var_3d_list_europe
         for p in pressure_levels_europe
     ],
+    vars_model=[],
     vars_invarient=[],
     base_url="https://opendata.dwd.de/weather/nwp",
     model_url="icon-eu/grib",
@@ -317,6 +408,28 @@ EUROPE_CONFIG = Config(
         "latitude": 326,
         "longitude": 350,
         "isobaricInhPa": -1,
+    },
+)
+
+EUROPE_ENSEMBLE_CONFIG = Config(
+    vars_2d=var_ensemble_list_2d_eu,
+    vars_3d=[
+        v + "@" + str(p)
+        for v in var_3d_list_europe
+        for p in pressure_levels_europe
+    ],
+    vars_model=[],
+    vars_invarient=invarient_list,
+    base_url="https://opendata.dwd.de/weather/nwp",
+    model_url="icon-eu-eps/grib",
+    var_url="icon-eu-eps_europe_icosahedral",
+    f_steps=list(range(0, 49)), # + list(range(81, 123, 3)),
+    repo_id="openclimatefix/dwd-icon-eu",
+    chunking={
+        "step": 24,
+        "values": 122500,
+        "isobaricInhPa": -1,
+        "number": -1,
     },
 )
 
@@ -339,8 +452,13 @@ def find_file_name(
     # New data comes in 3 ish hours after the run time,
     # ensure the script is running with a decent buffer
     date_string = date.strftime("%Y%m%d") + run_string
-    if (len(config.vars_2d) == 0) and (len(config.vars_3d) == 0):
-        raise ValueError("You need to specify at least one 2D or one 3D variable")
+    if (len(config.vars_2d) == 0) and (len(config.vars_3d) == 0) and (len(config.vars_model) == 0):
+        raise ValueError("You need to specify at least one 2D, 3D, or model level variable")
+
+    if config in [GLOBAL_ENSEMBLE_CONFIG, EUROPE_ENSEMBLE_CONFIG]:
+        up_var_name = False
+    else:
+        up_var_name = True
 
     urls = []
     for f_time in config.f_steps:
@@ -348,20 +466,27 @@ def find_file_name(
             var_url = config.var_url + "_single-level"
             urls.append(
                 f"{config.base_url}/{config.model_url}/{run_string}/{var}/"
-                f"{var_url}_{date_string}_{f_time:03d}_{var.upper()}.grib2.bz2",
+                f"{var_url}_{date_string}_{f_time:03d}_{var.upper() if up_var_name else var.lower()}.grib2.bz2",
             )
         for var in config.vars_3d:
             var_t, plev = var.split("@")
             var_url = config.var_url + "_pressure-level"
             urls.append(
                 f"{config.base_url}/{config.model_url}/{run_string}/{var_t}/"
-                f"{var_url}_{date_string}_{f_time:03d}_{plev}_{var_t.upper()}.grib2.bz2",
+                f"{var_url}_{date_string}_{f_time:03d}_{plev}_{var_t.upper() if up_var_name else var_t.lower()}.grib2.bz2",
             )
         for var in config.vars_invarient:
             var_url = config.var_url + "_time-invariant"
             urls.append(
                 f"{config.base_url}/{config.model_url}/{run_string}/{var}/"
-                f"{var_url}_{date_string}_{var.upper()}.grib2.bz2",
+                f"{var_url}_{date_string}_{var.upper() if up_var_name else var.lower()}.grib2.bz2",
+            )
+        for var in config.vars_model:
+            var_t, plev = var.split("@")
+            var_url = config.var_url + "_model-level"
+            urls.append(
+                f"{config.base_url}/{config.model_url}/{run_string}/{var_t}/"
+                f"{var_url}_{date_string}_{f_time:03d}_{plev}_{var_t.upper() if up_var_name else var_t.lower()}.grib2.bz2",
             )
     return urls
 
@@ -430,8 +555,8 @@ def run(path: str, config: Config, run: str, date: dt.date) -> None:
                         results.append(result)
 
             not_done = False
-        except Exception:
-            log.error("Error downloading files for run {run}: {e}")
+        except Exception as e:
+            log.error(f"Error downloading files for run {run}: {e}")
 
     filepaths: list[str] = list(filter(None, results))
     if len(filepaths) == 0:
@@ -446,12 +571,28 @@ def run(path: str, config: Config, run: str, date: dt.date) -> None:
 
     # Write files to zarr
     log.info(f"Converting {len(filepaths)} files for run {run}")
-    if config == GLOBAL_CONFIG:
+    if config in [GLOBAL_ENSEMBLE_CONFIG, EUROPE_ENSEMBLE_CONFIG]:
+        up_var_name = False
+    else:
+        up_var_name = True
+    if config in [GLOBAL_CONFIG, GLOBAL_ENSEMBLE_CONFIG, EUROPE_ENSEMBLE_CONFIG, GLOBAL_MODEL_CONFIG]:
+        if config in [GLOBAL_CONFIG, GLOBAL_MODEL_CONFIG]:
+            name = "icon_global"
+            lat = "CLAT"
+            lon = "CLON"
+        elif config == GLOBAL_ENSEMBLE_CONFIG:
+            name = "icon-eps_global"
+            lat = "clat"
+            lon = "clon"
+        elif config == EUROPE_ENSEMBLE_CONFIG:
+            name = "icon-eu-eps_europe"
+            lat = "clat"
+            lon = "clon"
         lon_ds = xr.open_mfdataset(
-            f"{path}/{run}/icon_global_icosahedral_time-invariant_*_CLON.grib2", engine="cfgrib", decode_timedelta=True,
+            f"{path}/{run}/{name}_icosahedral_time-invariant_*_{lon}.grib2", engine="cfgrib", decode_timedelta=True,
         )
         lat_ds = xr.open_mfdataset(
-            f"{path}/{run}/icon_global_icosahedral_time-invariant_*_CLAT.grib2", engine="cfgrib", decode_timedelta=True,
+            f"{path}/{run}/{name}_icosahedral_time-invariant_*_{lat}.grib2", engine="cfgrib", decode_timedelta=True,
         )
         lons = lon_ds.tlon.values
         lats = lat_ds.tlat.values
@@ -461,12 +602,12 @@ def run(path: str, config: Config, run: str, date: dt.date) -> None:
         var_paths: list[list[pathlib.Path]] = []
         for step in config.f_steps:
             step_paths: list[pathlib.Path] = list(pathlib.Path(f"{path}/{run}/").glob(
-                f"{config.var_url}_pressure-level_*_{str(step).zfill(3)}_*_{var_3d.upper()}.grib2",
+                f"{config.var_url}_pressure-level_*_{str(step).zfill(3)}_*_{var_3d.upper() if up_var_name else var_3d.lower()}.grib2",
             ))
             if len(step_paths) == 0:
                 log.debug(f"No files found for 3D var {var_3d} for run {run} and step {step}")
                 log.debug(list(pathlib.Path(f"{path}/{run}/").glob(
-                    f"{config.var_url}_pressure-level_*_{var_3d.upper()}.grib2",
+                    f"{config.var_url}_pressure-level_*_{var_3d.upper() if up_var_name else var_3d.lower()}.grib2",
                 )))
                 continue
             else:
@@ -500,14 +641,63 @@ def run(path: str, config: Config, run: str, date: dt.date) -> None:
         if len(coords_to_remove) > 0:
             ds = ds.drop_vars(coords_to_remove)
         datasets.append(ds)
-    ds_atmos = xr.merge(datasets)
-    log.debug(f"Merged 3D datasets: {ds_atmos}")
+    if len(datasets) != 0:
+        ds_atmos = xr.merge(datasets)
+        log.debug(f"Merged 3D datasets: {ds_atmos}")
+
+    model_datasets = []
+    for var_model in [v.split("@")[0] for v in config.vars_model]:
+        var_paths: list[list[pathlib.Path]] = []
+        for step in config.f_steps:
+            step_paths: list[pathlib.Path] = list(pathlib.Path(f"{path}/{run}/").glob(
+                f"{config.var_url}_model-level_*_{str(step).zfill(3)}_*_{var_model.upper() if up_var_name else var_model.lower()}.grib2",
+            ))
+            if len(step_paths) == 0:
+                log.debug(f"No files found for 3D var {var_model} for run {run} and step {step}")
+                log.debug(list(pathlib.Path(f"{path}/{run}/").glob(
+                    f"{config.var_url}_model-level_*_{var_model.upper() if up_var_name else var_model.lower()}.grib2",
+                )))
+                continue
+            else:
+                var_paths.append(step_paths)
+        if len(var_paths) == 0:
+            log.warning(f"No files found for Model var {var_model} for run {run}")
+            continue
+        try:
+            ds = xr.concat(
+                [
+                    xr.open_mfdataset(
+                        p,
+                        engine="cfgrib",
+                        backend_kwargs={"errors": "ignore"} if config == GLOBAL_CONFIG else {},
+                        combine="nested",
+                        concat_dim="generalVertical",
+                        decode_timedelta=True,
+                    ).sortby("generalVertical")
+                    for p in var_paths
+                ],
+                dim="step",
+            ).sortby("step")
+        except Exception as e:
+            log.error(e)
+            continue
+        ds = ds.rename({v: var_model for v in ds.data_vars})
+        coords_to_remove = []
+        for coord in ds.coords:
+            if coord not in ds.dims and coord != "time":
+                coords_to_remove.append(coord)
+        if len(coords_to_remove) > 0:
+            ds = ds.drop_vars(coords_to_remove)
+        model_datasets.append(ds)
+    if len(model_datasets) != 0:
+        ds_model = xr.merge(model_datasets)
+        log.debug(f"Merged Model datasets: {ds_model}")
 
     total_dataset = []
     for var_2d in config.vars_2d:
         paths = list(
             pathlib.Path(f"{path}/{run}").glob(
-                f"{config.var_url}_single-level_*_*_{var_2d.upper()}.grib2",
+                f"{config.var_url}_single-level_*_*_{var_2d.upper() if up_var_name else var_2d.lower()}.grib2",
             ),
         )
         if len(paths) == 0:
@@ -539,12 +729,25 @@ def run(path: str, config: Config, run: str, date: dt.date) -> None:
         if len(coords_to_remove) > 0:
             ds = ds.drop_vars(coords_to_remove)
         total_dataset.append(ds)
-    ds = xr.merge(total_dataset)
-    log.debug("Merged 2D datasets: {ds}")
+    if len(total_dataset) != 0:
+        ds_surface = xr.merge(total_dataset)
+        log.debug(f"Merged 2D datasets: {ds_surface}")
     # Merge both
-    ds = xr.merge([ds, ds_atmos])
+    ds = None
+    if len(total_dataset) != 0:
+        ds = ds_surface
+    if len(datasets) != 0:
+        if ds is None:
+            ds = ds_atmos
+        else:
+            ds = xr.merge([ds, ds_atmos])
+    if len(model_datasets) != 0:
+        if ds is None:
+            ds = ds_model
+        else:
+            ds = xr.merge([ds, ds_model])
     # Add lats and lons manually for icon global
-    if config == GLOBAL_CONFIG:
+    if config in [GLOBAL_CONFIG, GLOBAL_MODEL_CONFIG]:
         ds = ds.assign_coords({"latitude": lats, "longitude": lons})
     log.debug(f"Created final dataset for run {run}: {ds}")
     encoding = {var: {"compressors": zarr.codecs.BloscCodec(
@@ -553,11 +756,15 @@ def run(path: str, config: Config, run: str, date: dt.date) -> None:
                                         shuffle=zarr.codecs.BloscShuffle.bitshuffle,
                                     ),} for var in ds.data_vars}
     encoding["time"] = {"units": "nanoseconds since 1970-01-01"}
-    if os.path.exists(f"{path}.icechunk"):
+    if config.per_init_time:
+        icechunk_path = f"{path}_{date.strftime('%Y%m%d')}_{run}.icechunk"
+    else:
+        icechunk_path = f"{path}.icechunk"
+    if os.path.exists(icechunk_path):
         appending = True
     else:
         appending = False
-    storage = icechunk.local_filesystem_storage(f"{path}.icechunk")
+    storage = icechunk.local_filesystem_storage(icechunk_path)
     repo = icechunk.Repository.open_or_create(storage)
     session = repo.writable_session("main")
     # First check which variables are already present, only append if all are present and time is not a duplicate
@@ -584,7 +791,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("area", choices=["eu", "global"], help="Area to download data for")
+    parser.add_argument("area", choices=["eu", "global", "global_model", "global_ensemble", "eu_ensemble"], help="Area to download data for")
     parser.add_argument("--path", default="./", help="Folder in which to save files") # noqa: S108
     parser.add_argument(
         "--run",
@@ -627,6 +834,12 @@ if __name__ == "__main__":
             run(path=path, config=EUROPE_CONFIG, run=hour, date=args.date)
         elif args.area == "global":
             run(path=path, config=GLOBAL_CONFIG, run=hour, date=args.date)
+        elif args.area == "global_model":
+            run(path=path, config=GLOBAL_MODEL_CONFIG, run=hour, date=args.date)
+        elif args.area == "global_ensemble":
+            run(path=path, config=GLOBAL_ENSEMBLE_CONFIG, run=hour, date=args.date)
+        elif args.area == "eu_ensemble":
+            run(path=path, config=EUROPE_ENSEMBLE_CONFIG, run=hour, date=args.date)
         # Remove files
         if args.rm:
             log.info(f"Removing downloaded files in {path}/{hour}")
