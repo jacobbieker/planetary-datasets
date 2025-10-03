@@ -1,5 +1,26 @@
 """Jacob's ICON global processing script, modified a little bit.
 
+New paths, including for ICON-ART, are:
+
+The following new variants exist for the deterministic models:
+
+/v1/m/<model-name>/p/<parameter-shortname>/r/<run>/s/<step>.grib2
+/v1/m/<model-name>/p/<parameter-shortname>/lvt1/<level-type>/lv1/<level>/r/<run>/s/<step>.grib2
+/v1/m/<model-name>/p/<parameter-shortname>/wvl1/<wavelength>/lvt1/<level-type>/lv1/<level>/r/<run>/s/<step>.grib2
+There are the following new variants for the ensemble models:
+
+/v1/m/<model-name>/p/<parameter-shortname>/lvt1/<level-type>/lv1/<level>/r/<run>/e/<ensemble-member>/s/<step>.grib2
+/v1/m/<model-name>/p/<parameter-shortname>/r/<run>/e/<ensemble-member>/s/<step>.grib2
+/v1/m/<model-name>/p/<parameter-shortname>/wvl1/<wavelength>/lvt1/<level-type>/lv1/<level>/r/<run>/e/<ensemble-member>/s/<step>.grib2
+Here is <level-type> the numeric GRIB-header typeOfFirstFixedSurface. . .. Examples of <level-type>:
+
+100: Isobaric Surface / "Pressure"
+106: Depth Below Land Surface
+150: Generalized Vertical Height Coordinate
+
+Everything seems to be all caps
+
+
 Usage
 =====
 
@@ -313,6 +334,207 @@ pressure_levels_europe = [
     50,
 ]
 
+"""
+Analysis from all models all variables
+
+Full forecast just winds and solar-related
+
+
+
+"""
+
+# ICON ART variables, which are decently different to normal ICON
+global_art_3d_vars = [
+    "FI",
+    "RELHUM",
+]
+
+global_art_2d_vars = [
+    "ACCDRYDEPO_DUSTA",
+    "ACCDRYDEPO_DUSTB",
+    "ACCDRYDEPO_DUSTC",
+    "ACCEMISS_DUSTA",
+    "ACCEMISS_DUSTB",
+    "ACCEMISS_DUSTC",
+    "ACCSEDIM_DUSTA",
+    "ACCSEDIM_DUSTB",
+    "ACCSEDIM_DUSTC",
+    "ACCWETDEPO_CON_DUSTA",
+    "ACCWETDEPO_CON_DUSTB",
+    "ACCWETDEPO_CON_DUSTC",
+    "ACCWETDEPO_GSP_DUSTA",
+    "ACCWETDEPO_GSP_DUSTB",
+    "ACCWETDEPO_GSP_DUSTC",
+    "ALB_RAD",
+    "ALHFL_S",
+    "ASHFL_S",
+    "ASOB_S",
+    "ASOB_T",
+    "ASWDIFD_S",
+    "ASWDIFU_S",
+    "ASWDIR_S",
+    "ATHB_S",
+    "ATHB_T",
+    "AUMFL_S",
+    "AVMFL_S",
+    "CAPE_CON",
+    "CAPE_ML",
+    "CLCH",
+    "CLCL",
+    "CLCM",
+    "CLCT",
+    "CLCT_MOD",
+    "CLDEPTH",
+    "C_T_LK",
+    "DUST_TOTAL_MC_VI",
+    "FRESHSNW",
+    "FR_ICE",
+    "HBAS_CON",
+    "HTOP_CON",
+    "HTOP_DC",
+    "HZEROCL",
+    "H_ICE",
+    "H_ML_LK",
+    "H_SNOW",
+    "LPI_CON_MAX",
+    "PMSL",
+    "PS",
+    "QV_S",
+    "RAIN_CON",
+    "RAIN_GSP",
+    "RELHUM_2M",
+    "RHO_SNOW",
+    "ROOTDP",
+    "RUNOFF_G",
+    "RUNOFF_S",
+    "SMI",
+    "SNOW_CON",
+    "SNOW_GSP",
+    "TAOD_DUST",
+    "TCH",
+    "TCM",
+    "TD_2M",
+    "T_2M",
+    "TOT_PREC",
+    "TQC",
+    "TQI",
+    "TQR",
+    "TQS",
+    "TQV",
+    "U_10M",
+    "V_10M",
+    "VMAX_10M",
+    "T_SNOW",
+    "W_SNOW",
+]
+
+global_art_soil_vars = [
+    "T_SO",
+    "W_SO",
+    "W_SO_ICE"
+]
+
+global_art_model_vars = [ # Most are potential layers, CEIL and SAT are wavelengths, MC_LAYER has its own numbers
+    "T",
+    "U",
+    "V",
+    "W",
+    "P",
+    "DUSTA",
+    "DUSTB",
+    "DUSTC",
+    "DUSTA0",
+    "DUSTB0",
+    "DUSTC0",
+    "DUST_MAX_TOTAL_MC_LAYER",
+    "DUST_TOTAL_MC",
+    "CEIL_BSC_DUST",
+    "SAT_BSC_DUST",
+    "AER_DUST",
+]
+
+global_art_ensemble_model_vars = [
+    "T",
+    "U",
+    "V",
+    "W",
+    "P",
+    "DUSTA",
+    "DUSTB",
+    "DUSTC",
+    "DUSTA0",
+    "DUSTB0",
+    "DUSTC0",
+    "DUST_TOTAL_MC",
+    "CEIL_BSC_DUST",
+    "SAT_BSC_DUST",
+    "AER_DUST",
+]
+
+global_art_ensemble_3d_vars = global_art_3d_vars
+
+global_art_ensemble_2d_vars = [
+    "ACCDRYDEPO_DUSTA",
+    "ACCDRYDEPO_DUSTB",
+    "ACCDRYDEPO_DUSTC",
+    "ACCEMISS_DUSTA",
+    "ACCEMISS_DUSTB",
+    "ACCEMISS_DUSTC",
+    "ACCSEDIM_DUSTA",
+    "ACCSEDIM_DUSTB",
+    "ACCSEDIM_DUSTC",
+    "ACCWETDEPO_CON_DUSTA",
+    "ACCWETDEPO_CON_DUSTB",
+    "ACCWETDEPO_CON_DUSTC",
+    "ACCWETDEPO_GSP_DUSTA",
+    "ACCWETDEPO_GSP_DUSTB",
+    "ACCWETDEPO_GSP_DUSTC",
+    "ALHFL_S",
+    "ASHFL_S",
+    "ASOB_S",
+    "ASOB_T",
+    "ASWDIFD_S",
+    "ASWDIFU_S",
+    "ASWDIR_S",
+    "ATHB_S",
+    "ATHB_T",
+    "CAPE_ML",
+    "CLCH",
+    "CLCL",
+    "CLCM",
+    "CLCT",
+    "CLCT_MOD",
+    "DUST_TOTAL_MC_VI",
+    "FRESHSNW",
+    "FR_ICE",
+    "HBAS_CON",
+    "HTOP_CON",
+    "H_ICE",
+    "H_SNOW",
+    "LPI_CON_MAX",
+    "PMSL",
+    "PS",
+    "RAIN_CON",
+    "RAIN_GSP",
+    "RELHUM_2M",
+    "SNOW_CON",
+    "SNOW_GSP",
+    "TAOD_DUST",
+    "TCH",
+    "TCM",
+    "TD_2M",
+    "T_2M",
+    "TOT_PREC",
+    "TQC",
+    "TQI",
+    "TQV",
+    "U_10M",
+    "V_10M",
+    "VMAX_10M",
+    "T_SNOW",
+    "W_SNOW",
+]
+
 
 @dataclasses.dataclass
 class Config:
@@ -346,6 +568,27 @@ GLOBAL_CONFIG = Config(
     repo_id="openclimatefix/dwd-icon-global",
     chunking={
         "step": 37,
+        "values": 122500,
+        "isobaricInhPa": -1,
+    },
+)
+
+GLOBAL_ART_CONFIG = Config(
+    vars_2d=global_art_2d_vars,
+    vars_3d=[
+        v + "@" + str(p)
+        for v in var_3d_list_global
+        for p in pressure_levels_global
+    ],
+    vars_model=global_art_model_vars,
+    vars_invarient=invarient_list,
+    base_url="https://opendata.dwd.de/weather/nwp/v1/m",
+    model_url="icon-art/p",
+    var_url="icon_global_icosahedral",
+    f_steps=list(range(0, 52)), # + list(range(81, 183, 3)),
+    repo_id="openclimatefix/dwd-icon-global",
+    chunking={
+        "step": 26,
         "values": 122500,
         "isobaricInhPa": -1,
     },
