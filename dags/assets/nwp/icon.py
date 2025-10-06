@@ -407,7 +407,6 @@ global_art_2d_vars = [
     "ROOTDP",
     "RUNOFF_G",
     "RUNOFF_S",
-    "SMI",
     "SNOW_CON",
     "SNOW_GSP",
     "TAOD_DUST",
@@ -431,7 +430,8 @@ global_art_2d_vars = [
 global_art_soil_vars = [
     "T_SO",
     "W_SO",
-    "W_SO_ICE"
+    "W_SO_ICE",
+    "SMI"
 ]
 
 global_art_model_vars = [ # Most are potential layers, CEIL and SAT are wavelengths, MC_LAYER has its own numbers
@@ -535,6 +535,32 @@ global_art_ensemble_2d_vars = [
     "W_SNOW",
 ]
 
+global_art_pressure_levels = [
+    10000,
+    100000,
+    15000,
+    20000,
+    25000,
+    3000,
+    30000,
+    40000,
+    5000,
+    50000,
+    60000,
+    7000,
+    70000,
+    80000,
+    85000,
+    90000,
+    92500,
+    95000,
+]
+
+global_art_model_levels = list(range(77,121)) # Widest range, most are only 118-120
+
+global_art_wavelengths = [1064, 532]
+
+global_art_soil_levels = [0.0, 0.005, 0.01, 0.02, 0.03, 0.06, 0.09, 0.18, 0.27, 0.54, 0.81, 1.62, 2.43, 4.86, 7.29, 14.58] # m
 
 @dataclasses.dataclass
 class Config:
@@ -544,12 +570,15 @@ class Config:
     vars_3d: list[str]
     vars_invarient: list[str]
     vars_model: list[str]
+    vars_soil: list[str]
+    vars_wavelength: list[str]
     base_url: str
     model_url: str
     var_url: str
     chunking: dict[str, int]
     f_steps: list[int]
     repo_id: str
+    ensemble_members: list[int] | None = None
     per_init_time: bool = False
 
 GLOBAL_CONFIG = Config(
@@ -560,6 +589,8 @@ GLOBAL_CONFIG = Config(
         for p in pressure_levels_global
     ],
     vars_model=[],
+    vars_soil=[],
+    vars_wavelength=[],
     vars_invarient=invarient_list,
     base_url="https://opendata.dwd.de/weather/nwp",
     model_url="icon/grib",
@@ -580,6 +611,8 @@ GLOBAL_ART_CONFIG = Config(
         for v in var_3d_list_global
         for p in pressure_levels_global
     ],
+    vars_soil=[],
+    vars_wavelength=[],
     vars_model=global_art_model_vars,
     vars_invarient=invarient_list,
     base_url="https://opendata.dwd.de/weather/nwp/v1/m",
@@ -594,10 +627,62 @@ GLOBAL_ART_CONFIG = Config(
     },
 )
 
+GLOBAL_ART_ANALYSIS_CONFIG = Config(
+    vars_2d=global_art_2d_vars,
+    vars_3d=[
+        v + "@" + str(p)
+        for v in global_art_3d_vars
+        for p in global_art_pressure_levels
+    ],
+    vars_model=[
+        v + "@" + str(p)
+        for v in global_art_model_vars
+        for p in global_art_model_levels
+    ],
+    vars_soil=[
+        v + "@" + str(p)
+        for v in global_art_soil_vars
+        for p in global_art_soil_levels
+    ],
+    vars_wavelength=[v + "@" + str(p) + "@" + str(l) for v in ["CEIL_BSC_DUST", "SAT_BSC_DUST"] for p in global_art_wavelengths for l in global_art_model_levels],
+    vars_invarient=invarient_list,
+    base_url="https://opendata.dwd.de/weather/nwp/v1/m",
+    model_url="icon-art/p",
+    var_url="icon_global_icosahedral",
+    f_steps=[0],
+    repo_id="openclimatefix/dwd-icon-global",
+    chunking={
+        "step": 1,
+        "values": 122500,
+        "isobaricInhPa": -1,
+    },
+)
+
+GLOBAL_ART_ENSEMBLE_ANALYSIS_CONFIG = Config(
+    vars_2d=global_art_ensemble_2d_vars,
+    vars_3d=global_art_ensemble_3d_vars,
+    vars_model=global_art_ensemble_model_vars,
+    vars_invarient=invarient_list,
+    vars_soil=[],
+    vars_wavelength=[],
+    base_url="https://opendata.dwd.de/weather/nwp/v1/m",
+    model_url="icon-art-eps/p",
+    var_url="icon_global_icosahedral",
+    f_steps=[0],
+    repo_id="openclimatefix/dwd-icon-global",
+    chunking={
+        "step": 1,
+        "values": 122500,
+        "isobaricInhPa": -1,
+    },
+)
+
 GLOBAL_ENSEMBLE_CONFIG = Config(
     vars_2d=var_2d_list_global,
     vars_3d=[],
     vars_model=[],
+    vars_soil=[],
+    vars_wavelength=[],
     vars_invarient=invarient_list,
     base_url="https://opendata.dwd.de/weather/nwp",
     model_url="icon-eps/grib",
@@ -619,6 +704,8 @@ GLOBAL_MODEL_CONFIG = Config(
         for p in model_levels_global
     ],
     vars_3d=[],
+    vars_soil=[],
+    vars_wavelength=[],
     vars_invarient=invarient_list,
     base_url="https://opendata.dwd.de/weather/nwp",
     model_url="icon/grib",
@@ -641,6 +728,8 @@ EUROPE_CONFIG = Config(
     ],
     vars_model=[],
     vars_invarient=[],
+    vars_soil=[],
+    vars_wavelength=[],
     base_url="https://opendata.dwd.de/weather/nwp",
     model_url="icon-eu/grib",
     var_url="icon-eu_europe_regular-lat-lon",
@@ -662,6 +751,8 @@ EUROPE_ENSEMBLE_CONFIG = Config(
         for p in pressure_levels_europe
     ],
     vars_model=[],
+    vars_soil=[],
+    vars_wavelength=[],
     vars_invarient=invarient_list,
     base_url="https://opendata.dwd.de/weather/nwp",
     model_url="icon-eu-eps/grib",
@@ -675,6 +766,68 @@ EUROPE_ENSEMBLE_CONFIG = Config(
         "number": -1,
     },
 )
+
+def find_file_name_v2(
+        config: Config,
+        run_string: str,
+        date: dt.date,
+) -> list[str]:
+    """
+    Find file names to be downloaded for a given config
+
+    - vars_2d, a list of 2d variables to download, e.g. ['t_2m']
+    - vars_3d, a list of 3d variables to download with pressure
+      level, e.g. ['t@850','fi@500']
+    - f_times, forecast steps, e.g. 0 or list(np.arange(1, 79))
+    - vars_model, a list of model level variables to download with model
+      level, e.g. ['u@10','v@20']
+    - vars_invarient, a list of invarient variables to download, e.g. ['clat','clon']
+    - vars_soil, a list of soil variables to download with soil
+      level, e.g. ['t_so@0','w_so@1']
+    Note that this function WILL NOT check if the files exist on
+    the server to avoid wasting time. When they're passed
+    to the download_extract_files function if the file does not
+    exist it will simply not be downloaded.
+    """
+    run_string = date.strftime("%Y-%m-%d") + f"T{run_string}:00"
+    # Start with the 2D ones are they are easier
+    if (len(config.vars_2d) == 0) and (len(config.vars_3d) == 0) and (len(config.vars_model) == 0):
+        raise ValueError("You need to specify at least one 2D, 3D, or model level variable")
+
+    urls = []
+    for f_time in config.f_steps:
+        for var in config.vars_2d:
+            # TODO: Handle D2 RUC where time step is every 15 minutes
+            urls.append(
+                f"{config.base_url}/{config.model_url}/{var}/r/{run_string}/s/PT{f_time:03d}H00M.grib2",
+            )
+        for var in config.vars_3d:
+            var_t, plev = var.split("@")
+            urls.append(
+                f"{config.base_url}/{config.model_url}/{var_t}/lvt1/100/lv1/{plev}/r/{run_string}/s/PT{f_time:03d}H00M.grib2",
+            )
+        for var in config.vars_model:
+            var_t, mlev = var.split("@")
+            urls.append(
+                f"{config.base_url}/{config.model_url}/{var_t}/lvt1/150/lv1/{mlev}/r/{run_string}/s/PT{f_time:03d}H00M.grib2",
+            )
+        for var in config.vars_soil:
+            var_t, slev = var.split("@")
+            urls.append(
+                f"{config.base_url}/{config.model_url}/{var_t}/lvt1/106/lv1/{slev}/r/{run_string}/s/PT{f_time:03d}H00M.grib2",
+            )
+        for var in config.vars_wavelength:
+            var_t, wave, mlev = var.split("@")
+            urls.append(
+                f"{config.base_url}/{config.model_url}/{var_t}/wvl1/{wave}/lvt1/150/lv1/{mlev}/r/{run_string}/s/PT{f_time:03d}H00M.grib2",
+            )
+        for var in config.vars_invarient:
+            urls.append(
+                f"{config.base_url}/{config.model_url}/{var}/r/{run_string}/s/PT000H00M.grib2",
+            )
+    return urls
+
+
 
 def find_file_name(
     config: Config,
@@ -733,6 +886,34 @@ def find_file_name(
             )
     return urls
 
+def download_url(url: str, folder: str) -> str | None:
+    """Download a file from a given url, renaming it to avoid conflicts"""
+    # Generate a unique filename based on the URL
+    variable = url.split("/p/")[-1].split("/")[0]
+    # TODO Make work for 15 minutely D2 data
+    if "wvl1" in url:
+        wavelength = url.split("/wvl1/")[-1].split("/")[0]
+        level = url.split("/lv1/")[-1].split("/")[0]
+        step = url.split("/s/PT")[-1].split("H")[0]
+        filename = f"{folder}/{variable}_wavelength-{wavelength}_level-{level}_step-{step}.grib2"
+    elif "lv1" in url:
+        level = url.split("/lv1/")[-1].split("/")[0]
+        step = url.split("/s/PT")[-1].split("H")[0]
+        filename = f"{folder}/{variable}_level-{level}_step-{step}.grib2"
+    else:
+        step = url.split("/s/PT")[-1].split("H")[0]
+        filename = f"{folder}/{variable}_step-{step}.grib2"
+
+    if os.path.exists(filename):
+        return filename
+    r = requests.get(url, stream=True, timeout=60 * 60)
+    if r.status_code == requests.codes.ok:
+        with r.raw as source, open(filename, "wb") as dest:
+            dest.write(source.read())
+        return filename
+    else:
+        log.debug(f"Failed to download {url}")
+        return None
 
 def download_extract_url(url: str, folder: str) -> str | None:
     """Download and extract a file from a given url."""
@@ -1038,7 +1219,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("area", choices=["eu", "global", "global_model", "global_ensemble", "eu_ensemble"], help="Area to download data for")
+    parser.add_argument("area", choices=["eu", "global", "global_model", "global_ensemble", "eu_ensemble", "global_art", "global_art_ensemble"], help="Area to download data for")
     parser.add_argument("--path", default="./", help="Folder in which to save files") # noqa: S108
     parser.add_argument(
         "--run",
@@ -1055,7 +1236,6 @@ if __name__ == "__main__":
     )
 
     # Check HF_TOKEN env var is present
-    # _ = os.environ["HF_TOKEN"]
     log.info("Starting ICON download script")
     args = parser.parse_args()
 
@@ -1068,6 +1248,17 @@ if __name__ == "__main__":
         )
 
     path: str = f"{args.path}/{args.area}"
+
+    # Just do the url and download/extract
+    urls = find_file_name_v2(GLOBAL_ART_ANALYSIS_CONFIG, "00", args.date)
+    # Now download them
+    if not pathlib.Path(f"{path}/test/").exists():
+        pathlib.Path(f"{path}/test/").mkdir(parents=True, exist_ok=True)
+    for url in urls:
+        download_url(url, path)
+
+    exit()
+
     if args.run == "all":
         runs: list[str] = ["00", "06", "12", "18"]
     else:
