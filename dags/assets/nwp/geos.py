@@ -43,6 +43,8 @@ def get_geos_day(day: pd.Timestamp, archive_folder: str | None = None) -> list[s
     for hour in range(0, 24):
         for minute in [0, 15, 30, 45]:
             url = f"https://portal.nccs.nasa.gov/datashare/gmao/geos-cf/v1/ana/Y{day.year:04d}/M{day.month:02d}/D{day.day:02d}/GEOS-CF.v01.rpl.htf_inst_15mn_g1440x721_x1.{day.strftime('%Y%m%d')}_{hour:02d}{minute:02d}z.nc4"
+            # v2 URL
+            #url = f"https://portal.nccs.nasa.gov/datashare/gmao/geos-cf/v2/ana/Y{day.year:04d}/M{day.month:02d}/D{day.day:02d}/GEOS.cf.ana.htf_inst_15mn_L1440x721_slv.{day.strftime('%Y%m%d')}_{hour:02d}{minute:02d}z.RO.nc4"
             urls.append(url)
 
     # Download the files
@@ -50,8 +52,9 @@ def get_geos_day(day: pd.Timestamp, archive_folder: str | None = None) -> list[s
     for url in urls:
         filename = os.path.join(archive_folder, os.path.basename(url))
         finished = False
+        tries = 0
         if not os.path.exists(filename):
-            while not finished:
+            while not finished and tries < 20:
                 try:
                     # Download the file using fsspec
                     with fsspec.open(url, "rb") as f:
