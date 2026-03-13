@@ -13,6 +13,7 @@ import pandas as pd
 import xarray as xr
 from icechunk.xarray import to_icechunk
 from loguru import logger
+import zarr.codecs
 
 """Base provider interface."""
 
@@ -72,10 +73,26 @@ class BaseProvider(ABC):
         Providers may override this if they need specialized handling.
         """
         session = repo.writable_session("main")
-        # If time is not in the repo, then append it
-        # if data.time.values[0] not in xr.open_zarr(repo.readonly_session("main").store, consolidated=False).time.values:
-        logger.debug(f"Appending {processed[self.append_dim].values} to icechunk")
-        to_icechunk(processed, session, append_dim=self.append_dim)
+        # Check if store already has data
+        try:
+            existing = xr.open_zarr(session.store, consolidated=False)
+            has_data = len(existing.dims) > 0
+        except Exception:
+            has_data = False
+
+        if has_data:
+            logger.debug(f"Appending {processed[self.append_dim].values} to icechunk")
+            to_icechunk(processed, session, append_dim=self.append_dim)
+        else:
+            encoding = {}
+            for dv in processed.data_vars:
+                encoding[dv] = {
+                    "compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9,
+                                                          shuffle=zarr.codecs.BloscShuffle.bitshuffle)}
+            encoding[self.append_dim] = {"units": "seconds since 1970-01-01", "calendar": "standard", "dtype": "int64"}
+            # If time is not in the repo, then append it
+            # if data.time.values[0] not in xr.open_zarr(repo.readonly_session("main").store, consolidated=False).time.values:
+            to_icechunk(processed, session, encoding=encoding)
         session.commit(f"add {processed[self.append_dim].values} data to store", rebase_with=icechunk.ConflictDetector())
 
     @contextmanager
