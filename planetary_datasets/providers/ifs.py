@@ -23,31 +23,17 @@ class IFSAnalysisProvider(BaseProvider):
     name = "ifs_analysis"
     append_dim = "time"
     icechunk_path = "s3://us-west-2.opendata.source.coop/bkr/ifs/hres_analysis.icechunk"
+    grid: list[float] | None = None
 
-    def fetch(self, it: pd.Timestamp, **kwargs) -> list[str]:
-        date, times_in_repo, data_vars, temp_dir, grid = date_times_in_repo_and_data_vars
-        if date.to_numpy() in times_in_repo:
-            logger.debug(f"HRES Analysis data for {date} already exists, skipping...")
-            return None, None
-        temp_folder = f"{temp_dir}/{date.strftime('%Y%m%d')}_hres_temp"
+    def fetch(self, it: pd.Timestamp) -> list[str]:
+        temp_dir = self.local_tempdir
+        temp_folder = f"{temp_dir}/{it.strftime('%Y%m%d%H')}_hres"
         if not os.path.exists(temp_folder):
             os.makedirs(temp_folder)
-        surface_ds, atmos_ds = download_raw_files(date, temp_folder=temp_folder, grid=grid)
-        if surface_ds is None or atmos_ds is None:
-            logger.debug(f"Failed to download raw files for {date}, skipping...")
-            shutil.rmtree(temp_folder)
-            return None, temp_folder
-        ds = merge_and_rename_vars(surface_ds, atmos_ds)
-        if data_vars is not None and set(ds.data_vars.keys()) != set(data_vars):
-            logger.debug(f"Data variables do not match for {date}, skipping...")
-            logger.error(set(ds.data_vars.keys()) - set(data_vars))
-            logger.debug(data_vars)
-            shutil.rmtree(temp_folder)
-            return None, temp_folder
-        return ds, temp_folder
+        surface_files, atmos_files = download_raw_files(it, temp_folder=temp_folder, grid=self.grid)
+        return [surface_files, atmos_files]
 
-    def process(self, input_files: List[str], it: pd.Timestamp, grid: list[float] | None = None,):
-        data_vars = xr.open_zarr(self.get_icechunk_repo().readonly_session("main").store, consolidated=False).data_vars.keys()
+    def process(self, input_files: List[str], it: pd.Timestamp):
         surface_files, atmosphere_files = input_files
         surface_ds = xr.open_mfdataset(surface_files, engine="cfgrib", compat="override", chunks={})
         # Atmosphere files must be merged per-hour (across variables), then concatenated
@@ -62,44 +48,7 @@ class IFSAnalysisProvider(BaseProvider):
         atmos_ds = xr.concat(hour_datasets, dim="time")
 
         ds = merge_and_rename_vars(surface_ds, atmos_ds)
-        if data_vars is not None and set(ds.data_vars.keys()) != set(data_vars):
-            logger.debug(f"Data variables do not match for {it}, skipping...")
-            logger.error(set(ds.data_vars.keys()) - set(data_vars))
-            logger.debug(data_vars)
-            return
         self.write_to_icechunk(self.get_icechunk_repo(), ds.chunk({"time": 1, "latitude": -1, "longitude": -1}))
-
-
-# Utils functions (from assimilation.data.load.utils)
-def lon_to_m180(lon):
-    return (lon + 180) % 360 - 180
-
-
-def make_lat_lon_coords_consistent(ds: xr.Dataset, lat_lon_coords: bool = True) -> xr.Dataset:
-    if lat_lon_coords:
-        if "latitude" not in ds.coords or "longitude" not in ds.coords:
-            raise ValueError("Dataset must have 'latitude' and 'longitude' coordinates")
-
-    if ds["latitude"].min() < -90 or ds["latitude"].max() > 90:
-        raise ValueError("Latitude values must be between -90 and 90 degrees")
-    if ds["longitude"].min() < -180 or ds["longitude"].max() > 180:
-        if (ds["longitude"] >= 0).all() and (ds["longitude"] <= 360).all():
-            ds["longitude"] = lon_to_m180(ds["longitude"])
-        else:
-            raise ValueError("Longitude values must be between -180 and 180 degrees")
-
-    return ds
-
-
-def make_spatial_coords_increasing(ds: xr.Dataset, x_coord: str, y_coord: str) -> xr.Dataset:
-    ds = ds.sortby(x_coord, ascending=True).sortby(y_coord, ascending=True)
-
-    if not (ds[x_coord].diff(dim=x_coord) > 0).all():
-        raise ValueError(f"'{x_coord}' coordinate must be increasing")
-    if not (ds[y_coord].diff(dim=y_coord) > 0).all():
-        raise ValueError(f"'{y_coord}' coordinate must be increasing")
-
-    return ds
 
 vars_to_keep_float32 = [
     "specific_humidity",
@@ -236,7 +185,7 @@ def regrid_grib(input_path: str, grid: list[float]) -> str:
     return output_path
 
 
-def download_file(url, output_path, opener, max_retries: int = 3) -> bool:
+def download_file(url, output_path, opener) -> bool:
     successful = False
     while not successful:
         try:
@@ -337,35 +286,6 @@ def merge_and_rename_vars(surface_ds: xr.Dataset, atmos_ds: xr.Dataset) -> xr.Da
         if var in vars_to_keep_float32 or var in static_vars:
             continue
         ds[var] = ds[var].astype(np.float16)
-    ds = make_spatial_coords_increasing(ds, x_coord="longitude", y_coord="latitude")
-    ds = make_lat_lon_coords_consistent(ds)
     level_dim = "isobaricInhPa" if "isobaricInhPa" in ds.dims else "level"
     ds = ds.chunk({"time": 1, level_dim: -1, "latitude": -1, "longitude": -1})
     return ds
-
-
-def download_and_process_date(
-    date_times_in_repo_and_data_vars: tuple[
-        pd.Timestamp, list[pd.Timestamp], list[str], str, list[float] | None
-    ],
-) -> tuple[xr.Dataset, str]:
-    date, times_in_repo, data_vars, temp_dir, grid = date_times_in_repo_and_data_vars
-    if date.to_numpy() in times_in_repo:
-        logger.debug(f"HRES Analysis data for {date} already exists, skipping...")
-        return None, None
-    temp_folder = f"{temp_dir}/{date.strftime('%Y%m%d')}_hres_temp"
-    if not os.path.exists(temp_folder):
-        os.makedirs(temp_folder)
-    surface_ds, atmos_ds = download_raw_files(date, temp_folder=temp_folder, grid=grid)
-    if surface_ds is None or atmos_ds is None:
-        logger.debug(f"Failed to download raw files for {date}, skipping...")
-        shutil.rmtree(temp_folder)
-        return None, temp_folder
-    ds = merge_and_rename_vars(surface_ds, atmos_ds)
-    if data_vars is not None and set(ds.data_vars.keys()) != set(data_vars):
-        logger.debug(f"Data variables do not match for {date}, skipping...")
-        logger.error(set(ds.data_vars.keys()) - set(data_vars))
-        logger.debug(data_vars)
-        shutil.rmtree(temp_folder)
-        return None, temp_folder
-    return ds, temp_folder

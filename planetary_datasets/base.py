@@ -77,10 +77,24 @@ class BaseProvider(ABC):
         try:
             existing = xr.open_zarr(session.store, consolidated=False)
             has_data = len(existing.dims) > 0
+            data_vars = xr.open_zarr(self.get_icechunk_repo().readonly_session("main").store,
+                                     consolidated=False).data_vars.keys()
+
         except Exception:
             has_data = False
 
         if has_data:
+            if data_vars is not None and set(processed.data_vars.keys()) != set(data_vars):
+                logger.debug(f"Data variables do not match, skipping...")
+                logger.error(set(processed.data_vars.keys()) - set(data_vars))
+                logger.debug(data_vars)
+                return
+            # Check to ensure level/isobaricinhPA/lat/lon are in the same order as existing data
+            for coord in ["latitude", "longitude", "level", "isobaricInhPa"]:
+                if coord in existing.dims and coord in processed.dims:
+                    if not all(existing[coord].values == processed[coord].values):
+                        logger.error(f"{coord} values do not match, skipping...")
+                        return
             logger.debug(f"Appending {processed[self.append_dim].values} to icechunk")
             to_icechunk(processed, session, append_dim=self.append_dim)
         else:
