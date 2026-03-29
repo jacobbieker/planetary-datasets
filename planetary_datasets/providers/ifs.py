@@ -1,6 +1,7 @@
 import http.client
 import multiprocessing as mp
 import os
+import pathlib
 import shutil
 import ssl
 from typing import List
@@ -25,9 +26,11 @@ class IFSAnalysisProvider(BaseProvider):
     icechunk_path = "s3://us-west-2.opendata.source.coop/bkr/ifs/hres_analysis.icechunk"
     grid: list[float] | None = None
 
-    def fetch(self, it: pd.Timestamp) -> list[str]:
-        temp_dir = self.local_tempdir
+    def fetch(self, it: pd.Timestamp, temp_dir: str | pathlib.Path = None) -> list[str]:
+        if temp_dir is None:
+            temp_dir = self.local_tempdir()
         temp_folder = f"{temp_dir}/{it.strftime('%Y%m%d%H')}_hres"
+        print(temp_folder)
         if not os.path.exists(temp_folder):
             os.makedirs(temp_folder)
         surface_files, atmos_files = download_raw_files(it, temp_folder=temp_folder, grid=self.grid)
@@ -48,7 +51,8 @@ class IFSAnalysisProvider(BaseProvider):
         atmos_ds = xr.concat(hour_datasets, dim="time")
 
         ds = merge_and_rename_vars(surface_ds, atmos_ds)
-        self.write_to_icechunk(self.get_icechunk_repo(), ds.chunk({"time": 1, "latitude": -1, "longitude": -1}))
+        return ds
+        #self.write_to_icechunk(self.get_icechunk_repo(), ds)
 
 vars_to_keep_float32 = [
     "specific_humidity",
@@ -282,10 +286,18 @@ def merge_and_rename_vars(surface_ds: xr.Dataset, atmos_ds: xr.Dataset) -> xr.Da
     ds = ds.rename(renamed)
     ds = ds.drop_vars(vars_to_drop, errors="ignore")
     ds = ds.drop_vars(static_vars, errors="ignore")
-    for var in ds.data_vars:
-        if var in vars_to_keep_float32 or var in static_vars:
-            continue
-        ds[var] = ds[var].astype(np.float16)
+    #for var in ds.data_vars:
+        #if var in vars_to_keep_float32 or var in static_vars:
+        #    continue
+        #ds[var] = ds[var].astype(np.float16)
     level_dim = "isobaricInhPa" if "isobaricInhPa" in ds.dims else "level"
     ds = ds.chunk({"time": 1, level_dim: -1, "latitude": -1, "longitude": -1})
     return ds
+
+if __name__ == "__main__":
+    import pandas as pd
+    provider = IFSAnalysisProvider()
+    provider.icechunk_path = "s3://us-west-2.opendata.source.coop/bkr/ifs/hres_analysis_1deg.icechunk"
+    provider.grid = [1.0, 1.0]
+    for it in pd.date_range(start="2016-01-01", end="2026-12-31", freq="1D"):
+        provider.run_partition(it)

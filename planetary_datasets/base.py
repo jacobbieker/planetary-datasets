@@ -39,7 +39,10 @@ class BaseProvider(ABC):
 
     def missing_timesteps(self, desired_timestamps: pd.DatetimeIndex) -> List[pd.Timestamp]:
         """Return a list of missing timesteps between start and end for the target store."""
-        times = xr.open_zarr(self.get_icechunk_repo().readonly_session("main").store, consolidated=False)[self.append_dim].values
+        try:
+            times = xr.open_zarr(self.get_icechunk_repo().readonly_session("main").store, consolidated=False)[self.append_dim].values
+        except:
+            times = []
         # Filter times to be between start and end
         missing_times = [time for time in desired_timestamps if time not in times]
         return missing_times
@@ -56,11 +59,11 @@ class BaseProvider(ABC):
                                           region="us-west-2", )
         else:
             storage = icechunk.local_filesystem_storage(self.icechunk_path)
-        repo = icechunk.Repository.open(storage)
+        repo = icechunk.Repository.open_or_create(storage)
         return repo
 
     @abstractmethod
-    def process(self, input_files: List[str], it: pd.Timestamp):
+    def process(self, input_files: List[str], it: pd.Timestamp, temp_dir: str | None = None, **kwargs) -> xr.Dataset:
         """Process input files and return a processed object exposing for writing.
 
         Implementations are free to return an xarray.Dataset or a virtualized wrapper from
@@ -109,11 +112,11 @@ class BaseProvider(ABC):
             to_icechunk(processed, session, encoding=encoding)
         session.commit(f"add {processed[self.append_dim].values} data to store", rebase_with=icechunk.ConflictDetector())
 
-    @contextmanager
-    def local_tempdir(self):
+    @staticmethod
+    def local_tempdir():
         """Context manager yielding a pathlib.Path to a temporary directory."""
-        with tempfile.TemporaryDirectory() as td:
-            yield pathlib.Path(td)
+        td = tempfile.TemporaryDirectory()
+        return pathlib.Path(td.name)
 
     def run_partition(self, it: pd.Timestamp):
         """High level orchestration: fetch -> process -> write.
@@ -124,14 +127,24 @@ class BaseProvider(ABC):
         repo = self.get_icechunk_repo()
         missing_times = self.missing_timesteps(pd.DatetimeIndex([it]))
         if len(missing_times) == 0:
-            logger.debug(f"Timestep {it} already exists in {self.name} icechunk, skipping.")
+            logger.debug(f"Timestep {it} already exists in {self.name} icechunk at {self.icechunk_path}, skipping.")
             return
-        input_files = self.fetch(it)
+        # Create a local temporary directory and pass it to fetch/process when
+        # providers support it. We prefer keyword invocation and fall back to the
+        # previous call signature if a provider does not accept the tmpdir arg.
+        temp_dir = self.local_tempdir()
+        print(temp_dir)
+        input_files = self.fetch(it, temp_dir=temp_dir)
+
         if not input_files:
             logger.debug(f"No input files found for {self.name} at {it}, skipping.")
             return
-        with self.local_tempdir() as tmpdir:
-            processed = self.process(input_files, it)
-            self.write_to_icechunk(repo, processed, self.append_dim)
-        # Remove tmpdir after processing
-        shutil.rmtree(tmpdir, ignore_errors=True)
+
+        processed = self.process(input_files, it)
+
+        # write processed result to icechunk repo
+        self.write_to_icechunk(repo, processed)
+
+        # Best-effort remove tempdir (TemporaryDirectory context already cleans up,
+        # but calling rmtree here is safe with ignore_errors=True)
+        shutil.rmtree(temp_dir, ignore_errors=True)

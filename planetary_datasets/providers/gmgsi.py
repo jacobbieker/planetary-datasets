@@ -26,9 +26,9 @@ class GMGSIProvider(BaseProvider):
     name = "gmgsi_v3"
     append_dim = "time"
     # Default icechunk path; override if you want a different store
-    icechunk_path = "s3://us-west-2.opendata.source.coop/bkr/gmgsi/gmgsi_v3.icechunk"
+    icechunk_path = "s3://us-west-2.opendata.source.coop/bkr/gmgi/gmgsi_v3.icechunk"
 
-    def fetch(self, it: pd.Timestamp, channels: Optional[List[str]] = None, **kwargs) -> List[str]:
+    def fetch(self, it: pd.Timestamp, channels: Optional[List[str]] = None, tmpdir: Optional[str] = None, **kwargs) -> List[str]:
         """Download GMGSI v3 files for the given partition timestamp.
 
         Returns a list of local file paths. If any expected file is missing the
@@ -39,6 +39,11 @@ class GMGSIProvider(BaseProvider):
 
         fs = s3fs.S3FileSystem(anon=True)
         downloaded_files: List[str] = []
+
+        # If a tmpdir was provided by BaseProvider.run_partition, prefer that
+        # for temporary downloads. Otherwise fall back to the persistent
+        # ARCHIVE_FOLDER (keeps behavior compatible with previous implementation).
+        use_dir = tmpdir if tmpdir is not None else ARCHIVE_FOLDER
 
         for channel in channels:
             if channel == "VIS":
@@ -74,7 +79,11 @@ class GMGSIProvider(BaseProvider):
             # fs.glob may return a path without the s3:// prefix in this environment,
             # so prepend it to get a valid s3 URI for fs.get
             s3_uri = f"s3://{matches[0]}"
-            local_uri = s3_uri.replace(BASE_URL, ARCHIVE_FOLDER)
+            # compute local path within chosen directory
+            # matches[0] may be a list element or a string; ensure it's a string
+            matched = matches[0] if isinstance(matches[0], str) else str(matches[0])
+            local_name = os.path.basename(matched)
+            local_uri = os.path.join(use_dir, local_name)
             os.makedirs(os.path.dirname(local_uri), exist_ok=True)
             if not os.path.exists(local_uri):
                 fs.get(s3_uri, local_uri)
@@ -85,7 +94,7 @@ class GMGSIProvider(BaseProvider):
 
         return downloaded_files
 
-    def process(self, input_files: List[str], it: pd.Timestamp):
+    def process(self, input_files: List[str], it: pd.Timestamp, tmpdir: Optional[str] = None):
         """Read local GMGSI v3 files and return a merged xarray.Dataset.
 
         The processing mirrors the logic used previously in the Dagster asset:
@@ -130,27 +139,33 @@ class GMGSIProvider(BaseProvider):
             # drop unexpected data variables
             for dv in list(ds.data_vars):
                 if dv not in keep:
-                    ds = ds.drop_vars(dv)
+                    # drop_vars accepts a name or list of names — pass a list to
+                    # avoid mypy/lsp complaints about Hashable vs str
+                    ds = ds.drop_vars([dv])
 
             datasets_to_merge.append(ds.astype(np.uint8))
 
         merged = xr.merge(datasets_to_merge)
 
-        # Try best-effort cleanup of the downloaded files
-        try:
-            parent = os.path.dirname(input_files[0])
-            for fp in input_files:
-                try:
-                    os.remove(fp)
-                except Exception:
-                    pass
-            if os.path.isdir(parent) and not os.listdir(parent):
-                try:
-                    os.rmdir(parent)
-                except Exception:
-                    pass
-        except Exception:
-            logger.debug("Failed to fully clean up GMGSI v3 temp files", exc_info=True)
+        # Try best-effort cleanup of the downloaded files, but only when the
+        # files were downloaded into a temporary directory provided by the
+        # BaseProvider orchestration. When tmpdir is None we assume files are
+        # persistent archive files and should not be removed.
+        if tmpdir is not None:
+            try:
+                parent = os.path.dirname(input_files[0])
+                for fp in input_files:
+                    try:
+                        os.remove(fp)
+                    except Exception:
+                        pass
+                if os.path.isdir(parent) and not os.listdir(parent):
+                    try:
+                        os.rmdir(parent)
+                    except Exception:
+                        pass
+            except Exception:
+                logger.debug("Failed to fully clean up GMGSI v3 temp files", exc_info=True)
 
         return merged
 
@@ -165,3 +180,11 @@ def get_global_mosaic_v3(time: pd.Timestamp, channels: Optional[List[str]] = Non
 
 
 __all__ = ["GMGSIProvider", "get_global_mosaic_v3"]
+
+if __name__ == "__main__":
+    import pandas as pd
+    date_range = pd.date_range("2025-03-01", "2026-06-02", freq="1H")
+    provider = GMGSIProvider()
+    for it in date_range:
+        print(f"Processing {it}")
+        provider.run_partition(it)
