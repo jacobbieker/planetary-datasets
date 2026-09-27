@@ -85,6 +85,44 @@ def test_storage_builds_for_each_credential_style(tmp_path, monkeypatch):
     assert cfg.icechunk_storage("bkr/x.icechunk") is not None
 
 
+def test_custom_endpoint_is_used(tmp_path, monkeypatch):
+    """Most stores live at bucket `bkr` behind source.coop's own endpoint."""
+    monkeypatch.setenv("ICECHUNK_BUCKET", "bkr")
+    monkeypatch.setenv("ICECHUNK_ENDPOINT_URL", "https://data.source.coop")
+    cfg = load_config(env_file=tmp_path / "absent.env")
+    assert cfg.endpoint_url == "https://data.source.coop"
+    assert cfg.icechunk_storage("geo/himawari_1km.icechunk") is not None
+
+
+def test_path_style_defaults_on_with_a_custom_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICECHUNK_ENDPOINT_URL", "https://data.source.coop")
+    cfg = load_config(env_file=tmp_path / "absent.env")
+    # Not set explicitly, but must be applied: a dotted bucket cannot use virtual-host
+    # addressing over TLS.
+    assert cfg.force_path_style is None
+    assert cfg.icechunk_storage("x.icechunk") is not None
+
+
+def test_path_style_can_be_forced_off(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICECHUNK_ENDPOINT_URL", "https://data.source.coop")
+    monkeypatch.setenv("ICECHUNK_FORCE_PATH_STYLE", "false")
+    cfg = load_config(env_file=tmp_path / "absent.env")
+    assert cfg.force_path_style is False
+
+
+def test_endpoint_is_absent_by_default(tmp_path):
+    cfg = load_config(env_file=tmp_path / "absent.env")
+    assert cfg.endpoint_url is None
+    assert cfg.allow_http is False
+
+
+def test_bool_env_parsing(tmp_path, monkeypatch):
+    for raw, expected in [("1", True), ("true", True), ("YES", True), ("on", True),
+                          ("0", False), ("false", False), ("no", False)]:
+        monkeypatch.setenv("ICECHUNK_ALLOW_HTTP", raw)
+        assert load_config(env_file=tmp_path / "absent.env").allow_http is expected
+
+
 def test_local_storage_creates_the_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
     cfg = load_config(env_file=tmp_path / "absent.env")
