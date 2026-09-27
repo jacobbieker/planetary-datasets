@@ -55,6 +55,22 @@ publish it. Rotate first, or rewrite those two commits before pushing.
 Rotating is still right even though nothing is public: the value was pasted into 51 files
 over months, and there is no way to be confident it was never shared elsewhere.
 
+### Nothing else is published
+
+The table above is not just a list of what turned up during the migration. `origin/main`
+was scanned independently for any remaining plaintext secret:
+
+```
+# any assignment of a password / username / token / api_key / secret literal
+git grep -nE "(password|passwd|pwd|username|token|api_key|secret)\s*=\s*[\"'][^\"']{6,}[\"']" \
+    origin/main -- '*.py' | grep -viE "os\.environ|getenv|\{\{|your_|example"
+# -> 0 hits
+```
+
+The source.coop pair is missed by that pattern because it is assigned to `access_key_id` /
+`secret_access_key`, which is why scanning for one shape of credential is not enough. Both
+shapes were checked; only the source.coop pair is reachable from a pushed ref.
+
 ## Revoking the source.coop key
 
 1. In the Source Cooperative console, revoke `SC11A9…` for the `bkr` repository.
