@@ -125,8 +125,8 @@ from planetary_datasets.base import BaseProvider
 from planetary_datasets.config import Config, get_config
 from planetary_datasets.memory import (
     BYTES_PER_GB,
+    available_memory_gb,
     estimate_dataset_gb,
-    memory_budget_gb,
     memory_guard,
     require_memory,
 )
@@ -158,6 +158,20 @@ def default_source_dir(config: Config | None = None) -> pathlib.Path:
     the big array, on a laptop wherever there is room.
     """
     return (config or get_config()).data_dir / "mars"
+
+
+def budget_gb(config: Config | None = None) -> float:
+    """:func:`~planetary_datasets.memory.memory_budget_gb`, but against `config`.
+
+    The shared helper reads the process-wide configuration, so a provider or
+    pipeline handed an explicit ``Config`` would resolve every path from it and
+    its memory budget from somewhere else. These jobs are the ones where that
+    matters, so the same two settings are read here from the config in hand.
+    """
+    config = config or get_config()
+    if config.memory_ceiling_gb is not None:
+        return config.memory_ceiling_gb
+    return available_memory_gb() * config.memory_fraction
 
 
 def default_staging_dir(config: Config | None = None) -> pathlib.Path:
@@ -1740,7 +1754,7 @@ def regrid_store_prefix(native_prefix: str, resolution: float) -> str:
 SLAB_BYTES = 4 << 30
 
 
-def default_slab_bytes() -> int:
+def default_slab_bytes(config: Config | None = None) -> int:
     """How much of one variable a regrid may hold at once.
 
     `SLAB_BYTES`, unless the memory budget (``MEMORY_CEILING_GB``, or
@@ -1751,7 +1765,7 @@ def default_slab_bytes() -> int:
     larger than a single target chunk on a small machine, below which the
     streaming loop in `regrid_timestep` would rewrite chunks.
     """
-    budget = memory_budget_gb() * BYTES_PER_GB
+    budget = budget_gb(config) * BYTES_PER_GB
     return int(min(SLAB_BYTES, max(256 << 20, budget // 4)))
 
 
@@ -1983,7 +1997,9 @@ class MARSRegridProvider(BaseProvider):
         super().__init__(native.config)
         self.native = native
         self.resolution = resolution
-        self.slab_bytes = slab_bytes if slab_bytes is not None else default_slab_bytes()
+        self.slab_bytes = (
+            slab_bytes if slab_bytes is not None else default_slab_bytes(native.config)
+        )
         self.chunk_bytes = chunk_bytes
         self.store_prefix = regrid_store_prefix(native.store_prefix, resolution)
         self.keepbits = native.keepbits

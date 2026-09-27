@@ -8,6 +8,9 @@ entrypoints still parse.
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
+import os
 import pathlib
 import subprocess
 import sys
@@ -15,10 +18,27 @@ import sys
 import pandas as pd
 import pytest
 
-from planetary_datasets.config import MissingCredential, load_config
+from planetary_datasets.config import DEFAULT_BUCKET, MissingCredential, load_config
 from planetary_datasets.providers import mars, mars_icechunk as mi, mars_pipeline as mp
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+@contextlib.contextmanager
+def loaded_env(path):
+    """Load a dotenv into a ``Config`` and take its keys back out of ``os.environ``.
+
+    ``load_config`` goes through ``load_dotenv``, which copies every key into
+    the real environment and leaves it there. Without this, a fixture's values
+    would leak into every test that ran afterwards.
+    """
+    before = dict(os.environ)
+    try:
+        yield load_config(env_file=path)
+    finally:
+        for key in set(os.environ) - set(before):
+            del os.environ[key]
+        os.environ.update(before)
 
 
 @pytest.fixture
@@ -33,8 +53,13 @@ def mars_config(tmp_path):
         f"PLANETARY_DATASETS_DATA_DIR={tmp_path / 'data'}\n"
         f"PLANETARY_DATASETS_SCRATCH_DIR={tmp_path / 'scratch'}\n"
         f"ICECHUNK_LOCAL_PATH={tmp_path / 'stores'}\n"
+        "AWS_PROFILE=mars-writer\n"
+        # A fixed budget, so the tests that assert on memory sizing do not
+        # depend on how much of the machine happens to be free.
+        "MEMORY_CEILING_GB=48\n"
     )
-    return load_config(env_file=env)
+    with loaded_env(env) as cfg:
+        yield cfg
 
 
 # -- directories -------------------------------------------------------
@@ -52,12 +77,24 @@ def test_the_pipeline_re_exports_the_same_directory_helpers():
     assert mp.default_staging_dir is mi.default_staging_dir
 
 
-def test_no_machine_specific_paths_are_hardcoded():
+def test_no_machine_specific_paths_or_buckets_are_hardcoded():
+    # The three machine-specific literals the modules used to carry, plus the
+    # published bucket, which now only exists as a `config.py` default. The
+    # old module-level names are checked too, since a reintroduced constant
+    # would most likely come back under its old spelling.
+    forbidden = [
+        "/ext_data",
+        "/nvme",
+        DEFAULT_BUCKET,
+        "DEFAULT_SOURCE_DIR",
+        "DEFAULT_STAGING_DIR",
+        "DEFAULT_AWS_PROFILE",
+        "SOURCE_COOP_PATH",
+    ]
     for name in ("mars.py", "mars_icechunk.py", "mars_pipeline.py"):
         source = (REPO_ROOT / "planetary_datasets" / "providers" / name).read_text()
-        assert "/ext_data" not in source, name
-        assert "/nvme" not in source, name
-        assert "s3://" not in source, name
+        for literal in forbidden:
+            assert literal not in source, f"{name} still mentions {literal}"
 
 
 # -- stores ------------------------------------------------------------
@@ -99,10 +136,15 @@ def test_the_repository_opens_against_the_local_store(mars_config):
 
 
 def test_an_explicit_profile_overrides_the_configured_one(mars_config):
+    assert mars_config.credentials.aws_profile == "mars-writer"
     provider = mi.build_provider(aws_profile="source-coop", config=mars_config)
     assert provider.aws_profile == "source-coop"
+    # The override must not disturb the rest of the configuration.
+    assert provider.icechunk_path == mars_config.store_path(mi.STORE_PREFIX)
     # Without one, whatever the configuration resolved stands.
-    assert mi.build_provider(config=mars_config).aws_profile == mars_config.credentials.aws_profile
+    assert mi.build_provider(config=mars_config).aws_profile == "mars-writer"
+    # And a regrid built from the provider keeps the override.
+    assert mi.MARSRegridProvider(provider, 0.25).aws_profile == "source-coop"
 
 
 # -- credentials -------------------------------------------------------
@@ -161,19 +203,6 @@ def test_planned_jobs_land_in_the_source_directory(tmp_path):
 # -- memory ------------------------------------------------------------
 
 
-def test_slab_size_is_capped_by_the_memory_ceiling(monkeypatch):
-    monkeypatch.setenv("MEMORY_CEILING_GB", "2")
-    from planetary_datasets import config as config_module  # noqa: PLC0415
-
-    config_module.reset_config_cache()
-    # A quarter of a 2GB budget, and never more than the tuned default.
-    assert mi.default_slab_bytes() == 512 << 20
-
-    monkeypatch.setenv("MEMORY_CEILING_GB", "1024")
-    config_module.reset_config_cache()
-    assert mi.default_slab_bytes() == mi.SLAB_BYTES
-
-
 def test_a_block_larger_than_the_budget_is_refused(monkeypatch):
     from planetary_datasets.memory import MemoryLimitExceeded  # noqa: PLC0415
 
@@ -185,11 +214,11 @@ def test_a_block_larger_than_the_budget_is_refused(monkeypatch):
         mi._load_fields([], (mi.N_MODEL_LEVELS, mi.N_VALUES), "level", False, 24)
 
 
-def test_each_ingest_worker_gets_a_share_of_the_budget(mars_config, monkeypatch, tmp_path):
-    monkeypatch.setenv("MEMORY_CEILING_GB", "48")
-    from planetary_datasets import config as config_module  # noqa: PLC0415
-
-    config_module.reset_config_cache()
+def test_each_ingest_worker_gets_a_share_of_the_injected_budget(mars_config):
+    # 48 GB comes from the fixture's .env and nothing else: the process-wide
+    # config is untouched here, so this fails if the budget is resolved from
+    # ambient state rather than from the Config the pipeline was handed.
+    assert mars_config.memory_ceiling_gb == 48.0
     pipeline = mp.MarsPipeline(
         start=pd.Timestamp("2026-01-01"),
         end=pd.Timestamp("2026-01-02"),
@@ -198,6 +227,20 @@ def test_each_ingest_worker_gets_a_share_of_the_budget(mars_config, monkeypatch,
     )
     assert pipeline.memory_ceiling_gb == pytest.approx(16.0)
     assert pipeline.cfg["memory_ceiling_gb"] == pytest.approx(16.0)
+    # The worker's config carries it too, so `_worker_state` can publish it.
+    assert pipeline.cfg["config"].memory_ceiling_gb == 48.0
+
+
+def test_slab_size_follows_the_injected_budget(mars_config):
+    # A quarter of the injected 48 GB is over the tuned default, so the
+    # default stands; the regrid provider must not consult the ambient config.
+    assert mi.default_slab_bytes(mars_config) == mi.SLAB_BYTES
+    provider = mi.build_provider(config=mars_config)
+    assert mi.MARSRegridProvider(provider, 0.25).slab_bytes == mi.SLAB_BYTES
+
+    tight = dataclasses.replace(mars_config, memory_ceiling_gb=2.0)
+    assert mi.default_slab_bytes(tight) == 512 << 20
+    assert mi.MARSRegridProvider(mi.build_provider(config=tight), 0.25).slab_bytes == 512 << 20
 
 
 # -- the pipeline as a whole -------------------------------------------

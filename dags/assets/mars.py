@@ -47,14 +47,17 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 #: One asset run per calendar month. A month is the smallest unit worth the
 #: fixed costs (opening three stores, building regridding weights, planning
 #: the retrievals) and the largest that finishes inside the runtime limit.
+#: The default ``end_offset`` of 0 already excludes the month in progress, so
+#: the newest partition is the most recent complete month.
 partitions_def: dg.TimeWindowPartitionsDefinition = dg.MonthlyPartitionsDefinition(
     start_date="2026-01-01",
-    end_offset=-1,
 )
 
 #: Every MARS asset takes this key, so only one of them runs at a time. They
 #: share a MARS queue, a staging disk and a set of stores, and extending a time
-#: axis is only safe with nothing else writing.
+#: axis is only safe with nothing else writing -- ``deps`` alone would not give
+#: that, because it orders assets only within a partition, and two partitions
+#: of the axis asset would still overlap.
 CONCURRENCY_KEY = "ecmwf-mars"
 
 #: Three days. A month of retrievals is dominated by MARS queueing requests
@@ -64,11 +67,22 @@ MAX_RUNTIME_SECONDS = 60 * 60 * 72
 #: The regridded stores written alongside the native one.
 RESOLUTIONS = (0.25, 1.0)
 
-_COMMON_TAGS = {
-    "dagster/max_runtime": str(MAX_RUNTIME_SECONDS),
+#: Op tags, which is where dagster's global op concurrency and the run queue's
+#: priority actually read these keys from. Passing them as ``tags=`` puts them
+#: on the asset in the catalogue and nothing enforces them.
+_OP_TAGS = {
     "dagster/concurrency_key": CONCURRENCY_KEY,
     "dagster/priority": "1",
 }
+
+#: Run tags. ``dagster/max_runtime`` is read by the run monitor off the *run*,
+#: so it has to be applied where the run is created. Exported for whoever
+#: assembles these assets into a job or an automation's ``RunRequest``; an
+#: asset cannot set it by itself.
+RUN_TAGS = {"dagster/max_runtime": str(MAX_RUNTIME_SECONDS)}
+
+#: Catalogue tags, so the runtime expectations are visible in the UI too.
+_ASSET_TAGS = {**_OP_TAGS, **RUN_TAGS}
 
 
 def _month(context: dg.AssetExecutionContext) -> Tuple["dt.datetime", "dt.datetime"]:
@@ -109,7 +123,8 @@ def _store_metadata(stores: List[str]) -> Dict[str, dg.MetadataValue]:
         "expected_runtime": dg.MetadataValue.text("minutes"),
     },
     compute_kind="python",
-    tags=_COMMON_TAGS,
+    tags=_ASSET_TAGS,
+    op_tags=_OP_TAGS,
 )
 def ecmwf_mars_axis_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Create or grow the native and regridded stores so the month fits in them."""
@@ -138,6 +153,11 @@ def ecmwf_mars_axis_asset(context: dg.AssetExecutionContext) -> dg.MaterializeRe
             )
         ) from exc
 
+    # `ensure_time_axis` reaches for the GRIB index to find what the source
+    # files cover. Load the cache without scanning: a scan of a full source
+    # directory takes hours, it would make this asset a second writer of the
+    # index cache, and the range wanted here comes from the partition anyway.
+    native.build_index(scan=False)
     # An hourly axis: the last analysis of the month is at 23Z on its last day.
     axis = native.ensure_time_axis(
         repo=repo, start=start, end=end.replace(hour=23, minute=0, second=0, microsecond=0)
@@ -173,7 +193,8 @@ def ecmwf_mars_axis_asset(context: dg.AssetExecutionContext) -> dg.MaterializeRe
         "expected_runtime": dg.MetadataValue.text("days"),
     },
     compute_kind="python",
-    tags=_COMMON_TAGS,
+    tags=_ASSET_TAGS,
+    op_tags=_OP_TAGS,
 )
 def ecmwf_mars_native_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Run `MarsPipeline` over the partition, downloading and ingesting together."""
@@ -211,7 +232,8 @@ def ecmwf_mars_native_asset(context: dg.AssetExecutionContext) -> dg.Materialize
         "expected_runtime": dg.MetadataValue.text("hours"),
     },
     compute_kind="python",
-    tags=_COMMON_TAGS,
+    tags=_ASSET_TAGS,
+    op_tags=_OP_TAGS,
 )
 def ecmwf_mars_regrid_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Catch the regridded stores up with the native store over the partition."""

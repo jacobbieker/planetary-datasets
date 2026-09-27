@@ -103,8 +103,8 @@ from loguru import logger
 
 from planetary_datasets.config import Config, get_config, reset_config_cache
 from planetary_datasets.memory import (
+    MemoryLimitExceeded,
     configure_malloc_arenas,
-    memory_budget_gb,
     memory_guard,
     total_memory_gb,
 )
@@ -577,6 +577,23 @@ def _worker_state(cfg: dict) -> dict:
     return _WORKER
 
 
+def _spawn_pool(max_workers: int) -> concurrent.futures.ProcessPoolExecutor:
+    """A process pool whose workers are spawned, never forked.
+
+    The pool is created after the download threads are running and after
+    `_check_stores` has opened three icechunk repositories, so the parent
+    holds logging locks and a tokio runtime with its own threads. ``fork``,
+    the default on Linux, copies those locks in whatever state they happen to
+    be in and the child deadlocks the first time it logs or touches S3. The
+    MARS retrieval child in `retrieve` already spawns for the same reason.
+    """
+    import multiprocessing  # noqa: PLC0415
+
+    return concurrent.futures.ProcessPoolExecutor(
+        max_workers, mp_context=multiprocessing.get_context("spawn")
+    )
+
+
 def _ingest_task(cfg: dict, it: pd.Timestamp, groups: List[str], rows: pd.DataFrame) -> dict:
     """Ingest the `groups` of one timestep, then read back every store's flags there.
 
@@ -584,21 +601,36 @@ def _ingest_task(cfg: dict, it: pd.Timestamp, groups: List[str], rows: pd.DataFr
     needs to find the messages; passing it avoids each worker loading the
     whole index.
 
-    The work is wrapped in a `memory_guard` at this worker's share of the
-    budget, so a worker whose resident set stays over it raises here and is
-    reported as a failed ingest, which the pipeline retries. The guard is
-    deliberately *inside* the worker rather than around the pool: killing a
-    pool worker raises ``BrokenProcessPool`` in the parent and fails every
-    other timestep in flight.
+    The work is wrapped in a `memory_guard`. It takes no explicit ceiling:
+    `_worker_state` has already published this worker's share of the budget as
+    ``MEMORY_CEILING_GB``, so the guard's default of *baseline RSS plus the
+    budget* is the right limit -- an explicit ``ceiling_gb`` is an absolute RSS
+    limit, which would be compared against a number that already includes the
+    interpreter's own footprint.
+
+    The guard is deliberately *inside* the worker rather than around the pool:
+    killing a pool worker raises ``BrokenProcessPool`` in the parent and fails
+    every other timestep in flight.
+
+    A breach is logged rather than raised. Writing a timestep is not separable
+    from committing it -- the variables are written and committed together, so
+    that data and flags land atomically -- so by the time the guard fires the
+    work is already durable. Failing the task would make the parent re-ingest a
+    timestep that succeeded, repeating the most expensive work in the pipeline
+    for no gain. The flags read back below are the truth either way.
     """
     state = _worker_state(cfg)
     native = state["native"]
     native._index = rows.reset_index(drop=True)
     files = sorted(rows["path"].unique())
-    with memory_guard(ceiling_gb=cfg["memory_ceiling_gb"], what=f"mars ingest {it}"):
-        native.write_to_icechunk(
-            state["repo"], native.process(files, it, groups=groups), regrids=state["targets"]
-        )
+    try:
+        with memory_guard(what=f"mars ingest {it}"):
+            native.write_to_icechunk(
+                state["repo"], native.process(files, it, groups=groups), regrids=state["targets"]
+            )
+    except MemoryLimitExceeded as exc:
+        logger.warning(f"{exc} The timestep was written; reduce --ingest-workers.")
+
     stores = {"native": state["repo"], **{str(t.resolution): r for t, r in state["targets"]}}
     flags = {}
     for name, repo in stores.items():
@@ -680,8 +712,10 @@ class MarsPipeline:
         self.refresh_seconds = refresh_seconds
         # Each worker gets an equal share of the budget, because they run at
         # the same time: a per-worker guard at the whole budget would let
-        # three of them together take three times what the host has.
-        self.memory_ceiling_gb = memory_budget_gb() / max(1, ingest_workers)
+        # three of them together take three times what the host has. Resolved
+        # from this pipeline's own config, not the ambient one, so an injected
+        # Config's MEMORY_CEILING_GB is not silently ignored.
+        self.memory_ceiling_gb = mi.budget_gb(self.config) / max(1, ingest_workers)
         self.cfg = {
             "source_dir": str(self.source_dir),
             "store_prefix": self.native.store_prefix,
@@ -709,7 +743,7 @@ class MarsPipeline:
         self.retrieve_fn = retrieve
         self.scan_fn = mi.scan_grib
         self.ingest_fn = _ingest_task
-        self.executor = concurrent.futures.ProcessPoolExecutor
+        self.executor = _spawn_pool
         self.idle_seconds = 30
 
     def describe(self) -> str:
@@ -938,6 +972,35 @@ class MarsPipeline:
             repos[str(target.resolution)] = mi._open_regrid_target(target, wanted)
         return repos
 
+    def _warn_if_staging_is_memory_backed(self) -> None:
+        """Warn when the staging directory looks like a RAM disk.
+
+        A timestep stages 10-12GB, and several are in flight, so staging into
+        a tmpfs quietly spends tens of gigabytes of RAM. Worse, it is invisible
+        to the memory guard: shared memory is not counted in a process's RSS,
+        so the run is killed by the kernel with every guard still reporting a
+        healthy footprint.
+        """
+        staging = self.staging_dir
+        filesystem = ""
+        try:  # Linux only; there is no tmpfs to fall into on macOS.
+            import subprocess  # noqa: PLC0415
+
+            filesystem = subprocess.run(
+                ["stat", "-f", "-c", "%T", str(staging)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+        except Exception:  # noqa: BLE001 - a diagnostic must never stop the run
+            pass
+        if filesystem in {"tmpfs", "ramfs"}:
+            logger.warning(
+                f"Staging directory {staging} is on {filesystem}, which is memory-backed. "
+                "Each timestep stages 10-12GB there and it does not show up in the memory "
+                "guard. Point PLANETARY_DATASETS_SCRATCH_DIR, or --staging-dir, at real disk."
+            )
+
     def _clear_staging(self) -> None:
         """Remove timestep staging directories left behind by killed workers.
 
@@ -973,6 +1036,7 @@ class MarsPipeline:
             f"{self.ingest_workers} ingest worker(s), "
             f"{self.memory_ceiling_gb:.1f} GB each of a {total_memory_gb():.1f} GB host"
         )
+        self._warn_if_staging_is_memory_backed()
         logger.info(
             f"{len(self.jobs)} MARS retrievals planned from {self.start:%Y-%m-%d} to "
             f"{self.end:%Y-%m-%d}"
