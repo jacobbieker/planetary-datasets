@@ -55,7 +55,9 @@ def build_encoding(
         encoding[var] = {
             "compressors": zarr.codecs.BloscCodec(cname="zstd", clevel=clevel, shuffle="bitshuffle")
         }
-    if append_dim in ds.coords:
+    # Only a datetime append dimension gets CF time encoding. Applying it to, say, a
+    # string station id fails in the encoder with "ufunc 'rint' not supported".
+    if append_dim in ds.coords and np.issubdtype(ds.coords[append_dim].dtype, np.datetime64):
         encoding[append_dim] = {
             "units": "seconds since 1970-01-01",
             "calendar": "standard",

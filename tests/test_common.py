@@ -189,6 +189,16 @@ class TestBuildEncoding:
         enc = store_helpers.build_encoding(sample_dataset)
         assert enc["time"]["dtype"] == "int64"
 
+    def test_a_non_temporal_append_dim_gets_no_time_encoding(self):
+        """Regression: CF time encoding on a string coord dies with 'rint' not supported."""
+        ds = xr.Dataset(
+            {"v": ("station", np.arange(3, dtype="float32"))},
+            coords={"station": np.array(["AAA", "BBB", "CCC"], dtype=object)},
+        )
+        enc = store_helpers.build_encoding(ds, append_dim="station")
+        assert "station" not in enc
+        assert "compressors" in enc["v"]
+
 
 class TestStoreRoundTrip:
     def test_first_write_creates_the_store(self, local_config, sample_dataset):
