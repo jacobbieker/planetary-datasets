@@ -1,10 +1,11 @@
 """Dataset providers.
 
-Each module here holds one :class:`~planetary_datasets.base.BaseProvider` subclass per
-dataset. Import the provider you need directly from its module, e.g.::
+Each module here defines one or more :class:`~planetary_datasets.base.BaseProvider`
+subclasses for a single data source. Import the provider you need directly::
 
     from planetary_datasets.providers.mrms import MRMSProvider
 
-Providers are intentionally not imported eagerly here: several pull in heavy optional
-dependencies, and a Dagster code location should only pay for the ones it uses.
+Nothing is re-exported from this module on purpose: importing every provider eagerly would
+pull in the whole optional dependency surface (cfgrib, satpy, harp, copernicusmarine, ...)
+for anyone importing any single one of them.
 """
