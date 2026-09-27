@@ -36,7 +36,14 @@ from typing import Any
 import yaml
 import pyresample
 import datetime as dt
-from dags.assets.icechunk.virtual_datasource import VirtualDataset
+# Both forms are needed: the Dagster code location imports this by dotted name, while
+# the __main__ block below is run as a plain script, when only this file's own directory
+# is on sys.path. Checking __package__ rather than catching ImportError keeps a genuine
+# failure inside virtual_datasource visible instead of masking it as "module not found".
+if __package__:
+    from dags.assets.icechunk.virtual_datasource import VirtualDataset
+else:  # run directly as a script: only this file's own directory is on sys.path
+    from virtual_datasource import VirtualDataset
 
 def _serialize(d: dict[str, Any]) -> dict[str, Any]:
     sd: dict[str, Any] = {}
@@ -429,8 +436,9 @@ if __name__ == "__main__":
         storage = icechunk.s3_storage(bucket="bkr",
                                       prefix=f"geo/{name}.icechunk",
                                       endpoint_url="https://data.source.coop",
-                                      access_key_id="SC11A9JDAZLVTF959664D1NI",
-                                      secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
+                                      # Credentials come from the environment (AWS_ACCESS_KEY_ID /
+                                      # AWS_SECRET_ACCESS_KEY or AWS_PROFILE); never hardcode them here.
+                                      from_env=True,
                                       allow_http=True,
                                       region="us-west-2",
                                       force_path_style=True, )
