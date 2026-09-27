@@ -589,6 +589,34 @@ def test_unified_cli_rejects_an_unknown_satellite():
         ingest_goes_radf._module_for("goes99")
 
 
+def test_backwards_walk_names_the_store_after_the_clamped_anchor(monkeypatch):
+    """A decommissioned satellite's newest store must have a stable name.
+
+    The walk is clamped to the archive end, so naming the store after an
+    unclamped "today" renamed it on every run and no run resumed the last.
+    """
+    from planetary_datasets.providers.virtualized import ingest_goes_radf
+
+    captured = {}
+
+    def fake_ingest_backwards(channel, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    mod = ingest_goes_radf._module_for("goes17")
+    monkeypatch.setattr(mod, "ARCHIVE_END_DATE", datetime.date(2023, 1, 10), raising=False)
+    monkeypatch.setattr(common, "ingest_backwards", fake_ingest_backwards)
+
+    ingest_goes_radf.ingest_channel_backwards(
+        lambda suffix: None,
+        "goes17",
+        13,
+        end_date=datetime.date(2026, 9, 27),
+    )
+    assert captured["first_store_suffix"] == "2023-01-10"
+    assert captured["end_date"] == datetime.date(2023, 1, 10)
+
+
 def test_date_to_fake_url_round_trips_through_parse_url_to_day():
     from planetary_datasets.providers.virtualized import ingest_goes_radf
 
@@ -596,3 +624,71 @@ def test_date_to_fake_url_round_trips_through_parse_url_to_day():
         datetime.date(2023, 4, 19), "ABI-L1b-RadF/"
     )
     assert common.parse_url_to_day(url, ["ABI-L1b-RadF"]) == (2023, 109)
+
+
+# ---------------------------------------------------------------------------
+# Dagster assets
+# ---------------------------------------------------------------------------
+def _goes_virtual_assets():
+    import importlib
+    import pathlib
+    import sys
+
+    dags_dir = str(pathlib.Path(__file__).resolve().parent.parent / "dags")
+    if dags_dir not in sys.path:
+        sys.path.insert(0, dags_dir)
+    pytest.importorskip("dagster")
+    return importlib.import_module("dags.assets.goes_virtual")
+
+
+def test_assets_carry_their_own_concurrency_key_and_a_long_runtime():
+    gv = _goes_virtual_assets()
+    assert len(gv.all_assets) == len(gv.SATELLITES)
+    for asset in gv.all_assets:
+        tags = asset.node_def.tags
+        assert tags["dagster/concurrency_key"] == gv.CONCURRENCY_KEY
+        # A single channel-era is hours of full-disk scans.
+        assert float(tags["dagster/max_runtime"]) >= 6 * 60 * 60
+
+
+def test_assets_are_partitioned_by_every_abi_channel():
+    gv = _goes_virtual_assets()
+    assert gv.channel_partitions.get_partition_keys() == [
+        f"C{c:02d}" for c in range(1, 17)
+    ]
+    assert gv._channel_number("C02") == 2
+    with pytest.raises(ValueError, match="Channel must be 1-16"):
+        gv._channel_number("C99")
+    with pytest.raises(ValueError, match="Bad channel partition key"):
+        gv._channel_number("banana")
+
+
+def test_anchor_is_unpinned_until_configured(monkeypatch):
+    """An unpinned anchor must be visible to the caller, not silently today.
+
+    The anchor names the newest era's store: defaulting it to today writes a
+    new store every run and re-ingests the era from nothing.
+    """
+    gv = _goes_virtual_assets()
+    monkeypatch.delenv("GOES_VIRTUAL_END_DATE", raising=False)
+    end_date, max_eras, batch_size = gv._run_options({})
+    assert end_date is None
+    assert (max_eras, batch_size) == (1, 1)
+
+
+def test_anchor_comes_from_the_environment_then_the_run_tag(monkeypatch):
+    gv = _goes_virtual_assets()
+    monkeypatch.setenv("GOES_VIRTUAL_END_DATE", "2026-09-01")
+    config_module.reset_config_cache()
+    assert gv._run_options({})[0] == datetime.date(2026, 9, 1)
+    # A run tag overrides the deployment-wide pin.
+    assert gv._run_options({"goes_virtual/end_date": "2025-01-05"})[0] == datetime.date(
+        2025, 1, 5
+    )
+
+
+def test_max_eras_all_means_every_era():
+    gv = _goes_virtual_assets()
+    assert gv._run_options({"goes_virtual/max_eras": "all"})[1] is None
+    assert gv._run_options({"goes_virtual/max_eras": "3"})[1] == 3
+    assert gv._run_options({"goes_virtual/batch_size": "5"})[2] == 5

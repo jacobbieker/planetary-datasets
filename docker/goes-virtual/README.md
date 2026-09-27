@@ -55,19 +55,25 @@ docker run -d --name goes-virtual --restart unless-stopped \
 
 `END_DATE` **must be pinned and kept the same across restarts.** It becomes the
 store-name suffix for the newest era, so changing it mints a whole new set of
-stores instead of resuming the existing ones.
+stores instead of resuming the existing ones. The Dagster assets in
+`dags/assets/goes_virtual.py` read the same anchor from
+`GOES_VIRTUAL_END_DATE`, or from a `goes_virtual/end_date` run tag, and warn
+when neither is set.
 
 ## Configuration
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `SC_ACCESS_KEY_ID` / `SC_SECRET_ACCESS_KEY` | *required* | Source Cooperative write keys |
+| `SC_ACCESS_KEY_ID` / `SC_SECRET_ACCESS_KEY` | *required* | Source Cooperative write keys. `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` are used when these are unset |
+| `SC_BUCKET` | `ICECHUNK_BUCKET`, else `us-west-2.opendata.source.coop` | Destination bucket |
+| `ICECHUNK_ENDPOINT_URL` | unset | Set to `https://data.source.coop` to address source.coop by its own endpoint (`SC_BUCKET=bkr`) rather than the AWS-hosted dotted bucket |
+| `SC_PREFIX_ROOT` | `GOES_STORE_ROOT`, else `bkr/geo/virtualized` | Store prefix root |
 | `END_DATE` | today (UTC) | Anchor for the backwards walk; suffixes the newest store |
 | `SATELLITES` | `goes16 goes17 goes18 goes19` | Which archives to run |
 | `MAIN_WORKERS` | `3` | Parallel channels per satellite (excluding C02) |
 | `OTHER_CHANNELS` | `16 15 14 13 12 11 10 9 8 7 6 5 4 3 1` | Channels for the main tier |
 | `RUN_C02` | `1` | Run C02 in its own single-worker process |
-| `BUDGET_GB` | `64` | Memory ceiling for the whole job |
+| `BUDGET_GB` | `MEMORY_CEILING_GB`, else `64` | Memory ceiling for the whole job |
 | `SC_BUCKET` | `us-west-2.opendata.source.coop` | Destination bucket |
 | `SC_PREFIX_ROOT` | `bkr/geo/virtualized` | Destination prefix |
 | `BATCH_SIZE` | `1` | Days per Icechunk commit |
@@ -96,14 +102,24 @@ projection stays reconstructable as the spacecraft's INR drifts.
 Any argument passed to the container goes straight to the ingest CLI instead of
 the orchestrator:
 
+The GOES CLI reads its destination and credentials from the shared
+`planetary_datasets` config, so nothing secret goes on the command line where
+`ps` can read it:
+
 ```bash
-docker run --rm $REGISTRY/goes-virtual-ingest:latest \
+docker run --rm \
+  -e ICECHUNK_BUCKET=us-west-2.opendata.source.coop \
+  -e AWS_REGION=us-west-2 \
+  -e AWS_ACCESS_KEY_ID=<source-coop-key> \
+  -e AWS_SECRET_ACCESS_KEY=<source-coop-secret> \
+  $REGISTRY/goes-virtual-ingest:latest \
   --satellite goes19 --channel 13 --max-eras 1 \
-  --storage s3 --bucket us-west-2.opendata.source.coop \
-  --prefix bkr/geo/virtualized/goes19_radf.icechunk \
-  --access-key-id <key> --secret-access-key <secret> \
   --end-date 2026-09-26
 ```
+
+Set `ICECHUNK_LOCAL_PATH` instead to write the whole run to a mounted
+directory, which is how the smoke runs are done. `--storage s3` with explicit
+`--bucket` / `--access-key-id` still works for ad-hoc use.
 
 Prefix the arguments with `gk2a` to reach the GK-2A CLI instead:
 
