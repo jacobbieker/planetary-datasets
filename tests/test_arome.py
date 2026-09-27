@@ -197,7 +197,9 @@ def _grib_stubs(tmp_path: pathlib.Path) -> list[pathlib.Path]:
     return paths
 
 
-def test_run_partition_writes_and_then_deletes_the_gribs(local_config, tmp_path, sample_dataset):
+def test_run_partition_writes_and_then_deletes_the_gribs(
+    local_config, tmp_path, sample_dataset
+):
     files = _grib_stubs(tmp_path)
     provider = _StubProvider(files, sample_dataset, config=local_config)
 
@@ -208,11 +210,14 @@ def test_run_partition_writes_and_then_deletes_the_gribs(local_config, tmp_path,
         assert not path.exists()
         assert not list(path.parent.glob(path.name + "*.idx"))
 
-    store = xr.open_zarr(provider.get_icechunk_repo().readonly_session("main").store, consolidated=False)
+    repo = provider.get_icechunk_repo()
+    store = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
     assert pd.Timestamp(store.time.values[0]) == it
 
 
-def test_run_partition_skips_a_timestep_that_is_already_stored(local_config, tmp_path, sample_dataset):
+def test_run_partition_skips_a_timestep_that_is_already_stored(
+    local_config, tmp_path, sample_dataset
+):
     it = pd.Timestamp(sample_dataset.time.values[0])
     provider = _StubProvider(_grib_stubs(tmp_path), sample_dataset, config=local_config)
     assert provider.run_partition(it) is True
@@ -224,7 +229,9 @@ def test_run_partition_skips_a_timestep_that_is_already_stored(local_config, tmp
     assert all(path.exists() for path in files)
 
 
-def test_run_partition_keeps_the_gribs_when_the_write_is_skipped(local_config, tmp_path, sample_dataset):
+def test_run_partition_keeps_the_gribs_when_the_write_is_skipped(
+    local_config, tmp_path, sample_dataset
+):
     files = _grib_stubs(tmp_path)
     provider = _StubProvider(files, sample_dataset, config=local_config)
     provider.write_to_icechunk = lambda repo, processed: False
@@ -257,8 +264,11 @@ def test_fetch_returns_every_paquet_when_all_download(local_config, tmp_path, mo
     ]
 
 
-def test_overseas_fetch_tolerates_a_paquet_with_no_analysis_step(local_config, tmp_path, monkeypatch):
-    provider = AromeOverseasProvider(region="INDIEN", config=dataclasses.replace(local_config, data_dir=tmp_path))
+def test_overseas_fetch_tolerates_a_paquet_with_no_analysis_step(
+    local_config, tmp_path, monkeypatch
+):
+    config = dataclasses.replace(local_config, data_dir=tmp_path)
+    provider = AromeOverseasProvider(region="INDIEN", config=config)
 
     def _fake_download(url, dest, **kwargs):
         dest = pathlib.Path(dest)
@@ -274,8 +284,11 @@ def test_overseas_fetch_tolerates_a_paquet_with_no_analysis_step(local_config, t
     assert len(arome._files_for(files, "IP4")) == 6
 
 
-def test_overseas_fetch_gives_up_when_a_paquet_is_missing_entirely(local_config, tmp_path, monkeypatch):
-    provider = AromeOverseasProvider(region="INDIEN", config=dataclasses.replace(local_config, data_dir=tmp_path))
+def test_overseas_fetch_gives_up_when_a_paquet_is_missing_entirely(
+    local_config, tmp_path, monkeypatch
+):
+    config = dataclasses.replace(local_config, data_dir=tmp_path)
+    provider = AromeOverseasProvider(region="INDIEN", config=config)
 
     def _fake_download(url, dest, **kwargs):
         dest = pathlib.Path(dest)

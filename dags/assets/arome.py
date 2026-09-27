@@ -7,7 +7,6 @@ the domain's icechunk store. See :mod:`planetary_datasets.providers.arome`.
 
 from typing import Callable
 
-
 import dagster as dg
 import pandas as pd
 

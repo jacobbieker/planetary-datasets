@@ -151,7 +151,7 @@ class AromeProvider(BaseProvider):
 
         return downloaded
 
-    def run_partition(self, it: pd.Timestamp) -> bool:
+    def run_partition(self, it: pd.Timestamp, check_present: bool = True) -> bool:
         """Fetch, process and write one init time, deleting the GRIB files on success.
 
         Overrides :meth:`BaseProvider.run_partition` only to add that deletion, and to
@@ -160,7 +160,7 @@ class AromeProvider(BaseProvider):
         """
         repo = self.get_icechunk_repo()
 
-        if not self.missing_timesteps(pd.DatetimeIndex([it])):
+        if check_present and not self.missing_timesteps(pd.DatetimeIndex([it])):
             logger.debug(f"{self.name}: {it} already in {self.store_path}, skipping")
             return False
 
@@ -171,21 +171,20 @@ class AromeProvider(BaseProvider):
 
         logger.info(f"{self.name}: processing {len(input_files)} file(s) for {it}")
         if self.guard_memory:
+            # As in the base class, only the processing is guarded: memory_guard raises
+            # when its block exits, so a breach must prevent the write rather than leave
+            # a committed store behind a failed run.
             with memory_guard(what=f"{self.name} {it}"):
-                written = self._process_and_write(repo, input_files, it, check_memory=True)
+                processed = self.process(input_files, it)
+                require_dataset_fits(processed, what=f"{self.name} {it}")
         else:
-            written = self._process_and_write(repo, input_files, it, check_memory=False)
+            processed = self.process(input_files, it)
 
+        written = self.write_to_icechunk(repo, processed)
         if written:
             removed = cleanup_files(*input_files)
             logger.debug(f"{self.name}: removed {removed} local file(s) for {it}")
         return written
-
-    def _process_and_write(self, repo, input_files: List[str], it: pd.Timestamp, check_memory: bool) -> bool:
-        processed = self.process(input_files, it)
-        if check_memory:
-            require_dataset_fits(processed, what=f"{self.name} {it}")
-        return self.write_to_icechunk(repo, processed)
 
 
 class AromeOverseasProvider(AromeProvider):
