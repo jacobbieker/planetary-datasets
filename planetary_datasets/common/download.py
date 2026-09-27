@@ -8,6 +8,7 @@ no truncated file that a later skip-if-present check would mistake for good data
 
 from __future__ import annotations
 
+import hashlib
 import os
 import pathlib
 import time
@@ -18,6 +19,10 @@ import fsspec
 from loguru import logger
 
 CHUNK_SIZE = 1024 * 1024
+
+# Failures that will not succeed on a retry. fsspec surfaces HTTP 404 as FileNotFoundError
+# and 401/403 as PermissionError.
+PERMANENT_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError)
 
 
 def download_one(
@@ -66,6 +71,12 @@ def download_one(
             os.replace(part, dest)
             logger.debug(f"downloaded {url}")
             return dest
+        except PERMANENT_ERRORS as exc:
+            # A 404 or a denial will not become a success; retrying only burns the backoff
+            # budget. Archives with gaps hit this constantly.
+            part.unlink(missing_ok=True)
+            logger.debug(f"{url} unavailable ({type(exc).__name__}), not retrying")
+            return None
         except Exception as exc:  # noqa: BLE001 - any transport error is worth retrying
             part.unlink(missing_ok=True)
             if attempt == retries:
@@ -93,11 +104,24 @@ def download_many(
     dest_dir = pathlib.Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    def _one(url: str) -> pathlib.Path | None:
-        return download_one(url, dest_dir / url.split("/")[-1], **kwargs)
+    # Two URLs can share a basename while differing by directory; naming destinations by
+    # basename alone would make them overwrite each other. Disambiguate only the clashes,
+    # so the common case keeps readable filenames.
+    names = [u.split("/")[-1] or "download" for u in urls]
+    clashing = {n for n in names if names.count(n) > 1}
+    targets: list[pathlib.Path] = []
+    for url, name in zip(urls, names):
+        if name in clashing:
+            digest = hashlib.sha256(url.encode()).hexdigest()[:8]
+            stem, dot, ext = name.partition(".")
+            name = f"{stem}-{digest}{dot}{ext}"
+        targets.append(dest_dir / name)
+
+    def _one(pair: tuple[str, pathlib.Path]) -> pathlib.Path | None:
+        return download_one(pair[0], pair[1], **kwargs)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        results = list(pool.map(_one, urls))
+        results = list(pool.map(_one, zip(urls, targets)))
 
     paths = [p for p in results if p is not None]
     if len(paths) != len(urls):

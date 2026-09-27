@@ -131,6 +131,37 @@ def test_memory_guard_can_be_disabled(local_config, monkeypatch):
     assert unguarded.run_partition(pd.Timestamp("2026-01-01T00:00")) is True
 
 
+def test_repo_handle_is_reused_across_partitions(provider, monkeypatch):
+    """Regression: run_range reopened the store for every partition."""
+    from planetary_datasets.config import Config
+
+    opens = []
+    original = Config.icechunk_repo
+
+    def counting(self, prefix):
+        opens.append(prefix)
+        return original(self, prefix)
+
+    monkeypatch.setattr(Config, "icechunk_repo", counting)
+    provider.run_range(pd.DatetimeIndex(["2026-01-01T00:00", "2026-01-01T01:00", "2026-01-01T02:00"]))
+    assert len(opens) == 1
+    assert provider.get_icechunk_repo() is provider.get_icechunk_repo()
+
+
+def test_run_range_does_not_recheck_each_partition(provider):
+    """run_range filters once; run_partition should not re-query per timestep."""
+    calls = []
+    original = provider.missing_timesteps
+
+    def counting(desired):
+        calls.append(list(desired))
+        return original(desired)
+
+    provider.missing_timesteps = counting
+    provider.run_range(pd.DatetimeIndex(["2026-01-01T00:00", "2026-01-01T01:00"]))
+    assert len(calls) == 1
+
+
 def test_abstract_methods_must_be_implemented():
     with pytest.raises(TypeError):
         BaseProvider()
