@@ -9,17 +9,39 @@ Verified 2026-09-27. Re-check before acting; branches move.
 
 ## Exposure summary
 
-| Credential | Where it is | Reachable from a pushed branch? | Action |
+There are **two** distinct S3 credential pairs, with very different exposure. Scanning only
+for the `AKIA` prefix misses the second one, which is the urgent one.
+
+| Credential | Where it is | Public? | Action |
 |---|---|---|---|
-| AWS access key `AKIAWCQM…` + secret | 97 occurrences across 51 `.py` files; history of the **local-only** `mars-provider` branch (commits `f440d4a`, `ed47f05`) | **No** | Rotate. Do not push `mars-provider` as-is. |
+| **source.coop key `SC11A9…` + secret** | 35 occurrences; **live on `origin/main` at HEAD** in `dags/assets/icechunky/{g2ka,himawari,iasi}.py` and `dags/assets/nwp/geos.py` | **YES — published** | **Revoke immediately.** |
+| AWS access key `AKIAWCQM…` + secret | 97 occurrences across 51 `.py` files; history of the **local-only** `mars-provider` branch (`f440d4a`, `ed47f05`) | No | Rotate; do not push `mars-provider` as-is. |
 | Copernicus Marine username + password | 7 `pb/` download scripts (untracked) | No | Rotate. |
 | Destination Earth PAT | `destinE.py:3` (untracked) | No | Rotate. |
 | ESA VirES token | `one_offs/vires_download.py:4` (untracked) | No | Rotate. |
 | Earthdata / GPM PPS username + password | `pb/corra*.py` (untracked, partly commented out) | No | Rotate. |
 
-### The AWS key is not currently public
+### The source.coop key is published — revoke it first
 
-It is unreachable from `origin/main`, from `origin/dags/refactor`, and from every pushed
+It is in the default branch of a public repository and has been since mid-2025:
+
+```
+git log origin/main --oneline -S'SC11A9…'
+b63fc1c 2025-08-07 Dump a ton of updates to files and such
+b735134 2025-07-29 Remove unused portion
+5da9ab7 2025-07-15 Add GOES/Himawari Icechunk creation
+```
+
+It is still present in four files at `origin/main` HEAD, and every `consolidate/*` branch
+inherits a copy in `dags/assets/icechunk/himawari.py` (scrubbed on this branch).
+
+Assume it is compromised. Revoke it in the Source Cooperative console before anything else;
+deleting the literals does not undo publication, and rewriting history on a public repo does
+not recall clones or forks.
+
+### The AWS key is not public
+
+Unreachable from `origin/main`, from `origin/dags/refactor`, and from every pushed
 `consolidate/*` branch:
 
 ```
@@ -27,13 +49,29 @@ git log origin/main origin/dags/refactor --oneline -S'AKIAWCQM…'   # 0 commits
 ```
 
 It lives only in the history of `mars-provider`, which has never been pushed, and in
-untracked working-tree files.
+untracked working-tree files. **The live risk is pushing `mars-provider`**, which would
+publish it. Rotate first, or rewrite those two commits before pushing.
 
-**The live risk is pushing `mars-provider`.** Doing so would publish the key in a public
-repository. Rotate first, or rewrite those two commits before pushing.
+Rotating is still right even though nothing is public: the value was pasted into 51 files
+over months, and there is no way to be confident it was never shared elsewhere.
 
-Rotating is still the right call even though nothing is public: the value was pasted into
-51 files over months, and there is no way to be confident it was never shared elsewhere.
+## Revoking the source.coop key
+
+1. In the Source Cooperative console, revoke `SC11A9…` for the `bkr` repository.
+2. Issue a replacement and put it in `.env` (gitignored) as `AWS_ACCESS_KEY_ID` /
+   `AWS_SECRET_ACCESS_KEY`, or configure a profile and set `AWS_PROFILE`. The consolidated
+   providers read both via `planetary_datasets/config.py`.
+3. Check what the old key could reach. It was a write credential for `bkr`, so review the
+   store history for writes you did not make:
+   ```
+   pixi run python -c "
+   from planetary_datasets.config import get_config
+   repo = get_config().icechunk_repo('geo/himawari_1km.icechunk')
+   for s in list(repo.ancestry(branch='main'))[:20]: print(s.written_at, s.message[:80])"
+   ```
+4. Remove the remaining literals from `origin/main` (`dags/assets/icechunky/g2ka.py`,
+   `himawari.py`, `iasi.py`, `dags/assets/nwp/geos.py`). This does not undo publication, but
+   it stops the value spreading further.
 
 ## Rotating the AWS key
 
