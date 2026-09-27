@@ -161,3 +161,10 @@ cython_debug/
 # pixi environments
 .pixi
 
+
+# ECMWF MARS retrievals and their staging area. A month of GRIB is tens of
+# terabytes and lands next to the provider modules on some machines.
+planetary_datasets/providers/*.grib
+planetary_datasets/providers/*.grib.tmp
+planetary_datasets/providers/mars_grib_index.parquet
+mars_staging/
