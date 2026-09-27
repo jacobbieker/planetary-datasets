@@ -42,8 +42,12 @@ dagster = ">=1.11.1,<2"
 dagster-webserver = ">=1.11.1,<2"
 dagster-pipes = ">=1.11.1,<2"
 dagster-docker = ">=1!0.27.1,<1!0.28"
-virtualizarr = ">=1.3.2,<2"
-icechunk = ">=1.0.0,<2"
+# The virtual-reference ingests use the virtualizarr 2 API — parsers, an explicit
+# ObjectStoreRegistry and hand-built ChunkManifests — and the icechunk 2 form of
+# VirtualChunkContainer. obstore is the object-store backend both of them read through.
+virtualizarr = ">=2.7,<3"
+icechunk = ">=2.2,<3"
+obstore = ">=0.11,<1"
 cdsapi = ">=0.7.6,<0.8"
 sqlite = ">=3.50.2,<4"
 netcdf4 = ">=1.7.2,<2"
@@ -67,6 +71,8 @@ meteostat = ">=1.7.4, <2"
 structlog = "*"
 huggingface-hub = "*"
 psutil = "*"
+# Not published to conda-forge; virtualizarr's object-store registry lives here.
+obspec-utils = ">=0.9, <1"
 # Unpinned upper bound: 0.109 requires tzdata<2026, which conflicts with the conda-side
 # tzdata 2026.4 and made the environment unsolvable.
 wetterdienst = ">=0.110"
