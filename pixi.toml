@@ -45,6 +45,9 @@ dagster-docker = ">=1!0.27.1,<1!0.28"
 virtualizarr = ">=1.3.2,<2"
 icechunk = ">=1.0.0,<2"
 cdsapi = ">=0.7.6,<0.8"
+# Imported by the CMEMS providers. It was only ever declared on a feature branch, so the
+# consolidated code imported a package main had never required.
+copernicusmarine = ">=2.4.1,<3"
 sqlite = ">=3.50.2,<4"
 netcdf4 = ">=1.7.2,<2"
 eumdac = ">=3.0.0,<4"
