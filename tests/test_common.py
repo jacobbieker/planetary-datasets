@@ -58,6 +58,19 @@ class TestCoordsMatch:
         b = xr.Dataset({"v": ("latitude", np.arange(3))}, coords={"latitude": [1, 2, 4]})
         assert ds_helpers.coords_match(a, b, ("latitude",)) == (False, "latitude")
 
+    def test_two_dimensional_non_dim_coords_are_checked(self):
+        """Regression: keying on dims meant geostationary 2-D lat/lon was never compared."""
+        base = xr.Dataset(
+            {"v": (("y", "x"), np.zeros((2, 3)))},
+            coords={"latitude": (("y", "x"), np.zeros((2, 3)))},
+        )
+        shifted = xr.Dataset(
+            {"v": (("y", "x"), np.zeros((2, 3)))},
+            coords={"latitude": (("y", "x"), np.ones((2, 3)))},
+        )
+        assert ds_helpers.coords_match(base, base, ("latitude",)) == (True, None)
+        assert ds_helpers.coords_match(base, shifted, ("latitude",)) == (False, "latitude")
+
     def test_differing_lengths_are_reported_not_raised(self):
         a = xr.Dataset({"v": ("latitude", np.arange(3))}, coords={"latitude": [1, 2, 3]})
         b = xr.Dataset({"v": ("latitude", np.arange(2))}, coords={"latitude": [1, 2]})
@@ -125,6 +138,32 @@ class TestDownloadOne:
         dest.touch()
         dl.download_one(str(src), dest)
         assert dest.read_bytes() == b"payload"
+
+
+class TestDownloadMany:
+    def test_same_basename_in_different_directories_does_not_collide(self, tmp_path):
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        (tmp_path / "a" / "f.bin").write_bytes(b"AAA")
+        (tmp_path / "b" / "f.bin").write_bytes(b"BBB")
+        out = tmp_path / "out"
+        got = dl.download_many([str(tmp_path / "a" / "f.bin"), str(tmp_path / "b" / "f.bin")], out)
+        assert len(got) == 2
+        assert {p.read_bytes() for p in got} == {b"AAA", b"BBB"}
+
+    def test_duplicate_urls_are_fetched_once(self, tmp_path):
+        """Regression: identical URLs mapped to one path and raced on it."""
+        src = tmp_path / "f.bin"
+        src.write_bytes(b"payload")
+        got = dl.download_many([str(src), str(src), str(src)], tmp_path / "out")
+        assert len(got) == 1
+        assert got[0].read_bytes() == b"payload"
+
+    def test_unique_names_keep_their_basename(self, tmp_path):
+        (tmp_path / "one.bin").write_bytes(b"1")
+        (tmp_path / "two.bin").write_bytes(b"2")
+        got = dl.download_many([str(tmp_path / "one.bin"), str(tmp_path / "two.bin")], tmp_path / "out")
+        assert sorted(p.name for p in got) == ["one.bin", "two.bin"]
 
 
 class TestCleanupFiles:

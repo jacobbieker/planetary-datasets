@@ -162,6 +162,20 @@ def test_run_range_does_not_recheck_each_partition(provider):
     assert len(calls) == 1
 
 
+def test_a_scalar_append_coordinate_is_accepted(local_config):
+    """Regression: the commit message indexed values[0] on a scalar and raised IndexError."""
+
+    class ScalarTime(FakeProvider):
+        def process(self, input_files, it, temp_dir=None, **kwargs):
+            ds = super().process(input_files, it, temp_dir=temp_dir, **kwargs)
+            # Squeeze time to a scalar coordinate, which the writer tolerates.
+            return ds.isel(time=0)
+
+    provider = ScalarTime(config=local_config)
+    provider.store_prefix = "test/scalar.icechunk"
+    assert provider.run_partition(pd.Timestamp("2026-01-01T00:00")) is True
+
+
 def test_abstract_methods_must_be_implemented():
     with pytest.raises(TypeError):
         BaseProvider()

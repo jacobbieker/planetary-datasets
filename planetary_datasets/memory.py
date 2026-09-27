@@ -88,12 +88,19 @@ def estimate_dataset_gb(ds) -> float:
 def largest_chunk_gb(ds) -> float:
     """Size of the largest single chunk across the dataset's variables, in GB.
 
-    Returns 0.0 when nothing is chunked.
+    An eagerly loaded variable has no chunks and is resident in full, so it counts as one
+    chunk of its whole size. Skipping those would let a dataset mixing one small chunked
+    variable with a large in-memory one be sized at nearly zero.
+
+    Returns 0.0 for an empty dataset.
     """
     largest = 0
     for var in getattr(ds, "data_vars", {}).values():
+        itemsize = getattr(getattr(var, "dtype", None), "itemsize", 0)
         chunksizes = getattr(var, "chunksizes", None)
         if not chunksizes:
+            # Not chunked: the whole variable is the unit of residency.
+            largest = max(largest, getattr(var, "nbytes", 0))
             continue
         # chunksizes maps dim -> tuple of chunk lengths; the largest chunk takes the
         # biggest length along each dim.
@@ -101,7 +108,6 @@ def largest_chunk_gb(ds) -> float:
         for lengths in chunksizes.values():
             if lengths:
                 elements *= max(lengths)
-        itemsize = getattr(getattr(var, "dtype", None), "itemsize", 0)
         largest = max(largest, elements * itemsize)
     return float(largest) / BYTES_PER_GB
 

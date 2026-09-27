@@ -104,9 +104,17 @@ def download_many(
     dest_dir = pathlib.Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    # Two URLs can share a basename while differing by directory; naming destinations by
-    # basename alone would make them overwrite each other. Disambiguate only the clashes,
-    # so the common case keeps readable filenames.
+    # Drop exact duplicates first: two identical URLs map to one destination by
+    # definition, and fetching them concurrently would race on the same file.
+    seen: set[str] = set()
+    deduped = [u for u in urls if not (u in seen or seen.add(u))]
+    if len(deduped) != len(urls):
+        logger.debug(f"dropped {len(urls) - len(deduped)} duplicate URL(s)")
+        urls = deduped
+
+    # Two distinct URLs can share a basename while differing by directory; naming
+    # destinations by basename alone would make them overwrite each other. Disambiguate
+    # only the clashes, so the common case keeps readable filenames.
     names = [u.split("/")[-1] or "download" for u in urls]
     clashing = {n for n in names if names.count(n) > 1}
     targets: list[pathlib.Path] = []

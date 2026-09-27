@@ -48,6 +48,35 @@ def test_peak_estimate_uses_chunks_for_a_lazy_dataset():
     assert peak < memory.estimate_dataset_gb(ds)
 
 
+def test_an_eager_variable_counts_as_one_whole_chunk():
+    """Regression: skipping unchunked variables sized a mixed dataset at nearly zero."""
+    dask = pytest.importorskip("dask.array")
+    ds = xr.Dataset(
+        {
+            "small_chunked": (("a", "b"), dask.zeros((100, 100), dtype="float64", chunks=(10, 10))),
+            "big_eager": (("c", "d"), np.zeros((2000, 2000), dtype="float64")),
+        }
+    )
+    # The eager variable is 32 MB and fully resident; the chunked one's chunk is 800 B.
+    assert memory.largest_chunk_gb(ds) == pytest.approx(32e6 / 1024**3, rel=0.01)
+
+
+def test_a_mixed_dataset_is_not_waved_through(monkeypatch):
+    monkeypatch.setenv("MEMORY_CEILING_GB", "0.001")
+    from planetary_datasets import config
+
+    config.reset_config_cache()
+    dask = pytest.importorskip("dask.array")
+    ds = xr.Dataset(
+        {
+            "small_chunked": (("a", "b"), dask.zeros((100, 100), dtype="float64", chunks=(10, 10))),
+            "big_eager": (("c", "d"), np.zeros((2000, 2000), dtype="float64")),
+        }
+    )
+    with pytest.raises(memory.MemoryLimitExceeded):
+        memory.require_dataset_fits(ds, what="mixed")
+
+
 def test_peak_estimate_falls_back_to_total_when_not_chunked():
     ds = xr.Dataset({"x": (("a", "b"), np.zeros((1000, 1000), dtype="float64"))})
     assert memory.estimate_peak_gb(ds) == pytest.approx(memory.estimate_dataset_gb(ds))

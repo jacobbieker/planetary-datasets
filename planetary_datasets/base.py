@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 from typing import Iterator, List
 
 import icechunk
+import numpy as np
 import pandas as pd
 import xarray as xr
 from loguru import logger
@@ -103,7 +104,9 @@ class BaseProvider(ABC):
             repo,
             processed,
             append_dim=self.append_dim,
-            message=f"{self.name}: {processed[self.append_dim].values[0]}",
+            # atleast_1d: a provider may hand back a scalar append coordinate, which the
+            # writer itself tolerates.
+            message=f"{self.name}: {np.atleast_1d(processed[self.append_dim].values)[0]}",
         )
 
     @staticmethod
