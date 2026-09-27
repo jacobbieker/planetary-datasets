@@ -42,6 +42,13 @@ def _env_path(name: str, default: str) -> pathlib.Path:
     return pathlib.Path(_env(name) or default).expanduser()
 
 
+def _env_bool(name: str, default: bool | None = None) -> bool | None:
+    raw = _env(name)
+    if raw is None:
+        return default
+    return raw.lower() in {"1", "true", "yes", "on"}
+
+
 def _env_float(name: str, default: float) -> float:
     raw = _env(name)
     if raw is None:
@@ -103,6 +110,9 @@ class Config:
     bucket: str = DEFAULT_BUCKET
     prefix: str = ""
     region: str = DEFAULT_REGION
+    endpoint_url: str | None = None
+    force_path_style: bool | None = None
+    allow_http: bool = False
     data_dir: pathlib.Path = field(default_factory=lambda: pathlib.Path("data"))
     scratch_dir: pathlib.Path = field(default_factory=lambda: pathlib.Path("/tmp"))
     icechunk_local_path: pathlib.Path | None = None
@@ -154,6 +164,17 @@ class Config:
             "prefix": self.full_prefix(prefix),
             "region": self.region,
         }
+        if self.endpoint_url:
+            kwargs["endpoint_url"] = self.endpoint_url
+            # A custom endpoint almost always needs path-style addressing, and a bucket
+            # name containing dots cannot be addressed virtual-host style over TLS at all.
+            kwargs["force_path_style"] = (
+                self.force_path_style if self.force_path_style is not None else True
+            )
+            if self.allow_http:
+                kwargs["allow_http"] = True
+        elif self.force_path_style:
+            kwargs["force_path_style"] = True
         if creds.aws_profile:
             # icechunk has no profile argument; the AWS SDK resolves AWS_PROFILE from the
             # environment when credentials are sourced from there. An explicit profile is
@@ -194,6 +215,9 @@ def load_config(env_file: str | os.PathLike | None = None, override: bool = Fals
         bucket=_env("ICECHUNK_BUCKET", DEFAULT_BUCKET) or DEFAULT_BUCKET,
         prefix=_env("ICECHUNK_PREFIX", "") or "",
         region=_env("AWS_REGION", DEFAULT_REGION) or DEFAULT_REGION,
+        endpoint_url=_env("ICECHUNK_ENDPOINT_URL"),
+        force_path_style=_env_bool("ICECHUNK_FORCE_PATH_STYLE"),
+        allow_http=bool(_env_bool("ICECHUNK_ALLOW_HTTP", False)),
         data_dir=_env_path("PLANETARY_DATASETS_DATA_DIR", str(REPO_ROOT / "data")),
         scratch_dir=_env_path("PLANETARY_DATASETS_SCRATCH_DIR", "/tmp"),
         icechunk_local_path=pathlib.Path(local_path).expanduser() if local_path else None,
