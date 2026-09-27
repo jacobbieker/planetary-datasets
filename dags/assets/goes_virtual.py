@@ -16,7 +16,9 @@ through ``BaseProvider``.
 
 Configuration comes from ``planetary_datasets.config``: the destination store
 is ``ICECHUNK_BUCKET``/``ICECHUNK_PREFIX``, or a local directory when
-``ICECHUNK_LOCAL_PATH`` is set.
+``ICECHUNK_LOCAL_PATH`` is set. Pin ``GOES_VIRTUAL_END_DATE`` as well — the
+anchor date names the newest era's store, so an unpinned deployment writes a
+new store every day instead of extending yesterday's.
 """
 
 # No `from __future__ import annotations` here: Dagster validates the
@@ -24,6 +26,7 @@ is ``ICECHUNK_BUCKET``/``ICECHUNK_PREFIX``, or a local directory when
 # annotations make it reject the asset.
 
 import datetime as dt
+import os
 from typing import Optional
 
 import dagster as dg
@@ -60,14 +63,29 @@ def _channel_number(partition_key: str) -> int:
     return channel
 
 
-def _run_options(tags: dict) -> tuple[dt.date, Optional[int], int]:
+def _pinned_anchor() -> Optional[dt.date]:
+    """The anchor date pinned for this deployment, if there is one.
+
+    The anchor names the newest era's store, so it has to stay the same from
+    one run to the next: a run anchored on a new date mints a fresh set of
+    stores and re-ingests the era from nothing instead of resuming. Pin it
+    with ``GOES_VIRTUAL_END_DATE`` (``.env`` works, since the config loads it)
+    and only move it when you intend to start a new set.
+    """
+    get_config()  # ensures .env has been loaded into the environment
+    raw = os.environ.get("GOES_VIRTUAL_END_DATE", "").strip()
+    return dt.date.fromisoformat(raw) if raw else None
+
+
+def _run_options(tags: dict) -> tuple[Optional[dt.date], Optional[int], int]:
     """Read the per-run overrides off the run tags.
 
-    Defaults keep a scheduled run cheap: anchor on today and take only the
-    newest era. Backfilling the older eras is then an explicit run tagged
-    ``goes_virtual/max_eras: all``.
+    ``end_date`` is None when neither the run nor the deployment pinned one;
+    the caller decides what to do about that. ``max_eras`` defaults to 1 so a
+    scheduled run only keeps the newest era current — backfilling the older
+    ones is an explicit run tagged ``goes_virtual/max_eras: all``.
     """
-    end_date = dt.date.today()
+    end_date = _pinned_anchor()
     max_eras: Optional[int] = 1
     batch_size = 1
     for key, value in (tags or {}).items():
@@ -88,6 +106,15 @@ def _run_ingest(
     cfg = get_config()
 
     end_date, max_eras, batch_size = _run_options(getattr(context.run, "tags", {}))
+    if end_date is None:
+        end_date = dt.date.today()
+        context.log.warning(
+            "No anchor date pinned, falling back to today "
+            f"({end_date.isoformat()}). The anchor names the newest era's "
+            "store, so an unpinned run writes a new store every day and "
+            "re-ingests the era from nothing. Set GOES_VIRTUAL_END_DATE, or "
+            "tag the run goes_virtual/end_date, to resume the existing store."
+        )
 
     args = ingest_goes_radf.build_args(
         satellite,

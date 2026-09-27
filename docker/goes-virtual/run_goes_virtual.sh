@@ -108,16 +108,21 @@ echo "budget     : ${BUDGET_GB}GB"
 echo "logs       : $OUT/logs"
 echo
 
+# The GOES CLI reads its destination and credentials from the environment via
+# planetary_datasets.config, so the keys never appear in argv. They would
+# otherwise be readable from `ps` by anything in the container, and the
+# watchdog logs command lines.
+export ICECHUNK_BUCKET="$SC_BUCKET"
+export AWS_REGION="$SC_REGION"
+export AWS_ACCESS_KEY_ID="$SC_ACCESS_KEY_ID"
+export AWS_SECRET_ACCESS_KEY="$SC_SECRET_ACCESS_KEY"
+
 launch() {  # satellite, tag, extra args...
   local sat=$1 tag=$2; shift 2
   $RUN \
     --satellite "$sat" \
-    --storage s3 \
-    --bucket "$SC_BUCKET" \
+    --storage config \
     --prefix "${SC_PREFIX_ROOT}/${sat}_radf.icechunk" \
-    --region "$SC_REGION" \
-    --access-key-id "$SC_ACCESS_KEY_ID" \
-    --secret-access-key "$SC_SECRET_ACCESS_KEY" \
     --end-date "$END_DATE" \
     --batch-size "$BATCH_SIZE" \
     --log-dir "$OUT/logs" \
@@ -126,6 +131,8 @@ launch() {  # satellite, tag, extra args...
   echo "  $sat/$tag -> pid $! (log: $OUT/${sat}_${tag}.log)"
 }
 
+# The GK-2A and Himawari CLIs do not yet take --storage config, so these two
+# still pass the keys as arguments. Switch them over when they do.
 launch_gk2a() {  # tag, extra args...
   local tag=$1; shift
   $GK2A_CMD \

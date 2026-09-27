@@ -215,7 +215,11 @@ def ingest_channel_backwards(
         end_date=walk_end,
         start_date=max(start_date, mod.ARCHIVE_START_DATE) if start_date
                    else mod.ARCHIVE_START_DATE,
-        first_store_suffix=end_date.isoformat(),
+        # walk_end, not end_date: for a decommissioned satellite the walk is
+        # clamped to the end of its archive, and naming the store after an
+        # unclamped "today" would mint a new one on every run instead of
+        # resuming the previous one.
+        first_store_suffix=walk_end.isoformat(),
         branch=branch,
         group="",
         batch_size=batch_size,

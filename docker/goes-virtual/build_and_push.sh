@@ -44,14 +44,24 @@ mkdir -p "$CTX/planetary_datasets/providers/virtualized"
 for f in config.py memory.py; do
   cp "$REPO_ROOT/planetary_datasets/$f" "$CTX/planetary_datasets/$f"
 done
-# The only modules the ingests import: the shared core, the four GOES
-# satellite definitions, GK-2A, and the two CLIs.
+# The modules the ingests import: the shared core, the four GOES satellite
+# definitions, and the CLI.
 for f in goes_radf_common.py goes_16_radf.py goes_17_radf.py goes_18_radf.py \
-         goes_19_radf.py ingest_goes_radf.py \
-         gk2a_ami_fd.py ingest_gk2a_fd.py \
-         himawari_isatss.py ingest_himawari_isatss.py; do
+         goes_19_radf.py ingest_goes_radf.py; do
   cp "$REPO_ROOT/planetary_datasets/providers/virtualized/$f" \
      "$CTX/planetary_datasets/providers/virtualized/$f"
+done
+# The other missions this image can also run. Optional: the GOES tiers work
+# without them, and `set -e` would otherwise abort the whole build on a
+# checkout that does not have them yet.
+for f in gk2a_ami_fd.py ingest_gk2a_fd.py \
+         himawari_isatss.py ingest_himawari_isatss.py; do
+  src="$REPO_ROOT/planetary_datasets/providers/virtualized/$f"
+  if [ -f "$src" ]; then
+    cp "$src" "$CTX/planetary_datasets/providers/virtualized/$f"
+  else
+    echo "    note: $f not present, image will run GOES only"
+  fi
 done
 cp "$HERE/environment.yml" "$HERE/Dockerfile" "$HERE/run_goes_virtual.sh" \
    "$HERE/memory_watchdog.py" "$CTX/"

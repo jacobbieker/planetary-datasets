@@ -227,9 +227,22 @@ def scratch_dir() -> pathlib.Path:
 
 
 def virtual_chunk_buckets(extra: Iterable[str] = ()) -> list[str]:
-    """Bucket names (no scheme) that virtual chunk references may point into."""
-    names = [b.split("://", 1)[-1].strip("/") for b in DEFAULT_SOURCE_BUCKETS.values()]
-    for bucket in extra:
+    """Bucket names (no scheme) that virtual chunk references may point into.
+
+    Resolves each satellite through :func:`source_bucket`, so a mirror
+    configured with ``<SATELLITE>_SOURCE_BUCKET`` gets a chunk container too.
+    Without that the manifests would reference the mirror while only the NOAA
+    prefixes were authorized, and every chunk read would fail. The defaults
+    stay in the list as well: an existing store's manifests still point at
+    them.
+    """
+    names: list[str] = []
+    candidates = [
+        *(source_bucket(sat) for sat in DEFAULT_SOURCE_BUCKETS),
+        *DEFAULT_SOURCE_BUCKETS.values(),
+        *extra,
+    ]
+    for bucket in candidates:
         name = bucket.split("://", 1)[-1].strip("/")
         if name and name not in names:
             names.append(name)
@@ -402,10 +415,15 @@ def _codec_matches(codec: Any, expected: dict[str, Any]) -> bool:
 
 def _pipeline_matches(
     actual: list[Any],
-    expected: list[dict[str, Any]],
+    expected: list[dict[str, Any]] | None,
 ) -> bool:
-    """Return True if actual codecs match an expected pipeline spec."""
-    if len(actual) != len(expected):
+    """Return True if actual codecs match an expected pipeline spec.
+
+    ``expected`` is None when the era's table does not list this variable at
+    all, which counts as "does not match" rather than an error: the dual-era
+    check calls this once per era and only needs one of them to match.
+    """
+    if expected is None or len(actual) != len(expected):
         return False
     return all(_codec_matches(act, exp) for act, exp in zip(actual, expected))
 
@@ -981,12 +999,16 @@ def _last_committed_day(
         session = repo.readonly_session(branch=branch)
         existing = xr.open_zarr(
             session.store, group=group or None, chunks=None, zarr_format=3,
-        ).drop_duplicates("t").sortby("t")
+        )
     except (FileNotFoundError, KeyError):
         return None
     if "t" not in existing.coords or existing.sizes.get("t", 0) == 0:
         return None
 
+    # Check the *raw* index, before any dedup or sort: resuming from max(t)
+    # when the store is out of order would silently skip every day between
+    # the true last append and that maximum. Sorting first would make the
+    # check unfailable.
     t_idx = existing.xindexes["t"].to_pandas_index()
     if not (t_idx.is_monotonic_increasing and t_idx.is_unique):
         raise ValueError(
@@ -1138,7 +1160,22 @@ def ingest_all_days(
     consecutive_failed_days = 0
     all_consecutive_are_codec = True
     codec_change_date: datetime.date | None = None
-    for batch_ind in range(n_batches):
+    # First batch of the current run of failures, so that a codec change can
+    # rewind to it: the days that *proved* the era boundary belong to the new
+    # era, and without a rewind they are in neither store.
+    first_failed_batch_ind: int | None = None
+    # Batches already rewound to, so a genuinely broken day cannot bounce the
+    # loop between "new era" and "still failing" forever.
+    rewound_to: set[int] = set()
+
+    # An index-driven loop rather than `for ... in range(...)`: the increment
+    # happens at the top, so every `continue` below still advances, and the
+    # codec-change branch can step the index backwards to retry.
+    batch_ind = -1
+    while True:
+        batch_ind += 1
+        if batch_ind >= n_batches:
+            break
         batch_start = batch_ind * batch_size
         batch = selected[batch_start : batch_start + batch_size]
 
@@ -1354,6 +1391,7 @@ def ingest_all_days(
             consecutive_failed_days = 0
             all_consecutive_are_codec = True
             codec_change_date = None
+            first_failed_batch_ind = None
 
         except Exception as e:
             print(
@@ -1370,6 +1408,8 @@ def ingest_all_days(
                 traceback.print_exc()
             batches_failed += 1
             consecutive_failed_days += len(batch)
+            if first_failed_batch_ind is None:
+                first_failed_batch_ind = batch_ind
 
             if _is_codec_error(e):
                 if codec_change_date is None:
@@ -1385,17 +1425,21 @@ def ingest_all_days(
             if consecutive_failed_days >= MAX_CONSECUTIVE_FAILED_DAYS:
                 # If all consecutive failures are codec-related, handle
                 # by creating a new Icechunk store for the new codec era.
+                retry_from = first_failed_batch_ind
                 if (
                     all_consecutive_are_codec
                     and codec_change_date is not None
                     and repo_factory is not None
                     and epoch_threshold is not None
+                    and retry_from is not None
+                    and retry_from not in rewound_to
                 ):
                     date_str = codec_change_date.isoformat()
                     print(
                         f"\nCodec change detected on {date_str} for "
                         f"{channel_label}. Creating new Icechunk store "
-                        f"with date suffix '{date_str}'.",
+                        f"with date suffix '{date_str}' and retrying from "
+                        f"batch {retry_from}.",
                         flush=True,
                     )
                     if log_dir is not None:
@@ -1403,16 +1447,42 @@ def ingest_all_days(
                             log_dir, satellite, channel_label, date_str,
                             "CODEC_CHANGE",
                             f"Creating new store for codec era "
-                            f"starting {date_str}",
+                            f"starting {date_str}, retrying from batch "
+                            f"{retry_from}",
                         )
                     repo = repo_factory(date_str)
                     preprocess_fn = make_preprocess_no_codec_check(
                         epoch_threshold, keep_data_vars
                     )
-                    is_first_write = True
+                    # The era store may already exist from an earlier run:
+                    # writing without append_dim would recreate its arrays and
+                    # drop everything already committed. Re-derive both the
+                    # first-write flag and the resume point against the *new*
+                    # repo — the old store's resume point would otherwise keep
+                    # filtering out days this store does not have.
+                    is_first_write = not _schema_exists(repo, branch, group)
+                    skip_through = None
+                    last_committed_t = None
+                    boundary_checked = False
+                    if resume and not is_first_write:
+                        info = _last_committed_day(repo, branch, group)
+                        if info is not None:
+                            skip_through, last_committed_t = info
+                            print(
+                                f"Auto-resuming the new era store: last "
+                                f"committed day is {skip_through[0]}-"
+                                f"{skip_through[1]:03d} (last t = "
+                                f"{last_committed_t}).",
+                                flush=True,
+                            )
                     consecutive_failed_days = 0
                     all_consecutive_are_codec = True
                     codec_change_date = None
+                    first_failed_batch_ind = None
+                    # Retry the days that proved the boundary: they belong to
+                    # the new era. -1 because the loop increments at the top.
+                    rewound_to.add(retry_from)
+                    batch_ind = retry_from - 1
                     continue
 
                 msg = (
