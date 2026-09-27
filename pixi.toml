@@ -71,6 +71,9 @@ psutil = "*"
 # tzdata 2026.4 and made the environment unsolvable.
 wetterdienst = ">=0.110"
 isd = ">=0.1.0, <0.2"
+# The MARS retrieval client (module `ecmwfapi`). Imported lazily, so only the
+# process that actually talks to MARS needs it, but it was never declared.
+ecmwf-api-client = ">=1.6.3, <2"
 ocf-blosc2 = ">=0.0.14, <0.0.15"
 nest-asyncio = ">=1.6.0, <2"
 igra = ">=23.5, <24"

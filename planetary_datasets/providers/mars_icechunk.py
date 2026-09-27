@@ -396,8 +396,12 @@ def scan_grib(path: str | pathlib.Path) -> pd.DataFrame:
                 step = ec.codes_get_long(handle, "step")
                 valid_time = (
                     pd.Timestamp(str(data_date))
-                    + pd.Timedelta(hours=data_time // 100, minutes=data_time % 100)
-                    + pd.Timedelta(hours=step)
+                    # Explicit units: the keyword form builds a generic-unit
+                    # numpy timedelta, which is deprecated and due to become
+                    # an error.
+                    + pd.Timedelta(data_time // 100, unit="h")
+                    + pd.Timedelta(data_time % 100, unit="m")
+                    + pd.Timedelta(step, unit="h")
                 )
                 rows.append(
                     (
@@ -2757,7 +2761,7 @@ if __name__ == "__main__":
             times = times[times <= pd.Timestamp(args.end)]
         # Shard on the hour, not on the position in `times`, so every worker
         # agrees on the split whichever list of times it happens to start from.
-        hours = ((times - pd.Timestamp("1970-01-01")) // pd.Timedelta(hours=1)).to_numpy()
+        hours = ((times - pd.Timestamp("1970-01-01")) // pd.Timedelta(1, unit="h")).to_numpy()
         return times[hours % n_shards == shard]
 
     provider = build_provider(

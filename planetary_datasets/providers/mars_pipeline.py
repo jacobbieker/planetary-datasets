@@ -303,7 +303,12 @@ def _chunked(
         )
         valid = pd.DatetimeIndex(
             sorted(
-                {d + pd.Timedelta(hours=h + s) for d in chunk for h in init_hours for s in steps}
+                {
+                    d + pd.Timedelta(h + s, unit="h")
+                    for d in chunk
+                    for h in init_hours
+                    for s in steps
+                }
             )
         )
         request = build_mars_request(chunk[0], chunk[-1], **request_kwargs)

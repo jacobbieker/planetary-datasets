@@ -131,7 +131,7 @@ def test_mars_service_passes_the_configured_credentials(tmp_path, monkeypatch):
         def __init__(self, service, url=None, key=None, email=None):
             captured.update(service=service, url=url, key=key, email=email)
 
-    monkeypatch.setattr(mars, "ECMWFService", FakeService)
+    monkeypatch.setattr(mars, "_ecmwf_service_class", lambda: FakeService)
     mars.mars_service()
     # All three have to be passed together: ecmwfapi throws away what it was
     # given and re-reads the environment as soon as any one of them is None.

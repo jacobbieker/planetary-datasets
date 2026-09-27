@@ -13,7 +13,6 @@ Retrievals land in ``<data_dir>/mars`` by default, where ``data_dir`` is
 import pathlib
 
 import pandas as pd
-from ecmwfapi import ECMWFService
 from loguru import logger
 
 from planetary_datasets.config import MissingCredential, get_config
@@ -73,7 +72,20 @@ def default_target_dir() -> pathlib.Path:
 DEFAULT_ECMWF_API_URL = "https://api.ecmwf.int/v1"
 
 
-def mars_service(service: str = "mars") -> ECMWFService:
+def _ecmwf_service_class():
+    """``ecmwfapi.ECMWFService``, imported on use.
+
+    Deferred so that importing this module -- which the Dagster code location
+    and the pipeline's planning both do -- needs nothing but the
+    configuration. Only the process that actually talks to MARS needs the
+    client. Patched wholesale in tests.
+    """
+    from ecmwfapi import ECMWFService  # noqa: PLC0415
+
+    return ECMWFService
+
+
+def mars_service(service: str = "mars"):
     """An ``ECMWFService`` authenticated from the configuration.
 
     Uses ``ECMWF_API_KEY``/``ECMWF_API_EMAIL`` (and ``ECMWF_API_URL``, which
@@ -93,8 +105,8 @@ def mars_service(service: str = "mars") -> ECMWFService:
         if not (pathlib.Path.home() / ".ecmwfapirc").is_file():
             raise
         logger.debug(f"{exc} Falling back to ~/.ecmwfapirc")
-        return ECMWFService(service)
-    return ECMWFService(
+        return _ecmwf_service_class()(service)
+    return _ecmwf_service_class()(
         service,
         url=creds.ecmwf_api_url or DEFAULT_ECMWF_API_URL,
         key=key,
