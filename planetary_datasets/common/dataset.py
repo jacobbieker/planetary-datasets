@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 import xarray as xr
+from loguru import logger
 
 # Variables matching these substrings do not carry meaningful precision beyond float16 and
 # dominate store size, so they are downcast before writing.
@@ -86,10 +87,20 @@ def rename_vars_by_long_name(ds: xr.Dataset, suffix: str = "") -> xr.Dataset:
     and append a suffix such as ``_at_surface`` to keep them distinct.
     """
     renames: dict[str, str] = {}
+    taken: set[str] = set()
     for var in ds.data_vars:
         long_name = str(ds[var].attrs.get("long_name", var))
         slug = long_name.lower().replace(" ", "_").replace("(", "").replace(")", "")
-        renames[var] = f"{slug}{suffix}"
+        target = f"{slug}{suffix}"
+        if target in taken:
+            # Two variables can share a long_name (GRIB does this across level types).
+            # Renaming both to it would raise, so keep the original name for the later one.
+            logger.debug(f"long_name {target!r} already used, keeping {var!r} unchanged")
+            target = str(var)
+            if target in taken:
+                continue
+        taken.add(target)
+        renames[str(var)] = target
     return ds.rename(renames)
 
 
