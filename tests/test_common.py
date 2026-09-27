@@ -94,6 +94,30 @@ class TestDownloadOne:
         assert not dest.exists()
         assert not dest.with_name("dest.bin.part").exists()
 
+    def test_missing_source_is_not_retried(self, tmp_path, monkeypatch):
+        """A 404 will not become a success; retrying only burns the backoff budget."""
+        calls = []
+        real_open = dl.fsspec.open
+
+        def counting_open(url, *args, **kwargs):
+            calls.append(url)
+            return real_open(url, *args, **kwargs)
+
+        monkeypatch.setattr(dl.fsspec, "open", counting_open)
+        assert dl.download_one(str(tmp_path / "gone.bin"), tmp_path / "d.bin", retries=5, backoff=0) is None
+        assert len(calls) == 1
+
+    def test_transient_errors_are_still_retried(self, tmp_path, monkeypatch):
+        calls = []
+
+        def flaky_open(url, *args, **kwargs):
+            calls.append(url)
+            raise TimeoutError("transient")
+
+        monkeypatch.setattr(dl.fsspec, "open", flaky_open)
+        assert dl.download_one("http://x/y.bin", tmp_path / "d.bin", retries=3, backoff=0) is None
+        assert len(calls) == 3
+
     def test_zero_byte_file_is_not_treated_as_downloaded(self, tmp_path):
         src = tmp_path / "src.bin"
         src.write_bytes(b"payload")
@@ -180,6 +204,46 @@ class TestStoreRoundTrip:
     def test_existing_times_is_empty_for_a_fresh_store(self, local_config):
         repo = local_config.icechunk_repo("test/fresh.icechunk")
         assert store_helpers.existing_times(repo).size == 0
+
+    def test_read_failure_never_overwrites_a_populated_store(self, local_config, sample_dataset, monkeypatch):
+        """A transient read error must not be mistaken for an empty store.
+
+        Regression: the create-fresh path would otherwise replace a multi-year archive
+        with a single timestep.
+        """
+        repo = local_config.icechunk_repo("test/guard.icechunk")
+        store_helpers.write_to_icechunk(repo, sample_dataset)
+        assert store_helpers.has_committed_data(repo) is True
+
+        def boom(*args, **kwargs):
+            raise ValueError("transient S3 read failure")
+
+        monkeypatch.setattr(store_helpers.xr, "open_zarr", boom)
+        later = sample_dataset.assign_coords(time=pd.DatetimeIndex(["2026-01-01T01:00"]))
+        with pytest.raises(store_helpers.StoreReadError, match="Refusing to overwrite"):
+            store_helpers.write_to_icechunk(repo, later)
+
+    def test_read_failure_is_not_reported_as_no_times(self, local_config, sample_dataset, monkeypatch):
+        repo = local_config.icechunk_repo("test/guard2.icechunk")
+        store_helpers.write_to_icechunk(repo, sample_dataset)
+
+        def boom(*args, **kwargs):
+            raise ValueError("transient S3 read failure")
+
+        monkeypatch.setattr(store_helpers.xr, "open_zarr", boom)
+        with pytest.raises(store_helpers.StoreReadError, match="Refusing to report it as empty"):
+            store_helpers.existing_times(repo)
+
+    def test_empty_repo_is_still_treated_as_empty(self, local_config):
+        repo = local_config.icechunk_repo("test/emptyrepo.icechunk")
+        assert store_helpers.has_committed_data(repo) is False
+        assert store_helpers.existing_times(repo).size == 0
+
+    def test_has_committed_data_flips_after_the_first_write(self, local_config, sample_dataset):
+        repo = local_config.icechunk_repo("test/committed.icechunk")
+        assert store_helpers.has_committed_data(repo) is False
+        store_helpers.write_to_icechunk(repo, sample_dataset)
+        assert store_helpers.has_committed_data(repo) is True
 
     def test_dataset_without_append_dim_is_rejected(self, local_config):
         repo = local_config.icechunk_repo("test/nodim.icechunk")
