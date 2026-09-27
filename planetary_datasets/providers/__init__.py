@@ -1,7 +1,11 @@
-"""Concrete data providers, one subpackage or module per source family.
+"""Dataset providers.
 
-Each provider subclasses :class:`planetary_datasets.base.BaseProvider` and is driven by the
-Dagster assets in ``dags/assets``. Importing this package is deliberately cheap: heavy
-optional dependencies (``satpy``, ``harp``, ``eumdac`` …) are imported inside the methods
-that need them, not at module scope.
+Each module here defines one or more :class:`~planetary_datasets.base.BaseProvider`
+subclasses for a single data source. Import the provider you need directly::
+
+    from planetary_datasets.providers.mrms import MRMSProvider
+
+Nothing is re-exported from this module on purpose: importing every provider eagerly would
+pull in the whole optional dependency surface (cfgrib, satpy, harp, copernicusmarine, ...)
+for anyone importing any single one of them.
 """
