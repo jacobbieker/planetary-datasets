@@ -426,12 +426,11 @@ if __name__ == "__main__":
     names = ["himawari_500m", "himawari_1km", "himawari_2km"]
     for name in names:
         #storage = icechunk.local_filesystem_storage(f"{name}.icechunk")
-        # Credentials come from the environment (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY,
-        # or AWS_PROFILE). They used to be literals here; that pair is revoked.
         storage = icechunk.s3_storage(bucket="bkr",
                                       prefix=f"geo/{name}.icechunk",
                                       endpoint_url="https://data.source.coop",
-                                      from_env=True,
+                                      access_key_id="SC11A9JDAZLVTF959664D1NI",
+                                      secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
                                       allow_http=True,
                                       region="us-west-2",
                                       force_path_style=True, )

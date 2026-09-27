@@ -33,7 +33,10 @@ b735134 2025-07-29 Remove unused portion
 ```
 
 It is still present in four files at `origin/main` HEAD, and every `consolidate/*` branch
-inherits a copy in `dags/assets/icechunk/himawari.py` (scrubbed on this branch).
+inherits copies in `dags/assets/icechunk/himawari.py` and `goes.py`. Those literals are
+removed by the Dagster consolidation PR, which owns those files; this branch deliberately
+does not duplicate that change. Removing them is housekeeping either way — the value is
+already published, so only revocation fixes it.
 
 Assume it is compromised. Revoke it in the Source Cooperative console before anything else;
 deleting the literals does not undo publication, and rewriting history on a public repo does
