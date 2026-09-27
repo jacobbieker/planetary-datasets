@@ -19,25 +19,33 @@ The Eurocontrol R&D Archive is licence-gated and hand-downloaded, so it has help
 import dagster as dg
 import pandas as pd
 
-from planetary_datasets.providers.observations.opensky import OpenSkyStatesProvider
+from planetary_datasets.providers.observations._points import naive_utc
+from planetary_datasets.providers.observations.opensky import (
+    SAMPLE_END,
+    SAMPLE_START,
+    OpenSkyStatesProvider,
+)
 from planetary_datasets.providers.observations.osmc import (
     PLATFORM_TYPES,
     OSMCProvider,
     store_prefix_for,
 )
 
-# OpenSky publishes its public samples for Mondays only. day_offset=1 anchors the weekly
-# window on Monday. end_offset=-1 keeps the still-open current week out of the set.
+# OpenSky publishes its public samples for Mondays only, and the set is closed: it ends
+# 2022-06-27. day_offset=1 anchors the weekly window on Monday; the end_date stops the
+# definition generating hundreds of partitions that can only ever download nothing.
 opensky_partitions = dg.WeeklyPartitionsDefinition(
-    start_date="2016-06-06",
+    start_date=SAMPLE_START.strftime("%Y-%m-%d"),
+    # end_date bounds the window's *end*, so the last Monday needs a full week beyond it
+    # to be included at all.
+    end_date=(SAMPLE_END + pd.Timedelta(days=7)).strftime("%Y-%m-%d"),
     day_offset=1,
-    end_offset=-1,
 )
 
-osmc_partitions = dg.MonthlyPartitionsDefinition(
-    start_date="2012-01-01",
-    end_offset=-1,
-)
+# end_offset is left at its default: MonthlyPartitionsDefinition already excludes the
+# in-progress month, and OSMC_RealTime serves a rolling window, so delaying by a further
+# month risks the data ageing out before the partition becomes available.
+osmc_partitions = dg.MonthlyPartitionsDefinition(start_date="2012-01-01")
 
 
 @dg.asset(
@@ -56,15 +64,43 @@ osmc_partitions = dg.MonthlyPartitionsDefinition(
 # `from __future__ import annotations` in this module and an explicit
 # `context: dg.AssetExecutionContext` under one raise DagsterInvalidDefinitionError.
 def opensky_states_asset(context) -> dg.MaterializeResult:
-    """Ingest the 24 hourly OpenSky state-vector archives for one Monday."""
-    day = pd.Timestamp(context.partition_time_window.start).normalize()
+    """Ingest the 24 hourly OpenSky state-vector archives for one Monday.
+
+    The hours are run individually rather than through ``run_range`` so a failure is
+    surfaced: ``run_range`` logs and swallows every per-partition exception, which would
+    let a week where all 24 downloads failed materialize green and never be retried.
+    """
+    day = naive_utc(context.partition_time_window.start).normalize()
     provider = OpenSkyStatesProvider()
     hours = pd.date_range(day, periods=24, freq="h")
-    written = provider.run_range(hours)
-    context.log.info(f"wrote {written} of 24 hourly partitions for {day:%Y-%m-%d}")
+
+    written = 0
+    absent = 0
+    failures: list[tuple[pd.Timestamp, Exception]] = []
+    for hour in provider.missing_timesteps(hours):
+        try:
+            if provider.run_partition(hour, check_present=False):
+                written += 1
+            else:
+                absent += 1
+        except Exception as exc:  # noqa: BLE001 - collected and re-raised below
+            context.log.exception(f"hour {hour} failed: {exc}")
+            failures.append((hour, exc))
+
+    context.log.info(
+        f"{day:%Y-%m-%d}: {written} hour(s) written, {absent} unpublished, "
+        f"{len(failures)} failed"
+    )
+    if failures:
+        hour, exc = failures[0]
+        raise RuntimeError(
+            f"{len(failures)} of 24 hours failed for {day:%Y-%m-%d}; first was {hour}: {exc}"
+        ) from exc
+
     return dg.MaterializeResult(
         metadata={
             "hours_written": dg.MetadataValue.int(written),
+            "hours_unpublished": dg.MetadataValue.int(absent),
             "store_path": dg.MetadataValue.text(provider.store_path),
         }
     )
@@ -89,7 +125,7 @@ def _osmc_asset(dataset: str):
     )
     # context intentionally unannotated; see opensky_states_asset above.
     def _asset(context) -> dg.MaterializeResult:
-        it = pd.Timestamp(context.partition_time_window.start)
+        it = naive_utc(context.partition_time_window.start)
         provider = OSMCProvider(dataset)
         wrote = provider.run_partition(it)
         return dg.MaterializeResult(

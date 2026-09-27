@@ -38,6 +38,7 @@ from loguru import logger
 from planetary_datasets.providers.observations._points import (
     PointObservationProvider,
     clip_to_window,
+    naive_utc,
     widen_string_vars,
 )
 
@@ -243,9 +244,14 @@ def reorganise_by_platform_id(ds: xr.Dataset, chunk_time: int = 1000) -> xr.Data
         platform_ds = platform_ds.drop_vars(
             [v for v in ("platform_id", "platform_type") if v in platform_ds.variables]
         )
-        if platform_type.size:
-            platform_ds = platform_ds.assign_coords(platform_type=[platform_type[0]])
         platform_ds = platform_ds.expand_dims({"platform_id": [platform_id]})
+        if platform_type.size:
+            # Attach the type *along* platform_id. A bare list would make it a new
+            # standalone dimension, which concat then unions across platforms, leaving
+            # a platform_type axis with no connection to the platform it describes.
+            platform_ds = platform_ds.assign_coords(
+                platform_type=("platform_id", [platform_type[0]])
+            )
         all_times.append(np.asarray(platform_ds["time"].values))
         per_platform.append(platform_ds)
 
@@ -300,7 +306,7 @@ class OSMCProvider(PointObservationProvider):
         partition is retried instead of being recorded as permanently done.
         """
         url = self.url_for(it)
-        month = pd.Timestamp(it).strftime("%Y-%m")
+        month = naive_utc(it).strftime("%Y-%m")
         dest_dir = pathlib.Path(temp_dir) if temp_dir is not None else self.local_dir("osmc")
         dest = pathlib.Path(dest_dir) / f"osmc_{self.dataset}_{month}.nc"
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -334,8 +340,16 @@ class OSMCProvider(PointObservationProvider):
         temp_dir: pathlib.Path | None = None,
         **kwargs,
     ) -> xr.Dataset:
-        """Reshape the ERDDAP response into the flat, time-indexed point layout."""
-        parts = [rows_to_time_dim(xr.open_dataset(path)) for path in input_files]
+        """Reshape the ERDDAP response into the flat, time-indexed point layout.
+
+        Each source file is read inside a ``with`` and loaded eagerly: leaving the
+        result lazily bound to a handle inside the partition's temporary directory
+        leaks a file descriptor per partition across a multi-year backfill.
+        """
+        parts = []
+        for path in input_files:
+            with xr.open_dataset(path) as raw:
+                parts.append(rows_to_time_dim(raw).load())
         ds = parts[0] if len(parts) == 1 else xr.concat(parts, dim="time")
         ds = ds.sortby("time").drop_encoding()
         ds = widen_string_vars(ds)
@@ -343,5 +357,5 @@ class OSMCProvider(PointObservationProvider):
         start, end = self.partition_bounds(it)
         ds = clip_to_window(ds, start, end)
         rows = ds.sizes.get("time", 0)
-        logger.info(f"{self.name}: {rows} observation(s) for {pd.Timestamp(it):%Y-%m}")
+        logger.info(f"{self.name}: {rows} observation(s) for {naive_utc(it):%Y-%m}")
         return ds.chunk({"time": min(self.chunk_rows, max(1, rows))})

@@ -34,9 +34,9 @@ import pathlib
 import tarfile
 from typing import Iterable, Iterator, List
 
-import fsspec
 import numpy as np
 import pandas as pd
+import requests
 import xarray as xr
 from loguru import logger
 
@@ -45,6 +45,7 @@ from planetary_datasets.providers.observations._points import (
     STRING_WIDTH,
     PointObservationProvider,
     clip_to_window,
+    naive_utc,
     widen_string_vars,
 )
 
@@ -102,7 +103,7 @@ def states_archive_url(it) -> str:
     The date component carries a leading dot (``.2020-05-11``); that is how the bucket
     is laid out upstream, not a typo.
     """
-    ts = pd.Timestamp(it)
+    ts = naive_utc(it)
     return (
         f"{STATES_BASE_URL}/.{ts.strftime('%Y-%m-%d')}/{ts.hour:02d}/"
         f"states_{ts.strftime('%Y-%m-%d-%H')}.csv.tar"
@@ -186,21 +187,37 @@ def normalise_states(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def states_to_dataset(df: pd.DataFrame) -> xr.Dataset:
-    """Turn normalised state vectors into a flat point dataset indexed by ``time``."""
+    """Turn normalised state vectors into a flat point dataset indexed by ``time``.
+
+    Every declared variable is emitted whether or not the source carried it, filled with
+    NaN / False / "" when absent. The column set is not identical across the 2016-2022
+    sample set, and the store's schema is fixed by whichever hour is written first: an
+    hour missing one column would otherwise be rejected by the append's variable-set
+    check and quietly never land.
+    """
     df = normalise_states(df)
+    rows = len(df)
     data_vars: dict[str, tuple[str, np.ndarray]] = {}
 
     for name in FLOAT_VARIABLES:
         if name in df.columns:
-            data_vars[name] = ("time", pd.to_numeric(df[name], errors="coerce").to_numpy("float32"))
+            values = pd.to_numeric(df[name], errors="coerce").to_numpy("float32")
+        else:
+            values = np.full(rows, np.nan, dtype="float32")
+        data_vars[name] = ("time", values)
     for name in BOOL_VARIABLES:
         if name in df.columns:
             # Missing flags mean "not asserted"; a NaN would force the column to float.
-            data_vars[name] = ("time", df[name].fillna(False).astype(bool).to_numpy())
+            values = df[name].fillna(False).astype(bool).to_numpy()
+        else:
+            values = np.zeros(rows, dtype=bool)
+        data_vars[name] = ("time", values)
     for name in STRING_VARIABLES:
         if name in df.columns:
-            values = df[name].fillna("").astype(str).str.strip()
-            data_vars[name] = ("time", values.to_numpy(f"<U{STRING_WIDTH}"))
+            values = df[name].fillna("").astype(str).str.strip().to_numpy(f"<U{STRING_WIDTH}")
+        else:
+            values = np.full(rows, "", dtype=f"<U{STRING_WIDTH}")
+        data_vars[name] = ("time", values)
 
     return xr.Dataset(
         data_vars,
@@ -356,8 +373,18 @@ def sample_hours(start=SAMPLE_START, end=SAMPLE_END) -> pd.DatetimeIndex:
 
 
 def _url_exists(url: str) -> bool:
-    """True when the archive is published. Errors other than 404 propagate."""
-    return fsspec.filesystem("https").exists(url)
+    """True when the archive is published.
+
+    Deliberately not ``fsspec``'s ``exists``: its HTTP implementation swallows every
+    transport error and answers False, so a DNS failure or a reset connection would be
+    indistinguishable from a 404 and the hour would be recorded as permanently empty.
+    Only an explicit 404/410 counts as "not published"; anything else propagates.
+    """
+    response = requests.head(url, timeout=60, allow_redirects=True)
+    if response.status_code in (404, 410):
+        return False
+    response.raise_for_status()
+    return True
 
 
 class OpenSkyStatesProvider(PointObservationProvider):
@@ -379,7 +406,7 @@ class OpenSkyStatesProvider(PointObservationProvider):
         # Only the first may be reported as an empty partition: the base class treats an
         # empty fetch as permanently done and would never retry a transient failure.
         if not _url_exists(url):
-            logger.info(f"no OpenSky states archive published for {pd.Timestamp(it)}")
+            logger.info(f"no OpenSky states archive published for {naive_utc(it)}")
             return []
         raise RuntimeError(f"failed to download {url}")
 

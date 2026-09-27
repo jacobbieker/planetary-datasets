@@ -24,7 +24,9 @@ from planetary_datasets.providers.observations import _points, eurocontrol, open
 def make_states_frame(start="2020-05-11T00:00:00", rows=6, camel=False) -> pd.DataFrame:
     """A small OpenSky state-vector frame, in either column spelling."""
     times = pd.date_range(start, periods=rows, freq="10min")
-    epoch = (times.view("int64") // 1_000_000_000).astype("int64")
+    # Not `.view("int64") // 1e9`: pandas 3 defaults date_range to microsecond
+    # resolution, so that silently divides microseconds and lands in 1970.
+    epoch = times.to_numpy().astype("datetime64[s]").astype("int64")
     frame = pd.DataFrame(
         {
             "time": epoch,
@@ -156,6 +158,28 @@ def test_states_to_dataset_shapes_and_dtypes():
     assert set(np.unique(ds["callsign"].values)) == {"BAW1", "EZY2"}
 
 
+def test_states_to_dataset_emits_every_variable_even_when_absent():
+    """The store schema is fixed by the first hour written, so it must not vary."""
+    frame = make_states_frame().drop(columns=["alert", "callsign", "geoaltitude"])
+    ds = opensky.states_to_dataset(frame)
+    expected = set(opensky.FLOAT_VARIABLES) | set(opensky.BOOL_VARIABLES) | set(opensky.STRING_VARIABLES)
+    assert set(ds.data_vars) == expected
+    assert bool(np.isnan(ds["altitude"].values).all())
+    assert not ds["alert"].values.any()
+    assert set(np.unique(ds["callsign"].values)) == {""}
+
+
+def test_states_to_dataset_schema_is_stable_across_differing_archives(local_config):
+    """An hour missing a column must still append, not be rejected forever."""
+    repo = local_config.icechunk_repo("test/schema.icechunk")
+    full = opensky.states_to_dataset(make_states_frame(start="2020-05-11T00:00"))
+    partial = opensky.states_to_dataset(
+        make_states_frame(start="2020-05-11T01:00").drop(columns=["alert"])
+    )
+    assert _points.append_point_observations(repo, full) is True
+    assert _points.append_point_observations(repo, partial) is True
+
+
 def test_states_to_dataset_keeps_duplicate_timestamps():
     frame = make_states_frame()
     frame["time"] = frame["time"].iloc[0]
@@ -262,6 +286,52 @@ def test_clip_to_window_drops_stray_rows():
     assert clipped.sizes["time"] == 3
 
 
+def test_naive_utc_strips_a_timezone():
+    aware = pd.Timestamp("2020-05-11T03:00", tz="UTC")
+    assert _points.naive_utc(aware) == pd.Timestamp("2020-05-11T03:00")
+    assert _points.naive_utc(pd.Timestamp("2020-05-11T03:00")) == pd.Timestamp("2020-05-11T03:00")
+
+
+def test_partition_bounds_accepts_a_tz_aware_partition_key():
+    """Dagster hands partition windows over as tz-aware UTC timestamps."""
+    start, end = _points.partition_bounds(pd.Timestamp("2020-05-11T03:00", tz="UTC"), "h")
+    assert (start, end) == (pd.Timestamp("2020-05-11T03:00"), pd.Timestamp("2020-05-11T04:00"))
+
+
+def test_stored_windows_on_an_empty_store(local_config):
+    repo = local_config.icechunk_repo("test/scan-empty.icechunk")
+    windows = [_points.partition_bounds("2020-05-11T00:00", "h")]
+    assert _points.stored_windows(repo, windows) == [False]
+
+
+def test_stored_windows_answers_many_windows_in_one_pass(local_config):
+    repo = local_config.icechunk_repo("test/scan.icechunk")
+    _points.append_point_observations(repo, opensky.states_to_dataset(make_states_frame()))
+    windows = [
+        _points.partition_bounds(t, "h")
+        for t in pd.date_range("2020-05-10T23:00", periods=3, freq="h")
+    ]
+    assert _points.stored_windows(repo, windows) == [False, True, False]
+
+
+def test_stored_windows_scans_in_blocks(local_config):
+    """A store larger than one block is still answered correctly."""
+    repo = local_config.icechunk_repo("test/scan-blocks.icechunk")
+    for hour in range(3):
+        ds = opensky.states_to_dataset(make_states_frame(start=f"2020-05-11T0{hour}:00"))
+        _points.append_point_observations(repo, ds)
+    windows = [
+        _points.partition_bounds(t, "h")
+        for t in pd.date_range("2020-05-11T00:00", periods=4, freq="h")
+    ]
+    assert _points.stored_windows(repo, windows, block=7) == [True, True, True, False]
+
+
+def test_stored_windows_returns_empty_for_no_windows(local_config):
+    repo = local_config.icechunk_repo("test/scan-none.icechunk")
+    assert _points.stored_windows(repo, []) == []
+
+
 def test_widen_string_vars_pins_the_width():
     ds = xr.Dataset(
         {"tag": ("time", np.array(["a", "bb"], dtype=object))},
@@ -352,6 +422,19 @@ def test_opensky_provider_fetch_reports_an_unpublished_hour_as_empty(local_confi
     monkeypatch.setattr(opensky, "download_one", lambda *a, **k: None)
     monkeypatch.setattr(opensky, "_url_exists", lambda url: False)
     assert provider.fetch(pd.Timestamp("2020-05-12T00:00")) == []
+
+
+def test_url_exists_only_treats_404_as_absent(monkeypatch):
+    """A transport error must propagate, not be reported as 'no such archive'."""
+    monkeypatch.setattr(opensky.requests, "head", lambda *a, **k: _FakeResponse(404))
+    assert opensky._url_exists("https://example.invalid/x") is False
+
+    monkeypatch.setattr(opensky.requests, "head", lambda *a, **k: _FakeResponse(200))
+    assert opensky._url_exists("https://example.invalid/x") is True
+
+    monkeypatch.setattr(opensky.requests, "head", lambda *a, **k: _FakeResponse(503))
+    with pytest.raises(RuntimeError, match="HTTP 503"):
+        opensky._url_exists("https://example.invalid/x")
 
 
 def test_opensky_provider_fetch_raises_on_a_transient_failure(local_config, monkeypatch):
@@ -540,6 +623,18 @@ def test_reorganise_by_platform_id():
     assert "sst" in out.data_vars
 
 
+def test_reorganise_by_platform_id_keeps_type_tied_to_the_platform():
+    """platform_type must follow platform_id, not become a dimension of its own."""
+    raw = make_erddap_dataset()
+    types = np.array(["DRIFTING BUOYS (GENERIC)", "SHIPS (GENERIC)"] * 4, dtype=object)
+    raw["platform_type"] = ("row", types)
+    out = osmc.reorganise_by_platform_id(osmc.rows_to_time_dim(raw))
+    assert "platform_type" not in out.dims
+    assert out["platform_type"].dims == ("platform_id",)
+    assert out.sizes["platform_id"] == 2
+    assert out["sst"].dims == ("platform_id", "time")
+
+
 def test_reorganise_by_platform_id_needs_the_variable():
     flat = osmc.rows_to_time_dim(make_erddap_dataset()).drop_vars("platform_id")
     with pytest.raises(ValueError, match="no 'platform_id'"):
@@ -634,8 +729,21 @@ def test_dagster_assets_build_a_definitions_object():
     assert len(keys) == 1 + len(osmc.PLATFORM_TYPES)
 
 
-def test_opensky_partitions_are_mondays():
+def test_opensky_partitions_cover_the_sample_set_and_stop_there():
     from dags.assets import flight_marine
 
     keys = flight_marine.opensky_partitions.get_partition_keys()
-    assert pd.Timestamp(keys[0]).dayofweek == 0
+    assert pd.Timestamp(keys[0]) == opensky.SAMPLE_START
+    assert {pd.Timestamp(k).dayofweek for k in keys} == {0}
+    # The sample set is closed; no partition may fall past its last Monday.
+    assert pd.Timestamp(keys[-1]) == opensky.SAMPLE_END
+
+
+def test_osmc_partitions_reach_the_last_complete_month():
+    from dags.assets import flight_marine
+
+    keys = flight_marine.osmc_partitions.get_partition_keys()
+    last = pd.Timestamp(keys[-1])
+    now = pd.Timestamp.now().normalize().replace(day=1)
+    # Only the in-progress month is excluded, not the one before it as well.
+    assert last == now - pd.offsets.MonthBegin(1)

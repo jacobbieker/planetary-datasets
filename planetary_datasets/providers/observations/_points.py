@@ -21,21 +21,22 @@ per-timestamp deduplication.
 from __future__ import annotations
 
 import pathlib
-from typing import List
+from typing import List, Sequence
 
 import icechunk
 import numpy as np
 import pandas as pd
 import xarray as xr
+import zarr
 from icechunk.xarray import to_icechunk
 from loguru import logger
+from xarray.coding.times import decode_cf_datetime
 
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common.store import (
     STORE_READ_ERRORS,
     StoreReadError,
     build_encoding,
-    existing_times,
     has_committed_data,
 )
 
@@ -45,9 +46,22 @@ from planetary_datasets.common.store import (
 STRING_WIDTH = 64
 
 
+def naive_utc(value) -> pd.Timestamp:
+    """Coerce a timestamp to timezone-naive UTC.
+
+    Dagster hands partition windows over as tz-aware UTC timestamps while the stored
+    coordinate is naive. ``np.datetime64`` of a tz-aware Timestamp drops the zone with a
+    UserWarning, so the conversion is done explicitly here instead.
+    """
+    stamp = pd.Timestamp(value)
+    if stamp.tzinfo is not None:
+        stamp = stamp.tz_convert("UTC").tz_localize(None)
+    return stamp
+
+
 def partition_bounds(it, freq: str) -> tuple[pd.Timestamp, pd.Timestamp]:
     """Return the half-open ``[start, end)`` window a partition timestamp covers."""
-    start = pd.Timestamp(it)
+    start = naive_utc(it)
     return start, start + pd.tseries.frequencies.to_offset(freq)
 
 
@@ -56,8 +70,8 @@ def window_has_data(times: np.ndarray, start, end) -> bool:
     if times is None or np.size(times) == 0:
         return False
     stamps = np.asarray(times, dtype="datetime64[ns]")
-    lo = np.datetime64(pd.Timestamp(start), "ns")
-    hi = np.datetime64(pd.Timestamp(end), "ns")
+    lo = np.datetime64(naive_utc(start), "ns")
+    hi = np.datetime64(naive_utc(end), "ns")
     return bool(((stamps >= lo) & (stamps < hi)).any())
 
 
@@ -83,13 +97,13 @@ def clip_to_window(ds: xr.Dataset, start, end, dim: str = "time") -> xr.Dataset:
     not see them as belonging to the partition.
     """
     stamps = np.asarray(ds[dim].values, dtype="datetime64[ns]")
-    lo = np.datetime64(pd.Timestamp(start), "ns")
-    hi = np.datetime64(pd.Timestamp(end), "ns")
+    lo = np.datetime64(naive_utc(start), "ns")
+    hi = np.datetime64(naive_utc(end), "ns")
     keep = np.flatnonzero((stamps >= lo) & (stamps < hi))
     if keep.size != stamps.size:
         logger.warning(
             f"dropping {stamps.size - keep.size} of {stamps.size} observations outside "
-            f"{pd.Timestamp(start)} .. {pd.Timestamp(end)}"
+            f"{naive_utc(start)} .. {naive_utc(end)}"
         )
     return ds.isel({dim: keep})
 
@@ -156,6 +170,76 @@ def append_point_observations(
     return True
 
 
+#: Values read per block when scanning a stored coordinate. 4M int64s is 32 MB.
+COORD_SCAN_BLOCK = 4_000_000
+
+
+def _decode_block(block: np.ndarray, attrs: dict) -> np.ndarray:
+    """Decode a raw block of a stored time coordinate to datetime64."""
+    if block.dtype.kind == "M":
+        return block.astype("datetime64[ns]")
+    units = attrs.get("units")
+    if not units:
+        raise ValueError("stored time coordinate is numeric but carries no CF units")
+    return decode_cf_datetime(block, units, attrs.get("calendar", "standard")).astype(
+        "datetime64[ns]"
+    )
+
+
+def stored_windows(
+    repo: icechunk.Repository,
+    windows: Sequence[tuple[pd.Timestamp, pd.Timestamp]],
+    append_dim: str = "time",
+    block: int = COORD_SCAN_BLOCK,
+) -> List[bool]:
+    """For each ``[start, end)`` window, whether the store already holds observations.
+
+    The coordinate is read block by block straight from zarr rather than through
+    :func:`~planetary_datasets.common.store.existing_times`. That helper hands back the
+    whole coordinate as one numpy array, and for a mature point archive — hundreds of
+    thousands of observations an hour, for years — that is tens of GB pulled into memory
+    just to answer "has this hour been ingested?". Here memory is bounded by ``block``
+    regardless of how large the store grows.
+
+    Every window not yet satisfied is carried into the next block, so one pass answers
+    the whole list, and the scan stops early once all of them are.
+    """
+    answers = [False] * len(windows)
+    if not windows:
+        return answers
+
+    # STORE_READ_ERRORS is a tuple, so it is unpacked rather than nested: a nested tuple
+    # makes `except` raise TypeError instead of catching anything.
+    try:
+        group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+        array = group[append_dim]
+    except (*STORE_READ_ERRORS, KeyError, zarr.errors.GroupNotFoundError) as exc:
+        if has_committed_data(repo):
+            raise StoreReadError(
+                f"store holds committed data but its {append_dim!r} coordinate could not "
+                f"be read ({type(exc).__name__}: {exc}). Refusing to report it as empty."
+            ) from exc
+        logger.debug(f"point store is empty ({type(exc).__name__})")
+        return answers
+
+    total = int(array.shape[0])
+    if total == 0:
+        return answers
+
+    attrs = dict(array.attrs)
+    bounds = [
+        (np.datetime64(naive_utc(s), "ns"), np.datetime64(naive_utc(e), "ns")) for s, e in windows
+    ]
+    for offset in range(0, total, block):
+        stamps = _decode_block(np.asarray(array[offset : offset + block]), attrs)
+        for index, (lo, hi) in enumerate(bounds):
+            if not answers[index] and ((stamps >= lo) & (stamps < hi)).any():
+                answers[index] = True
+        if all(answers):
+            break
+    return answers
+
+
 class PointObservationProvider(BaseProvider):
     """A :class:`~planetary_datasets.base.BaseProvider` for ragged point archives.
 
@@ -174,18 +258,15 @@ class PointObservationProvider(BaseProvider):
     def missing_timesteps(self, desired) -> List[pd.Timestamp]:
         """Return the partitions whose window holds no observations yet.
 
-        The store's time coordinate is read once for the whole list rather than once per
-        partition; for a point archive it can be tens of millions of values long.
+        One bounded-memory pass over the stored coordinate answers the whole list, so
+        this costs the same whether Dagster asks about one partition or a year of them.
         """
-        times = existing_times(self.get_icechunk_repo(), append_dim=self.append_dim)
-        if np.size(times) == 0:
-            return list(desired)
-        missing = []
-        for it in desired:
-            start, end = self.partition_bounds(it)
-            if not window_has_data(times, start, end):
-                missing.append(it)
-        return missing
+        desired = list(desired)
+        windows = [self.partition_bounds(it) for it in desired]
+        covered = stored_windows(
+            self.get_icechunk_repo(), windows, append_dim=self.append_dim
+        )
+        return [it for it, done in zip(desired, covered) if not done]
 
     def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
         """Append the window without per-timestamp deduplication."""
