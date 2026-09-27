@@ -127,6 +127,7 @@ from planetary_datasets.memory import (
     BYTES_PER_GB,
     available_memory_gb,
     estimate_dataset_gb,
+    estimate_peak_gb,
     memory_guard,
     require_memory,
 )
@@ -1714,23 +1715,26 @@ class MARSIcechunkProvider(BaseProvider):
                 logger.warning(f"No source messages for {it}, skipping")
                 continue
             logger.info(f"Ingesting {it} ({', '.join(groups)}) from {len(input_files)} file(s)")
-            # A whole timestep of model levels is about 50GB, which is why
-            # `write_to_icechunk` computes and writes one variable at a time.
-            # The guard is on that: it watches the process tree while the
-            # timestep runs and aborts the run if the peak stays over budget,
-            # rather than letting the ingest grow until the kernel picks a
-            # victim. The estimate is logged, not enforced -- the dataset is
-            # lazy and its `nbytes` is the whole timestep, not the working set.
-            #
             # `process` stages the timestep's messages on disk and
             # `write_to_icechunk` removes them again, so it must be called
             # exactly once per timestep or every extra call leaks a staging
             # directory.
             processed = self.process(input_files, it, groups=groups)
+            # A whole timestep of model levels is about 50GB, but it is never
+            # resident: `write_to_icechunk` computes and writes one dask chunk
+            # -- one variable, or one spectra direction -- at a time, so the
+            # working set is the largest chunk. That is what the peak estimate
+            # measures, with concurrency 1 because the compute is synchronous.
+            require_memory(
+                estimate_peak_gb(processed, concurrency=1), what=f"{self.name} {it}"
+            )
             logger.debug(
                 f"{it}: {estimate_dataset_gb(processed):.1f} GB of fields, "
-                "written a variable at a time"
+                "written a chunk at a time"
             )
+            # The guard watches the process tree while the timestep runs and
+            # aborts the run if the peak stays over budget, rather than
+            # letting the ingest grow until the kernel picks a victim.
             with memory_guard(what=f"{self.name} {it}") as usage:
                 self.write_to_icechunk(repo, processed, regrids=target_repos)
             logger.debug(f"{it}: peak {usage.peak_gb:.1f} GB")
