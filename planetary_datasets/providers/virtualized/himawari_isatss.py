@@ -80,6 +80,15 @@ ARCHIVE_START_DATE: dict[str, datetime.date] = {
     "himawari8": datetime.date(2019, 7, 1),
     "himawari9": datetime.date(2022, 12, 1),
 }
+#: Last day each satellite produced ISatSS, exclusive; None means "still going".
+#: The two overlap: Himawari-9 started publishing on 2022-12-01 but Himawari-8
+#: remained the operational satellite until the handover on 2022-12-13, so
+#: cutting Himawari-8 off at the first Himawari-9 day would lose a fortnight.
+ARCHIVE_END_DATE: dict[str, datetime.date | None] = {
+    "himawari8": datetime.date(2022, 12, 14),
+    "himawari9": None,
+}
+
 MIN_YEAR: dict[str, int] = {"himawari8": 2019, "himawari9": 2022}
 
 EPOCH_THRESHOLD = np.datetime64("2015-01-01", "ns")
@@ -249,6 +258,27 @@ def stitch_slot(
             lambda u: _open_tile(u, registry, parser, loadable), urls
         ))
 
+    # Every tile handle is closed even when assembly raises. build_batch
+    # swallows a bad scene and carries on, so without this a day of malformed
+    # scenes leaks hundreds of handles in a module whose whole point is
+    # bounding memory.
+    try:
+        return _mosaic_from_tiles(tiles, urls, require_full_scene=require_full_scene)
+    finally:
+        for tile in tiles:
+            tile["ds"].close()
+
+
+def _mosaic_from_tiles(
+    tiles: list[dict[str, Any]],
+    urls: list[str],
+    *,
+    require_full_scene: bool = True,
+) -> xr.Dataset:
+    """Place the opened tiles' chunks on the product grid.
+
+    Does not close the tiles; :func:`stitch_slot` owns their lifetime.
+    """
     if require_full_scene and len(tiles) != N_TILES:
         raise ValueError(
             f"Expected {N_TILES} tiles for a full scene, got {len(tiles)} "
@@ -335,8 +365,6 @@ def stitch_slot(
         if k not in ("tile_row_offset", "tile_column_offset",
                      "tile_center_latitude", "tile_center_longitude")
     })
-    for tile in tiles:
-        tile["ds"].close()
     return out
 
 
@@ -490,6 +518,8 @@ def probe_list_day_files(
     year: int | None = None,
     doy: int | None = None,
     channel: str = "",
+    *,
+    satellite: str | None = None,
     **kwargs: Any,
 ) -> list[str]:
     """List only the day's first slot, for probing.
@@ -498,6 +528,11 @@ def probe_list_day_files(
     200,000 objects -- so listing it costs ~200 paginated calls. The probe
     needs one representative tile, so this lists the slot directories (a
     single delimiter call) and then only the first of them.
+
+    ``satellite`` applies the same GH8/GH9 filename filter as
+    :func:`list_day_files`. Without it the probe can anchor an era on a stray
+    tile that the ingest listing will then exclude, so the combinability
+    decision is made against a file that is never ingested.
     """
     band = channel.upper()
     res = BAND_RESOLUTION[band]
@@ -507,15 +542,19 @@ def probe_list_day_files(
     if not slots:
         return []
 
+    token = SATELLITE_TOKEN.get(satellite, "") if satellite else ""
     want_res, want_band = f"HFD-{res}-", f"C{int(band[1:]):02d}-T"
     for slot in sorted(slots):
         urls: list[str] = []
         for page in obs.list(store, prefix=f"{day_prefix}{slot}/"):
             for o in page:
                 fname = _filename(o["path"])
-                if (o["path"].endswith(".nc")
+                if not (o["path"].endswith(".nc")
                         and want_res in fname and want_band in fname):
-                    urls.append(f"{bucket}/{o['path']}")
+                    continue
+                if token and f"_{token}_" not in fname:
+                    continue
+                urls.append(f"{bucket}/{o['path']}")
         if urls:
             return sorted(urls)
     return []
@@ -524,7 +563,9 @@ def probe_list_day_files(
 def make_probe_list_day_files(satellite: str):
     """Bind a satellite into the probe listing signature."""
     def _list(store, bucket, product, year, doy, channel, **kwargs):
-        return probe_list_day_files(store, bucket, product, year, doy, channel)
+        return probe_list_day_files(
+            store, bucket, product, year, doy, channel, satellite=satellite
+        )
     return _list
 
 
@@ -665,14 +706,28 @@ def ingest_day(
     group: str | None = "",
     **kwargs: Any,
 ) -> int:
-    """Ingest a single day for one band. Returns the number of tiles referenced.
+    """Ingest a single day for one band. Returns the scenes now stored for it.
 
     This is the entry point the Dagster daily partition calls. Enumerating the
     day directly avoids walking the whole archive listing to reach one day.
+
+    The result is read back from the store rather than counted from the listing,
+    because the shared engine logs and swallows a failed batch: without the read
+    a partition that committed nothing would still report success.
+
+    Raises:
+        OutOfOrderPartition: when the store already holds a newer day.
+        NothingCommitted: when the ingest ran but committed nothing.
     """
     band = band.upper()
     if repo is None:
         repo = open_repo(satellite, band, base=base, config=config)
+
+    what = f"{SATELLITE_NAMES[satellite]} {band}"
+    already = virtual_repo.guard_append_order(repo, date, what, branch=branch)
+    if already:
+        logger.info(f"{what}: {date.isoformat()} already holds {already} scene(s), skipping")
+        return already
 
     store = _store(satellite)
     bucket = SATELLITE_BUCKET[satellite]
@@ -681,7 +736,7 @@ def ingest_day(
         store, bucket, PRODUCT, date.year, doy, band, satellite=satellite
     )
     if not urls:
-        logger.warning(f"{SATELLITE_NAMES[satellite]} {band}: no tiles for {date}")
+        logger.warning(f"{what}: no tiles for {date.isoformat()}")
         return 0
 
     common.ingest_all_days(
@@ -706,7 +761,7 @@ def ingest_day(
         scan_start_fn=parse_slot,
         **kwargs,
     )
-    return len(urls)
+    return virtual_repo.require_committed(repo, date, what, branch=branch)
 
 
 def ingest_backwards(

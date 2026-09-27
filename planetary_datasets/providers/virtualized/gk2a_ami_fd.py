@@ -608,20 +608,34 @@ def ingest_day(
     config: Config | None = None,
     **kwargs: Any,
 ) -> int:
-    """Ingest a single day for one band. Returns the number of files referenced.
+    """Ingest a single day for one band. Returns the timesteps now stored for it.
 
     This is the entry point the Dagster daily partition calls. Enumerating the
     day directly avoids walking the whole archive listing just to reach one day.
+
+    The result is read back from the store rather than counted from the listing,
+    because the shared engine logs and swallows a failed batch: without the read
+    a partition that committed nothing would still report success.
+
+    Raises:
+        OutOfOrderPartition: when the store already holds a newer day.
+        NothingCommitted: when the ingest ran but committed nothing.
     """
     band = _band_label(band)
     if repo is None:
         repo = open_repo(band, base=base, config=config)
 
+    what = f"GK-2A {band}"
+    already = virtual_repo.guard_append_order(repo, date, what)
+    if already:
+        logger.info(f"{what}: {date.isoformat()} already holds {already} step(s), skipping")
+        return already
+
     urls = list_day_files(
         _store(), BUCKET, PRODUCT, date.year, date.timetuple().tm_yday, band
     )
     if not urls:
-        logger.warning(f"GK-2A {band}: no files for {date.isoformat()}")
+        logger.warning(f"{what}: no files for {date.isoformat()}")
         return 0
 
     ingest_all_days(
@@ -630,7 +644,7 @@ def ingest_day(
         all_days=[((date.year, date.timetuple().tm_yday), urls)],
         **kwargs,
     )
-    return len(urls)
+    return virtual_repo.require_committed(repo, date, what)
 
 
 def ingest_all_days(

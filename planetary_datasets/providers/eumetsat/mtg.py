@@ -87,14 +87,19 @@ def open_datastore(config: Config | None = None) -> "eumdac.DataStore":
     return eumdac.DataStore(eumdac.AccessToken((key, secret)))
 
 
+def archive_root(config: Config | None = None) -> pathlib.Path:
+    """Root of the local MTG archive, under the configured data directory."""
+    cfg = config if config is not None else get_config()
+    return cfg.data_dir / DATA_SUBDIR
+
+
 def archive_dir(
     product: str,
     it: dt.datetime,
     config: Config | None = None,
 ) -> pathlib.Path:
     """Directory one hour of one product is downloaded into."""
-    cfg = config if config is not None else get_config()
-    return cfg.data_dir / DATA_SUBDIR / it.strftime("%Y%m%d%H") / product.upper()
+    return archive_root(config) / it.strftime("%Y%m%d%H") / product.upper()
 
 
 def search_products(

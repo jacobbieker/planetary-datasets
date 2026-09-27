@@ -17,6 +17,12 @@ Every store location, archive directory and credential comes from
 against the public bucket, a scratch bucket or a local directory with no code
 change.
 
+Registration: ``dags/definitions.py`` builds its code location with
+``load_assets_from_package_module`` over the ``nwp``, ``observation`` and
+``satellite`` packages. This module sits directly under ``dags/assets`` and so is
+not picked up by any of them — it must be added to ``definitions.py`` explicitly,
+via ``ASSETS`` below.
+
 Note: this module deliberately does not use ``from __future__ import annotations``.
 Dagster resolves the ``context`` parameter by its runtime annotation object, and a
 postponed (string) annotation is rejected outright.
@@ -49,8 +55,10 @@ gk2a_partitions = dg.MultiPartitionsDefinition({"date": gk2a_dates, "band": GK2A
 
 himawari8_dates = dg.DailyPartitionsDefinition(
     start_date=himawari_isatss.ARCHIVE_START_DATE["himawari8"].isoformat(),
-    # Himawari-8 was replaced as the operational satellite in December 2022.
-    end_date=himawari_isatss.ARCHIVE_START_DATE["himawari9"].isoformat(),
+    # The two satellites overlap: Himawari-9 starts publishing on 2022-12-01 but
+    # Himawari-8 stays operational until the 13th, so the ranges are not a
+    # clean split and both cover that fortnight.
+    end_date=himawari_isatss.ARCHIVE_END_DATE["himawari8"].isoformat(),
 )
 himawari8_partitions = dg.MultiPartitionsDefinition(
     {"date": himawari8_dates, "band": AHI_BANDS}
@@ -108,13 +116,13 @@ def gk2a_ami_fd_virtual_asset(context: AssetExecutionContext) -> dg.MaterializeR
     band = _partition_band(context)
 
     repo = gk2a_ami_fd.open_repo(band)
-    n_files = gk2a_ami_fd.ingest_day(date, band, repo=repo, branch="main", group="")
+    n_steps = gk2a_ami_fd.ingest_day(date, band, repo=repo, branch="main", group="")
 
     return dg.MaterializeResult(
         metadata={
             "date": dg.MetadataValue.text(date.isoformat()),
             "band": dg.MetadataValue.text(band),
-            "files_referenced": dg.MetadataValue.int(n_files),
+            "timesteps_stored": dg.MetadataValue.int(n_steps),
             "store": dg.MetadataValue.text(
                 get_config().store_path(gk2a_ami_fd.store_prefix_for(band))
             ),
@@ -133,14 +141,14 @@ def _himawari_materialize(
     band = _partition_band(context)
 
     repo = himawari_isatss.open_repo(satellite, band)
-    n_tiles = himawari_isatss.ingest_day(satellite, date, band, repo=repo)
+    n_scenes = himawari_isatss.ingest_day(satellite, date, band, repo=repo)
 
     return dg.MaterializeResult(
         metadata={
             "satellite": dg.MetadataValue.text(himawari_isatss.SATELLITE_NAMES[satellite]),
             "date": dg.MetadataValue.text(date.isoformat()),
             "band": dg.MetadataValue.text(band),
-            "tiles_referenced": dg.MetadataValue.int(n_tiles),
+            "scenes_stored": dg.MetadataValue.int(n_scenes),
             "store": dg.MetadataValue.text(
                 get_config().store_path(himawari_isatss.store_prefix_for(satellite, band))
             ),
@@ -201,7 +209,9 @@ def _mtg_materialize(
 
 @dg.asset(
     name="mtg_fdhi_download",
-    description="MTG FCI L1c High Resolution Fast Imagery, downloaded from the EUMETSAT Data Store.",
+    description=(
+        "MTG FCI L1c High Resolution Fast Imagery, from the EUMETSAT Data Store."
+    ),
     metadata={"source": dg.MetadataValue.text("eumetsat-datastore")},
     partitions_def=mtg_partitions,
     tags={**_LONG_RUNNING, "dagster/concurrency_key": "eumetsat"},
@@ -213,7 +223,9 @@ def mtg_fdhi_download_asset(context: AssetExecutionContext) -> dg.MaterializeRes
 
 @dg.asset(
     name="mtg_fdlr_download",
-    description="MTG FCI L1c Full Disk High Spectral Imagery, downloaded from the EUMETSAT Data Store.",
+    description=(
+        "MTG FCI L1c Full Disk High Spectral Imagery, from the EUMETSAT Data Store."
+    ),
     metadata={"source": dg.MetadataValue.text("eumetsat-datastore")},
     partitions_def=mtg_partitions,
     tags={**_LONG_RUNNING, "dagster/concurrency_key": "eumetsat"},
@@ -224,26 +236,33 @@ def mtg_fdlr_download_asset(context: AssetExecutionContext) -> dg.MaterializeRes
 
 
 @dg.asset(
-    name="mtg_zarr_hub_upload",
-    description="Publish the assembled MTG Zarr store to the Hugging Face Hub.",
+    name="mtg_hub_upload",
+    description="Publish the local MTG archive to the Hugging Face Hub.",
     metadata={"destination": dg.MetadataValue.text("huggingface-hub")},
     deps=[mtg_fdhi_download_asset, mtg_fdlr_download_asset],
     tags={**_LONG_RUNNING, "dagster/concurrency_key": "huggingface"},
 )
-def mtg_zarr_hub_upload_asset(context: AssetExecutionContext) -> dg.MaterializeResult:
-    """Upload the MTG Zarr store named by ``HF_REPO_ID`` to the Hub.
+def mtg_hub_upload_asset(context: AssetExecutionContext) -> dg.MaterializeResult:
+    """Upload the MTG archive directory to the repo named by ``HF_REPO_ID``.
 
-    Skipped, rather than failed, when no destination repo is configured: the
-    upload is a publishing step and most deployments do not want it.
+    Publishes exactly what the two download assets produce —
+    ``<data_dir>/eumetsat/mtg`` — rather than a store no asset in this repo
+    builds. Skipped, not failed, when there is nothing configured or nothing
+    downloaded yet: publishing is optional and most deployments do not want it.
     """
     from planetary_datasets.common.hub import upload_folder
 
     cfg = get_config()
-    folder = cfg.data_dir / mtg_provider.DATA_SUBDIR / "mtg.zarr"
+    folder = mtg_provider.archive_root(cfg)
 
     if not cfg.hf_repo_id:
         logger.info("HF_REPO_ID is not set, skipping the Hugging Face upload")
         return dg.MaterializeResult(metadata={"skipped": dg.MetadataValue.text("no HF_REPO_ID")})
+    if not folder.is_dir():
+        logger.info(f"{folder} does not exist yet, skipping the Hugging Face upload")
+        return dg.MaterializeResult(
+            metadata={"skipped": dg.MetadataValue.text(f"no archive at {folder}")}
+        )
 
     repo_id = upload_folder(folder, repo_type="dataset", config=cfg)
     return dg.MaterializeResult(
@@ -302,6 +321,6 @@ ASSETS = [
     himawari9_isatss_virtual_asset,
     mtg_fdhi_download_asset,
     mtg_fdlr_download_asset,
-    mtg_zarr_hub_upload_asset,
+    mtg_hub_upload_asset,
     eumetsat_iodc_lrv_asset,
 ]

@@ -105,6 +105,81 @@ def test_check_stores_counts_unreadable_stores(bare_config):
     assert failed == 1
 
 
+def test_check_stores_does_not_create_the_store_it_checks(bare_config):
+    prefix = "bkr/geo/never-written.icechunk"
+    virtual_repo.check_stores(
+        [prefix], virtual_buckets=gk2a_ami_fd.BUCKET, config=bare_config
+    )
+    assert not (bare_config.icechunk_local_path / prefix).exists()
+
+
+# =============================================================================
+# Append-order and commit guards
+# =============================================================================
+def _write_days(repo, days: list[str]) -> None:
+    """Commit one timestep per named day into an empty virtual-reference store."""
+    import numpy as np
+    import xarray as xr
+    from icechunk.xarray import to_icechunk
+
+    ds = xr.Dataset(
+        {"image_pixel_values": (("t",), np.arange(len(days), dtype="int16"))},
+        coords={"t": np.array(days, dtype="datetime64[ns]")},
+    )
+    session = repo.writable_session("main")
+    to_icechunk(ds, session)
+    session.commit("test data")
+
+
+def test_day_coverage_reports_steps_and_the_newest_timestep(bare_config):
+    repo = virtual_repo.open_virtual_repo(
+        "bkr/geo/coverage.icechunk",
+        virtual_buckets=gk2a_ami_fd.BUCKET,
+        config=bare_config,
+    )
+    assert virtual_repo.day_coverage(repo, dt.date(2026, 1, 1)) == (0, None)
+
+    _write_days(repo, ["2026-01-01T00:00", "2026-01-01T00:10", "2026-01-02T00:00"])
+    steps, newest = virtual_repo.day_coverage(repo, dt.date(2026, 1, 1))
+    assert steps == 2
+    assert newest == np.datetime64("2026-01-02T00:00", "ns")
+
+
+def test_guard_append_order_reports_a_day_already_stored(bare_config):
+    repo = virtual_repo.open_virtual_repo(
+        "bkr/geo/order-ok.icechunk",
+        virtual_buckets=gk2a_ami_fd.BUCKET,
+        config=bare_config,
+    )
+    _write_days(repo, ["2026-01-02T00:00"])
+    assert virtual_repo.guard_append_order(repo, dt.date(2026, 1, 2), "test") == 1
+    # A newer day is still appendable.
+    assert virtual_repo.guard_append_order(repo, dt.date(2026, 1, 3), "test") == 0
+
+
+def test_guard_append_order_refuses_a_day_behind_the_store(bare_config):
+    repo = virtual_repo.open_virtual_repo(
+        "bkr/geo/order-bad.icechunk",
+        virtual_buckets=gk2a_ami_fd.BUCKET,
+        config=bare_config,
+    )
+    _write_days(repo, ["2026-01-05T00:00"])
+    with pytest.raises(virtual_repo.OutOfOrderPartition, match="2026-01-04"):
+        virtual_repo.guard_append_order(repo, dt.date(2026, 1, 4), "test")
+
+
+def test_require_committed_raises_when_the_day_is_absent(bare_config):
+    repo = virtual_repo.open_virtual_repo(
+        "bkr/geo/committed.icechunk",
+        virtual_buckets=gk2a_ami_fd.BUCKET,
+        config=bare_config,
+    )
+    _write_days(repo, ["2026-01-05T00:00"])
+    assert virtual_repo.require_committed(repo, dt.date(2026, 1, 5), "test") == 1
+    with pytest.raises(virtual_repo.NothingCommitted, match="2026-01-06"):
+        virtual_repo.require_committed(repo, dt.date(2026, 1, 6), "test")
+
+
 # =============================================================================
 # Archive geometry
 # =============================================================================
@@ -217,7 +292,7 @@ def test_definitions_build_from_the_assets():
         "himawari9_isatss_virtual",
         "mtg_fdhi_download",
         "mtg_fdlr_download",
-        "mtg_zarr_hub_upload",
+        "mtg_hub_upload",
         "eumetsat_iodc_lrv",
     }
 
@@ -232,3 +307,13 @@ def test_partitions_start_at_the_archive_starts():
     )
     assert set(geo_satellites.GK2A_BANDS.get_partition_keys()) == set(gk2a_ami_fd.BANDS)
     assert set(geo_satellites.AHI_BANDS.get_partition_keys()) == set(himawari_isatss.BANDS)
+
+
+def test_himawari8_partitions_cover_the_overlap_with_himawari9():
+    """Himawari-8 stayed operational for a fortnight after Himawari-9 started."""
+    from dags.assets import geo_satellites
+
+    keys = set(geo_satellites.himawari8_dates.get_partition_keys())
+    assert "2022-12-01" in keys
+    assert "2022-12-13" in keys
+    assert "2022-12-14" not in keys
