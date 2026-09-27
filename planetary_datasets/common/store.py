@@ -21,6 +21,28 @@ from planetary_datasets.common.dataset import coords_match
 # Coordinates that must line up with the existing store or an append will corrupt it.
 ALIGNMENT_COORDS = ("latitude", "longitude", "level", "isobaricInhPa", "height")
 
+# Errors that mean "this store has nothing in it yet" when the repository is also empty.
+STORE_READ_ERRORS = (ValueError, KeyError, FileNotFoundError, icechunk.IcechunkError)
+
+
+class StoreReadError(RuntimeError):
+    """A store that is known to hold data could not be read.
+
+    Distinct from an empty store. Treating this as empty would silently discard the
+    archive, so it is raised rather than swallowed.
+    """
+
+
+def has_committed_data(repo: icechunk.Repository, branch: str = "main") -> bool:
+    """True when the repository has at least one commit beyond initialisation.
+
+    ``Repository.open_or_create`` leaves a single "initialized" snapshot behind, so a
+    count above one means real data has been written. This is the authoritative
+    emptiness check: a failed read must never be mistaken for an empty store, or the
+    create-fresh path would overwrite an existing archive.
+    """
+    return sum(1 for _ in repo.ancestry(branch=branch)) > 1
+
 
 def build_encoding(
     ds: xr.Dataset,
@@ -50,8 +72,13 @@ def existing_times(repo: icechunk.Repository, append_dim: str = "time") -> np.nd
     """
     try:
         ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
-    except (ValueError, KeyError, FileNotFoundError, icechunk.IcechunkError) as exc:
-        logger.debug(f"store not readable yet ({type(exc).__name__}), treating as empty")
+    except STORE_READ_ERRORS as exc:
+        if has_committed_data(repo):
+            raise StoreReadError(
+                f"store holds committed data but could not be read ({type(exc).__name__}: {exc}). "
+                "Refusing to report it as empty."
+            ) from exc
+        logger.debug(f"store is empty ({type(exc).__name__})")
         return np.array([])
     if append_dim not in ds.coords:
         return np.array([])
@@ -108,7 +135,14 @@ def write_to_icechunk(
     try:
         existing = xr.open_zarr(session.store, consolidated=False)
         first_write = append_dim not in existing.coords
-    except (ValueError, KeyError, FileNotFoundError, icechunk.IcechunkError) as exc:
+    except STORE_READ_ERRORS as exc:
+        # A read failure against a store that already holds data must not fall through to
+        # the create-fresh path: that would overwrite the whole archive with one timestep.
+        if has_committed_data(repo):
+            raise StoreReadError(
+                f"store holds committed data but could not be read ({type(exc).__name__}: {exc}). "
+                "Refusing to overwrite it with a fresh write."
+            ) from exc
         logger.debug(f"creating new store ({type(exc).__name__})")
         existing = None
         first_write = True

@@ -19,6 +19,10 @@ from loguru import logger
 
 CHUNK_SIZE = 1024 * 1024
 
+# Failures that will not succeed on a retry. fsspec surfaces HTTP 404 as FileNotFoundError
+# and 401/403 as PermissionError.
+PERMANENT_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError)
+
 
 def download_one(
     url: str,
@@ -66,6 +70,12 @@ def download_one(
             os.replace(part, dest)
             logger.debug(f"downloaded {url}")
             return dest
+        except PERMANENT_ERRORS as exc:
+            # A 404 or a denial will not become a success; retrying only burns the backoff
+            # budget. Archives with gaps hit this constantly.
+            part.unlink(missing_ok=True)
+            logger.debug(f"{url} unavailable ({type(exc).__name__}), not retrying")
+            return None
         except Exception as exc:  # noqa: BLE001 - any transport error is worth retrying
             part.unlink(missing_ok=True)
             if attempt == retries:
