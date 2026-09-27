@@ -31,6 +31,48 @@ def test_estimate_does_not_load_a_lazy_dataset():
     assert memory.estimate_dataset_gb(ds) == pytest.approx(1e11 / 1024**3, rel=0.01)
 
 
+def test_largest_chunk_is_measured_not_the_total():
+    dask = pytest.importorskip("dask.array")
+    # 100 chunks of 8 MB each: total 800 MB, largest chunk 8 MB.
+    ds = xr.Dataset({"x": (("a", "b"), dask.zeros((100_000, 1000), dtype="float64", chunks=(1000, 1000)))})
+    assert memory.largest_chunk_gb(ds) == pytest.approx(8e6 / 1024**3, rel=0.01)
+    assert memory.estimate_dataset_gb(ds) == pytest.approx(8e8 / 1024**3, rel=0.01)
+
+
+def test_peak_estimate_uses_chunks_for_a_lazy_dataset():
+    """Regression: sizing a long lazy concat by its total rejected small streaming jobs."""
+    dask = pytest.importorskip("dask.array")
+    ds = xr.Dataset({"x": (("a", "b"), dask.zeros((100_000, 1000), dtype="float64", chunks=(1000, 1000)))})
+    peak = memory.estimate_peak_gb(ds, concurrency=4)
+    assert peak == pytest.approx(4 * 8e6 / 1024**3, rel=0.01)
+    assert peak < memory.estimate_dataset_gb(ds)
+
+
+def test_peak_estimate_falls_back_to_total_when_not_chunked():
+    ds = xr.Dataset({"x": (("a", "b"), np.zeros((1000, 1000), dtype="float64"))})
+    assert memory.estimate_peak_gb(ds) == pytest.approx(memory.estimate_dataset_gb(ds))
+
+
+def test_peak_never_exceeds_the_total():
+    dask = pytest.importorskip("dask.array")
+    # One single chunk: 4x concurrency must not inflate past the real total.
+    ds = xr.Dataset({"x": (("a",), dask.zeros(1000, dtype="float64", chunks=1000))})
+    assert memory.estimate_peak_gb(ds, concurrency=4) == pytest.approx(memory.estimate_dataset_gb(ds))
+
+
+def test_a_streaming_job_is_no_longer_rejected(monkeypatch):
+    dask = pytest.importorskip("dask.array")
+    monkeypatch.setenv("MEMORY_CEILING_GB", "1")
+    from planetary_datasets import config
+
+    config.reset_config_cache()
+    # 100 GB total, 8 MB chunks: peaks well under the 1 GB ceiling.
+    ds = xr.Dataset(
+        {"x": (("a", "b"), dask.zeros((12_500_000, 1000), dtype="float64", chunks=(1000, 1000)))}
+    )
+    assert memory.require_dataset_fits(ds, what="streaming") < 1.0
+
+
 def test_require_memory_passes_when_it_fits(monkeypatch):
     monkeypatch.setenv("MEMORY_CEILING_GB", "100")
     from planetary_datasets import config
@@ -48,15 +90,28 @@ def test_require_memory_raises_when_too_big(monkeypatch):
         memory.require_memory(50.0, what="huge job")
 
 
-def test_require_dataset_fits_rejects_an_oversized_dataset(monkeypatch):
+def test_require_dataset_fits_rejects_oversized_chunks(monkeypatch):
+    """Rejection is driven by the peak footprint, so it needs genuinely large chunks."""
     dask = pytest.importorskip("dask.array")
     monkeypatch.setenv("MEMORY_CEILING_GB", "1")
     from planetary_datasets import config
 
     config.reset_config_cache()
-    ds = xr.Dataset({"x": (("a", "b"), dask.zeros((100_000, 125_000), dtype="float64", chunks=1000))})
+    # A single 8 GB chunk cannot be streamed around.
+    ds = xr.Dataset({"x": (("a", "b"), dask.zeros((1_000_000, 1000), dtype="float64", chunks=(1_000_000, 1000)))})
     with pytest.raises(memory.MemoryLimitExceeded):
-        memory.require_dataset_fits(ds, what="oversized")
+        memory.require_dataset_fits(ds, what="oversized chunk")
+
+
+def test_require_dataset_fits_rejects_an_oversized_eager_dataset(monkeypatch):
+    monkeypatch.setenv("MEMORY_CEILING_GB", "0.001")
+    from planetary_datasets import config
+
+    config.reset_config_cache()
+    # Already resident, so the total is the footprint.
+    ds = xr.Dataset({"x": (("a", "b"), np.zeros((1000, 1000), dtype="float64"))})
+    with pytest.raises(memory.MemoryLimitExceeded):
+        memory.require_dataset_fits(ds, what="oversized eager")
 
 
 def test_memory_guard_reports_peak_and_allows_normal_work():

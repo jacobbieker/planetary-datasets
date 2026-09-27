@@ -70,10 +70,11 @@ def process_tree_rss_gb(pid: int | None = None) -> float:
 
 
 def estimate_dataset_gb(ds) -> float:
-    """Estimate the in-memory size of an xarray Dataset in GB, without loading it.
+    """Total in-memory size of an xarray Dataset in GB, without loading it.
 
-    Uses ``nbytes``, which is computed from dtype and shape and so is valid for lazy
-    dask-backed variables.
+    Uses ``nbytes``, computed from dtype and shape, so it is valid for lazy dask-backed
+    variables. This is what the dataset costs if fully materialised; for a lazy dataset
+    written chunk by chunk see :func:`estimate_peak_gb`.
     """
     try:
         return float(ds.nbytes) / BYTES_PER_GB
@@ -82,6 +83,45 @@ def estimate_dataset_gb(ds) -> float:
         for var in getattr(ds, "data_vars", {}).values():
             total += getattr(var, "nbytes", 0)
         return float(total) / BYTES_PER_GB
+
+
+def largest_chunk_gb(ds) -> float:
+    """Size of the largest single chunk across the dataset's variables, in GB.
+
+    Returns 0.0 when nothing is chunked.
+    """
+    largest = 0
+    for var in getattr(ds, "data_vars", {}).values():
+        chunksizes = getattr(var, "chunksizes", None)
+        if not chunksizes:
+            continue
+        # chunksizes maps dim -> tuple of chunk lengths; the largest chunk takes the
+        # biggest length along each dim.
+        elements = 1
+        for lengths in chunksizes.values():
+            if lengths:
+                elements *= max(lengths)
+        itemsize = getattr(getattr(var, "dtype", None), "itemsize", 0)
+        largest = max(largest, elements * itemsize)
+    return float(largest) / BYTES_PER_GB
+
+
+def estimate_peak_gb(ds, concurrency: int = 4) -> float:
+    """Estimate peak memory for writing a dataset, in GB.
+
+    An eagerly loaded dataset is already resident, so its total size is the answer. A
+    dask-backed dataset is written chunk by chunk, so the peak is roughly the largest
+    chunk times the number in flight — not the total, which for a long lazy concatenation
+    can be hundreds of GB for a job that never exceeds a few.
+
+    Args:
+        ds: Dataset to size.
+        concurrency: Assumed number of chunks resident at once.
+    """
+    chunk = largest_chunk_gb(ds)
+    if chunk == 0.0:
+        return estimate_dataset_gb(ds)
+    return min(estimate_dataset_gb(ds), chunk * max(1, concurrency))
 
 
 def memory_budget_gb(fraction: float | None = None) -> float:
@@ -115,19 +155,30 @@ def require_memory(needed_gb: float, what: str = "job") -> None:
     logger.debug(f"{what}: ~{needed_gb:.1f} GB estimated, {budget:.1f} GB budgeted")
 
 
-def require_dataset_fits(ds, what: str = "dataset") -> float:
-    """Estimate a dataset's size, check it against the budget, and return the estimate."""
-    needed = estimate_dataset_gb(ds)
+def require_dataset_fits(ds, what: str = "dataset", concurrency: int = 4) -> float:
+    """Check a dataset's estimated peak write footprint against the budget.
+
+    Uses :func:`estimate_peak_gb`, so a lazy dataset is judged on the chunks in flight
+    rather than its total size. Sizing a 120-step lazy concatenation by its total would
+    reject a job that peaks at a few GB, which is why providers were disabling the guard.
+    """
+    needed = estimate_peak_gb(ds, concurrency=concurrency)
     require_memory(needed, what)
     return needed
 
 
 @dataclass
 class MemoryUsage:
-    """Peak and final resident memory observed by :func:`memory_guard`."""
+    """Resident memory observed by :func:`memory_guard`."""
 
     peak_gb: float = 0.0
     final_gb: float = 0.0
+    baseline_gb: float = 0.0
+
+    @property
+    def growth_gb(self) -> float:
+        """How much the guarded block added on top of what was already resident."""
+        return max(0.0, self.peak_gb - self.baseline_gb)
 
 
 @contextlib.contextmanager
@@ -145,15 +196,31 @@ def memory_guard(
     Requires ``strikes`` consecutive over-budget samples before acting, so a brief spike
     during a concatenate does not kill an otherwise healthy run. On breach the exception is
     raised in the *calling* thread when the block exits, leaving any pool workers intact.
+    Put only the memory-hungry work inside the block and do irreversible work such as a
+    commit after it, so a breach prevents the write rather than following it.
+
+    When no explicit ceiling is given, the limit is the memory already resident at entry
+    plus the available-memory budget. Comparing absolute RSS against an available-derived
+    budget would abort immediately for any process that is already large, which is exactly
+    the case this is meant to protect.
 
     Args:
-        ceiling_gb: Limit in GB. Defaults to :func:`memory_budget_gb`.
+        ceiling_gb: Absolute RSS limit in GB. Defaults to baseline RSS plus the budget
+            from :func:`memory_budget_gb`.
         what: Name used in log lines and the error message.
         interval: Seconds between samples.
         strikes: Consecutive over-budget samples required before flagging a breach.
     """
-    ceiling = ceiling_gb if ceiling_gb is not None else memory_budget_gb()
-    usage = MemoryUsage()
+    baseline = process_tree_rss_gb()
+    if ceiling_gb is not None:
+        ceiling = ceiling_gb
+    else:
+        ceiling = baseline + memory_budget_gb()
+        logger.debug(
+            f"{what}: ceiling {ceiling:.1f} GB (baseline {baseline:.1f} GB + budget "
+            f"{ceiling - baseline:.1f} GB)"
+        )
+    usage = MemoryUsage(baseline_gb=baseline)
     stop = threading.Event()
     breached: list[float] = []
 
