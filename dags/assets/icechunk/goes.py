@@ -507,7 +507,7 @@ if __name__ == "__main__":
         #storage = icechunk.local_filesystem_storage(f"{name}.icechunk")
         storage = icechunk.s3_storage(bucket="bkr",
                                       prefix=f"geo/{name}.icechunk",
-                                      secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
+                                      from_env=True,
                                       allow_http=True,
                                       region="us-west-2",
                                       force_path_style=True, )
@@ -530,7 +530,7 @@ if __name__ == "__main__":
             #storage = icechunk.local_filesystem_storage(f"{names[idx]}.icechunk")
             storage = icechunk.s3_storage(bucket="bkr",
                                           prefix=f"geo/{names[idx]}.icechunk",
-                                          secret_access_key="P0qxms7SFORhGJOqBPjQoygRVIdrt0M542l9grr08XF9Kwk5XJzj9lZQXxS3YKsT",
+                                      from_env=True,
                                           allow_http=True,
                                           region="us-west-2",
                                           force_path_style=True, )
