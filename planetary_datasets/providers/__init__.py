@@ -1,7 +1,11 @@
-"""Concrete dataset providers.
+"""Dataset providers.
 
-Each module here defines one :class:`~planetary_datasets.base.BaseProvider` subclass that
-knows how to fetch and shape a single dataset. Import the provider you need directly from
-its module, e.g. ``from planetary_datasets.providers.geos import GEOSProvider``, so that
-loading one provider does not pull in every other provider's dependencies.
+Each module here defines one or more :class:`~planetary_datasets.base.BaseProvider`
+subclasses for a single data source. Import the provider you need directly::
+
+    from planetary_datasets.providers.mrms import MRMSProvider
+
+Nothing is re-exported from this module on purpose: importing every provider eagerly would
+pull in the whole optional dependency surface (cfgrib, satpy, harp, copernicusmarine, ...)
+for anyone importing any single one of them.
 """

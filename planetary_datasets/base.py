@@ -53,6 +53,7 @@ class BaseProvider(ABC):
 
     def __init__(self, config: Config | None = None):
         self._config = config
+        self._repo: icechunk.Repository | None = None
 
     @property
     def config(self) -> Config:
@@ -83,8 +84,14 @@ class BaseProvider(ABC):
         """Turn the fetched inputs into a dataset ready to write."""
 
     def get_icechunk_repo(self) -> icechunk.Repository:
-        """Open or create the repository this provider writes to."""
-        return self.config.icechunk_repo(self.store_prefix)
+        """Open or create the repository this provider writes to.
+
+        The handle is cached: a backfill of one day can be ~96 partitions, and reopening
+        the store for each one is pure overhead.
+        """
+        if self._repo is None:
+            self._repo = self.config.icechunk_repo(self.store_prefix)
+        return self._repo
 
     def missing_timesteps(self, desired: pd.DatetimeIndex) -> List[pd.Timestamp]:
         """Return the timesteps in ``desired`` that are not yet stored."""
@@ -111,15 +118,20 @@ class BaseProvider(ABC):
         with tempfile.TemporaryDirectory(prefix="planetary-datasets-") as td:
             yield pathlib.Path(td)
 
-    def run_partition(self, it: pd.Timestamp) -> bool:
+    def run_partition(self, it: pd.Timestamp, check_present: bool = True) -> bool:
         """Fetch, process and write one partition.
 
         Returns True if data was written, False if there was nothing to do. This is the
         method Dagster assets call.
+
+        Args:
+            it: Partition timestamp.
+            check_present: Skip the "already stored?" query. :meth:`run_range` sets this
+                False because it has already filtered the timestamps.
         """
         repo = self.get_icechunk_repo()
 
-        if not self.missing_timesteps(pd.DatetimeIndex([it])):
+        if check_present and not self.missing_timesteps(pd.DatetimeIndex([it])):
             logger.debug(f"{self.name}: {it} already in {self.store_path}, skipping")
             return False
 
@@ -131,12 +143,15 @@ class BaseProvider(ABC):
 
             logger.info(f"{self.name}: processing {len(input_files)} file(s) for {it}")
             if self.guard_memory:
+                # Only the processing is guarded. memory_guard raises when the block
+                # exits, so keeping the commit outside it means a breach prevents the
+                # write rather than leaving a committed store behind a failed run.
                 with memory_guard(what=f"{self.name} {it}"):
                     processed = self.process(input_files, it, temp_dir=temp_dir)
                     require_dataset_fits(processed, what=f"{self.name} {it}")
-                    return self.write_to_icechunk(repo, processed)
+            else:
+                processed = self.process(input_files, it, temp_dir=temp_dir)
 
-            processed = self.process(input_files, it, temp_dir=temp_dir)
             return self.write_to_icechunk(repo, processed)
 
     def run_range(self, timestamps: pd.DatetimeIndex) -> int:
@@ -146,9 +161,10 @@ class BaseProvider(ABC):
         original scripts behaved over archive gaps.
         """
         written = 0
+        # Filter once here rather than re-reading the time coordinate per partition.
         for it in self.missing_timesteps(timestamps):
             try:
-                if self.run_partition(it):
+                if self.run_partition(it, check_present=False):
                     written += 1
             except Exception as exc:  # noqa: BLE001 - one bad partition must not stop a backfill
                 logger.exception(f"{self.name}: partition {it} failed: {exc}")
