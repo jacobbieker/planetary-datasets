@@ -21,6 +21,7 @@ from planetary_datasets.providers.regional_lam_common import (
     download_with_filesystem,
     long_name_slug,
     rename_present,
+    resolve_renames,
     soil_level_count,
 )
 
@@ -317,6 +318,23 @@ def test_rename_present_ignores_names_that_are_not_there():
     renamed = rename_present(ds, {"isobaricInhPa": "level", "depthBelowLandLayer": "depth"})
     assert "level" in renamed.dims
     assert "depth" not in renamed.dims
+
+
+def test_resolve_renames_drops_sources_that_are_not_there():
+    ds = xr.Dataset({"a": ("x", np.zeros(2))})
+    assert resolve_renames(ds, {"a": "alpha", "twater": "total_water"}) == {"a": "alpha"}
+
+
+def test_resolve_renames_lets_the_first_claim_on_a_name_win():
+    """GRIB reuses a long_name across level types; renaming both would raise."""
+    ds = xr.Dataset({"a": ("x", np.zeros(2)), "b": ("x", np.zeros(2))})
+    assert resolve_renames(ds, {"a": "shared", "b": "shared"}) == {"a": "shared"}
+    assert ds.rename(resolve_renames(ds, {"a": "shared", "b": "shared"})) is not None
+
+
+def test_resolve_renames_will_not_collide_with_a_variable_left_alone():
+    ds = xr.Dataset({"a": ("x", np.zeros(2)), "keep": ("x", np.zeros(2))})
+    assert resolve_renames(ds, {"a": "keep"}) == {}
 
 
 def test_chunk_present_ignores_dimensions_that_are_not_there():

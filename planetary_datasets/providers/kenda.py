@@ -25,7 +25,11 @@ from loguru import logger
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common.dataset import reduce_precision
 from planetary_datasets.config import Config
-from planetary_datasets.providers.regional_lam_common import chunk_present, long_name_slug
+from planetary_datasets.providers.regional_lam_common import (
+    chunk_present,
+    long_name_slug,
+    resolve_renames,
+)
 
 #: Sub-directory of the configured data directory holding the MeteoSwiss feed.
 ARCHIVE_SUBDIR = "meteoswiss"
@@ -68,12 +72,17 @@ def load_constants(constant_files: List[str]) -> xr.Dataset:
         if "long_name" in horizontal[var].attrs
     }
     renames["h"] = "height"
-    horizontal = horizontal.rename(renames)
+    horizontal = horizontal.rename(resolve_renames(horizontal, renames))
     horizontal = horizontal.rename(
-        {"longitude_on_t_grid": "longitude", "latitude_on_t_grid": "latitude"}
+        resolve_renames(
+            horizontal,
+            {"longitude_on_t_grid": "longitude", "latitude_on_t_grid": "latitude"},
+        )
     ).drop_vars(["valid_time", "level", "surface", "time", "step"], errors="ignore")
 
-    vertical = vertical.rename({"h": "height_above_ground"}).drop_vars(
+    vertical = vertical.rename(
+        resolve_renames(vertical, {"h": "height_above_ground"})
+    ).drop_vars(
         ["valid_time", "level", "surface", "time", "step"], errors="ignore"
     )
 
@@ -171,7 +180,7 @@ class KENDAProviderBase(BaseProvider):
             long_name = merged[var].attrs.get("long_name")
             if long_name and long_name != "unknown":
                 renames[var] = long_name_slug(str(long_name))
-        merged = merged.rename(renames)
+        merged = merged.rename(resolve_renames(merged, renames))
 
         merged = xr.merge([merged, constants], compat="no_conflicts")
         merged = merged.rename(

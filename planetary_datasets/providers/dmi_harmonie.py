@@ -28,6 +28,7 @@ from planetary_datasets.providers.regional_lam_common import (
     download_with_filesystem,
     long_name_slug,
     rename_present,
+    resolve_renames,
 )
 
 BUCKET = "dmi-opendata"
@@ -65,7 +66,7 @@ def _rename_by_long_name(ds: xr.Dataset, suffix: str = "") -> xr.Dataset:
         var: long_name_slug(str(ds[var].attrs.get("long_name", var)), strip_parens=True) + suffix
         for var in ds.data_vars
     }
-    return ds.rename(renames)
+    return ds.rename(resolve_renames(ds, renames))
 
 
 def _split_by_height(
@@ -157,7 +158,7 @@ def process_pressure_level_file(path: str) -> xr.Dataset:
         for var in ds.data_vars
         if "2m" not in str(var) and "10m" not in str(var)
     }
-    return ds.rename(renames)
+    return ds.rename(resolve_renames(ds, renames))
 
 
 class _DMIHarmonieBase(BaseProvider):

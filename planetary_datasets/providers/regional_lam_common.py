@@ -150,6 +150,31 @@ class GribMergeSpec:
     drop_coords_after_merge: tuple[str, ...] = ()
 
 
+def resolve_renames(ds: xr.Dataset, targets: dict) -> dict:
+    """Reduce ``targets`` to the renames :meth:`xarray.Dataset.rename` will actually accept.
+
+    ``rename`` raises on a source name that is not in the dataset, and on a target name
+    that is already taken. Both happen routinely here: GRIB reuses a ``long_name`` across
+    level types, and the per-variable feeds do not always publish every variable. Raising
+    would lose a whole timestep over one duplicated field, so the offending renames are
+    dropped and the earlier claim on a name wins.
+    """
+    present = {str(name) for name in ds.variables}
+    taken = {name for name in present if name not in targets}
+
+    resolved: dict = {}
+    for source, target in targets.items():
+        if str(source) not in present:
+            logger.debug(f"cannot rename {source!r} to {target!r}: not in the dataset")
+            continue
+        if target in taken:
+            logger.debug(f"cannot rename {source!r} to {target!r}: name already taken")
+            continue
+        taken.add(target)
+        resolved[source] = target
+    return resolved
+
+
 def _rename_by_grib_long_name(ds: xr.Dataset) -> xr.Dataset:
     """Rename variables after their ``long_name``, suffixed with the level they sit on.
 
@@ -181,7 +206,8 @@ def _rename_by_grib_long_name(ds: xr.Dataset) -> xr.Dataset:
             renames[var] = long_name_slug(long_name) + suffix
 
     ds = ds.drop_vars(to_drop)
-    return ds.rename(renames).drop_vars("heightAboveGround", errors="ignore")
+    ds = ds.rename(resolve_renames(ds, renames))
+    return ds.drop_vars("heightAboveGround", errors="ignore")
 
 
 def _is_incomplete_wind_or_height(ds: xr.Dataset) -> bool:
