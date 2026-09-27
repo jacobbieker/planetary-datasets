@@ -19,6 +19,7 @@ from planetary_datasets.providers.regional_lam_common import (
     chunk_present,
     clean_grib_subset,
     download_with_filesystem,
+    init_time_download_dir,
     long_name_slug,
     rename_present,
     resolve_renames,
@@ -335,6 +336,53 @@ def test_resolve_renames_lets_the_first_claim_on_a_name_win():
 def test_resolve_renames_will_not_collide_with_a_variable_left_alone():
     ds = xr.Dataset({"a": ("x", np.zeros(2)), "keep": ("x", np.zeros(2))})
     assert resolve_renames(ds, {"a": "keep"}) == {}
+
+
+def test_resolve_renames_rechecks_after_dropping_a_rename():
+    """Dropping b->c leaves b in place, so a->b must be dropped too, not just b->c."""
+    ds = xr.Dataset({name: ("x", np.zeros(2)) for name in ("a", "b", "c")})
+    resolved = resolve_renames(ds, {"a": "b", "b": "c"})
+    assert resolved == {}
+    ds.rename(resolved)  # would raise if the mapping still conflicted
+
+
+def test_resolve_renames_allows_a_simultaneous_swap():
+    ds = xr.Dataset({"a": ("x", np.zeros(2)), "b": ("x", np.ones(2))})
+    resolved = resolve_renames(ds, {"a": "b", "b": "a"})
+    assert resolved == {"a": "b", "b": "a"}
+    swapped = ds.rename(resolved)
+    assert list(swapped["a"].values) == [1.0, 1.0]
+
+
+def test_a_duplicated_long_name_drops_the_loser_rather_than_the_timestep():
+    """Two messages sharing a long_name would make Dataset.rename raise."""
+    ds = xr.Dataset(
+        {
+            "t": (("y", "x"), np.zeros((2, 3), dtype="float32")),
+            "t2": (("y", "x"), np.ones((2, 3), dtype="float32")),
+            "r": (("y", "x"), np.ones((2, 3), dtype="float32")),
+        },
+        coords={"y": np.arange(2), "x": np.arange(3), "surface": 0.0},
+    )
+    ds["t"].attrs["long_name"] = "Temperature"
+    ds["t2"].attrs["long_name"] = "Temperature"
+    ds["r"].attrs["long_name"] = "Relative humidity"
+
+    kept = clean_grib_subset(ds, GribMergeSpec())
+    assert sorted(kept.data_vars) == ["relative_humidity_at_surface", "temperature_at_surface"]
+
+
+def test_download_dir_separates_init_times_when_no_temp_dir_is_given(tmp_path):
+    first = init_time_download_dir(tmp_path, "alaska_hrrr", pd.Timestamp("2026-01-01T06:00"))
+    second = init_time_download_dir(tmp_path, "alaska_hrrr", pd.Timestamp("2026-01-02T06:00"))
+    assert first != second
+    assert first.parent == second.parent == tmp_path / "alaska_hrrr"
+
+
+def test_download_dir_honours_an_explicit_temp_dir(tmp_path):
+    assert init_time_download_dir(
+        tmp_path / "scratch", "alaska_hrrr", pd.Timestamp("2026-01-01T06:00"), tmp_path / "given"
+    ) == (tmp_path / "given")
 
 
 def test_chunk_present_ignores_dimensions_that_are_not_there():

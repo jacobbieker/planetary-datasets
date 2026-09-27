@@ -13,6 +13,10 @@ merges them and appends the result to its icechunk store. A partition whose inpu
 in the archive reports itself as skipped rather than failing, because these archives all
 have gaps and a rolling retention window.
 
+This lives under ``dags/assets/nwp`` rather than beside it so that
+``dags/definitions.py`` picks the assets up through its existing
+``load_assets_from_package_module(nwp, ...)`` call, with no change to that file.
+
 Note: this module deliberately does not use ``from __future__ import annotations``.
 Dagster validates the ``context`` parameter of an asset against the real class object,
 which PEP 563 would turn into a string.

@@ -158,21 +158,37 @@ def resolve_renames(ds: xr.Dataset, targets: dict) -> dict:
     level types, and the per-variable feeds do not always publish every variable. Raising
     would lose a whole timestep over one duplicated field, so the offending renames are
     dropped and the earlier claim on a name wins.
+
+    Dropping one rename can create a new conflict — the variable that stays put still
+    occupies its own name, which a later rename may have been counting on being vacated —
+    so this drops one at a time and rechecks until the mapping is clean. Simultaneous
+    swaps, where two variables exchange names, are left intact because ``rename`` applies
+    the mapping in one go.
     """
     present = {str(name) for name in ds.variables}
-    taken = {name for name in present if name not in targets}
 
     resolved: dict = {}
     for source, target in targets.items():
-        if str(source) not in present:
+        if str(source) in present:
+            resolved[source] = target
+        else:
             logger.debug(f"cannot rename {source!r} to {target!r}: not in the dataset")
-            continue
-        if target in taken:
-            logger.debug(f"cannot rename {source!r} to {target!r}: name already taken")
-            continue
-        taken.add(target)
-        resolved[source] = target
-    return resolved
+
+    while True:
+        staying = present - {str(source) for source in resolved}
+        claimed: set = set()
+        conflicting = None
+        for source, target in resolved.items():
+            if target in staying or target in claimed:
+                conflicting = source
+                break
+            claimed.add(target)
+        if conflicting is None:
+            return resolved
+        logger.debug(
+            f"cannot rename {conflicting!r} to {resolved[conflicting]!r}: name already taken"
+        )
+        del resolved[conflicting]
 
 
 def _rename_by_grib_long_name(ds: xr.Dataset) -> xr.Dataset:
@@ -206,8 +222,15 @@ def _rename_by_grib_long_name(ds: xr.Dataset) -> xr.Dataset:
             renames[var] = long_name_slug(long_name) + suffix
 
     ds = ds.drop_vars(to_drop)
-    ds = ds.rename(resolve_renames(ds, renames))
-    return ds.drop_vars("heightAboveGround", errors="ignore")
+    resolved = resolve_renames(ds, renames)
+    # A refused rename means two messages on this level type share a long_name, so the
+    # loser is genuinely ambiguous. Drop it rather than storing it under its raw GRIB
+    # short name, which would change the variable set and make every later append skip.
+    refused = [var for var in renames if var not in resolved]
+    if refused:
+        logger.debug(f"dropping {refused}: their long_name is already taken")
+        ds = ds.drop_vars(refused)
+    return ds.rename(resolved).drop_vars("heightAboveGround", errors="ignore")
 
 
 def _is_incomplete_wind_or_height(ds: xr.Dataset) -> bool:
@@ -289,6 +312,25 @@ def chunk_present(ds: xr.Dataset, chunks: dict[str, int]) -> xr.Dataset:
     return ds.chunk({dim: size for dim, size in chunks.items() if dim in ds.dims})
 
 
+def init_time_download_dir(
+    scratch_root: str | os.PathLike,
+    name: str,
+    it: pd.Timestamp,
+    temp_dir: str | os.PathLike | None = None,
+) -> pathlib.Path:
+    """Directory to download one init time's files into.
+
+    When no temporary directory is supplied the files land under the scratch directory,
+    in a sub-directory named after the init time. That sub-directory matters: these
+    archives name their files after the run hour but not the date
+    (``hrrr.t06z.wrfsfcf00.ak.grib2``), so a flat directory would let the
+    skip-if-present check hand yesterday's file back for today's run.
+    """
+    if temp_dir is not None:
+        return pathlib.Path(temp_dir)
+    return pathlib.Path(scratch_root) / name / it.strftime("%Y%m%dT%H%M%S")
+
+
 def download_with_filesystem(
     fs,
     remote: str,
@@ -368,9 +410,7 @@ class GribNestProvider(BaseProvider):
         A partial init time would be written with holes and then skipped forever by the
         already-present check, so an incomplete set is reported as "nothing to do".
         """
-        target = (
-            pathlib.Path(temp_dir) if temp_dir is not None else self.config.scratch_dir / self.name
-        )
+        target = init_time_download_dir(self.config.scratch_dir, self.name, it, temp_dir)
         urls = self.expected_urls(it)
         paths = download_many(urls, target, workers=self.download_workers)
         if len(paths) != len(urls):

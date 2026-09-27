@@ -22,10 +22,10 @@ import xarray as xr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
-from planetary_datasets.common.dataset import rename_vars_by_long_name
 from planetary_datasets.providers.regional_lam_common import (
     chunk_present,
     download_with_filesystem,
+    init_time_download_dir,
     long_name_slug,
     rename_present,
     resolve_renames,
@@ -197,9 +197,7 @@ class _DMIHarmonieBase(BaseProvider):
         DMI keeps only the last few days, so most misses are simply "not published yet" or
         "already expired"; both are reported as nothing to do rather than as failures.
         """
-        target = (
-            pathlib.Path(temp_dir) if temp_dir is not None else self.config.scratch_dir / self.name
-        )
+        target = init_time_download_dir(self.config.scratch_dir, self.name, it, temp_dir)
         fs = self._filesystem()
 
         paths: List[str] = []
@@ -273,4 +271,7 @@ class DMIHarmonieModelLevelProvider(_DMIHarmonieBase):
         """Merge the model-level file of one forecast step."""
         import cfgrib  # imported lazily: eccodes is a heavy, optional native dependency
 
-        return rename_vars_by_long_name(xr.merge(cfgrib.open_datasets(str(files[0]))))
+        # The local renamer rather than common.rename_vars_by_long_name: it goes through
+        # resolve_renames, so a long_name shared by two model-level fields cannot take
+        # the whole init time down with it.
+        return _rename_by_long_name(xr.merge(cfgrib.open_datasets(str(files[0]))))
