@@ -18,6 +18,10 @@ CREDENTIAL_VARS = [
     "MEMORY_CEILING_GB",
     "PLANETARY_DATASETS_DATA_DIR",
     "PLANETARY_DATASETS_SCRATCH_DIR",
+    # Archive roots the radar providers read from; an operator who has these set in their
+    # shell would otherwise see the default-path tests fail.
+    "UK_RADAR_ARCHIVE_DIR",
+    "FMI_RADAR_ARCHIVE_DIR",
 ]
 
 
