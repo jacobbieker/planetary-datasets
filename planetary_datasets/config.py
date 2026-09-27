@@ -116,6 +116,17 @@ class Config:
         """True when stores should be written to the local filesystem instead of S3."""
         return self.icechunk_local_path is not None
 
+    def full_prefix(self, prefix: str) -> str:
+        """Apply the configured ``ICECHUNK_PREFIX`` to a store prefix.
+
+        Every path-producing method routes through this. Resolving the prefix in more than
+        one place is how a staging prefix ended up being reported but not written to.
+        """
+        prefix = prefix.strip("/")
+        if self.prefix:
+            prefix = f"{self.prefix.strip('/')}/{prefix}"
+        return prefix
+
     def store_path(self, prefix: str) -> str:
         """Resolve a store prefix to a full path.
 
@@ -123,12 +134,10 @@ class Config:
         It is returned as an ``s3://`` URI, or as a local directory when
         ``ICECHUNK_LOCAL_PATH`` is set.
         """
-        prefix = prefix.strip("/")
-        if self.prefix:
-            prefix = f"{self.prefix.strip('/')}/{prefix}"
+        full = self.full_prefix(prefix)
         if self.use_local_store:
-            return str(self.icechunk_local_path / prefix)
-        return f"s3://{self.bucket}/{prefix}"
+            return str(self.icechunk_local_path / full)
+        return f"s3://{self.bucket}/{full}"
 
     def icechunk_storage(self, prefix: str):
         """Build an ``icechunk`` storage object for a store prefix."""
@@ -142,7 +151,7 @@ class Config:
         creds = self.credentials
         kwargs = {
             "bucket": self.bucket,
-            "prefix": prefix.strip("/"),
+            "prefix": self.full_prefix(prefix),
             "region": self.region,
         }
         if creds.aws_profile:

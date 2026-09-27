@@ -124,10 +124,16 @@ def require_dataset_fits(ds, what: str = "dataset") -> float:
 
 @dataclass
 class MemoryUsage:
-    """Peak and final resident memory observed by :func:`memory_guard`."""
+    """Resident memory observed by :func:`memory_guard`."""
 
     peak_gb: float = 0.0
     final_gb: float = 0.0
+    baseline_gb: float = 0.0
+
+    @property
+    def growth_gb(self) -> float:
+        """How much the guarded block added on top of what was already resident."""
+        return max(0.0, self.peak_gb - self.baseline_gb)
 
 
 @contextlib.contextmanager
@@ -145,15 +151,31 @@ def memory_guard(
     Requires ``strikes`` consecutive over-budget samples before acting, so a brief spike
     during a concatenate does not kill an otherwise healthy run. On breach the exception is
     raised in the *calling* thread when the block exits, leaving any pool workers intact.
+    Put only the memory-hungry work inside the block and do irreversible work such as a
+    commit after it, so a breach prevents the write rather than following it.
+
+    When no explicit ceiling is given, the limit is the memory already resident at entry
+    plus the available-memory budget. Comparing absolute RSS against an available-derived
+    budget would abort immediately for any process that is already large, which is exactly
+    the case this is meant to protect.
 
     Args:
-        ceiling_gb: Limit in GB. Defaults to :func:`memory_budget_gb`.
+        ceiling_gb: Absolute RSS limit in GB. Defaults to baseline RSS plus the budget
+            from :func:`memory_budget_gb`.
         what: Name used in log lines and the error message.
         interval: Seconds between samples.
         strikes: Consecutive over-budget samples required before flagging a breach.
     """
-    ceiling = ceiling_gb if ceiling_gb is not None else memory_budget_gb()
-    usage = MemoryUsage()
+    baseline = process_tree_rss_gb()
+    if ceiling_gb is not None:
+        ceiling = ceiling_gb
+    else:
+        ceiling = baseline + memory_budget_gb()
+        logger.debug(
+            f"{what}: ceiling {ceiling:.1f} GB (baseline {baseline:.1f} GB + budget "
+            f"{ceiling - baseline:.1f} GB)"
+        )
+    usage = MemoryUsage(baseline_gb=baseline)
     stop = threading.Event()
     breached: list[float] = []
 

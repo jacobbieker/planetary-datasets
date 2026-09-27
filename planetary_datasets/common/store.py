@@ -147,17 +147,30 @@ def write_to_icechunk(
         existing = None
         first_write = True
 
+    # atleast_1d so a scalar append coordinate does not raise IndexError here.
+    incoming = np.atleast_1d(ds[append_dim].values)
+
     if first_write:
         to_icechunk(ds, session, encoding=build_encoding(ds, append_dim=append_dim))
-        session.commit(message or f"Initial write of {append_dim} {ds[append_dim].values[0]}")
+        session.commit(message or f"Initial write of {append_dim} {incoming[0]}")
         logger.info(f"created store with {ds.sizes.get(append_dim, 1)} step(s)")
         return True
 
-    incoming = np.atleast_1d(ds[append_dim].values)
     present = existing.coords[append_dim].values
-    if np.isin(incoming, present).all():
+    already = np.isin(incoming, present)
+    if already.all():
         logger.debug(f"{incoming[0]} already in store, skipping write")
         return False
+
+    if already.any():
+        # Partial overlap: appending the whole batch would duplicate the steps that are
+        # already stored. Append only the new ones.
+        keep = np.flatnonzero(~already)
+        logger.info(
+            f"{int(already.sum())} of {incoming.size} steps already stored, appending the remaining {keep.size}"
+        )
+        ds = ds.isel({append_dim: keep})
+        incoming = incoming[~already]
 
     if check_vars and set(ds.data_vars) != set(existing.data_vars):
         only_new = set(ds.data_vars) - set(existing.data_vars)

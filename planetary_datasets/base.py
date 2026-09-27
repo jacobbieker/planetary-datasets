@@ -143,12 +143,15 @@ class BaseProvider(ABC):
 
             logger.info(f"{self.name}: processing {len(input_files)} file(s) for {it}")
             if self.guard_memory:
+                # Only the processing is guarded. memory_guard raises when the block
+                # exits, so keeping the commit outside it means a breach prevents the
+                # write rather than leaving a committed store behind a failed run.
                 with memory_guard(what=f"{self.name} {it}"):
                     processed = self.process(input_files, it, temp_dir=temp_dir)
                     require_dataset_fits(processed, what=f"{self.name} {it}")
-                    return self.write_to_icechunk(repo, processed)
+            else:
+                processed = self.process(input_files, it, temp_dir=temp_dir)
 
-            processed = self.process(input_files, it, temp_dir=temp_dir)
             return self.write_to_icechunk(repo, processed)
 
     def run_range(self, timestamps: pd.DatetimeIndex) -> int:
