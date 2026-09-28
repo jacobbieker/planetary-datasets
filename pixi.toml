@@ -82,3 +82,5 @@ nest-asyncio = ">=1.6.0, <2"
 igra = ">=23.5, <24"
 # NASA GPM/TRMM granule search, download and reader, used by the CORRA providers.
 gpm-api = ">=0.4, <0.5"
+# Region-wide GHCN-hourly client used by the surface observation providers.
+meteora = ">=0.2.0"
