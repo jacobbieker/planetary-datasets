@@ -162,6 +162,48 @@ cython_debug/
 # once vendored under dags/assets/virt/ and added ~3800 files to the tree.
 .pixi/
 **/.pixi/
+# pixi environments
+.pixi
+# A pixi environment was once created inside dags/assets/virt/, adding ~3775 .py files to
+# the tree. Covered by `.pixi` at any depth, but spelled out so it is not re-added.
+dags/assets/virt/.pixi/
+
+# Downloaded inputs and intermediates. Providers write these under
+# PLANETARY_DATASETS_DATA_DIR / _SCRATCH_DIR; these patterns catch the historical locations.
+/data/
+/meteofrance/
+/meteofrance_france/
+/goes16/
+/hawaii_radar/
+/global/
+/logs/
+/nordic_reflectivity/
+mars_staging/
+*.icechunk/
+
+# Bulk data. Inputs belong in a data directory, not the repo.
+*.grib
+*.grib2
+*.grib.tmp
+*.nc
+*.nc4
+*.h5
+*.hdf5
+*.bufr
+*.parquet
+*.tif
+*.tiff
+*.zarr/
+*.idx
+
+# Local configuration. .env.example is the committed template.
+.env
+.env.local
+
+# Editor and OS cruft
+.DS_Store
+.idea/
+.playwright-mcp/
 
 
 # ECMWF MARS retrievals and their staging area. A month of GRIB is tens of
