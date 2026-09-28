@@ -108,6 +108,38 @@ def missing_timesteps(
     return [t for t in desired if not np.isin(getattr(t, "to_numpy", lambda: t)(), times).any()]
 
 
+def missing_periods(
+    repo: icechunk.Repository,
+    desired: Sequence,
+    unit: str = "D",
+    append_dim: str = "time",
+) -> list:
+    """Return the timestamps in ``desired`` whose *period* is not represented in the store.
+
+    :func:`missing_timesteps` asks whether an exact value is stored, which only works when
+    the partition timestamp is itself one of the stored values. It is not for a swath
+    archive keyed by granule time, or for a forecast archive whose initialisation dates
+    fall inside the partition rather than on its first instant: there the question is
+    "does the store already hold anything from this day/month?".
+
+    Args:
+        repo: Target repository.
+        desired: Partition timestamps to test.
+        unit: numpy datetime64 unit naming the period, e.g. ``D`` for a day or ``M`` for a
+            month.
+        append_dim: Dimension holding the stored timestamps.
+    """
+    times = existing_times(repo, append_dim=append_dim)
+    if times.size == 0:
+        return list(desired)
+    # Truncating to the period inside numpy keeps this an array pass. Building a Python
+    # set of Timestamps instead costs gigabytes once a swath store holds tens of millions
+    # of scan times, and this runs before every partition.
+    stored = np.unique(times.astype(f"datetime64[{unit}]"))
+    wanted = np.array([np.datetime64(t, unit) for t in desired], dtype=f"datetime64[{unit}]")
+    return [t for t, present in zip(desired, np.isin(wanted, stored)) if not present]
+
+
 def write_to_icechunk(
     repo: icechunk.Repository,
     ds: xr.Dataset,
