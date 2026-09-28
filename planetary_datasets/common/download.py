@@ -112,9 +112,8 @@ def download_many(
         logger.debug(f"dropped {len(urls) - len(deduped)} duplicate URL(s)")
         urls = deduped
 
-    # Two distinct URLs can share a basename while differing by directory; naming
-    # destinations by basename alone would make them overwrite each other. Disambiguate
-    # only the clashes, so the common case keeps readable filenames.
+    # Distinct URLs can share a basename; disambiguate only those, so the common case
+    # keeps readable filenames.
     names = [u.split("/")[-1] or "download" for u in urls]
     clashing = {n for n in names if names.count(n) > 1}
     targets: list[pathlib.Path] = []

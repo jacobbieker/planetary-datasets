@@ -414,7 +414,6 @@ def main() -> None:
     storage.add_argument("--access-key-id", default=None, help="S3 access key ID.")
     storage.add_argument("--secret-access-key", default=None, help="S3 secret access key.")
 
-    # Ingest options
     ingest = p.add_argument_group("ingest options")
     ingest.add_argument("--branch", default="main", help="Icechunk branch (default: main).")
     ingest.add_argument("--batch-size", type=int, default=1,
@@ -479,7 +478,6 @@ def main() -> None:
     if args.max_eras is not None and args.max_eras < 1:
         p.error(f"--max-eras must be >= 1, got {args.max_eras}")
 
-    # Validate storage args
     if args.storage == "local" and not args.path:
         p.error("--path is required for local storage")
     if args.storage == "s3" and (not args.bucket or not args.prefix):

@@ -132,9 +132,8 @@ def missing_periods(
     times = existing_times(repo, append_dim=append_dim)
     if times.size == 0:
         return list(desired)
-    # Truncating to the period inside numpy keeps this an array pass. Building a Python
-    # set of Timestamps instead costs gigabytes once a swath store holds tens of millions
-    # of scan times, and this runs before every partition.
+    # Truncated inside numpy: a Python set of Timestamps costs gigabytes once a swath
+    # store holds tens of millions of scan times, and this runs before every partition.
     stored = np.unique(times.astype(f"datetime64[{unit}]"))
     wanted = np.array([np.datetime64(t, unit) for t in desired], dtype=f"datetime64[{unit}]")
     return [t for t, present in zip(desired, np.isin(wanted, stored)) if not present]

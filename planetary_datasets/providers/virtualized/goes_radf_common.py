@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import sys
+import dataclasses
+import functools
 import datetime
 import gc
 import os
@@ -2076,3 +2079,295 @@ def smoke_test(
         **_COMBINE_KWARGS,
     )
     return vmds
+
+
+# =============================================================================
+# Per-satellite archives
+# =============================================================================
+
+#: Variables the ABI L1b files carry on every satellite.
+_BASE_LOADABLE_VARIABLES: tuple[str, ...] = (
+    "t", "x", "y", "x_image", "y_image", "x_image_bounds", "y_image_bounds",
+    "time_bounds", "goes_imager_projection", "nominal_satellite_height",
+    "nominal_satellite_subpoint_lat", "nominal_satellite_subpoint_lon",
+    "geospatial_lat_lon_extent", "earth_sun_distance_anomaly_in_AU", "band_id",
+    "band_wavelength", "esun", "kappa0", "planck_fk1", "planck_fk2", "planck_bc1",
+    "planck_bc2", "valid_pixel_count", "missing_pixel_count", "saturated_pixel_count",
+    "undersaturated_pixel_count", "min_radiance_value_of_valid_pixels",
+    "max_radiance_value_of_valid_pixels", "mean_radiance_value_of_valid_pixels",
+    "std_dev_radiance_value_of_valid_pixels", "percent_uncorrectable_L0_errors",
+    "percent_uncorrectable_GRB_errors", "algorithm_dynamic_input_data_container",
+    "processing_parm_version_container", "algorithm_product_version_container",
+    "focal_plane_temperature_threshold_exceeded_count", "maximum_focal_plane_temperature",
+    "focal_plane_temperature_threshold_increasing",
+    "focal_plane_temperature_threshold_decreasing", "yaw_flip_flag", "star_id",
+    "t_star_look", "band_wavelength_star_look", "time_bounds_swaths", "time_bounds_rows",
+    "reprocessing_version",
+)
+
+_ZLIB = {"class": "Zlib", "codec_name": "numcodecs.zlib", "codec_config": {"level": 1}}
+
+
+def _shuffle(elementsize: int) -> dict[str, Any]:
+    return {
+        "class": "Shuffle",
+        "codec_name": "numcodecs.shuffle",
+        "codec_config": {"elementsize": elementsize},
+    }
+
+
+#: Before ABI switched the Shuffle filter on.
+CODECS_PRE_SHUFFLE: dict[str, list[dict[str, Any]]] = {
+    "Rad": [{"class": "BytesCodec", "endian": "little"}, _ZLIB],
+    "DQF": [{"class": "BytesCodec", "endian": None}, _ZLIB],
+}
+
+#: After the switch, and the only era for satellites launched since.
+CODECS_POST_SHUFFLE: dict[str, list[dict[str, Any]]] = {
+    "Rad": [{"class": "BytesCodec", "endian": "little"}, _shuffle(2), _ZLIB],
+    "DQF": [{"class": "BytesCodec", "endian": None}, _shuffle(1), _ZLIB],
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class GoesArchive:
+    """One GOES satellite's ABI L1b full-disk archive.
+
+    The per-satellite modules are generated from these; everything else lives in the
+    functions above and takes the configuration as arguments.
+    """
+
+    satellite: str
+    satellite_name: str
+    min_year: int
+    archive_start_date: datetime.date
+    loadable_variables: tuple[str, ...] = _BASE_LOADABLE_VARIABLES
+    reproc_start_date: datetime.date | None = None
+    reproc_end_date: datetime.date | None = None
+    product: str = "ABI-L1b-RadF/"
+    #: None for a satellite NOAA never reprocessed, which also drops the reproc key below.
+    product_reproc: str | None = "ABI-L1b-RadF-Reproc/"
+    #: One entry for a satellite with a single codec era, two for one that predates the
+    #: Shuffle switch and so has to accept both.
+    codec_eras: tuple[dict[str, list[dict[str, Any]]], ...] = (
+        CODECS_PRE_SHUFFLE,
+        CODECS_POST_SHUFFLE,
+    )
+
+    @property
+    def product_keys(self) -> list[str]:
+        return ["ABI-L1b-RadF-Reproc", "ABI-L1b-RadF"] if self.product_reproc else ["ABI-L1b-RadF"]
+
+    @property
+    def bucket(self) -> str:
+        return source_bucket(self.satellite)
+
+    @property
+    def store_prefix(self) -> str:
+        return default_store_prefix(self.satellite)
+
+    @property
+    def epoch_threshold(self) -> np.datetime64:
+        """Scan times before the satellite existed are rejected as corrupt."""
+        return np.datetime64(f"{self.min_year}-01-01", "ns")
+
+    def store(self):
+        return make_store(self.bucket)
+
+    def check_codecs(self, ds: xr.Dataset) -> xr.Dataset:
+        if len(self.codec_eras) == 1:
+            return check_codecs_single_era(ds, self.codec_eras[0])
+        return check_codecs_dual_era(ds, *self.codec_eras)
+
+    @functools.cached_property
+    def preprocess(self):
+        return make_preprocess(self.check_codecs, self.epoch_threshold)
+
+    def _product(self, reproc: bool) -> str:
+        if reproc and not self.product_reproc:
+            raise ValueError(f"{self.satellite_name} has no reprocessed archive")
+        return self.product_reproc if reproc else self.product
+
+    def list_years(self) -> list[int]:
+        return list_years(self.store(), self.product, self.min_year)
+
+    def list_days_in_year(self, year: int) -> list[int]:
+        return list_days_in_year(self.store(), self.product, year)
+
+    def iter_days(self, *, start=None, end=None):
+        return iter_days(
+            self.store(), self.product, self.min_year, self.product_keys,
+            start=start, end=end,
+        )
+
+    def list_day_files(self, year, doy, channel, *, start=None, end=None, reproc=False):
+        return list_day_files(
+            self.store(), self.bucket, self.product, year, doy, channel,
+            start=start, end=end, product_reproc=self.product_reproc, reproc=reproc,
+        )
+
+    def iter_archive(self, channel, *, start=None, end=None, reproc=False):
+        return iter_archive(
+            self.store(), self.bucket, self.product, self.min_year,
+            self.product_keys, channel, start=start, end=end,
+            product_reproc=self.product_reproc, reproc=reproc,
+        )
+
+    def iter_archive_by_day(self, channel, *, start=None, end=None, reproc=False):
+        return iter_archive_by_day(
+            self.store(), self.bucket, self.product, self.min_year,
+            self.product_keys, channel, start=start, end=end,
+            product_reproc=self.product_reproc, reproc=reproc,
+        )
+
+    def days_to_ingest(self, channel, *, start=None, end=None, reproc=False):
+        return days_to_ingest(
+            self.store(), self.bucket, self.product, self.min_year,
+            self.product_keys, channel, start=start, end=end,
+            product_reproc=self.product_reproc, reproc=reproc,
+        )
+
+    def smoke_test(self, channel=13, n_files=3, *, start=None, reproc=False):
+        return smoke_test(
+            self.store(), self.bucket, self.product, self.min_year,
+            self.product_keys, self.satellite_name, self.preprocess,
+            list(self.loadable_variables), channel=channel, n_files=n_files,
+            start=start, product_reproc=self.product_reproc, reproc=reproc,
+        )
+
+    def ingest_all_days(self, repo, channel, *, group=None, reproc=False,
+                        start=None, end=None, loadable_variables=None, **kwargs):
+        label = self._product(reproc).rstrip("/")
+        if group is None:
+            group = f"{label}/{_ch(channel)}"
+        return ingest_all_days(
+            repo, channel,
+            satellite_name=self.satellite_name, satellite=self.satellite,
+            product_label=label, archive_start_date=self.archive_start_date,
+            all_days=self.days_to_ingest(channel, start=start, end=end, reproc=reproc),
+            preprocess_fn=self.preprocess, group=group, bucket=self.bucket,
+            loadable_variables=loadable_variables or self.loadable_variables,
+            epoch_threshold=self.epoch_threshold, **kwargs,
+        )
+
+    def ingest_all_channels(self, repo, *, channels=None, base_group=None,
+                            reproc=False, **kwargs):
+        if base_group is None:
+            base_group = self._product(reproc).rstrip("/")
+        return ingest_all_channels(
+            repo,
+            ingest_fn=lambda r, ch, **kw: self.ingest_all_days(r, ch, reproc=reproc, **kw),
+            channels=channels, base_group=base_group, **kwargs,
+        )
+
+
+SATELLITES: dict[str, GoesArchive] = {
+    "goes16": GoesArchive(
+        satellite="goes16", satellite_name="GOES-16", min_year=2017,
+        archive_start_date=datetime.date(2017, 2, 28),
+        reproc_start_date=datetime.date(2018, 1, 4),
+        reproc_end_date=datetime.date(2024, 12, 28),
+    ),
+    "goes17": GoesArchive(
+        satellite="goes17", satellite_name="GOES-17", min_year=2018,
+        archive_start_date=datetime.date(2018, 2, 12),
+        reproc_start_date=datetime.date(2018, 8, 28),
+        reproc_end_date=datetime.date(2023, 1, 1),
+    ),
+    "goes18": GoesArchive(
+        satellite="goes18", satellite_name="GOES-18", min_year=2022,
+        archive_start_date=datetime.date(2022, 7, 28),
+        loadable_variables=tuple(
+            v for v in _BASE_LOADABLE_VARIABLES
+            if v not in {
+                "algorithm_dynamic_input_data_container", "algorithm_product_version_container",
+                "band_wavelength_star_look", "processing_parm_version_container",
+                "reprocessing_version", "star_id", "t_star_look", "time_bounds_rows",
+                "time_bounds_swaths",
+            }
+        ) + ("channel_integration_time", "channel_gain_field"),
+        product_reproc=None,
+    ),
+    "goes19": GoesArchive(
+        satellite="goes19", satellite_name="GOES-19", min_year=2024,
+        archive_start_date=datetime.date(2024, 10, 10),
+        loadable_variables=tuple(
+            v for v in _BASE_LOADABLE_VARIABLES
+            if v not in {"reprocessing_version", "time_bounds_rows", "time_bounds_swaths"}
+        ) + (
+            "channel_integration_time", "channel_gain_field", "a_h_NRTH", "b_h_NRTH",
+            "number_of_harmonization_coefficients", "num_star_looks",
+        ),
+        product_reproc=None,
+        # Launched after the Shuffle switch, so there is only one era to accept.
+        codec_eras=(CODECS_POST_SHUFFLE,),
+    ),
+}
+
+
+def bind(satellite: str) -> dict[str, Any]:
+    """Module namespace for one satellite, used by the ``goes_*_radf`` shims."""
+    archive = SATELLITES[satellite]
+    return {
+        # Re-exported so the per-satellite module namespace matches what it was before
+        # these became shims, including for tests that patch through it.
+        "common": sys.modules[__name__],
+        "CHANNEL_GRID_SIZE": CHANNEL_GRID_SIZE,
+        "RADF_CHUNK_SIZE": RADF_CHUNK_SIZE,
+        "DATETIME_NS": DATETIME_NS,
+        "MAX_CONSECUTIVE_FAILED_DAYS": MAX_CONSECUTIVE_FAILED_DAYS,
+        "_KEEP_DATA_VARS": _KEEP_DATA_VARS,
+        "RadFValidationError": RadFValidationError,
+        "parse_scan_start_to_datetime": parse_scan_start_to_datetime,
+        "ARCHIVE": archive,
+        "SATELLITE": archive.satellite,
+        "SATELLITE_NAME": archive.satellite_name,
+        "BUCKET": archive.bucket,
+        "STORE_PREFIX": archive.store_prefix,
+        "PRODUCT": archive.product,
+        "PRODUCT_REPROC": archive.product_reproc,
+        "PRODUCT_KEYS": archive.product_keys,
+        "MIN_YEAR": archive.min_year,
+        "ARCHIVE_START_DATE": archive.archive_start_date,
+        "REPROC_START_DATE": archive.reproc_start_date,
+        "REPROC_END_DATE": archive.reproc_end_date,
+        "EPOCH_THRESHOLD": archive.epoch_threshold,
+        "DEFAULT_LOADABLE_VARIABLES": archive.loadable_variables,
+        "preprocess": archive.preprocess,
+        "list_years": archive.list_years,
+        "list_days_in_year": archive.list_days_in_year,
+        "iter_days": archive.iter_days,
+        "list_day_files": archive.list_day_files,
+        "iter_archive": archive.iter_archive,
+        "iter_archive_by_day": archive.iter_archive_by_day,
+        "days_to_ingest": archive.days_to_ingest,
+        "smoke_test": archive.smoke_test,
+        "ingest_all_days": archive.ingest_all_days,
+        "ingest_all_channels": archive.ingest_all_channels,
+        "_store": archive.store,
+        "_ch": _ch,
+        "_grid_size": _grid_size,
+    }
+
+
+def satellite_cli(satellite: str, argv: list[str] | None = None) -> None:
+    """Command line for one satellite's module, shared by all of them."""
+    import argparse
+
+    archive = SATELLITES[satellite]
+    parser = argparse.ArgumentParser(
+        description=f"Ingest {archive.satellite_name} ABI-L1b-RadF into Icechunk via VirtualiZarr."
+    )
+    parser.add_argument("--smoke-test", action="store_true", help="Run a quick smoke test and exit.")
+    parser.add_argument("--channel", type=int, default=13, help="ABI channel 1-16 (default: 13).")
+    parser.add_argument("--n-files", type=int, default=3, help="Files for the smoke test (default: 3).")
+    if archive.product_reproc:
+        parser.add_argument("--reproc", action="store_true", help="Use the reprocessed archive.")
+    args = parser.parse_args(argv)
+
+    if args.smoke_test:
+        print(archive.smoke_test(
+            channel=args.channel, n_files=args.n_files, reproc=getattr(args, "reproc", False)
+        ))
+    else:
+        parser.print_help()

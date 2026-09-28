@@ -111,9 +111,8 @@ def coords_match(a: xr.Dataset, b: xr.Dataset, coords: tuple[str, ...]) -> tuple
     coordinate that differs.
     """
     for coord in coords:
-        # Check coords, not just dims: geostationary grids carry latitude/longitude as
-        # 2-D non-dimension coordinates, and keying on `dims` meant the alignment guard
-        # never fired for them.
+        # Coords, not dims: geostationary lat/lon are 2-D non-dimension coordinates, and
+        # keying on dims meant the guard never fired for them.
         if coord in a.coords and coord in b.coords:
             if a[coord].shape != b[coord].shape or not np.array_equal(a[coord].values, b[coord].values):
                 return False, coord

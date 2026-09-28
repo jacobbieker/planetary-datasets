@@ -167,9 +167,8 @@ class BaseProvider(ABC):
 
             logger.info(f"{self.name}: processing {len(input_files)} file(s) for {it}")
             if self.guard_memory:
-                # Only the processing is guarded. memory_guard raises when the block
-                # exits, so keeping the commit outside it means a breach prevents the
-                # write rather than leaving a committed store behind a failed run.
+                # memory_guard raises on exit, so the commit stays outside it: a breach
+                # then prevents the write instead of following it.
                 with memory_guard(what=f"{self.name} {it}"):
                     processed = self.process(input_files, it, temp_dir=temp_dir)
                     require_dataset_fits(processed, what=f"{self.name} {it}")
