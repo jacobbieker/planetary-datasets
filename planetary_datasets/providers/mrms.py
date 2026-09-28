@@ -306,9 +306,14 @@ class MRMSProvider(BaseProvider):
         step = pd.Timedelta(self.freq)
         return pd.date_range(it, it + self.partition_span - step, freq=self.freq)
 
-    def run_partition(self, it: pd.Timestamp) -> bool:
-        """Run one hour, accepting a timezone-aware partition start from Dagster."""
-        return super().run_partition(naive_utc(it))
+    def run_partition(self, it: pd.Timestamp, check_present: bool = True) -> bool:
+        """Run one hour, accepting a timezone-aware partition start from Dagster.
+
+        ``check_present`` has to be forwarded, not dropped: :meth:`BaseProvider.run_range`
+        passes it explicitly after filtering the timestamps itself, and an override that
+        does not accept it turns every partition of a backfill into a ``TypeError``.
+        """
+        return super().run_partition(naive_utc(it), check_present=check_present)
 
     def missing_timesteps(self, desired: pd.DatetimeIndex) -> List[pd.Timestamp]:
         """Which partitions in ``desired`` still have work to do.
@@ -482,6 +487,10 @@ class MRMSProvider(BaseProvider):
         first step of an hour is often missing, so the base class's "is the partition start
         already stored?" check cannot stand in for a per-timestep check. Filtering here
         keeps a re-run from appending duplicate times.
+
+        Revisiting a settled-but-partial hour can still surface a step that sorts *before*
+        what is already stored; the base writer's monotonicity guard drops those, since
+        icechunk cannot insert and an unsorted ``time`` would break slicing store-wide.
         """
         present = existing_times(repo, append_dim=self.append_dim)
         if present.size:

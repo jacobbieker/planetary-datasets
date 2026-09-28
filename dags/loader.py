@@ -19,16 +19,23 @@ continuously and by many people at once. Two consequences follow from that:
   it, so ``gfs_download`` becomes ``nwp/gfs_download``. An asset that declared its own
   ``key_prefix``, or a module that declared its own ``group_name``, keeps it.
 
-Concurrency is sized from the host's memory. Each factory-built asset declares what it
-needs (see :mod:`dags.factory`); assets are grouped into one scheduled job per memory
-class, the run queue in ``dags/dagster.yaml`` limits how many runs of each class are
-dequeued, and the executor configured here limits how many steps of each class run
-inside a run.
+Concurrency is sized from the host's memory. A factory-built asset declares what it needs
+(see :mod:`dags.factory`); an asset that declares nothing is assumed to need
+``DEFAULT_MEMORY_GB``. Assets are grouped into one scheduled job per (partitioning,
+memory class), which puts the class on every run's tags, and the run queue in
+``dags/dagster.yaml`` limits how many runs of each class are dequeued.
+
+The executor's per-class limit, which bounds steps *within* a run, matches on **op** tags
+rather than asset tags, and Dagster offers no way to attach those after the fact. It
+therefore only binds for assets built by :func:`~dags.factory.make_provider_asset`, which
+sets them. A hand-rolled ``@dg.asset`` needs ``op_tags={MEMORY_CLASS_TAG: ...}`` of its
+own to take part in that layer; it is covered by the run-queue layer either way.
 """
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib
 import os
 import pkgutil
@@ -42,6 +49,7 @@ from types import ModuleType
 from typing import Iterator
 
 import dagster as dg
+import pandas as pd
 from loguru import logger
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -51,17 +59,21 @@ if str(_REPO_ROOT) not in sys.path:
 
 from dags import assets as assets_package  # noqa: E402
 from dags.factory import (  # noqa: E402
-    DAILY_CRON,
+    DAILY_CRON_HOUR,
+    DAILY_CRON_MINUTE,
     DEFAULT_MEMORY_GB,
     MEMORY_CLASS_TAG,
-    daily_partitions,
     executor_tag_concurrency_limits,
+    memory_class_for,
 )
 from dags.resources import MemoryResource, PlanetaryConfigResource  # noqa: E402
 from planetary_datasets.memory import memory_budget_gb  # noqa: E402
 
 #: Subpackages under ``dags/assets`` that are not Dagster asset modules. ``virt`` holds
-#: standalone PEP-723 scripts that are run with ``uv run``, not imported.
+#: standalone PEP-723 scripts that are run with ``uv run``, not imported. Matched at
+#: package boundaries by :func:`_is_skipped`, not with a bare ``startswith``: the latter
+#: also swallowed ``dags.assets.virtual_goes`` and ``dags.assets.virtual_gk2a``, which are
+#: ordinary modules that merely share a prefix, and did so with no trace in ``failures``.
 SKIP_MODULE_PREFIXES: tuple[str, ...] = ("dags.assets.virt",)
 
 #: Seconds a single module gets to import before it is abandoned. Several of these
@@ -91,6 +103,14 @@ class AssetModuleImportTimeout(BaseException):
     ``Exception`` and carry on. An ordinary ``TimeoutError`` gets swallowed by
     ``cdsapi``'s retry handling and the import never ends.
     """
+
+
+def _is_skipped(module_name: str) -> bool:
+    """Whether ``module_name`` is inside one of :data:`SKIP_MODULE_PREFIXES`."""
+    return any(
+        module_name == prefix or module_name.startswith(f"{prefix}.")
+        for prefix in SKIP_MODULE_PREFIXES
+    )
 
 
 @contextlib.contextmanager
@@ -158,7 +178,7 @@ def discover_asset_modules(
     for info in walker:
         if info.ispkg:
             continue
-        if info.name.startswith(SKIP_MODULE_PREFIXES):
+        if _is_skipped(info.name):
             logger.debug(f"dagster: skipping non-asset module {info.name}")
             continue
         if info.name.rsplit(".", 1)[-1].startswith("_"):
@@ -204,6 +224,22 @@ def _family(module_name: str) -> str:
     return "".join(c if c.isalnum() or c == "_" else "_" for c in family)
 
 
+def _node_def(asset: dg.AssetsDefinition):
+    """The op backing ``asset``, or None when it has none.
+
+    ``getattr(asset, "node_def", None)`` is not enough. A spec-only
+    ``AssetsDefinition`` — an external asset, or one built from ``AssetSpec``s — has no
+    op, and Dagster signals that by raising its own ``CheckError`` from the property
+    rather than by not defining it, which the ``getattr`` default never catches. One such
+    asset anywhere under ``dags/assets`` used to take the whole code location down, since
+    this is consulted outside the per-module ``try`` in :func:`load_assets`.
+    """
+    try:
+        return asset.node_def
+    except Exception:  # noqa: BLE001 - CheckError, AttributeError, anything: no op either way
+        return None
+
+
 def _load_grouped(
     module: ModuleType, family: str, key_prefix: str | None
 ) -> list[dg.AssetsDefinition]:
@@ -235,13 +271,13 @@ def _load_one_module(module: ModuleType, family: str) -> list[dg.AssetsDefinitio
     # Mixed module: pair the two loads by op identity, which ``key_prefix`` preserves.
     prefixed = _load_grouped(module, family, key_prefix=family)
     by_node = {
-        id(asset.node_def): asset
+        id(node): asset
         for asset in prefixed
-        if getattr(asset, "node_def", None) is not None
+        if (node := _node_def(asset)) is not None
     }
     result: list[dg.AssetsDefinition] = []
     for asset in plain:
-        node_def = getattr(asset, "node_def", None)
+        node_def = _node_def(asset)
         if is_bare(asset) and node_def is not None and id(node_def) in by_node:
             result.append(by_node[id(node_def)])
         else:
@@ -276,7 +312,7 @@ def load_assets(
             continue
 
         for asset in found:
-            node_def = getattr(asset, "node_def", None)
+            node_def = _node_def(asset)
             if node_def is not None:
                 if id(node_def) in seen_ops:
                     continue
@@ -296,45 +332,149 @@ def load_assets(
     return loaded, failures
 
 
+def _partitions_key(partitions_def: dg.PartitionsDefinition) -> str:
+    """A short, stable name for a partitioning, used in job and schedule names.
+
+    Assets in one partitioned job must share a ``partitions_def``, so jobs are keyed by
+    partitioning as well as by memory class. The name has to be stable across code server
+    restarts — it is what a schedule and its run history are addressed by — so it is
+    derived from the partitioning's own configuration, never from ``id()``.
+
+    The readable part (kind and start date) is for whoever reads the Dagster UI; the digest
+    is what makes it correct. Two daily partitionings that differ only in ``end_offset``
+    must not land in one job, and Dagster would reject the mixed selection if they did.
+    """
+    kind = type(partitions_def).__name__.replace("PartitionsDefinition", "").lower() or "custom"
+    parts = [kind]
+    start = getattr(partitions_def, "start", None)
+    if start is not None:
+        with contextlib.suppress(ValueError, TypeError):
+            parts.append(pd.Timestamp(start).strftime("%Y%m%d"))
+    parts.append(hashlib.sha1(repr(partitions_def).encode()).hexdigest()[:6])
+    name = "_".join(parts)
+    return "".join(c if c.isalnum() or c == "_" else "_" for c in name)
+
+
+def _time_partitions_def(partitions_def: dg.PartitionsDefinition):
+    """The time-window partitioning inside ``partitions_def``, or None if it has none.
+
+    A ``MultiPartitionsDefinition`` carries its cadence on one dimension; the others (a
+    band, a region) are static. A wholly static partitioning has no cadence at all.
+    """
+    if isinstance(partitions_def, dg.TimeWindowPartitionsDefinition):
+        return partitions_def
+    if isinstance(partitions_def, dg.MultiPartitionsDefinition):
+        # Raises rather than returning None when every dimension is static.
+        with contextlib.suppress(Exception):
+            return partitions_def.time_window_dimension.partitions_def
+    return None
+
+
+def _schedule_offsets(partitions_def: dg.PartitionsDefinition) -> dict[str, int]:
+    """The ``hour_of_day``/``minute_of_hour`` that this partitioning will accept.
+
+    ``build_schedule_from_partitioned_job`` derives its cron from the partitioning and
+    lets you shift it within the period — but only where that makes sense, and it says so
+    by raising at *resolve* time rather than when the schedule is built, so the decision
+    has to be made here. An hourly partitioning refuses ``hour_of_day`` ("Cannot set hour
+    parameter with hourly partitions"). Passing nothing leaves the partitioning's own cron
+    untouched, which is the right answer for anything with no regular period.
+    """
+    inner = _time_partitions_def(partitions_def)
+    schedule_type = getattr(inner, "schedule_type", None)
+    if schedule_type is None:
+        return {}
+    if getattr(schedule_type, "name", str(schedule_type)).upper() == "HOURLY":
+        return {"minute_of_hour": DAILY_CRON_MINUTE}
+    return {"hour_of_day": DAILY_CRON_HOUR, "minute_of_hour": DAILY_CRON_MINUTE}
+
+
+def asset_memory_class(asset: dg.AssetsDefinition, spec: dg.AssetSpec) -> str:
+    """The memory class an asset's runs should be queued under.
+
+    Factory-built assets declare it (see :func:`~dags.factory.make_provider_asset`). The
+    hand-rolled assets in ``dags/assets`` do not, and treating "undeclared" as "exempt"
+    was the bug this replaces: the selection matched nothing, so the code location shipped
+    no jobs, no schedules, and the ``tag_concurrency_limits`` in ``dags/dagster.yaml``
+    matched no run. An undeclared asset is assumed to need :data:`DEFAULT_MEMORY_GB`,
+    which is the same assumption the factory makes.
+    """
+    declared = (spec.tags or {}).get(MEMORY_CLASS_TAG)
+    return declared or memory_class_for(DEFAULT_MEMORY_GB)
+
+
 def build_memory_class_jobs(
     assets: list[dg.AssetsDefinition],
 ) -> tuple[list[dg.JobDefinition], list[dg.ScheduleDefinition]]:
-    """One scheduled job per memory class, over the daily-partitioned provider assets.
+    """One scheduled job per (partitioning, memory class) over the partitioned assets.
 
     Grouping by memory class is what lets the run queue apply a different limit to a
     32 GB reanalysis ingest than to a 2 GB station download: the class is carried on the
     job's run tags, which is what ``tag_concurrency_limits`` matches on.
+
+    Grouping by partitioning as well is not a refinement but a requirement — Dagster
+    refuses a partitioned asset job whose assets do not share one ``partitions_def`` —
+    and it is what lets the schedule be built with
+    :func:`dagster.build_schedule_from_partitioned_job`. That matters: a plain
+    ``ScheduleDefinition`` over a partitioned job emits ``RunRequest(partition_key=None)``,
+    and executing a partitioned job without a partition key fails outright, so every tick
+    produced a failed run. It also gives each partitioning the cadence it actually wants,
+    so hourly assets are not asked for one partition a day.
+
+    Assets carrying their own ``AutomationCondition`` are left out. They have opted into
+    declarative automation and scheduling them here as well would launch each partition
+    twice.
     """
-    by_class: dict[str, list[dg.AssetKey]] = defaultdict(list)
+    by_group: dict[tuple[str, str], list[dg.AssetKey]] = defaultdict(list)
+    partitions_by_key: dict[str, dg.PartitionsDefinition] = {}
 
     for asset in assets:
-        if getattr(asset, "partitions_def", None) is not daily_partitions:
+        partitions_def = getattr(asset, "partitions_def", None)
+        if partitions_def is None:
+            # Unpartitioned assets have no window to schedule; they are materialised on
+            # demand or by their own automation condition.
             continue
+        partitions_key = _partitions_key(partitions_def)
+        partitions_by_key.setdefault(partitions_key, partitions_def)
         for spec in asset.specs:
-            memory_class = (spec.tags or {}).get(MEMORY_CLASS_TAG)
-            if memory_class:
-                by_class[memory_class].append(spec.key)
+            if spec.automation_condition is not None:
+                continue
+            by_group[(partitions_key, asset_memory_class(asset, spec))].append(spec.key)
 
     jobs: list[dg.JobDefinition] = []
     schedules: list[dg.ScheduleDefinition] = []
-    for memory_class, keys in sorted(by_class.items()):
+    for (partitions_key, memory_class), keys in sorted(by_group.items()):
+        name = f"providers_{partitions_key}_{memory_class}"
+        # No `partitions_def=` here: Dagster infers it from the selection, and passing it
+        # as well is deprecated. The grouping above is what guarantees the selection is
+        # uniform enough for that inference to succeed.
         job = dg.define_asset_job(
-            name=f"daily_providers_{memory_class}",
+            name=name,
             selection=dg.AssetSelection.assets(*keys),
             tags={MEMORY_CLASS_TAG: memory_class},
             description=(
-                f"Daily ingest of every {memory_class}-memory provider asset "
-                f"({len(keys)} assets)."
+                f"Ingest of every {memory_class}-memory asset partitioned by "
+                f"{partitions_key} ({len(keys)} assets)."
             ),
         )
         jobs.append(job)
+
+        partitions_def = partitions_by_key[partitions_key]
+        if _time_partitions_def(partitions_def) is None:
+            # A wholly static partitioning has no cadence to schedule from, and
+            # `build_schedule_from_partitioned_job` fails to resolve for one. The job is
+            # still built so it can be launched by hand with the right run tags.
+            logger.debug(f"dagster: {name} has no time partitioning, leaving it unscheduled")
+            continue
+
         schedules.append(
-            dg.ScheduleDefinition(
-                name=f"daily_providers_{memory_class}_schedule",
-                cron_schedule=DAILY_CRON,
-                job=job,
-                execution_timezone="UTC",
+            dg.build_schedule_from_partitioned_job(
+                job,
+                name=f"{name}_schedule",
                 default_status=dg.DefaultScheduleStatus.RUNNING,
+                # The execution timezone comes from the partitioning itself; passing it as
+                # well as an offset is rejected.
+                **_schedule_offsets(partitions_def),
             )
         )
 

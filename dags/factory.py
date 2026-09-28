@@ -50,9 +50,13 @@ from planetary_datasets.memory import (
     total_memory_gb,
 )
 
-#: When the scheduled jobs fire. Late enough that the previous UTC day is complete at
-#: every upstream provider we pull from.
-DAILY_CRON = "0 6 * * *"
+#: When a daily scheduled job fires. Late enough that the previous UTC day is complete at
+#: every upstream provider we pull from. ``dags/loader.py`` builds its schedules with
+#: ``build_schedule_from_partitioned_job``, which takes the hour and minute rather than a
+#: cron string so that partitionings finer than a day keep their own cadence.
+DAILY_CRON_HOUR = 6
+DAILY_CRON_MINUTE = 0
+DAILY_CRON = f"{DAILY_CRON_MINUTE} {DAILY_CRON_HOUR} * * *"
 
 #: Earliest partition. Providers with shorter archives simply produce empty partitions
 #: before their data starts, which ``run_partition`` treats as "nothing to do".
@@ -78,8 +82,12 @@ MEMORY_CLASSES: tuple[tuple[str, float], ...] = (
     ("xlarge", math.inf),
 )
 
-#: The partitioning every factory-built asset shares. ``end_offset=-1`` keeps the
-#: in-progress UTC day out of the partition set.
+#: The partitioning every factory-built asset shares. ``end_offset=-1`` drops one whole
+#: partition from the end of the set, so the newest partition is D-2, not D-1: the day
+#: that ended yesterday is left out until today is over. That is deliberate — several
+#: upstreams are still publishing the previous UTC day well into the next one — but it is
+#: a day more lag than "keeps the in-progress day out", which is what ``end_offset=0``
+#: already does.
 daily_partitions = dg.DailyPartitionsDefinition(start_date=DEFAULT_START_DATE, end_offset=-1)
 
 
@@ -166,11 +174,26 @@ def _partition_window(
 
     Falls back to parsing the partition key for partitionings that carry no time window,
     so a provider asset still works if someone swaps in a custom ``partitions_def``.
+
+    Raises:
+        RuntimeError: When the run has no partition at all. Both lookups raise the same
+            Dagster error in that case, so without this the fallback simply re-raises it
+            and the cause — a schedule or a manual launch that forgot the partition key —
+            is buried in a ``DagsterInvariantViolationError`` about ``partition_key``.
     """
     try:
         window = context.partition_time_window
-    except Exception:  # noqa: BLE001 - not a time-window partitioning
-        start = _naive_utc(context.partition_key)
+    except Exception as exc:  # noqa: BLE001 - not a time-window partitioning
+        try:
+            key = context.partition_key
+        except Exception as key_exc:  # noqa: BLE001 - no partition on this run at all
+            raise RuntimeError(
+                "this asset is partitioned but the run has no partition key; launch it "
+                "for a partition, or build its schedule with "
+                "dagster.build_schedule_from_partitioned_job"
+            ) from key_exc
+        logger.debug(f"{key}: not a time-window partitioning ({type(exc).__name__})")
+        start = _naive_utc(key)
         return start, start + pd.Timedelta(days=1)
     return _naive_utc(window.start), _naive_utc(window.end)
 
@@ -362,6 +385,8 @@ def make_provider_assets(
 
 __all__ = [
     "DAILY_CRON",
+    "DAILY_CRON_HOUR",
+    "DAILY_CRON_MINUTE",
     "DEFAULT_MEMORY_GB",
     "DEFAULT_START_DATE",
     "MEMORY_CLASSES",

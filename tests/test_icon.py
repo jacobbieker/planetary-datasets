@@ -459,6 +459,74 @@ def test_ruc_process_refuses_an_empty_run(local_config):
         provider.process([], pd.Timestamp("2026-09-27T14:00"))
 
 
+# -- completeness -----------------------------------------------------------------------
+
+
+def _icon_run(init: pd.Timestamp, variables: list[str], steps: int = 3) -> xr.Dataset:
+    """A minimal ICON run: one init time, ``steps`` lead times, the named variables."""
+    return xr.Dataset(
+        {
+            name: (("init_time", "step", "values"), np.zeros((1, steps, 4), dtype="float32"))
+            for name in variables
+        },
+        coords={
+            "init_time": pd.DatetimeIndex([init]),
+            "step": pd.to_timedelta(np.arange(steps), unit="h"),
+        },
+    )
+
+
+def test_a_fresh_run_does_not_create_the_store(local_config):
+    """Regression: a half-uploaded run is indistinguishable from a sparse one.
+
+    A truncated first run fixed the store's schema and locked every complete run out afterwards,
+    while the asset went on reporting success.
+    """
+    provider = icon.ICONProvider("eu", config=local_config, store_prefix="bkr/icon/fresh.icechunk")
+    just_now = pd.Timestamp.utcnow().tz_localize(None).floor("h")
+
+    with pytest.raises(icon.IncompleteRun, match="possibly still uploading"):
+        provider.write_to_icechunk(
+            provider.get_icechunk_repo(), _icon_run(just_now, ["t_2m", "u_10m"])
+        )
+
+
+def test_a_settled_run_creates_the_store(local_config):
+    provider = icon.ICONProvider(
+        "eu", config=local_config, store_prefix="bkr/icon/settled.icechunk"
+    )
+    old = pd.Timestamp.utcnow().tz_localize(None).floor("h") - pd.Timedelta(days=1)
+
+    assert (
+        provider.write_to_icechunk(
+            provider.get_icechunk_repo(), _icon_run(old, ["t_2m", "u_10m"])
+        )
+        is True
+    )
+
+
+def test_a_run_short_of_the_stores_variables_is_refused(local_config):
+    provider = icon.ICONProvider("eu", config=local_config, store_prefix="bkr/icon/short.icechunk")
+    repo = provider.get_icechunk_repo()
+    first = pd.Timestamp.utcnow().tz_localize(None).floor("h") - pd.Timedelta(days=2)
+    provider.write_to_icechunk(repo, _icon_run(first, ["t_2m", "u_10m"]))
+
+    with pytest.raises(icon.IncompleteRun, match="1 variable"):
+        provider.write_to_icechunk(repo, _icon_run(first + pd.Timedelta(hours=6), ["t_2m"]))
+
+
+def test_a_run_with_a_short_step_axis_is_refused(local_config):
+    provider = icon.ICONProvider("eu", config=local_config, store_prefix="bkr/icon/steps.icechunk")
+    repo = provider.get_icechunk_repo()
+    first = pd.Timestamp.utcnow().tz_localize(None).floor("h") - pd.Timedelta(days=2)
+    provider.write_to_icechunk(repo, _icon_run(first, ["t_2m"], steps=4))
+
+    with pytest.raises(icon.IncompleteRun, match="2 of 4 step"):
+        provider.write_to_icechunk(
+            repo, _icon_run(first + pd.Timedelta(hours=6), ["t_2m"], steps=2)
+        )
+
+
 # -- static heights ---------------------------------------------------------------------
 
 

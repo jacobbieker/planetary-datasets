@@ -1036,6 +1036,8 @@ class MARSIcechunkProvider(BaseProvider):
         # shuffle's 7.0x at the same level.
         self.compressor = zarr.codecs.BloscCodec(cname="zstd", clevel=clevel, shuffle="shuffle")
         self._index: pd.DataFrame | None = None
+        #: Cache for `expected_names`; invalidated wherever `_index` is.
+        self._expected_names: dict[str, set[str]] | None = None
 
     @property
     def aws_profile(self) -> str | None:
@@ -1120,6 +1122,8 @@ class MARSIcechunkProvider(BaseProvider):
 
         cached = cached[~cached["short_name"].isin(self.exclude)].reset_index(drop=True)
         self._index = cached
+        # `expected_names` is derived from the index; a rescan can widen it.
+        self._expected_names = None
         return cached
 
     @property
@@ -1190,15 +1194,43 @@ class MARSIcechunkProvider(BaseProvider):
         part way up the column. The data that is there is valid and still gets
         written, but the timestep must not be flagged ingested, or a re-run
         after re-downloading would skip it and leave the gap as NaN forever.
+
+        The variables *expected* are checked, not only the ones that turned up.
+        A truncation that loses a variable outright leaves it out of the index
+        entirely, so counting what is present called such a timestep complete,
+        deleted its source file, and then refused to fetch it again.
         """
         rows = self.select(GROUP_ML, it)
         if rows.empty:
             return False
         counts = rows.groupby("short_name")["level"].nunique()
-        expected = {
-            name: 1 if name in ML_SURFACE_SHORT_NAMES else N_MODEL_LEVELS for name in counts.index
-        }
-        return all(counts[name] == expected[name] for name in counts.index)
+        expected_names = self.expected_names(GROUP_ML)
+        absent = expected_names - set(counts.index)
+        if absent:
+            logger.warning(f"{it}: model-level variable(s) missing entirely: {sorted(absent)[:5]}")
+            return False
+        return all(
+            counts[name] == (1 if name in ML_SURFACE_SHORT_NAMES else N_MODEL_LEVELS)
+            for name in expected_names
+        )
+
+    def expected_names(self, group: str) -> set[str]:
+        """The variable names a complete timestep of ``group`` carries.
+
+        Taken from the store's schema, which :meth:`initialize_store` builds from
+        :meth:`variables` over the whole index, so it is the same set for every
+        timestep and does not shrink because one source file came up short.
+        Cached: it is consulted once per family per timestep and the index runs
+        to millions of rows.
+        """
+        if getattr(self, "_expected_names", None) is None:
+            names = self.variables()
+            self._expected_names = {
+                GROUP_ML: set(names["ml_level"]) | set(names["ml_surface"]),
+                GROUP_WAVE: set(names["wave"]),
+                GROUP_SPECTRA: set(names["spectra"]),
+            }
+        return self._expected_names[group]
 
     def variables(self) -> dict[str, List[str]]:
         """Variable names per family, discovered from the index.
@@ -1566,7 +1598,11 @@ class MARSIcechunkProvider(BaseProvider):
         time_index = self.store_times(repo)
         position = int(time_index.get_loc(it))
 
-        written = {group: False for group in GROUPS}
+        # Names actually written, per family, rather than a bare "something was written".
+        # The ingest flag means "this timestep is finished", and a source file that is
+        # short of a whole variable produces a timestep that writes some of its family and
+        # none of the rest; flagging that would delete the file and refuse the re-download.
+        written_names: dict[str, set[str]] = {group: set() for group in GROUPS}
         ml_names = set(self.select(GROUP_ML, it)["short_name"])
         wave_names = set(self.select(GROUP_WAVE, it)["short_name"])
 
@@ -1621,11 +1657,25 @@ class MARSIcechunkProvider(BaseProvider):
             logger.debug(f"Wrote {name} for {it}")
 
             if name == SPECTRA_VAR:
-                written[GROUP_SPECTRA] = True
+                written_names[GROUP_SPECTRA].add(str(name))
             elif name in wave_names and name not in ml_names:
-                written[GROUP_WAVE] = True
+                written_names[GROUP_WAVE].add(str(name))
             elif name in ml_names:
-                written[GROUP_ML] = True
+                written_names[GROUP_ML].add(str(name))
+
+        written = {group: False for group in GROUPS}
+        for group, names in written_names.items():
+            if not names:
+                continue
+            absent = self.expected_names(group) - names
+            if absent:
+                logger.warning(
+                    f"{it}: {group} is short of {len(absent)} variable(s) "
+                    f"({sorted(absent)[:5]}); a source file is truncated. Data written, "
+                    "but left unflagged so a re-run picks it up."
+                )
+                continue
+            written[group] = True
 
         if written[GROUP_ML] and not self.ml_is_complete(it):
             logger.warning(

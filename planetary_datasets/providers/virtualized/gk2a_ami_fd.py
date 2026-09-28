@@ -606,6 +606,7 @@ def ingest_day(
     repo: icechunk.Repository | None = None,
     base: str = DEFAULT_STORE_BASE,
     config: Config | None = None,
+    group: str | None = None,
     **kwargs: Any,
 ) -> int:
     """Ingest a single day for one band. Returns the timesteps now stored for it.
@@ -617,6 +618,11 @@ def ingest_day(
     because the shared engine logs and swallows a failed batch: without the read
     a partition that committed nothing would still report success.
 
+    ``group`` is resolved once here and used for the write and for both guards.
+    They have to agree: the ingest writes into ``AMI-L1B-FD/<band>``, and guards
+    reading the store's root find no ``t`` coordinate there, so a successful
+    ingest raises ``NothingCommitted`` and a re-run sees nothing to skip.
+
     Raises:
         OutOfOrderPartition: when the store already holds a newer day.
         NothingCommitted: when the ingest ran but committed nothing.
@@ -624,9 +630,11 @@ def ingest_day(
     band = _band_label(band)
     if repo is None:
         repo = open_repo(band, base=base, config=config)
+    if group is None:
+        group = f"{PRODUCT_LABEL}/{band}"
 
     what = f"GK-2A {band}"
-    already = virtual_repo.guard_append_order(repo, date, what)
+    already = virtual_repo.guard_append_order(repo, date, what, group=group)
     if already:
         logger.info(f"{what}: {date.isoformat()} already holds {already} step(s), skipping")
         return already
@@ -642,9 +650,10 @@ def ingest_day(
         repo,
         band,
         all_days=[((date.year, date.timetuple().tm_yday), urls)],
+        group=group,
         **kwargs,
     )
-    return virtual_repo.require_committed(repo, date, what)
+    return virtual_repo.require_committed(repo, date, what, group=group)
 
 
 def ingest_all_days(

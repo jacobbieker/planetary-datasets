@@ -1,3 +1,13 @@
+"""Write the NOAA Global Hydro Estimator archive into an icechunk store.
+
+A one-off script, not a Dagster asset module. The archive listing and the navigation file
+used to be read at module scope; `dags/loader.py` imports every module under
+`dags/assets/` to discover assets, so that ran on every code-location load and failed the
+import outright on any machine that did not have the external drive mounted.
+"""
+
+import functools
+import os
 import zarr
 import xarray as xr
 import numpy as np
@@ -13,8 +23,20 @@ import icechunk as ic
 ARCHIVE_FOLDER = "/run/media/jacob/Tester/GHE/"
 BASE_URL = "s3://noaa-ghe-pds/"
 ZARR_PATH = "/run/media/jacob/Tester/ghe2.icechunk"
-files = sorted(list(Path(f"{ARCHIVE_FOLDER}rain_rate/").rglob("*.nc.gz")))
-nav = xr.open_dataset(f"{ARCHIVE_FOLDER}NPR.GEO.GHE.v1.Navigation.netcdf").load()
+
+
+def archive_files() -> list[Path]:
+    """Every rain-rate granule in the local archive, oldest first."""
+    return sorted(Path(f"{ARCHIVE_FOLDER}rain_rate/").rglob("*.nc.gz"))
+
+
+@functools.cache
+def navigation() -> xr.Dataset:
+    """The static latitude/longitude grid every granule is placed on.
+
+    Read on first use rather than at import, and cached because every granule needs it.
+    """
+    return xr.open_dataset(f"{ARCHIVE_FOLDER}NPR.GEO.GHE.v1.Navigation.netcdf").load()
 
 
 def get_ghe_element(filename: str) -> xr.Dataset:
@@ -31,6 +53,7 @@ def get_ghe_element(filename: str) -> xr.Dataset:
     time = dt.datetime.strptime(time_str, "%Y%m%d%H%M")
     ds = xr.open_dataset(filename).load()
     # Add in coordinates from navigation one
+    nav = navigation()
     ds = ds.assign_coords({"latitude": nav.latitude, "longitude": nav.longitude})
     # Add in timestamp
     time = pd.Timestamp(time)
@@ -66,8 +89,7 @@ def write_single_timestamp(file):
             continue
 
 
-if __name__ == "__main__":
-    import os
+def main() -> None:
     import multiprocessing as mp
 
     mp.set_start_method("forkserver")
@@ -75,6 +97,7 @@ if __name__ == "__main__":
     repo = icechunk.Repository.open_or_create(storage)
 
     session = repo.writable_session("main")
+    files = archive_files()
     data = get_ghe_element(files[-1])
     encoding = {
         "rainfall_estimate": {
@@ -119,3 +142,7 @@ if __name__ == "__main__":
     pool = mp.Pool(mp.cpu_count())
     for _ in tqdm.tqdm(pool.imap_unordered(write_single_timestamp, files), total=len(files)):
         pass
+
+
+if __name__ == "__main__":
+    main()

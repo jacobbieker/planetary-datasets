@@ -338,8 +338,11 @@ STATION_LIST_COLSPECS = [
 ]
 STATION_LIST_COLUMNS = ["id", "lat", "lon", "alt", "state", "name", "start", "end", "total"]
 
-#: Sentinels the station list uses for an unknown position or elevation.
-STATION_LIST_MISSING = (-98.8888, -98.8888, -99.9999, -999.9, -999.0)
+#: Sentinels the station list uses for an unknown position or elevation, from NCEI's format
+#: document: latitude -98.8888, longitude -998.8888, elevation -999.9 or -998.8. The
+#: longitude and second elevation sentinels were previously absent, so a station with an
+#: unknown longitude was placed at -98.8888 degrees east rather than dropped.
+STATION_LIST_MISSING = (-98.8888, -998.8888, -999.9, -998.8, -99.9999, -999.0)
 
 
 def parse_station_list(path: str | os.PathLike) -> pd.DataFrame:

@@ -214,6 +214,12 @@ def retrieve_mars(request: dict[str, str], target: str | pathlib.Path) -> str:
     exists once the retrieval is complete. This makes skip-if-exists checks
     safe against partial downloads from interrupted runs.
 
+    The temporary file is removed when the retrieval fails. A single MARS target
+    can be 75GB and nothing else ever looks at it: every cleanup and discovery
+    path in this repo globs `output_*.grib`, which does not match `.grib.tmp`, so
+    a leaked partial would sit on the data array invisibly until the free-space
+    check parked all further downloads for good.
+
     Args:
         request: MARS request dictionary, e.g. from build_mars_request().
         target: Path to write the retrieved data to.
@@ -226,7 +232,13 @@ def retrieve_mars(request: dict[str, str], target: str | pathlib.Path) -> str:
     tmp_target = target.with_name(target.name + ".tmp")
     logger.info(f"Submitting MARS request: {request} -> {target}")
     server = mars_service()
-    server.execute(request, str(tmp_target))
+    try:
+        server.execute(request, str(tmp_target))
+    except BaseException:
+        # BaseException, not Exception: a KeyboardInterrupt part way through a
+        # multi-hour retrieval is the most likely way this leaks.
+        tmp_target.unlink(missing_ok=True)
+        raise
     tmp_target.rename(target)
     logger.info(f"MARS retrieval complete: {target}")
     return str(target)

@@ -134,6 +134,21 @@ def long_table_to_cube(
     group_keys = ["_time", station_col, variable_col]
     if level_col is not None:
         level_values = pd.to_numeric(df[level_col], errors="coerce").to_numpy(dtype="float64")
+        # A row whose level does not parse gives an all-NaN distance row, and `argmin` of
+        # that is 0 — it would be filed at `levels[0]`, the surface, rather than discarded.
+        # Soundings do carry rows with a blank pressure, so this is not hypothetical.
+        usable = np.isfinite(level_values)
+        if not usable.all():
+            logger.warning(
+                f"dropping {int((~usable).sum())} row(s) with no usable {level_col!r} rather "
+                f"than snapping them to {np.asarray(levels, dtype='float64')[0]:g}"
+            )
+            df = df[usable]
+            level_values = level_values[usable]
+            if df.empty:
+                raise NoStationDataError(
+                    f"every observation in the CDS response has an unusable {level_col!r}"
+                )
         nearest = np.asarray(levels, dtype="float64")[
             np.abs(np.asarray(levels, dtype="float64")[None, :] - level_values[:, None]).argmin(
                 axis=1

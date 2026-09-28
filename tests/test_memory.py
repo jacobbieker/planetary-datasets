@@ -61,6 +61,35 @@ def test_an_eager_variable_counts_as_one_whole_chunk():
     assert memory.largest_chunk_gb(ds) == pytest.approx(32e6 / 1024**3, rel=0.01)
 
 
+def test_a_large_eager_coordinate_counts_too():
+    """Regression: sizing only ``data_vars`` hid the 2-D geostationary coordinates.
+
+    A 21696x21696 float64 latitude array is 3.8 GB and dwarfs any single data chunk.
+    """
+    dask = pytest.importorskip("dask.array")
+    ds = xr.Dataset(
+        {"radiance": (("y", "x"), dask.zeros((2000, 2000), dtype="float32", chunks=(100, 100)))},
+        coords={"latitude": (("y", "x"), np.zeros((2000, 2000), dtype="float64"))},
+    )
+    # The chunked variable's chunk is 40 kB; the eager coordinate is 32 MB.
+    assert memory.largest_chunk_gb(ds) == pytest.approx(32e6 / 1024**3, rel=0.01)
+
+
+def test_a_dataset_whose_bulk_is_in_its_coords_is_not_waved_through(monkeypatch):
+    """The whole point of require_dataset_fits: refuse before the OOM killer does."""
+    monkeypatch.setenv("MEMORY_CEILING_GB", "0.001")
+    from planetary_datasets import config
+
+    config.reset_config_cache()
+    dask = pytest.importorskip("dask.array")
+    ds = xr.Dataset(
+        {"radiance": (("y", "x"), dask.zeros((2000, 2000), dtype="float32", chunks=(10, 10)))},
+        coords={"latitude": (("y", "x"), np.zeros((2000, 2000), dtype="float64"))},
+    )
+    with pytest.raises(memory.MemoryLimitExceeded):
+        memory.require_dataset_fits(ds, what="geostationary")
+
+
 def test_a_mixed_dataset_is_not_waved_through(monkeypatch):
     monkeypatch.setenv("MEMORY_CEILING_GB", "0.001")
     from planetary_datasets import config

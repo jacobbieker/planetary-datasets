@@ -637,6 +637,40 @@ def test_parse_station_list_handles_blank_and_sentinel_fields(tmp_path):
     ]
 
 
+def test_every_ncei_missing_value_sentinel_becomes_nan(tmp_path):
+    """Regression: the sentinel tuple listed -98.8888 twice and missed two others.
+
+    NCEI's longitude sentinel (-998.8888) and its second elevation sentinel (-998.8) were
+    absent, so a station with an unknown longitude was placed at -998.8888 degrees east
+    rather than dropped.
+    """
+    path = tmp_path / "igra2-station-list.txt"
+    path.write_text(
+        "\n".join(
+            [
+                _station_line(
+                    "NOLONXXXXXX", "51.5000", "-998.8888", "10.0", "", "NO LONGITUDE", 1950, 2020, 5
+                ),
+                _station_line(
+                    "NOLATXXXXXX", "-98.8888", "0.0000", "10.0", "", "NO LATITUDE", 1950, 2020, 5
+                ),
+                _station_line(
+                    "NOALTXXXXXX", "51.5000", "0.0000", "-998.8", "", "NO ALTITUDE", 1950, 2020, 5
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+    stations = parse_station_list(path)
+
+    assert np.isnan(stations.loc["NOLONXXXXXX", "lon"])
+    assert np.isnan(stations.loc["NOLATXXXXXX", "lat"])
+    assert np.isnan(stations.loc["NOALTXXXXXX", "alt"])
+    # The fields that are present are untouched.
+    assert stations.loc["NOLONXXXXXX", "lat"] == pytest.approx(51.5)
+
+
 def _fake_station_table():
     """Two soundings on two standard levels, in the shape ascii_to_dataframe returns."""
     dates = pd.to_datetime(["2020-01-01T00:00", "2020-01-01T00:00", "2020-01-02T12:00"])

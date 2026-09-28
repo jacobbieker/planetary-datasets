@@ -168,17 +168,27 @@ def _as_url_prefix(bucket: str) -> str:
 
 
 def committed_times(
-    repo: "icechunk.Repository", branch: str = "main", dim: str = "t"
+    repo: "icechunk.Repository",
+    branch: str = "main",
+    dim: str = "t",
+    group: str | None = None,
 ) -> np.ndarray:
     """The values already committed along ``dim``, or an empty array.
 
     A store with no commits yet reads as empty rather than raising, which is
     the normal state before the first partition runs.
+
+    ``group`` must name the same subgroup the ingest writes into. Reading the
+    root of a store whose data lives under, say, ``AMI-L1B-FD/vi006`` finds no
+    ``t`` coordinate and reports the day as absent, which turns a successful
+    ingest into a ``NothingCommitted`` failure.
     """
     import xarray as xr
 
     try:
-        ds = xr.open_zarr(repo.readonly_session(branch).store, consolidated=False)
+        ds = xr.open_zarr(
+            repo.readonly_session(branch).store, group=group or None, consolidated=False
+        )
     except Exception as exc:  # noqa: BLE001 - any failure here means "nothing written yet"
         logger.debug(f"store not readable ({type(exc).__name__}: {exc})")
         return np.array([], dtype="datetime64[ns]")
@@ -192,13 +202,14 @@ def day_coverage(
     date: datetime.date,
     branch: str = "main",
     dim: str = "t",
+    group: str | None = None,
 ) -> tuple[int, np.datetime64 | None]:
     """How many committed timesteps fall on ``date``, and the newest one stored.
 
     Returns ``(steps_on_date, newest_committed)``. ``newest_committed`` is None
     when the store is empty.
     """
-    times = committed_times(repo, branch=branch, dim=dim)
+    times = committed_times(repo, branch=branch, dim=dim, group=group)
     if times.size == 0:
         return 0, None
     day = np.datetime64(date.isoformat(), "D")
@@ -210,17 +221,21 @@ def guard_append_order(
     date: datetime.date,
     what: str,
     branch: str = "main",
+    group: str | None = None,
 ) -> int:
     """Check ``date`` can still be appended. Returns steps already stored for it.
 
     A non-zero return means the day is already in the store and the caller
     should treat the partition as a no-op success.
 
+    ``group`` must be the subgroup the ingest writes into; see
+    :func:`committed_times`.
+
     Raises:
         OutOfOrderPartition: when the store already holds a newer day, so this
             one can never be appended.
     """
-    covered, newest = day_coverage(repo, date, branch=branch)
+    covered, newest = day_coverage(repo, date, branch=branch, group=group)
     if covered:
         return covered
     if newest is not None and newest.astype("datetime64[D]") > np.datetime64(
@@ -240,15 +255,17 @@ def require_committed(
     date: datetime.date,
     what: str,
     branch: str = "main",
+    group: str | None = None,
 ) -> int:
     """Assert the ingest actually committed something for ``date``.
 
-    Returns the number of timesteps now stored for that day.
+    Returns the number of timesteps now stored for that day. ``group`` must be
+    the subgroup the ingest writes into; see :func:`committed_times`.
 
     Raises:
         NothingCommitted: when the day is still absent from the store.
     """
-    covered, _ = day_coverage(repo, date, branch=branch)
+    covered, _ = day_coverage(repo, date, branch=branch, group=group)
     if covered == 0:
         raise NothingCommitted(
             f"{what}: the ingest of {date.isoformat()} committed no timesteps. The "

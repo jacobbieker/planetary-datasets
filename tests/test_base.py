@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import inspect
 import pathlib
 
 import numpy as np
@@ -179,3 +181,50 @@ def test_a_scalar_append_coordinate_is_accepted(local_config):
 def test_abstract_methods_must_be_implemented():
     with pytest.raises(TypeError):
         BaseProvider()
+
+
+def _provider_subclasses() -> list[type[BaseProvider]]:
+    """Every BaseProvider subclass importing the providers package brings in."""
+    import importlib
+    import pkgutil
+
+    import planetary_datasets.providers as providers_pkg
+
+    for info in pkgutil.walk_packages(providers_pkg.__path__, f"{providers_pkg.__name__}."):
+        if info.name.rsplit(".", 1)[-1].startswith("_"):
+            continue
+        # A provider whose optional dependency is absent is covered by other tests.
+        with contextlib.suppress(Exception):
+            importlib.import_module(info.name)
+
+    seen: list[type[BaseProvider]] = []
+    stack = [BaseProvider]
+    while stack:
+        for sub in stack.pop().__subclasses__():
+            if sub not in seen:
+                seen.append(sub)
+                stack.append(sub)
+    return seen
+
+
+def test_every_run_partition_override_accepts_check_present():
+    """Regression: three providers overrode ``run_partition(self, it)``.
+
+    ``run_range`` calls ``self.run_partition(it, check_present=False)``, so an override
+    without the parameter raises TypeError on every partition — swallowed by
+    ``run_range``'s blanket handler, which for a year-long backfill logged 8,760
+    tracebacks, wrote nothing, and returned 0.
+    """
+    subclasses = _provider_subclasses()
+    assert subclasses, "found no providers; the package layout must have moved"
+
+    offenders = [
+        f"{cls.__module__}.{cls.__qualname__}"
+        for cls in subclasses
+        if (override := cls.__dict__.get("run_partition")) is not None
+        and "check_present" not in inspect.signature(override).parameters
+    ]
+
+    assert not offenders, "run_partition override(s) missing check_present:\n" + "\n".join(
+        f"  {name}" for name in sorted(offenders)
+    )

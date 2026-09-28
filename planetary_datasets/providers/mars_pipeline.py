@@ -1012,6 +1012,26 @@ class MarsPipeline:
             shutil.rmtree(stale, ignore_errors=True)
             logger.info(f"Removed stale staging directory {stale}")
 
+    def _sweep_partial_downloads(self) -> None:
+        """Remove ``<target>.tmp`` files left by a killed retrieval.
+
+        `retrieve` unlinks its own partial on every exit path, but a process that
+        is killed outright leaves one behind, and nothing else can see it: every
+        discovery and clean-up path here globs ``output_*.grib``, which does not
+        match ``output_*.grib.tmp``. A few of those (up to 75GB each) fill the
+        data array, and `_download_loop` then parks forever below
+        `min_free_bytes` because `_clean_up` has nothing it is willing to delete.
+
+        Safe only at startup, before this pipeline's download threads exist, for
+        the same reason as `_clear_staging`.
+        """
+        if not self.source_dir.exists():
+            return
+        for stale in sorted(self.source_dir.glob(f"{self.native.pattern}.tmp")):
+            size = stale.stat().st_size if stale.exists() else 0
+            stale.unlink(missing_ok=True)
+            logger.info(f"Removed partial download {stale.name} ({size / GB:.1f}GB)")
+
     def run(self) -> None:
         # Bound glibc arena growth in the workers and MIR children started
         # below; unbounded arenas inflate their RSS well past the real working
@@ -1020,6 +1040,7 @@ class MarsPipeline:
         self.source_dir.mkdir(parents=True, exist_ok=True)
         self.staging_dir.mkdir(parents=True, exist_ok=True)
         self._clear_staging()
+        self._sweep_partial_downloads()
         # The index first: `_check_stores` range-checks the times it holds, and
         # pruning it drops files that went away since the last run.
         self._load_index()

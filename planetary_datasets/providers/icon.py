@@ -41,6 +41,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable, List, Sequence
 
+import icechunk
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -48,9 +49,18 @@ from loguru import logger
 
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common.download import download_one
+from planetary_datasets.common.store import STORE_READ_ERRORS, has_committed_data
 from planetary_datasets.config import Config
 
 DWD_OPENDATA = "https://opendata.dwd.de/weather/nwp"
+
+
+class IncompleteRun(Exception):
+    """A run was only partly published when it was fetched.
+
+    Raised rather than returned so the partition fails and Dagster retries it. Returning
+    False would mark the partition green, and the run would never be revisited.
+    """
 
 # ---------------------------------------------------------------------------------------
 # Variable lists
@@ -865,6 +875,12 @@ class ICONProvider(BaseProvider):
 
     append_dim = "init_time"
 
+    #: How long after its initialisation time a run is assumed to be fully published. Used
+    #: only when the store does not exist yet, where there is no schema to check against.
+    #: DWD publishes a global run over roughly two hours; six is generous but the cost of
+    #: waiting is one retry, and the cost of not waiting is a permanently poisoned store.
+    settle_after: pd.Timedelta = pd.Timedelta(hours=6)
+
     def __init__(
         self,
         variant: str = "global",
@@ -987,6 +1003,70 @@ class ICONProvider(BaseProvider):
     def _download_dir(self, it: pd.Timestamp, temp_dir: pathlib.Path | None) -> pathlib.Path:
         base = pathlib.Path(temp_dir) if temp_dir is not None else self.config.data_dir / "icon"
         return base / self.variant / it.strftime("%Y%m%d") / it.strftime("%H")
+
+    # -- completeness ---------------------------------------------------------------
+
+    def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
+        """Write one run, refusing one that is still being published.
+
+        Nothing upstream of here notices an incomplete run. :func:`download_run` treats a
+        404 as "this file does not exist", which is normally true — :func:`build_urls`
+        enumerates far more candidates than DWD publishes — but is also exactly what a run
+        that is only half uploaded looks like. ``_open_leveled`` and ``_open_single_level``
+        then swallow their own read errors and return ``None``. The result is a dataset
+        that is merely *smaller*, with no signal that anything is wrong.
+
+        That matters because the first run written fixes the store's schema. A truncated
+        first run bakes in a short variable set and a short ``step`` axis; every later
+        complete run then fails the writer's variable check, is logged and skipped, and the
+        asset still materialises green. Raising instead lets Dagster retry the partition
+        once DWD has caught up.
+        """
+        self._require_complete(repo, processed)
+        return super().write_to_icechunk(repo, processed)
+
+    def _require_complete(self, repo: icechunk.Repository, processed: xr.Dataset) -> None:
+        """Raise :class:`IncompleteRun` when ``processed`` is short of the store's schema.
+
+        With a store to compare against, "complete" means "holds at least the variables and
+        the lead times the store already does". With no store yet there is nothing to
+        compare against, so completeness is inferred from age instead: a run older than
+        :attr:`settle_after` has certainly finished publishing.
+        """
+        init = pd.Timestamp(np.atleast_1d(processed[self.append_dim].values)[0])
+
+        if not has_committed_data(repo):
+            age = pd.Timestamp.utcnow().tz_localize(None) - init
+            if age < self.settle_after:
+                raise IncompleteRun(
+                    f"{self.name}: refusing to create {self.store_path} from run {init}, "
+                    f"only {age} old and possibly still uploading. The first run written "
+                    "fixes the store's variable set and step axis, so a truncated one would "
+                    f"lock every later run out. Retry once the run is {self.settle_after} old."
+                )
+            return
+
+        try:
+            existing = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+        except STORE_READ_ERRORS as exc:
+            raise IncompleteRun(
+                f"{self.name}: store holds data but could not be read to check run {init} "
+                f"for completeness ({type(exc).__name__}: {exc})"
+            ) from exc
+
+        missing_vars = sorted(set(existing.data_vars) - set(processed.data_vars))
+        stored_steps = existing.sizes.get("step")
+        run_steps = processed.sizes.get("step")
+        short_steps = (
+            stored_steps is not None and run_steps is not None and run_steps < stored_steps
+        )
+        if missing_vars or short_steps:
+            raise IncompleteRun(
+                f"{self.name}: run {init} is incomplete against {self.store_path} — "
+                f"{len(missing_vars)} variable(s) missing ({missing_vars[:5]}), "
+                f"{run_steps} of {stored_steps} step(s). DWD is most likely still "
+                "publishing it; retry rather than writing a short run."
+            )
 
     # -- Hugging Face ---------------------------------------------------------------
 

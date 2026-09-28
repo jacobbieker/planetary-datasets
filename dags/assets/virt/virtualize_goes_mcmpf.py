@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import datetime as dt
 import pathlib
+import re
 import sys
 
 import icechunk
@@ -61,6 +62,11 @@ from planetary_datasets.config import get_config  # noqa: E402
 
 #: Destination store, relative to the configured bucket.
 STORE_PREFIX = "bkr/geo/goes-west-mcmpif.icechunk"
+
+#: Commit message for one written day, and the pattern that reads it back. `main` resumes
+#: from the newest commit that matches, so the two have to stay in step.
+COMMIT_TEMPLATE = "Wrote {bucket} {year} day {day:03d}"
+_COMMIT_RE = re.compile(r"^Wrote (?P<bucket>\S+) (?P<year>\d{4}) day (?P<day>\d{3})$")
 
 #: The GOES-West spacecraft, in order, with the years each one covers. The years must
 #: not overlap: the store is appended along ``time`` in iteration order, so a year
@@ -171,18 +177,70 @@ def build_store(bucket: str):
     return CachingReadableStore(splitting_store, max_size=512 * 1024 * 1024)
 
 
+class StoreUnreadable(RuntimeError):
+    """The store holds commits but could not be read.
+
+    Never treated as "empty": the empty path writes without ``append_dim``, which would
+    replace the whole archive with a single day.
+    """
+
+
 def store_is_empty(repo: icechunk.Repository) -> bool:
     """True when the store has no ``time`` coordinate yet, so the next write creates it.
 
     Asked of the repository rather than tracked in a variable: this script takes days to
-    run and is restarted often, and a resumed run that believed the store was empty
-    would overwrite the whole archive with a single day.
+    run and is restarted often, and a resumed run that believed the store was empty would
+    overwrite the whole archive with a single day.
+
+    Emptiness is decided from the commit history, not from whether the read succeeded.
+    ``open_or_create`` leaves exactly one "initialized" snapshot, so anything beyond that
+    is real data. A transient S3 error while reading a fully populated store used to be
+    caught here and reported as empty, which is precisely the outcome this function exists
+    to prevent.
     """
     try:
         ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
-    except Exception:  # noqa: BLE001 - nothing committed yet
+    except Exception as exc:  # noqa: BLE001 - distinguished by the ancestry check below
+        if sum(1 for _ in repo.ancestry(branch="main")) > 1:
+            raise StoreUnreadable(
+                f"{STORE_PREFIX} holds committed data but could not be read "
+                f"({type(exc).__name__}: {exc}). Refusing to report it as empty, which "
+                "would overwrite the archive with one day."
+            ) from exc
         return True
     return "time" not in ds.coords
+
+
+def last_written(repo: icechunk.Repository) -> tuple[str, int, int] | None:
+    """The ``(bucket, year, day)`` of the last committed day, or None for an empty store.
+
+    Read back from the commit messages `virtualize_day` writes, so a restart picks up
+    where the previous run stopped. Without this, every restart re-appended the whole
+    2019-2026 archive from the beginning: icechunk only appends, so the result was a store
+    with each day present several times and a ``time`` coordinate that no longer sorts.
+    """
+    for snapshot in repo.ancestry(branch="main"):
+        match = _COMMIT_RE.match(snapshot.message)
+        if match:
+            return match["bucket"], int(match["year"]), int(match["day"])
+    return None
+
+
+def days_to_do(resume_from: tuple[str, int, int] | None) -> list[tuple[str, int, int]]:
+    """Every ``(bucket, year, day)`` still to write, in append order.
+
+    ``SOURCES`` is ordered and its years do not overlap, so "still to do" is simply
+    everything after the last committed day in that same order.
+    """
+    plan = [
+        (bucket, year, day)
+        for bucket, years in SOURCES
+        for year in years
+        for day in range(1, 367)
+    ]
+    if resume_from is None:
+        return plan
+    return plan[plan.index(resume_from) + 1 :] if resume_from in plan else plan
 
 
 def virtualize_day(
@@ -224,7 +282,8 @@ def virtualize_day(
             vds.vz.to_icechunk(session.store)
         else:
             vds.vz.to_icechunk(session.store, append_dim="time")
-        session.commit(f"Wrote {bucket} {year} day {day:03d}")
+        # `last_written` parses this message back out to resume; keep the two in step.
+        session.commit(COMMIT_TEMPLATE.format(bucket=bucket, year=year, day=day))
         # Only after the commit: a failed commit leaves the store uninitialised, and
         # flipping the flag early would make the next day append to nothing.
         first_write = False
@@ -242,12 +301,14 @@ def main() -> None:
     repo = open_repository()
     first_write = store_is_empty(repo)
 
-    for bucket, years in SOURCES:
-        for year in years:
-            for day in tqdm.tqdm(range(1, 367), total=366, desc=f"{bucket} {year}"):
-                first_write = virtualize_day(
-                    fs, repo, bucket, year, day, first_write=first_write
-                )
+    resume_from = None if first_write else last_written(repo)
+    plan = days_to_do(resume_from)
+    if resume_from is not None:
+        bucket, year, day = resume_from
+        print(f"Resuming after {bucket} {year} day {day:03d}: {len(plan)} day(s) left")
+
+    for bucket, year, day in tqdm.tqdm(plan, desc="virtualizing"):
+        first_write = virtualize_day(fs, repo, bucket, year, day, first_write=first_write)
 
 
 if __name__ == "__main__":

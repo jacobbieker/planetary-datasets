@@ -146,6 +146,7 @@ def write_to_icechunk(
     message: str | None = None,
     check_vars: bool = True,
     alignment_coords: Iterable[str] = ALIGNMENT_COORDS,
+    require_monotonic: bool = True,
 ) -> bool:
     """Write ``ds`` to ``repo``, creating the store or appending along ``append_dim``.
 
@@ -160,6 +161,10 @@ def write_to_icechunk(
         message: Commit message. A default naming the timestep is used when omitted.
         check_vars: Refuse to append when the variable set differs from the store's.
         alignment_coords: Coordinates that must match the store exactly before appending.
+        require_monotonic: Drop incoming steps that fall at or before the last stored one.
+            Icechunk only appends, so writing a late-arriving earlier timestep would leave
+            ``append_dim`` unsorted and every later ``.sel(time=slice(...))`` silently
+            wrong. The gap stays a gap, but it stays a *visible* gap.
     """
     if append_dim not in ds.coords:
         raise ValueError(f"dataset has no {append_dim!r} coordinate to append along")
@@ -204,6 +209,25 @@ def write_to_icechunk(
         )
         ds = ds.isel({append_dim: keep})
         incoming = incoming[~already]
+
+    if require_monotonic and present.size:
+        # Icechunk appends; it cannot insert. A provider that revisits a partial hour (MRMS
+        # and the UK radar composite both do, deliberately, while the upstream archive is
+        # still filling in) can hand us a timestep that sorts before what is already there.
+        # Appending it anyway leaves the coordinate unsorted, which no consumer checks for
+        # and which breaks slicing over the whole store, not just the affected hour.
+        stale = incoming <= present.max()
+        if stale.any():
+            logger.error(
+                f"{int(stale.sum())} of {incoming.size} step(s) are at or before the last "
+                f"stored {append_dim} ({present.max()}); dropping them rather than writing "
+                f"an unsorted {append_dim}. First dropped: {incoming[stale][0]}"
+            )
+            keep = np.flatnonzero(~stale)
+            if keep.size == 0:
+                return False
+            ds = ds.isel({append_dim: keep})
+            incoming = incoming[~stale]
 
     if check_vars and set(ds.data_vars) != set(existing.data_vars):
         only_new = set(ds.data_vars) - set(existing.data_vars)

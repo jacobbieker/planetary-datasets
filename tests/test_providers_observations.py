@@ -151,6 +151,41 @@ def test_frames_to_dataset_writes_declared_variables_even_when_absent():
     assert bool(np.isnan(ds["pressure"].values).all())
 
 
+def test_a_roster_with_an_unknown_position_can_still_be_appended_to(local_config):
+    """Regression: a roster with NaN positions made the store fail to match itself.
+
+    Those coords are in OBSERVATION_ALIGNMENT_COORDS and NaN != NaN, so the store failed to
+    match itself: the first partition created it, and every later one was silently skipped while
+    the Dagster asset still went green.
+    """
+    from planetary_datasets.common.store import write_to_icechunk
+    from planetary_datasets.providers.observations.base import OBSERVATION_ALIGNMENT_COORDS
+
+    stations = [
+        Station(id="AAA", latitude=1.0, longitude=2.0, elevation=3.0, name="Alpha"),
+        Station(id="NOPOS", latitude=None, longitude=None, elevation=None, name="Unknown"),
+    ]
+    repo = local_config.icechunk_repo("test/nan_roster.icechunk")
+
+    def day(date: str):
+        times = partition_time_index(pd.Timestamp(date), "D", "1h")
+        return frames_to_dataset(
+            {"AAA": pd.DataFrame({"temp": np.zeros(24)}, index=times)},
+            stations,
+            times,
+            variables=["temp"],
+        )
+
+    first = day("2026-01-01")
+    assert bool(np.isnan(first["latitude"].values[1]))
+    assert write_to_icechunk(
+        repo, first, alignment_coords=OBSERVATION_ALIGNMENT_COORDS
+    ) is True
+    assert write_to_icechunk(
+        repo, day("2026-01-02"), alignment_coords=OBSERVATION_ALIGNMENT_COORDS
+    ) is True
+
+
 def test_frames_to_dataset_infers_variables_when_not_declared():
     times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
     ds = frames_to_dataset(
@@ -981,6 +1016,41 @@ def test_long_table_to_cube_pins_the_level_axis():
     )
     # Only one level was reported; all three must still appear.
     assert list(ds["level"].values) == [100000.0, 85000.0, 50000.0]
+
+
+def test_a_row_with_no_usable_level_is_dropped_not_filed_at_the_surface():
+    """Regression: an unparseable level gives an all-NaN distance row.
+
+    ``argmin`` of that is 0, so such rows were filed at ``levels[0]`` — 100000 Pa —
+    biasing the surface level rather than being discarded.
+    """
+    from planetary_datasets.providers.observations.cds import long_table_to_cube
+
+    ds_in = _long_table().assign(z_coordinate=("index", [50000.0, np.nan, np.nan, np.nan]))
+    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
+
+    ds = long_table_to_cube(
+        ds_in, times, stations=["AAAA", "BBBB"], levels=(100000.0, 85000.0, 50000.0)
+    )
+
+    surface = ds["total_column_water_vapour"].sel(level=100000.0)
+    assert bool(np.isnan(surface.values).all()), "a NaN level must not become the surface"
+    assert float(
+        ds["total_column_water_vapour"].sel(level=50000.0, station="AAAA").isel(time=0)
+    ) == pytest.approx(10.0)
+
+
+def test_a_table_where_no_level_parses_is_reported():
+    from planetary_datasets.providers.observations.cds import (
+        NoStationDataError,
+        long_table_to_cube,
+    )
+
+    ds_in = _long_table().assign(z_coordinate=("index", [np.nan] * 4))
+    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
+
+    with pytest.raises(NoStationDataError, match="unusable"):
+        long_table_to_cube(ds_in, times, stations=["AAAA"], levels=(100000.0, 50000.0))
 
 
 def test_cds_station_axis_follows_the_store_once_one_exists(local_config):

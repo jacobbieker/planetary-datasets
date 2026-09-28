@@ -388,6 +388,7 @@ class IMERGProvider(BaseProvider):
         it: pd.Timestamp,
         cleanup: bool = True,
         allow_partial: bool = False,
+        check_present: bool = True,
     ) -> bool:
         """Process whatever is staged for ``it`` and append it to the store.
 
@@ -406,12 +407,14 @@ class IMERGProvider(BaseProvider):
                 returned, nothing is removed unless the commit succeeded.
             allow_partial: Write a day even if fewer than 48 granules are available. Only
                 for days the archive genuinely never completed.
+            check_present: Skip the "already stored?" query. :meth:`run_range` has already
+                filtered the timestamps, so repeating the lookup per day is pure waste.
 
         Raises:
             IncompleteDay: When the day is short and ``allow_partial`` is False.
         """
         day = pd.Timestamp(it).normalize()
-        if not self.missing_timesteps(pd.DatetimeIndex([day])):
+        if check_present and not self.missing_timesteps(pd.DatetimeIndex([day])):
             logger.debug(f"{self.name}: {day.date()} already in {self.store_path}, skipping")
             return False
 
@@ -442,14 +445,18 @@ class IMERGProvider(BaseProvider):
             self.cleanup_staged(day)
         return written
 
-    def run_partition(self, it: pd.Timestamp) -> bool:
+    def run_partition(self, it: pd.Timestamp, check_present: bool = True) -> bool:
         """Fetch, process and write one UTC day.
 
         Overrides the base implementation to go through :meth:`write_staged`, so a run
         from the CLI gets the same short-day guard and the same resumable staging
         directory as the Dagster chain instead of a throwaway temporary directory.
+
+        ``check_present`` has to be accepted and forwarded: :meth:`BaseProvider.run_range`
+        passes it explicitly, and an override that drops it makes every partition of a
+        backfill raise ``TypeError`` into ``run_range``'s blanket handler.
         """
-        return self.write_staged(it)
+        return self.write_staged(it, check_present=check_present)
 
     def cleanup_staged(self, it: pd.Timestamp) -> int:
         """Delete the staged granules for a day, and the sidecar XML files beside them."""

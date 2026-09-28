@@ -539,6 +539,16 @@ def finalise(ds: xr.Dataset, append_dim: str = "time", float16: bool = False) ->
 # --------------------------------------------------------------------------------------
 
 
+class IncompleteWeek(RuntimeError):
+    """Raised when only part of a weekly CAMS partition could be retrieved.
+
+    Writing a subset of the variables would either create the store with a partial schema,
+    which nothing can widen afterwards, or be silently refused by the writer's variable
+    check while the asset still reports success. Failing the partition is what makes
+    Dagster retry it.
+    """
+
+
 class _CAMSProvider(BaseProvider):
     """Shared plumbing for the ADS-backed CAMS providers."""
 
@@ -723,13 +733,34 @@ class _CAMSWeeklyProvider(_CAMSProvider):
         raise NotImplementedError
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
+        """Retrieve every variable for the week, or fail the partition.
+
+        There is one retrieval per variable and ``_retrieve`` returns None for any ADS
+        error, so a single failed request out of the 27 would otherwise leave ``process``
+        merging a subset and the writer committing it. On the week that creates the store
+        that bakes in a partial variable set and locks every complete week out afterwards;
+        on a later week the writer silently refuses it and the asset still reports success.
+        Neither is recoverable without someone noticing, so a short week fails the
+        partition. The files that did arrive stay on disk, so a retry only fetches the rest.
+        """
         stored: list[str] = []
+        missing: list[str] = []
         for variable in self.variables:
             dst = self._retrieve(self.build_request(it, variable), self.target_path(it, variable))
-            if dst is not None:
+            if dst is None:
+                missing.append(variable)
+            else:
                 stored.append(str(dst))
+
         if not stored:
             logger.warning(f"{self.name}: no files retrieved for {it}")
+            return []
+        if missing:
+            raise IncompleteWeek(
+                f"{self.name}: {len(missing)} of {len(self.variables)} variable(s) could not "
+                f"be retrieved for {it:%Y-%m-%d} ({missing[:5]}); refusing to write a "
+                "partial week."
+            )
         return stored
 
     def process(

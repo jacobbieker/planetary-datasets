@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from dags import loader as loader_module  # noqa: E402
 from dags.factory import (  # noqa: E402
+    DEFAULT_MEMORY_GB,
     MEMORY_CLASS_TAG,
     MEMORY_GB_TAG,
     concurrency_limit_for,
@@ -461,6 +462,16 @@ def test_an_asset_that_chose_its_own_key_prefix_keeps_it(tmp_path):
     assert keys == ["cmems/cmems_forecast", "ocean/cmems_analysis"]
 
 
+def _resolved(assets, jobs, schedules):
+    """Resolve the schedules ``build_memory_class_jobs`` returns.
+
+    ``build_schedule_from_partitioned_job`` hands back an unresolved definition; the cron
+    it derives from the partitioning is only known once the code location assembles it.
+    """
+    defs = dg.Definitions(assets=assets, jobs=jobs, schedules=schedules)
+    return [defs.resolve_schedule_def(s.name) for s in schedules]
+
+
 def test_jobs_are_grouped_by_memory_class():
     assets = [
         make_provider_asset(TinyProvider, name="small-one", memory_gb=2),
@@ -470,12 +481,137 @@ def test_jobs_are_grouped_by_memory_class():
 
     jobs, schedules = loader_module.build_memory_class_jobs(assets)
 
-    assert sorted(j.name for j in jobs) == ["daily_providers_small", "daily_providers_xlarge"]
-    assert all(s.cron_schedule == "0 6 * * *" for s in schedules)
-    assert all(s.default_status == dg.DefaultScheduleStatus.RUNNING for s in schedules)
+    assert len(jobs) == 2
+    classes = {j.tags[MEMORY_CLASS_TAG] for j in jobs}
+    assert classes == {"small", "xlarge"}
+    assert all(j.name.endswith(j.tags[MEMORY_CLASS_TAG]) for j in jobs)
 
-    small = next(j for j in jobs if j.name == "daily_providers_small")
-    assert small.tags[MEMORY_CLASS_TAG] == "small"
+    resolved = _resolved(assets, jobs, schedules)
+    assert all(s.cron_schedule == "0 6 * * *" for s in resolved)
+    assert all(s.execution_timezone == "UTC" for s in resolved)
+    assert all(s.default_status == dg.DefaultScheduleStatus.RUNNING for s in resolved)
+
+
+def test_job_names_are_stable_across_rebuilds():
+    """The schedule and its run history are addressed by name, so it must not move."""
+    first, _ = loader_module.build_memory_class_jobs(
+        [make_provider_asset(TinyProvider, name="tiny", memory_gb=2)]
+    )
+    second, _ = loader_module.build_memory_class_jobs(
+        [make_provider_asset(TinyProvider, name="tiny", memory_gb=2)]
+    )
+    assert [j.name for j in first] == [j.name for j in second]
+
+
+def test_an_asset_that_declares_no_memory_class_still_gets_one():
+    """Regression: the selection required a tag that no hand-rolled asset sets.
+
+    It therefore matched nothing, and the code location shipped zero jobs, zero schedules,
+    and a set of ``tag_concurrency_limits`` that applied to no run.
+    """
+
+    @dg.asset(name="hand_rolled", partitions_def=daily_partitions)
+    def hand_rolled(context):
+        return 1
+
+    jobs, schedules = loader_module.build_memory_class_jobs([hand_rolled])
+
+    assert len(jobs) == 1
+    assert jobs[0].tags[MEMORY_CLASS_TAG] == memory_class_for(DEFAULT_MEMORY_GB)
+    assert len(schedules) == 1
+
+
+def test_assets_with_different_partitionings_get_their_own_job_and_cadence():
+    """A partitioned asset job needs one partitions_def, and each wants its own cadence."""
+    hourly = dg.HourlyPartitionsDefinition(start_date="2024-01-01-00:00")
+
+    @dg.asset(name="daily_one", partitions_def=daily_partitions)
+    def daily_one(context):
+        return 1
+
+    @dg.asset(name="hourly_one", partitions_def=hourly)
+    def hourly_one(context):
+        return 1
+
+    jobs, schedules = loader_module.build_memory_class_jobs([daily_one, hourly_one])
+
+    assert len(jobs) == 2
+    crons = sorted(s.cron_schedule for s in _resolved([daily_one, hourly_one], jobs, schedules))
+    # Not two daily ticks: the hourly asset would only ever get one partition a day.
+    assert crons == ["0 * * * *", "0 6 * * *"]
+
+
+def test_a_schedule_tick_carries_a_partition_key():
+    """Regression: the schedule emitted ``RunRequest(partition_key=None)``.
+
+    A plain ``ScheduleDefinition`` over a partitioned job does that, and executing a
+    partitioned job without a partition key fails outright, so every tick was a failed run.
+    """
+
+    @dg.asset(name="tick_me", partitions_def=daily_partitions)
+    def tick_me(context):
+        return 1
+
+    _, (schedule,) = loader_module.build_memory_class_jobs([tick_me])
+    defs = dg.Definitions(assets=[tick_me], schedules=[schedule])
+    resolved = defs.resolve_schedule_def(schedule.name)
+
+    context = dg.build_schedule_context(scheduled_execution_time=pd.Timestamp("2026-06-02T06:00"))
+    run_requests = list(resolved.evaluate_tick(context).run_requests or [])
+
+    assert run_requests, "the schedule produced no run request"
+    assert all(request.partition_key for request in run_requests)
+
+
+def test_an_asset_with_its_own_automation_condition_is_not_also_scheduled():
+    """Both would fire, launching every partition twice."""
+
+    @dg.asset(
+        name="self_driving",
+        partitions_def=daily_partitions,
+        automation_condition=dg.AutomationCondition.on_cron("0 7 * * *"),
+    )
+    def self_driving(context):
+        return 1
+
+    jobs, schedules = loader_module.build_memory_class_jobs([self_driving])
+
+    assert jobs == []
+    assert schedules == []
+
+
+def test_a_spec_only_asset_does_not_take_down_the_code_location(tmp_path):
+    """Regression: ``node_def`` raises CheckError, not AttributeError.
+
+    A spec-only ``AssetsDefinition`` signals "no op" that way, the ``getattr`` default
+    never caught it, and the access sat outside the per-module try.
+    """
+    package = _write_package(
+        tmp_path,
+        "pd_spec_only_pkg",
+        {
+            "external": (
+                "import dagster as dg\n\n"
+                "upstream = dg.AssetsDefinition(specs=[dg.AssetSpec('upstream_thing')])\n"
+            ),
+            "normal": "import dagster as dg\n\n@dg.asset\ndef normal_asset():\n    return 1\n",
+        },
+    )
+    modules, _ = loader_module.discover_asset_modules(package)
+
+    assets, failures = loader_module.load_assets(modules)
+
+    assert failures == {}
+    keys = sorted(k.to_user_string() for a in assets for k in a.keys)
+    assert keys == ["external/upstream_thing", "normal/normal_asset"]
+
+
+def test_skip_prefixes_match_at_package_boundaries():
+    """`dags.assets.virtual_goes` merely shares a prefix with the skipped `virt` package."""
+    assert loader_module._is_skipped("dags.assets.virt.virtualize_goes_mcmpf")
+    assert loader_module._is_skipped("dags.assets.virt")
+    assert not loader_module._is_skipped("dags.assets.virtual_goes")
+    assert not loader_module._is_skipped("dags.assets.virtual_gk2a")
 
 
 def test_executor_parallelism_is_bounded_by_the_memory_budget():

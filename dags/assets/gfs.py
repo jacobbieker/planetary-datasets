@@ -30,10 +30,13 @@ from planetary_datasets.providers.gfs import GFSProvider
 # would only ever fail. Holding the window back two days keeps the automation honest.
 GDEX_LAG_PARTITIONS = -8
 
+# ``|`` is Dagster's reserved multi-partition key delimiter and must not appear in an
+# ordinary partition key; every other cycle-partitioned asset here uses ``-``. See the
+# note in dags/assets/meps.py.
 gfs_partitions_def = dg.TimeWindowPartitionsDefinition(
     start=dt.datetime(2016, 1, 1, 0, 0, tzinfo=dt.timezone.utc),
     cron_schedule="0 0,6,12,18 * * *",
-    fmt="%Y-%m-%d|%H:%M",
+    fmt="%Y-%m-%d-%H:%M",
     end_offset=GDEX_LAG_PARTITIONS,
 )
 

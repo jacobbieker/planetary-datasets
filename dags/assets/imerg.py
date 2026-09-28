@@ -114,7 +114,14 @@ def build_imerg_assets(product: IMERGProduct) -> list[dg.AssetsDefinition]:
         name=f"imerg-{code}-publish",
         description=f"Confirm the published location of the IMERG {code} store",
         deps=[zarr_asset],
-        automation_condition=dg.AutomationCondition.eager(),
+        # Unpartitioned, over a parent with ~9,400 daily partitions. Plain ``eager()``
+        # includes ``~any_deps_missing()``, which for such a parent means "every partition
+        # back to 2000-06-01 has been materialised" — never true while a backfill is
+        # outstanding, so the asset never fired at all. Dropping that one clause leaves the
+        # rest of eager: run once the zarr asset updates, and not while it is in progress.
+        automation_condition=dg.AutomationCondition.eager().without(
+            ~dg.AutomationCondition.any_deps_missing()
+        ),
     )
     def publish_asset(context) -> dg.MaterializeResult:
         info = IMERGProvider(product).publish()

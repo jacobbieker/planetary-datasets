@@ -164,9 +164,13 @@ class EEPSProvider(BaseProvider):
             logger.debug(f"{self.name}: no EEPS file for {it} under {self.source_dir}")
         return matches
 
-    def run_partition(self, it: pd.Timestamp) -> bool:
-        """Run one timestep, accepting a timezone-aware partition start from Dagster."""
-        return super().run_partition(naive_utc(it))
+    def run_partition(self, it: pd.Timestamp, check_present: bool = True) -> bool:
+        """Run one timestep, accepting a timezone-aware partition start from Dagster.
+
+        ``check_present`` is forwarded rather than dropped; :meth:`BaseProvider.run_range`
+        passes it explicitly, so an override without it breaks every backfill.
+        """
+        return super().run_partition(naive_utc(it), check_present=check_present)
 
     def process(
         self,

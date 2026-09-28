@@ -71,9 +71,14 @@ class AromeLayout:
         step_tokens: Step part of the filename, one entry per file per paquet. Either one
             file per hourly step (``000H``…) or a single file covering a range (``00H06H``).
         download_subdir: Directory under ``data_dir`` that GRIB files are kept in.
-        require_all_steps: Treat a missing file as fatal for the init time. False for the
-            overseas domains, where some paquets genuinely have no analysis step (IP4 is
-            published from 001H onwards) and the merge fills the gap.
+        optional_steps: ``(paquet, step_token)`` pairs that are allowed to be absent. Every
+            other missing file is fatal for the init time. This is deliberately a list of
+            named exceptions rather than a "tolerate anything missing" flag: the only
+            genuine gap is a paquet the archive does not publish an analysis step for (IP4
+            starts at 001H overseas), which the merge fills. Accepting *any* subset instead
+            meant an init time caught mid-publication was written with two valid times out
+            of seven, and ``run_partition``'s "is this init time stored?" check then called
+            the whole thing done, leaving a permanent silent hole at the later steps.
     """
 
     model_path: str
@@ -82,7 +87,11 @@ class AromeLayout:
     paquets: tuple[str, ...]
     step_tokens: tuple[str, ...]
     download_subdir: str
-    require_all_steps: bool = True
+    optional_steps: tuple[tuple[str, str], ...] = ()
+
+    def step_is_optional(self, paquet: str, step_token: str) -> bool:
+        """Whether this paquet is known not to publish this step."""
+        return (paquet, step_token) in self.optional_steps
 
     def filename(self, paquet: str, step_token: str, init_time: pd.Timestamp) -> str:
         """Local filename for one paquet at one step."""
@@ -139,9 +148,10 @@ class AromeProvider(BaseProvider):
                     retries=self.download_retries,
                 )
                 if path is None:
-                    if layout.require_all_steps:
+                    if not layout.step_is_optional(paquet, step_token):
                         logger.warning(f"{self.name}: {dest.name} unavailable, skipping {it}")
                         return []
+                    logger.debug(f"{self.name}: {paquet} has no {step_token}, as expected")
                     continue
                 found.append(str(path))
             if not found:
@@ -222,7 +232,9 @@ class AromeOverseasProvider(AromeProvider):
             paquets=("HP1", "HP2", "IP1", "IP2", "IP3", "IP4", "IP5", "SP1", "SP2"),
             step_tokens=tuple(f"{step:03d}H" for step in range(7)),
             download_subdir="meteofrance",
-            require_all_steps=False,
+            # IP4 is published from 001H onwards overseas; there is no analysis step to
+            # download. Nothing else may be missing.
+            optional_steps=(("IP4", "000H"),),
         )
 
     def process(

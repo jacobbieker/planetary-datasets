@@ -76,6 +76,62 @@ class TestCoordsMatch:
         b = xr.Dataset({"v": ("latitude", np.arange(2))}, coords={"latitude": [1, 2]})
         assert ds_helpers.coords_match(a, b, ("latitude",)) == (False, "latitude")
 
+    def test_a_nan_station_position_still_matches_itself(self):
+        """Regression: a NaN coordinate made the store fail to match itself.
+
+        Station rosters carry NaN lat/lon for stations with no known position (ISD leaves
+        LAT/LON blank for hundreds of them), and NaN != NaN, so every append after the
+        first was silently skipped while the Dagster asset still went green.
+        """
+        roster = xr.Dataset(
+            {"temperature": ("station", np.zeros(3))},
+            coords={
+                "station": np.array(["a", "b", "c"], dtype=object),
+                "latitude": ("station", np.array([51.5, np.nan, -33.9])),
+            },
+        )
+        assert ds_helpers.coords_match(roster, roster, ("latitude",)) == (True, None)
+
+    def test_a_moved_station_is_still_reported(self):
+        """The NaN tolerance must not make the guard blind to a real change."""
+        a = xr.Dataset(
+            {"v": ("station", np.zeros(2))},
+            coords={"latitude": ("station", np.array([51.5, np.nan]))},
+        )
+        b = xr.Dataset(
+            {"v": ("station", np.zeros(2))},
+            coords={"latitude": ("station", np.array([52.5, np.nan]))},
+        )
+        assert ds_helpers.coords_match(a, b, ("latitude",)) == (False, "latitude")
+
+    def test_non_float_coords_are_still_compared(self):
+        """equal_nan is only valid for floats; a string station axis must not raise."""
+        a = xr.Dataset(coords={"station": np.array(["a", "b"], dtype=object)})
+        b = xr.Dataset(coords={"station": np.array(["a", "c"], dtype=object)})
+        assert ds_helpers.coords_match(a, a, ("station",)) == (True, None)
+        assert ds_helpers.coords_match(a, b, ("station",)) == (False, "station")
+
+
+class TestRenameVarsByLongName:
+    def test_variables_are_renamed_to_their_long_name(self):
+        ds = xr.Dataset({"t2m": ("x", np.zeros(2))})
+        ds["t2m"].attrs["long_name"] = "2 metre temperature"
+        out = ds_helpers.rename_vars_by_long_name(ds, suffix="_at_surface")
+        assert list(out.data_vars) == ["2_metre_temperature_at_surface"]
+
+    def test_a_long_name_that_collides_with_another_variables_name_does_not_raise(self):
+        """Regression: the fallback name could collide with an already-renamed variable.
+
+        Two variables then pointed at one name, and ``ds.rename`` rejects that outright.
+        """
+        ds = xr.Dataset({"t": ("x", np.zeros(2)), "temperature": ("x", np.zeros(2))})
+        ds["t"].attrs["long_name"] = "Temperature"
+
+        out = ds_helpers.rename_vars_by_long_name(ds)
+
+        assert len(out.data_vars) == 2
+        assert "temperature" in out.data_vars
+
 
 class TestDownloadOne:
     def test_file_is_downloaded(self, tmp_path):
@@ -218,6 +274,58 @@ class TestStoreRoundTrip:
         later = sample_dataset.assign_coords(time=pd.DatetimeIndex(["2026-01-01T01:00"]))
         assert store_helpers.write_to_icechunk(repo, later) is True
         assert store_helpers.existing_times(repo).size == 2
+
+    def test_a_step_older_than_the_store_is_not_appended(self, local_config, sample_dataset):
+        """Regression: a late-arriving earlier timestep was appended after the later ones.
+
+        Icechunk only appends, so the result was an unsorted `time` and every
+        `.sel(time=slice(...))` over the whole store silently wrong.
+        """
+        repo = local_config.icechunk_repo("test/monotonic.icechunk")
+        store_helpers.write_to_icechunk(repo, sample_dataset)
+        later = sample_dataset.assign_coords(time=pd.DatetimeIndex(["2026-01-01T02:00"]))
+        store_helpers.write_to_icechunk(repo, later)
+
+        stale = sample_dataset.assign_coords(time=pd.DatetimeIndex(["2026-01-01T01:00"]))
+        assert store_helpers.write_to_icechunk(repo, stale) is False
+
+        times = pd.DatetimeIndex(store_helpers.existing_times(repo))
+        assert list(times) == list(pd.DatetimeIndex(["2026-01-01T00:00", "2026-01-01T02:00"]))
+        assert times.is_monotonic_increasing
+
+    def test_a_batch_straddling_the_store_end_keeps_only_the_new_steps(
+        self, local_config, sample_dataset
+    ):
+        repo = local_config.icechunk_repo("test/monotonic_batch.icechunk")
+        store_helpers.write_to_icechunk(repo, sample_dataset)
+        later = sample_dataset.assign_coords(time=pd.DatetimeIndex(["2026-01-01T03:00"]))
+        store_helpers.write_to_icechunk(repo, later)
+
+        batch = xr.concat(
+            [
+                sample_dataset.assign_coords(time=pd.DatetimeIndex([stamp]))
+                for stamp in ("2026-01-01T02:00", "2026-01-01T04:00")
+            ],
+            dim="time",
+        )
+        assert store_helpers.write_to_icechunk(repo, batch) is True
+
+        times = pd.DatetimeIndex(store_helpers.existing_times(repo))
+        assert times.is_monotonic_increasing
+        assert pd.Timestamp("2026-01-01T02:00") not in times
+        assert pd.Timestamp("2026-01-01T04:00") in times
+
+    def test_require_monotonic_can_be_turned_off(self, local_config, sample_dataset):
+        repo = local_config.icechunk_repo("test/unsorted.icechunk")
+        store_helpers.write_to_icechunk(repo, sample_dataset)
+        later = sample_dataset.assign_coords(time=pd.DatetimeIndex(["2026-01-01T02:00"]))
+        store_helpers.write_to_icechunk(repo, later)
+
+        stale = sample_dataset.assign_coords(time=pd.DatetimeIndex(["2026-01-01T01:00"]))
+        assert (
+            store_helpers.write_to_icechunk(repo, stale, require_monotonic=False) is True
+        )
+        assert store_helpers.existing_times(repo).size == 3
 
     def test_mismatched_variables_are_refused(self, local_config, sample_dataset):
         repo = local_config.icechunk_repo("test/vars.icechunk")

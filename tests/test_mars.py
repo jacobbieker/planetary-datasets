@@ -185,6 +185,68 @@ def test_mars_service_passes_the_configured_credentials(tmp_path, monkeypatch):
     }
 
 
+# -- partial retrievals ------------------------------------------------
+
+
+def test_a_failed_retrieval_leaves_no_partial_file(tmp_path, monkeypatch):
+    """Regression: the .tmp orphan was invisible to every cleanup path.
+
+    A few of those (up to 75GB each) filled the data array, and the free-space check then parked
+    downloads forever with nothing it could delete.
+    """
+
+    class FailingService:
+        def execute(self, request, target):
+            pathlib.Path(target).write_bytes(b"half a grib")
+            raise RuntimeError("MARS gave up")
+
+    monkeypatch.setattr(mars, "mars_service", FailingService)
+    target = tmp_path / "output_20240101_20240103.grib"
+
+    with pytest.raises(RuntimeError, match="MARS gave up"):
+        mars.retrieve_mars({"class": "od"}, target)
+
+    assert not target.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_interrupted_retrieval_leaves_no_partial_file(tmp_path, monkeypatch):
+    """A KeyboardInterrupt is the likeliest way this leaks, and it is not an Exception.
+
+    Nothing else catches it part way through a multi-hour retrieval.
+    """
+
+    class InterruptedService:
+        def execute(self, request, target):
+            pathlib.Path(target).write_bytes(b"half a grib")
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(mars, "mars_service", InterruptedService)
+    target = tmp_path / "output_20240101_20240103.grib"
+
+    with pytest.raises(KeyboardInterrupt):
+        mars.retrieve_mars({"class": "od"}, target)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_pipeline_sweeps_partial_downloads_left_by_a_killed_run(tmp_path):
+    """`retrieve` cleans up after itself on every exit path; a killed process cannot."""
+    pipeline = mp.MarsPipeline.__new__(mp.MarsPipeline)
+    pipeline.source_dir = tmp_path
+    pipeline.native = type("Native", (), {"pattern": "output_*.grib"})()
+
+    orphan = tmp_path / "output_20240101_20240103.grib.tmp"
+    orphan.write_bytes(b"partial")
+    keep = tmp_path / "output_20240104_20240106.grib"
+    keep.write_bytes(b"complete")
+
+    pipeline._sweep_partial_downloads()
+
+    assert not orphan.exists()
+    assert keep.exists()
+
+
 # -- retrieval planning ------------------------------------------------
 
 

@@ -116,7 +116,7 @@ def test_check_stores_does_not_create_the_store_it_checks(bare_config):
 # =============================================================================
 # Append-order and commit guards
 # =============================================================================
-def _write_days(repo, days: list[str]) -> None:
+def _write_days(repo, days: list[str], group: str | None = None) -> None:
     """Commit one timestep per named day into an empty virtual-reference store."""
     import numpy as np
     import xarray as xr
@@ -127,7 +127,7 @@ def _write_days(repo, days: list[str]) -> None:
         coords={"t": np.array(days, dtype="datetime64[ns]")},
     )
     session = repo.writable_session("main")
-    to_icechunk(ds, session)
+    to_icechunk(ds, session, group=group)
     session.commit("test data")
 
 
@@ -180,6 +180,55 @@ def test_require_committed_raises_when_the_day_is_absent(bare_config):
         virtual_repo.require_committed(repo, dt.date(2026, 1, 6), "test")
 
 
+def test_the_guards_read_the_subgroup_the_ingest_writes_to(bare_config):
+    """Regression: the ingest wrote into a subgroup while the guards read the root.
+
+    A successful ingest therefore raised NothingCommitted, and a re-run found nothing to skip.
+    """
+    repo = virtual_repo.open_virtual_repo(
+        "bkr/geo/grouped.icechunk",
+        virtual_buckets=gk2a_ami_fd.BUCKET,
+        config=bare_config,
+    )
+    group = f"{gk2a_ami_fd.PRODUCT_LABEL}/vi006"
+    _write_days(repo, ["2026-01-05T00:00"], group=group)
+
+    # Reading the root reports the day as absent, which is what used to happen.
+    assert virtual_repo.day_coverage(repo, dt.date(2026, 1, 5)) == (0, None)
+
+    assert virtual_repo.require_committed(repo, dt.date(2026, 1, 5), "t", group=group) == 1
+    assert virtual_repo.guard_append_order(repo, dt.date(2026, 1, 5), "t", group=group) == 1
+
+
+def test_gk2a_ingest_day_uses_one_group_for_the_write_and_the_guards(monkeypatch):
+    """The group resolved for the write must be the one the guards are handed."""
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        virtual_repo, "guard_append_order",
+        lambda repo, date, what, **kw: seen.setdefault("guard", kw.get("group")) and 0 or 0,
+    )
+    monkeypatch.setattr(
+        gk2a_ami_fd, "list_day_files", lambda *a, **k: ["s3://bucket/one.nc"]
+    )
+    monkeypatch.setattr(gk2a_ami_fd, "_store", lambda: None)
+    monkeypatch.setattr(
+        gk2a_ami_fd, "ingest_all_days",
+        lambda repo, band, **kw: seen.__setitem__("write", kw.get("group")),
+    )
+    monkeypatch.setattr(
+        virtual_repo, "require_committed",
+        lambda repo, date, what, **kw: seen.__setitem__("committed", kw.get("group")) or 1,
+    )
+
+    gk2a_ami_fd.ingest_day(dt.date(2026, 1, 5), "vi006", repo=object())
+
+    expected = f"{gk2a_ami_fd.PRODUCT_LABEL}/{gk2a_ami_fd._band_label('vi006')}"
+    assert seen["guard"] == expected
+    assert seen["write"] == expected
+    assert seen["committed"] == expected
+
+
 # =============================================================================
 # Archive geometry
 # =============================================================================
@@ -205,6 +254,77 @@ def test_himawari_tiles_divide_the_grid_exactly():
         assert himawari_isatss.tile_size(band) * himawari_isatss.TILE_GRID == (
             himawari_isatss.grid_size(band)
         )
+
+
+def _isatss_url(slot: str, tile: int) -> str:
+    return f"s3://bucket/OR_HFD-020-B12-M1C13-T{tile:03d}_GH9_s{slot}_e0_c0.nc"
+
+
+def test_himawari_slots_are_grouped_in_time_order():
+    urls = [_isatss_url("20260010010000", t) for t in (3, 1, 2)]
+    urls += [_isatss_url("20260010000000", t) for t in (1, 2)]
+
+    slots = himawari_isatss.group_by_slot(urls)
+
+    assert [len(s) for s in slots] == [2, 3]
+    assert "s20260010000000" in slots[0][0]
+
+
+def test_a_redelivered_himawari_tile_does_not_cost_the_whole_scene():
+    """Regression: the lister did not dedupe the way the GOES and GK-2A ones do.
+
+    A tile delivered twice reached the mosaic as an 89th entry claiming an occupied grid
+    cell, and the whole scene was discarded over a duplicate carrying the same data.
+    """
+    urls = [_isatss_url("20260010000000", t) for t in (1, 2, 3)]
+    urls.append(_isatss_url("20260010000000", 2))
+
+    (slot,) = himawari_isatss.group_by_slot(urls)
+
+    assert len(slot) == 3
+    assert len(set(slot)) == 3
+
+
+def test_a_batch_with_a_failed_scene_is_refused(monkeypatch):
+    """Regression: the failed scene was logged and dropped and the day committed as complete.
+
+    The store only appends along `t`, so the gap could never be filled.
+    """
+    urls = [_isatss_url(slot, 1) for slot in ("20260010000000", "20260010010000")]
+
+    def stitch(slot_urls, **kwargs):
+        if "s20260010010000" in slot_urls[0]:
+            raise ValueError("Expected 88 tiles for a full scene, got 40")
+        return object()
+
+    monkeypatch.setattr(himawari_isatss, "stitch_slot", stitch)
+
+    with pytest.raises(himawari_isatss.IncompleteBatch, match="1 of 2 scene"):
+        himawari_isatss.build_batch(urls, registry=None, parser=object())
+
+
+def test_a_batch_with_a_failed_scene_can_be_forced(monkeypatch):
+    """For a day the archive genuinely never published in full."""
+    urls = [_isatss_url(slot, 1) for slot in ("20260010000000", "20260010010000")]
+    concatenated = []
+
+    def stitch(slot_urls, **kwargs):
+        if "s20260010010000" in slot_urls[0]:
+            raise ValueError("never published")
+        return "scene"
+
+    monkeypatch.setattr(himawari_isatss, "stitch_slot", stitch)
+    monkeypatch.setattr(
+        himawari_isatss.xr, "concat", lambda scenes, **kw: concatenated.append(scenes) or "out"
+    )
+
+    assert (
+        himawari_isatss.build_batch(
+            urls, registry=None, parser=object(), allow_missing_scenes=True
+        )
+        == "out"
+    )
+    assert concatenated == [["scene"]]
 
 
 # =============================================================================

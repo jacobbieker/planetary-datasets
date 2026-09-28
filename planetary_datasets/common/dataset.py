@@ -97,11 +97,35 @@ def rename_vars_by_long_name(ds: xr.Dataset, suffix: str = "") -> xr.Dataset:
             # Renaming both to it would raise, so keep the original name for the later one.
             logger.debug(f"long_name {target!r} already used, keeping {var!r} unchanged")
             target = str(var)
-            if target in taken:
-                continue
+        # Falling back to the original name is not always enough: an earlier variable may
+        # already have been renamed onto exactly this variable's name, and `ds.rename`
+        # rejects the resulting collision outright. Disambiguate rather than leaving two
+        # variables pointed at one name.
+        if target in taken:
+            base = target
+            n = 2
+            while target in taken:
+                target = f"{base}_{n}"
+                n += 1
+            logger.debug(f"{base!r} is taken as well, renaming {var!r} to {target!r}")
         taken.add(target)
         renames[str(var)] = target
     return ds.rename(renames)
+
+
+def _values_equal(x: np.ndarray, y: np.ndarray) -> bool:
+    """Elementwise equality that treats NaN as equal to NaN.
+
+    Station rosters carry NaN latitude/longitude for entries whose position the upstream
+    metadata does not give (ISD's ``isd-history.csv`` leaves LAT/LON blank for hundreds of
+    stations). Plain ``array_equal`` reports such a coordinate as different from itself, so
+    the alignment guard would reject every append after the store was created.
+    """
+    if x.shape != y.shape:
+        return False
+    if np.issubdtype(x.dtype, np.inexact) and np.issubdtype(y.dtype, np.inexact):
+        return bool(np.array_equal(x, y, equal_nan=True))
+    return bool(np.array_equal(x, y))
 
 
 def coords_match(a: xr.Dataset, b: xr.Dataset, coords: tuple[str, ...]) -> tuple[bool, str | None]:
@@ -114,6 +138,6 @@ def coords_match(a: xr.Dataset, b: xr.Dataset, coords: tuple[str, ...]) -> tuple
         # Coords, not dims: geostationary lat/lon are 2-D non-dimension coordinates, and
         # keying on dims meant the guard never fired for them.
         if coord in a.coords and coord in b.coords:
-            if a[coord].shape != b[coord].shape or not np.array_equal(a[coord].values, b[coord].values):
+            if not _values_equal(a[coord].values, b[coord].values):
                 return False, coord
     return True, None

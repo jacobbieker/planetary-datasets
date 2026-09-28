@@ -92,10 +92,20 @@ def largest_chunk_gb(ds) -> float:
     chunk of its whole size. Skipping those would let a dataset mixing one small chunked
     variable with a large in-memory one be sized at nearly zero.
 
+    Coordinates count too, not just ``data_vars``. The geostationary datasets this repo
+    handles carry 2-D ``latitude``/``longitude`` coordinate arrays — 21696x21696 float64 is
+    3.8 GB each — which are eagerly loaded and dwarf any single data chunk. Sizing from
+    ``data_vars`` alone made ``estimate_peak_gb`` return a few hundred MB for a write that
+    needs tens of GB, which is exactly the case ``require_dataset_fits`` exists to refuse.
+
     Returns 0.0 for an empty dataset.
     """
     largest = 0
-    for var in getattr(ds, "data_vars", {}).values():
+    variables = {
+        **dict(getattr(ds, "coords", {}) or {}),
+        **dict(getattr(ds, "data_vars", {}) or {}),
+    }
+    for var in variables.values():
         itemsize = getattr(getattr(var, "dtype", None), "itemsize", 0)
         chunksizes = getattr(var, "chunksizes", None)
         if not chunksizes:

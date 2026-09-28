@@ -313,6 +313,34 @@ def test_weekly_request_dates_do_not_overlap_the_next_partition():
     )
 
 
+def test_a_week_missing_a_variable_fails_rather_than_writing_a_subset(local_config, tmp_path):
+    """Regression: one failed ADS request was enough to write a partial week.
+
+    On the week that creates the store that bakes in a partial variable set and locks every
+    complete week out afterwards; on a later week the write is silently refused and the asset
+    still reports success. Neither is visible without someone reading the logs.
+    """
+    provider = cams.CAMSGlobalAODProvider(
+        config=local_config,
+        archive_dir=tmp_path / "archive",
+        variables=["dust", "sea_salt"],
+    )
+    provider._retrieve = lambda request, dst: None if "sea_salt" in request["variable"] else dst
+
+    with pytest.raises(cams.IncompleteWeek, match="1 of 2 variable"):
+        provider.fetch(pd.Timestamp("2024-03-04"))
+
+
+def test_a_week_with_nothing_at_all_is_a_skip_not_a_failure(local_config, tmp_path):
+    """Nothing published is "no work to do"; half published is an error."""
+    provider = cams.CAMSGlobalAODProvider(
+        config=local_config, archive_dir=tmp_path / "archive", variables=["dust"]
+    )
+    provider._retrieve = lambda request, dst: None
+
+    assert provider.fetch(pd.Timestamp("2024-03-04")) == []
+
+
 def test_archive_dir_defaults_under_the_data_dir(local_config):
     provider = cams.CAMSGlobalCompositionProvider(config=local_config)
     assert provider.archive_dir == local_config.data_dir / "cams" / "composition"

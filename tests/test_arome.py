@@ -38,8 +38,14 @@ def test_overseas_filenames_and_urls_match_the_archive():
         "arome-om-INDIEN__0025__HP1__000H__2026-04-15T12:00:00Z.grib2"
     )
     assert layout.step_tokens == ("000H", "001H", "002H", "003H", "004H", "005H", "006H")
-    # A missing analysis step is normal overseas (IP4 starts at 001H).
-    assert layout.require_all_steps is False
+    # A missing analysis step is normal overseas, but only for IP4, which starts at 001H.
+    assert layout.optional_steps == (("IP4", "000H"),)
+    assert layout.step_is_optional("IP4", "000H")
+    # Regression: a blanket "any subset will do" flag let an init time caught part way
+    # through publication be written with two of seven valid times, and the
+    # already-stored check then called that init time done forever.
+    assert not layout.step_is_optional("IP4", "003H")
+    assert not layout.step_is_optional("SP1", "000H")
 
 
 def test_france_filenames_and_urls_match_the_archive():
@@ -51,7 +57,7 @@ def test_france_filenames_and_urls_match_the_archive():
         "https://files.data.gouv.fr/meteofrance-pnt/pnt/2026-04-15T12:00:00Z/"
         "arome/0025/HP1/arome__0025__HP1__00H06H__2026-04-15T12:00:00Z.grib2"
     )
-    assert layout.require_all_steps is True
+    assert layout.optional_steps == ()
 
 
 def test_france_hd_filenames_and_urls_match_the_archive():
@@ -293,6 +299,34 @@ def test_overseas_fetch_gives_up_when_a_paquet_is_missing_entirely(
     def _fake_download(url, dest, **kwargs):
         dest = pathlib.Path(dest)
         if "HP2__" in dest.name:
+            return None
+        dest.write_bytes(b"GRIB")
+        return dest
+
+    monkeypatch.setattr(arome, "download_one", _fake_download)
+
+    assert provider.fetch(INIT_TIME) == []
+
+
+def test_overseas_fetch_gives_up_on_an_init_time_still_being_published(
+    local_config, tmp_path, monkeypatch
+):
+    """Regression: "any subset will do" accepted a half-published init time.
+
+    `process` merged it with join="outer", `_keep_hours` yielded two valid times instead of
+    seven, and `run_partition`'s "is this init time stored?" check then called the whole thing
+    done — a permanent silent hole at the later steps.
+    """
+    config = dataclasses.replace(local_config, data_dir=tmp_path)
+    provider = AromeOverseasProvider(region="INDIEN", config=config)
+
+    published = ("000H", "001H")
+
+    def _fake_download(url, dest, **kwargs):
+        dest = pathlib.Path(dest)
+        if not any(f"__{step}__" in dest.name for step in published):
+            return None
+        if "IP4__000H" in dest.name:
             return None
         dest.write_bytes(b"GRIB")
         return dest

@@ -142,6 +142,14 @@ _FILENAME_RE = re.compile(
 RadFValidationError = common.RadFValidationError
 
 
+class IncompleteBatch(RuntimeError):
+    """Raised when a batch could not be stitched in full.
+
+    Committing what did stitch would mark the day done with holes in it, and the store
+    only appends along ``t``, so the missing timesteps could never be filled in.
+    """
+
+
 def grid_size(band: str) -> int:
     """Return the y=x pixel count of the full product for a band."""
     return _RESOLUTION_GRID[BAND_RESOLUTION[band.upper()]]
@@ -176,12 +184,28 @@ def _slot_key(url: str) -> str:
     return m.group("start")
 
 
+def _tile_key(url: str) -> tuple[str, str]:
+    """The ``(slot, tile)`` a URL belongs to: its identity on the scene grid."""
+    m = _FILENAME_RE.match(_filename(url))
+    if m is None:
+        raise ValueError(f"Unexpected ISatSS filename: {_filename(url)!r}")
+    return m.group("start"), m.group("tile")
+
+
 def group_by_slot(urls: Iterable[str]) -> list[list[str]]:
-    """Group a flat URL list into per-timestep tile sets, in time order."""
-    slots: dict[str, list[str]] = {}
+    """Group a flat URL list into per-timestep tile sets, in time order.
+
+    Deduplicated by ``(slot, tile)``, the way the GOES and GK-2A listers dedupe by scan
+    slot. A re-delivered tile shows up in the listing twice; without this the slot reaches
+    :func:`_mosaic_from_tiles` with 89 entries, two of them claiming the same grid cell,
+    and the whole scene is discarded over a duplicate carrying the same data.
+    """
+    slots: dict[str, dict[str, str]] = {}
     for u in urls:
-        slots.setdefault(_slot_key(u), []).append(u)
-    return [sorted(slots[k]) for k in sorted(slots)]
+        slot, tile = _tile_key(u)
+        # First wins, matching the sibling listers; the result is sorted either way.
+        slots.setdefault(slot, {}).setdefault(tile, u)
+    return [sorted(slots[k].values()) for k in sorted(slots)]
 
 
 # =============================================================================
@@ -376,12 +400,25 @@ def build_batch(
     preprocess_fn: Any = None,
     loadable_variables: Iterable[str] = DEFAULT_LOADABLE_VARIABLES,
     max_workers: int = TILE_THREADS,
+    allow_missing_scenes: bool = False,
 ) -> xr.Dataset:
     """Stitch every timestep in a batch and concatenate them along `t`.
 
     Signature matches the `open_batch_fn` hook in goes_radf_common, which
     calls this instead of open_virtual_mfdataset for instruments whose
     timestep spans many files.
+
+    A scene that fails to stitch fails the batch. Dropping it and committing
+    the rest looks like resilience and is not: the store is append-only along
+    `t`, `guard_append_order` reports any non-zero count as "already covered"
+    and `require_committed` only asserts `> 0`, so the re-run skips the day and
+    the missing timesteps can never be filled in. The common cause is a slot
+    that was still uploading when the day was listed, which is exactly the case
+    a retry fixes.
+
+    Pass `allow_missing_scenes=True` to commit what did stitch and log the rest.
+    That is only for a day the archive genuinely never completed, where the
+    alternative is no data at all.
     """
     parser = parser or vz.parsers.HDFParser()
     slots = group_by_slot(urls)
@@ -397,8 +434,16 @@ def build_batch(
                 loadable_variables=loadable_variables, max_workers=max_workers,
             ))
         except Exception as e:
-            # One malformed scene should not cost the whole day.
             failures.append(f"{_slot_key(slot_urls[0])}: {type(e).__name__}: {e}")
+
+    if failures and not allow_missing_scenes:
+        raise IncompleteBatch(
+            f"{len(failures)} of {len(slots)} scene(s) failed to stitch: "
+            f"{failures[:3]}{'...' if len(failures) > 3 else ''}. Refusing to commit a "
+            "batch with holes in it; the store only appends along `t`, so these "
+            "timesteps could not be added later. Retry, or pass allow_missing_scenes=True "
+            "if the archive never published them."
+        )
     if failures:
         logger.warning(
             f"skipped {len(failures)} of {len(slots)} scene(s): "
@@ -724,7 +769,9 @@ def ingest_day(
         repo = open_repo(satellite, band, base=base, config=config)
 
     what = f"{SATELLITE_NAMES[satellite]} {band}"
-    already = virtual_repo.guard_append_order(repo, date, what, branch=branch)
+    # Same `group` for the guards as for the write below; reading a different group
+    # would report a written day as absent and an absent day as writable.
+    already = virtual_repo.guard_append_order(repo, date, what, branch=branch, group=group)
     if already:
         logger.info(f"{what}: {date.isoformat()} already holds {already} scene(s), skipping")
         return already
@@ -761,7 +808,7 @@ def ingest_day(
         scan_start_fn=parse_slot,
         **kwargs,
     )
-    return virtual_repo.require_committed(repo, date, what, branch=branch)
+    return virtual_repo.require_committed(repo, date, what, branch=branch, group=group)
 
 
 def ingest_backwards(
