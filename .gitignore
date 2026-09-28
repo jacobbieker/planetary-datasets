@@ -158,8 +158,10 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
-# pixi environments
-.pixi
+# pixi environments. The bare name matches at any depth, which matters: a pixi env was
+# once vendored under dags/assets/virt/ and added ~3800 files to the tree.
+.pixi/
+**/.pixi/
 
 
 # ECMWF MARS retrievals and their staging area. A month of GRIB is tens of

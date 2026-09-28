@@ -1,32 +1,68 @@
-auto_materialize:
-  enabled: true
-  minimum_interval_seconds: 3600
-  respect_materialization_data_versions: true
-  max_tick_retries: 3
-  use_sensors: false
-  use_threads: false
-  num_workers: 4
+# Dagster instance configuration for the planetary-datasets code location.
+#
+# Concurrency here is about memory, not CPU. A single ingest can hold tens of GB of
+# gridded data in RAM, so the limits below are expressed per memory class. Assets built
+# by dags/factory.py declare a `memory_gb`, which the factory turns into a
+# `planetary/memory_class` tag on both the asset and the run. The three layers are:
+#
+#   1. `concurrency.runs`  - how many *runs* of each memory class leave the queue.
+#   2. `concurrency.pools` - how many *steps* of one provider run at once, across runs.
+#   3. the executor in dags/definitions.py - how many steps run inside a single run,
+#      sized at import time from the host's actual memory budget.
+#
+# The limits below assume a host with roughly 64 GB of usable RAM: one xlarge (>48 GB)
+# run at a time, or one large, or four small. Adjust them together with MEMORY_FRACTION
+# / MEMORY_CEILING_GB if the host differs.
 
-run_queue:
-  max_concurrent_runs: 50
-  tag_concurrency_limits:
-    - key: 'heavy-zarr-creation'
-      limit: 1
-    - key: 'download'
-      limit: 46
-    - key: 'dagster/backfill'
-      limit: 35
-    - key: 'dagster/concurrency_key'
-      value: 'goes-icechunk'
-      limit: 4
-    - key: 'dagster/concurrency_key'
-      value: 'heavy-zarr-creation'
-      limit: 1
-    - key: 'dagster/concurrency_key'
-      value: 'download'
-      limit: 46
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+
+run_launcher:
+  module: dagster.core.launcher
+  class: DefaultRunLauncher
+
+concurrency:
+  pools:
+    # One in-flight step per provider pool. The factory gives each asset its own pool,
+    # so different providers still overlap; a provider never races itself.
+    granularity: op
+    default_limit: 1
+  runs:
+    max_concurrent_runs: 4
+    tag_concurrency_limits:
+      # >48 GB: nothing else large may run alongside it.
+      - key: planetary/memory_class
+        value: xlarge
+        limit: 1
+      # 16-48 GB.
+      - key: planetary/memory_class
+        value: large
+        limit: 1
+      # 4-16 GB.
+      - key: planetary/memory_class
+        value: medium
+        limit: 2
+      # <=4 GB.
+      - key: planetary/memory_class
+        value: small
+        limit: 4
+      # Backfills are the usual way to exhaust a host; keep them a minority of the queue.
+      - key: dagster/backfill
+        limit: 2
+
+run_monitoring:
+  enabled: true
+  # Honours the `dagster/max_runtime` tag the factory sets on every provider asset.
+  max_runtime_seconds: 86400
 
 run_retries:
   enabled: true
   max_retries: 3
   retry_on_asset_or_op_failure: true
+
+auto_materialize:
+  enabled: true
+  minimum_interval_seconds: 3600
+  respect_materialization_data_versions: true
+  max_tick_retries: 3

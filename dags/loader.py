@@ -1,0 +1,422 @@
+"""Discovery and assembly of the planetary-datasets Dagster code location.
+
+``dags/definitions.py`` is the entry point Dagster loads; everything it needs is built
+here so that the pieces can be imported and tested without the side effect of importing
+every asset module.
+
+Every module under ``dags/assets/`` is discovered and loaded automatically. Nothing has
+to be registered here by hand, which matters because asset modules are added
+continuously and by many people at once. Two consequences follow from that:
+
+* **A broken module is skipped, not fatal.** One module that fails to import used to
+  take the whole code location down with it, hiding every other asset. Import errors are
+  logged and collected into the ``asset_module_import_failures`` metadata on the
+  definitions instead.
+* **Group and key prefix come from the file's location.** A module's *family* is the
+  directory it sits in under ``dags/assets``, or its own filename when it sits directly
+  there: ``dags/assets/nwp/gfs.py`` is family ``nwp``, ``dags/assets/arome.py`` is
+  family ``arome``. Assets are grouped under the family and their keys are prefixed with
+  it, so ``gfs_download`` becomes ``nwp/gfs_download``. An asset that declared its own
+  ``key_prefix``, or a module that declared its own ``group_name``, keeps it.
+
+Concurrency is sized from the host's memory. Each factory-built asset declares what it
+needs (see :mod:`dags.factory`); assets are grouped into one scheduled job per memory
+class, the run queue in ``dags/dagster.yaml`` limits how many runs of each class are
+dequeued, and the executor configured here limits how many steps of each class run
+inside a run.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import importlib
+import os
+import pkgutil
+import signal
+import sys
+import threading
+import time
+from collections import defaultdict
+from pathlib import Path
+from types import ModuleType
+from typing import Iterator
+
+import dagster as dg
+from loguru import logger
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    # Lets `dagster dev -f dags/definitions.py` work as well as `-m dags.definitions`.
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from dags import assets as assets_package  # noqa: E402
+from dags.factory import (  # noqa: E402
+    DAILY_CRON,
+    DEFAULT_MEMORY_GB,
+    MEMORY_CLASS_TAG,
+    daily_partitions,
+    executor_tag_concurrency_limits,
+)
+from dags.resources import MemoryResource, PlanetaryConfigResource  # noqa: E402
+from planetary_datasets.memory import memory_budget_gb  # noqa: E402
+
+#: Subpackages under ``dags/assets`` that are not Dagster asset modules. ``virt`` holds
+#: standalone PEP-723 scripts that are run with ``uv run``, not imported.
+SKIP_MODULE_PREFIXES: tuple[str, ...] = ("dags.assets.virt",)
+
+#: Seconds a single module gets to import before it is abandoned. Several of these
+#: modules began life as scripts and still open network connections at import time; one
+#: of them blocking forever would leave the code location permanently "loading".
+#: ``dags/assets/observation/gnss.py`` submits a Copernicus CDS request from module
+#: scope, which is what motivated this.
+IMPORT_TIMEOUT_SECONDS = float(os.environ.get("DAGSTER_ASSET_IMPORT_TIMEOUT", "10"))
+
+#: The first module imported also pays for the shared dependency tree — xarray, satpy,
+#: iris, dagster's own plugins — which is far slower than anything after it. Giving it
+#: its own grace period is what makes the short per-module deadline above safe.
+FIRST_IMPORT_TIMEOUT_SECONDS = float(os.environ.get("DAGSTER_ASSET_FIRST_IMPORT_TIMEOUT", "60"))
+
+#: Total seconds discovery may spend importing modules. Per-module deadlines alone do
+#: not bound a cold start: a handful of slow modules can still add minutes and push the
+#: code server past Dagster's gRPC load timeout. Once the budget is gone the remaining
+#: modules are recorded as skipped rather than imported.
+DISCOVERY_BUDGET_SECONDS = float(os.environ.get("DAGSTER_ASSET_DISCOVERY_BUDGET", "120"))
+
+
+class AssetModuleImportTimeout(BaseException):
+    """Raised when a module takes longer than :data:`IMPORT_TIMEOUT_SECONDS` to import.
+
+    Deliberately derived from ``BaseException``, not ``Exception``: the modules this has
+    to interrupt are the ones doing network I/O at import, and their retry loops catch
+    ``Exception`` and carry on. An ordinary ``TimeoutError`` gets swallowed by
+    ``cdsapi``'s retry handling and the import never ends.
+    """
+
+
+@contextlib.contextmanager
+def _import_deadline(module_name: str, seconds: float) -> Iterator[None]:
+    """Interrupt the import of ``module_name`` if it outlasts ``seconds``.
+
+    Implemented with ``SIGALRM`` because the only way to break out of a blocking socket
+    read inside an import is to raise in the thread that is running it. Falls back to no
+    timeout where that is not possible (non-main thread, or a platform without SIGALRM),
+    which is no worse than the behaviour this replaces.
+    """
+    if (
+        seconds <= 0
+        or not hasattr(signal, "SIGALRM")
+        or threading.current_thread() is not threading.main_thread()
+    ):
+        yield
+        return
+
+    finished = False
+
+    def _on_alarm(signum, frame):  # noqa: ANN001, ARG001
+        # A repeating timer can fire in the window between the import returning and the
+        # timer being disarmed; that must not turn a successful import into a failure.
+        if finished:
+            return
+        raise AssetModuleImportTimeout(f"{module_name} did not import within {seconds:g}s")
+
+    previous = signal.signal(signal.SIGALRM, _on_alarm)
+    # Repeat every second after the deadline: if the module is inside a loop that keeps
+    # retrying, one signal is not enough to get it to let go.
+    signal.setitimer(signal.ITIMER_REAL, seconds, 1.0)
+    try:
+        yield
+    finally:
+        finished = True
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def discover_asset_modules(
+    package: ModuleType = assets_package,
+) -> tuple[list[ModuleType], dict[str, str]]:
+    """Import every module under ``package``, tolerating modules that fail.
+
+    Returns:
+        The successfully imported modules, and a mapping of module name to the reason it
+        could not be imported.
+    """
+    modules: list[ModuleType] = []
+    failures: dict[str, str] = {}
+    deadline = time.monotonic() + DISCOVERY_BUDGET_SECONDS
+    first_import = True
+
+    def on_walk_error(name: str) -> None:
+        # walk_packages re-raises a sub-package's __init__ failure from inside the
+        # generator, which would escape the per-module try below and take the whole code
+        # location with it. Record it and keep walking.
+        failures[name] = "ImportError: package __init__ failed to import"
+        logger.warning(f"dagster: could not walk into {name}")
+
+    walker = pkgutil.walk_packages(
+        package.__path__, prefix=f"{package.__name__}.", onerror=on_walk_error
+    )
+    for info in walker:
+        if info.ispkg:
+            continue
+        if info.name.startswith(SKIP_MODULE_PREFIXES):
+            logger.debug(f"dagster: skipping non-asset module {info.name}")
+            continue
+        if info.name.rsplit(".", 1)[-1].startswith("_"):
+            continue
+        if info.name in sys.modules:
+            # Already imported (usually by a sibling); no need to pay the deadline again.
+            modules.append(sys.modules[info.name])
+            continue
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            failures[info.name] = (
+                f"TimeoutError: discovery budget of {DISCOVERY_BUDGET_SECONDS:g}s exhausted "
+                "before this module was reached"
+            )
+            continue
+
+        per_module = FIRST_IMPORT_TIMEOUT_SECONDS if first_import else IMPORT_TIMEOUT_SECONDS
+        first_import = False
+        try:
+            with _import_deadline(info.name, min(per_module, remaining)):
+                modules.append(importlib.import_module(info.name))
+        except KeyboardInterrupt:
+            raise
+        except BaseException as exc:  # noqa: BLE001 - these modules began life as
+            # scripts; some call sys.exit() or raise at import. None of that may be
+            # allowed to break the code location for everyone else.
+            failures[info.name] = f"{type(exc).__name__}: {exc}"
+            logger.warning(f"dagster: skipping {info.name}: {type(exc).__name__}: {exc}")
+
+    return modules, failures
+
+
+def _family(module_name: str) -> str:
+    """The group and key prefix for a module: its first path component under ``assets``.
+
+    Asset modules arrive in two shapes and both are supported:
+    ``dags/assets/nwp/gfs.py`` belongs to the ``nwp`` family, and a module placed
+    directly at ``dags/assets/arome.py`` is its own family, ``arome``.
+    """
+    parts = module_name.split(".")
+    family = parts[2] if len(parts) > 3 else parts[-1]
+    return "".join(c if c.isalnum() or c == "_" else "_" for c in family)
+
+
+def _load_grouped(
+    module: ModuleType, family: str, key_prefix: str | None
+) -> list[dg.AssetsDefinition]:
+    """Load a module's assets into the ``family`` group, tolerating its own group name."""
+    try:
+        return dg.load_assets_from_modules([module], group_name=family, key_prefix=key_prefix)
+    except Exception:  # noqa: BLE001 - the module set its own group_name; keep it
+        return dg.load_assets_from_modules([module], key_prefix=key_prefix)
+
+
+def _load_one_module(module: ModuleType, family: str) -> list[dg.AssetsDefinition]:
+    """Load one module's assets, namespacing the ones that did not namespace themselves.
+
+    The convention is that an asset's key is prefixed with its family — the directory it
+    lives in under ``dags/assets``, or its own filename for a module placed directly
+    there. An asset that already declares a ``key_prefix`` has made a deliberate choice
+    and keeps it, so ``@dg.asset(key_prefix="ocean")`` stays ``ocean/...`` rather than
+    becoming ``cmems/ocean/...``.
+    """
+    plain = _load_grouped(module, family, key_prefix=None)
+
+    def is_bare(asset: dg.AssetsDefinition) -> bool:
+        keys = list(getattr(asset, "keys", ()))
+        return bool(keys) and all(len(key.path) == 1 for key in keys)
+
+    if all(is_bare(asset) for asset in plain):
+        return _load_grouped(module, family, key_prefix=family)
+
+    # Mixed module: pair the two loads by op identity, which ``key_prefix`` preserves.
+    prefixed = _load_grouped(module, family, key_prefix=family)
+    by_node = {
+        id(asset.node_def): asset
+        for asset in prefixed
+        if getattr(asset, "node_def", None) is not None
+    }
+    result: list[dg.AssetsDefinition] = []
+    for asset in plain:
+        node_def = getattr(asset, "node_def", None)
+        if is_bare(asset) and node_def is not None and id(node_def) in by_node:
+            result.append(by_node[id(node_def)])
+        else:
+            result.append(asset)
+    return result
+
+
+def load_assets(
+    modules: list[ModuleType],
+) -> tuple[list[dg.AssetsDefinition], dict[str, str]]:
+    """Collect the assets defined by each module, namespaced by its family.
+
+    Assets already seen under another module are dropped. Deduplication is by the
+    identity of the underlying op, not by asset key: ``load_assets_from_modules`` picks
+    up anything in a module's namespace, so a module that does ``from .sibling import
+    thing`` yields a second copy of that asset under its own key prefix. The two copies
+    share one op, which is how they are told apart from two genuinely different assets
+    that happen to share a name.
+    """
+    loaded: list[dg.AssetsDefinition] = []
+    failures: dict[str, str] = {}
+    seen_ops: set[int] = set()
+    seen_keys: set[dg.AssetKey] = set()
+
+    for module in modules:
+        family = _family(module.__name__)
+        try:
+            found = _load_one_module(module, family)
+        except Exception as exc:  # noqa: BLE001
+            failures[module.__name__] = f"{type(exc).__name__}: {exc}"
+            logger.warning(f"dagster: could not load assets from {module.__name__}: {exc}")
+            continue
+
+        for asset in found:
+            node_def = getattr(asset, "node_def", None)
+            if node_def is not None:
+                if id(node_def) in seen_ops:
+                    continue
+                seen_ops.add(id(node_def))
+
+            keys = set(getattr(asset, "keys", ()) or ())
+            if keys & seen_keys:
+                clashing = sorted(k.to_user_string() for k in keys & seen_keys)
+                logger.warning(
+                    f"dagster: {module.__name__} redefines {clashing}; "
+                    "keeping the first definition"
+                )
+                continue
+            seen_keys |= keys
+            loaded.append(asset)
+
+    return loaded, failures
+
+
+def build_memory_class_jobs(
+    assets: list[dg.AssetsDefinition],
+) -> tuple[list[dg.JobDefinition], list[dg.ScheduleDefinition]]:
+    """One scheduled job per memory class, over the daily-partitioned provider assets.
+
+    Grouping by memory class is what lets the run queue apply a different limit to a
+    32 GB reanalysis ingest than to a 2 GB station download: the class is carried on the
+    job's run tags, which is what ``tag_concurrency_limits`` matches on.
+    """
+    by_class: dict[str, list[dg.AssetKey]] = defaultdict(list)
+
+    for asset in assets:
+        if getattr(asset, "partitions_def", None) is not daily_partitions:
+            continue
+        for spec in asset.specs:
+            memory_class = (spec.tags or {}).get(MEMORY_CLASS_TAG)
+            if memory_class:
+                by_class[memory_class].append(spec.key)
+
+    jobs: list[dg.JobDefinition] = []
+    schedules: list[dg.ScheduleDefinition] = []
+    for memory_class, keys in sorted(by_class.items()):
+        job = dg.define_asset_job(
+            name=f"daily_providers_{memory_class}",
+            selection=dg.AssetSelection.assets(*keys),
+            tags={MEMORY_CLASS_TAG: memory_class},
+            description=(
+                f"Daily ingest of every {memory_class}-memory provider asset "
+                f"({len(keys)} assets)."
+            ),
+        )
+        jobs.append(job)
+        schedules.append(
+            dg.ScheduleDefinition(
+                name=f"daily_providers_{memory_class}_schedule",
+                cron_schedule=DAILY_CRON,
+                job=job,
+                execution_timezone="UTC",
+                default_status=dg.DefaultScheduleStatus.RUNNING,
+            )
+        )
+
+    return jobs, schedules
+
+
+def sizing_budget_gb() -> float:
+    """The memory figure the static executor configuration is sized from, in GB.
+
+    Deliberately derived from *total* memory rather than what happens to be free right
+    now: this value is baked into the executor when the code location loads and then
+    holds for the life of the process. Sizing it from available memory would mean a
+    code-server reload while the host is busy permanently collapses every limit to one.
+    The moment-to-moment check belongs to ``require_memory`` at run time, which does
+    look at what is actually free.
+    """
+    from planetary_datasets.config import get_config
+    from planetary_datasets.memory import total_memory_gb
+
+    cfg = get_config()
+    if cfg.memory_ceiling_gb is not None:
+        return cfg.memory_ceiling_gb
+    return total_memory_gb() * cfg.memory_fraction
+
+
+def build_executor(budget_gb: float | None = None) -> dg.ExecutorDefinition:
+    """A multiprocess executor whose parallelism is derived from host memory.
+
+    ``max_concurrent`` is how many default-sized (8 GB) steps fit in the budget, capped
+    by the CPU count. The per-class ``tag_concurrency_limits`` then stop a handful of
+    large steps from filling those slots and blowing past the budget anyway.
+    """
+    budget = budget_gb if budget_gb is not None else sizing_budget_gb()
+    slots = max(1, int(budget // DEFAULT_MEMORY_GB))
+    max_concurrent = max(1, min(slots, os.cpu_count() or 1))
+    return dg.multiprocess_executor.configured(
+        {
+            "max_concurrent": max_concurrent,
+            "tag_concurrency_limits": executor_tag_concurrency_limits(budget),
+        }
+    )
+
+
+def build_resources() -> dict[str, object]:
+    """Resources available to every asset in this code location."""
+    resources: dict[str, object] = {
+        "config": PlanetaryConfigResource(),
+        "memory": MemoryResource(),
+        "pipes_subprocess_client": dg.PipesSubprocessClient(),
+    }
+    try:
+        from dagster_docker import PipesDockerClient
+
+        resources["pipes_docker_client"] = PipesDockerClient()
+    except Exception as exc:  # noqa: BLE001 - Docker is optional on dev machines
+        logger.warning(f"dagster: pipes_docker_client unavailable: {exc}")
+    return resources
+
+
+def build_definitions() -> dg.Definitions:
+    """Assemble the code location."""
+    modules, import_failures = discover_asset_modules()
+    assets, load_failures = load_assets(modules)
+    failures = {**import_failures, **load_failures}
+
+    jobs, schedules = build_memory_class_jobs(assets)
+
+    logger.info(
+        f"dagster: loaded {len(assets)} asset definition(s) from {len(modules)} module(s); "
+        f"{len(failures)} module(s) skipped; {len(jobs)} scheduled job(s)"
+    )
+
+    return dg.Definitions(
+        assets=assets,
+        jobs=jobs,
+        schedules=schedules,
+        resources=build_resources(),
+        executor=build_executor(),
+        metadata={
+            "asset_modules_loaded": len(modules),
+            "asset_module_import_failures": dg.MetadataValue.json(failures),
+            "memory_budget_gb": round(memory_budget_gb(), 1),
+        },
+    )
+
