@@ -17,5 +17,9 @@ setup(
     url="https://github.com/jacobbieker/planetary-datasets",
     install_requires=install_requires,
     long_description=long_description,
-    packages=find_packages(),
+    long_description_content_type="text/markdown",
+    # Scoped deliberately: a bare find_packages() also picks up dags/, which would put a
+    # top-level "dags" module into every environment that installs this.
+    packages=find_packages(include=["planetary_datasets", "planetary_datasets.*"]),
+    python_requires=">=3.12",
 )
