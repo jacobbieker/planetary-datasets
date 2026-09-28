@@ -1,0 +1,26 @@
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "Keep the 3 most recent date-tagged builds (running + rollbacks)",
+      "selection": {
+        "tagStatus": "tagged",
+        "tagPatternList": ["20*"],
+        "countType": "imageCountMoreThan",
+        "countNumber": 3
+      },
+      "action": { "type": "expire" }
+    },
+    {
+      "rulePriority": 2,
+      "description": "Expire untagged manifests after 14 days",
+      "selection": {
+        "tagStatus": "untagged",
+        "countType": "sinceImagePushed",
+        "countUnit": "days",
+        "countNumber": 14
+      },
+      "action": { "type": "expire" }
+    }
+  ]
+}
