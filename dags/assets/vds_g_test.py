@@ -2,12 +2,11 @@ import sys
 import xarray as xr
 from obstore.store import from_url
 
-from virtualizarr import open_virtual_dataset, open_virtual_mfdataset
+from virtualizarr import open_virtual_mfdataset
 from virtualizarr.parsers import HDFParser
 from virtualizarr.registry import ObjectStoreRegistry
 import icechunk
 import s3fs
-import os
 from concurrent.futures import ThreadPoolExecutor
 
 import warnings

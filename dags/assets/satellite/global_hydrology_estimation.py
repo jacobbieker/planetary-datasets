@@ -2,7 +2,6 @@
 
 import datetime as dt
 import os
-from typing import TYPE_CHECKING
 
 import dagster as dg
 import dask.array
@@ -12,7 +11,6 @@ import pandas as pd
 import xarray as xr
 import zarr
 
-import datetime as dt
 
 """Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
 

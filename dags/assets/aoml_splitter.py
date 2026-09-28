@@ -1,6 +1,5 @@
 import icechunk
 import xarray as xr
-import numpy as np
 from icechunk.xarray import to_icechunk
 import zarr
 

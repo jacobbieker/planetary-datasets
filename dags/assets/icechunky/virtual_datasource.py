@@ -7,7 +7,6 @@ then at the end of making an example, the actual data is fetched from AWS/remote
 
 import xarray as xr
 import pandas as pd
-import numpy as np
 from datetime import datetime
 import os
 import pathlib
