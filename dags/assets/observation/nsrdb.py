@@ -7,6 +7,26 @@ import requests
 """Zarr archive of satellite image data from GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
 
 ARCHIVE_FOLDER = "/Users/jacob/Development/planetary-datasets/dags/assets/observation/NSRDB/"
+
+
+def _nrel_credentials() -> tuple[str, str]:
+    """NREL developer API key and the registered email, from the environment.
+
+    These were referenced but never defined, so materialising any asset here raised
+    NameError. Reading them through the config turns that into a clear message naming
+    what to set.
+    """
+    from planetary_datasets.config import MissingCredential, get_config
+
+    creds = get_config().credentials
+    key = getattr(creds, "nrel_api_key", None) or os.environ.get("NREL_API_KEY")
+    email = getattr(creds, "nrel_email", None) or os.environ.get("NREL_EMAIL")
+    if not key or not email:
+        raise MissingCredential(
+            "NSRDB needs NREL_API_KEY and NREL_EMAIL. Request a key at "
+            "https://developer.nrel.gov/signup/ and set both in .env or the environment."
+        )
+    return key, email
 if os.getenv("ENVIRONMENT", "local") == "pb":
     ARCHIVE_FOLDER = "/data/NSRDB/"
 
@@ -116,18 +136,19 @@ def get_response_json_and_handle_errors(response: requests.Response) -> dict:
 def nsrdb_himawari8_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     partition_key = int(context.partition_key)
+    _api_key, _email = _nrel_credentials()
     BASE_URL = "https://developer.nrel.gov/api/nsrdb/v2/solar/himawari-download.json?"
     input_data = {
         "attributes": "dhi,dni,ghi,solar_zenith_angle,cloud_type",
         "interval": "10",
-        "api_key": API_KEY,
-        "email": EMAIL,
+        "api_key": _api_key,
+        "email": _email,
     }
     name = ["2016,2017,2018,2019,2020"]
     location_ids = generate_points(8683127, chunks=50)[partition_key]
     input_data["years"] = [name]
     input_data["location_ids"] = location_ids
-    headers = {"x-api-key": API_KEY}
+    headers = {"x-api-key": _api_key}
     data = False
     local_path = os.path.join(ARCHIVE_FOLDER, f"himawari8_key_{partition_key}.zip")
     while data == False:
@@ -176,17 +197,18 @@ def nsrdb_himawari8_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
 def nsrdb_himawari7_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     partition_key = int(context.partition_key)
+    _api_key, _email = _nrel_credentials()
     BASE_URL = "https://developer.nrel.gov/api/nsrdb/v2/solar/himawari7-download.json?"
     input_data = {
         "attributes": "dhi,dni,ghi,cloud_type,solar_zenith_angle",
         "interval": "30",
-        "api_key": API_KEY,
-        "email": EMAIL,
+        "api_key": _api_key,
+        "email": _email,
     }
     location_ids = generate_points(2170781)[partition_key]
     input_data["years"] = ["2011,2012,2013,2014,2015"]
     input_data["location_ids"] = location_ids
-    headers = {"x-api-key": API_KEY}
+    headers = {"x-api-key": _api_key}
     data = False
     while data == False:
         data = get_response_json_and_handle_errors(
@@ -228,19 +250,20 @@ def nsrdb_himawari7_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
 def nsrdb_goes10min_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     partition_key = int(context.partition_key)
+    _api_key, _email = _nrel_credentials()
     BASE_URL = (
         "https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-GOES-full-disc-v4-0-0-download.json?"
     )
     input_data = {
         "attributes": "aod,cloud_type,dhi,dni,ghi,solar_zenith_angle",
         "interval": "10",
-        "api_key": API_KEY,
-        "email": EMAIL,
+        "api_key": _api_key,
+        "email": _email,
     }
     location_ids = generate_points(9462459, chunks=50)[partition_key]
     input_data["years"] = ["2019,2020,2021"]
     input_data["location_ids"] = location_ids
-    headers = {"x-api-key": API_KEY}
+    headers = {"x-api-key": _api_key}
     data = False
     local_path = os.path.join(ARCHIVE_FOLDER, f"goes_10min_key_{partition_key}.zip")
     while data == False:
@@ -287,21 +310,22 @@ def nsrdb_goes10min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
 def nsrdb_goes30min_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     partition_key = int(context.partition_key)
+    _api_key, _email = _nrel_credentials()
     BASE_URL = (
         "https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-GOES-aggregated-v4-0-0-download.json?"
     )
     input_data = {
         "attributes": "dhi,ghi,dni,cloud_type,solar_zenith_angle",
         "interval": "30",
-        "api_key": API_KEY,
-        "email": EMAIL,
+        "api_key": _api_key,
+        "email": _email,
     }
     location_ids = generate_points(2018266, chunks=50)[partition_key]
     input_data["years"] = [
         "1998,1999,2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019,2020,2021"
     ]
     input_data["location_ids"] = location_ids
-    headers = {"x-api-key": API_KEY}
+    headers = {"x-api-key": _api_key}
     data = False
     local_path = os.path.join(ARCHIVE_FOLDER, f"goes_30min_key_{partition_key}.zip")
     while data == False:
@@ -348,19 +372,20 @@ def nsrdb_goes30min_download_asset(context: dg.AssetExecutionContext) -> dg.Mate
 def nsrdb_iodc_60min_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     partition_key = int(context.partition_key)
+    _api_key, _email = _nrel_credentials()
     BASE_URL = "https://developer.nrel.gov/api/nsrdb/v2/solar/suny-india-download.json?"
     input_data = {
         "attributes": "dhi,dni,ghi,solar_zenith_angle",
         "interval": "60",
-        "api_key": API_KEY,
-        "email": EMAIL,
+        "api_key": _api_key,
+        "email": _email,
     }
     location_ids = generate_points(102299)[partition_key]
     input_data["years"] = [
         "2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014"
     ]
     input_data["location_ids"] = location_ids
-    headers = {"x-api-key": API_KEY}
+    headers = {"x-api-key": _api_key}
     data = False
     local_path = os.path.join(ARCHIVE_FOLDER, f"iodc_60min_key_{partition_key}.zip")
     while data == False:
@@ -407,17 +432,18 @@ def nsrdb_iodc_60min_download_asset(context: dg.AssetExecutionContext) -> dg.Mat
 def nsrdb_mtg_15min_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     partition_key = int(context.partition_key)
+    _api_key, _email = _nrel_credentials()
     BASE_URL = "https://developer.nrel.gov/api/nsrdb/v2/solar/msg-iodc-download.json?"
     input_data = {
         "attributes": "ghi,dhi,dni,solar_zenith_angle,cloud_type",
         "interval": "15",
-        "api_key": API_KEY,
-        "email": EMAIL,
+        "api_key": _api_key,
+        "email": _email,
     }
     location_ids = generate_points(3869543)[partition_key]
     input_data["years"] = ["2017,2018,2019"]
     input_data["location_ids"] = location_ids
-    headers = {"x-api-key": API_KEY}
+    headers = {"x-api-key": _api_key}
     data = False
     local_path = os.path.join(ARCHIVE_FOLDER, f"mtg_15min_recent_key_{partition_key}.zip")
     while data == False:
@@ -466,19 +492,20 @@ def nsrdb_mtg_15min_longer_download_asset(
 ) -> dg.MaterializeResult:
     """Dagster asset for downloading GMGSI global mosaic of geostationary satellites from NOAA on AWS"""
     partition_key = int(context.partition_key)
+    _api_key, _email = _nrel_credentials()
     BASE_URL = "https://developer.nrel.gov/api/nsrdb/v2/solar/nsrdb-msg-v1-0-0-download.json?"
     input_data = {
         "attributes": "ghi,dhi,dni,solar_zenith_angle,cloud_type",
         "interval": "15",
-        "api_key": API_KEY,
-        "email": EMAIL,
+        "api_key": _api_key,
+        "email": _email,
     }
     location_ids = generate_points(2693286, chunks=50)[partition_key]
     input_data["years"] = [
         "2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019,2020,2021,2022"
     ]
     input_data["location_ids"] = location_ids
-    headers = {"x-api-key": API_KEY}
+    headers = {"x-api-key": _api_key}
     data = False
     while data == False:
         data = get_response_json_and_handle_errors(

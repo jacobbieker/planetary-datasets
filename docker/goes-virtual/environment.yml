@@ -1,0 +1,37 @@
+# Minimal environment for the GOES ABI-L1b-RadF virtual-reference ingest.
+#
+# Deliberately not the project's full pixi environment (4.3GB: satpy, iris,
+# metview, dagster, ...). This is only what the ingest actually imports.
+#
+# Versions are pinned to the ones the ingest was verified against on real
+# GOES data, not to pixi.lock — the lock has since drifted ahead
+# (virtualizarr 2.7.3, icechunk 2.2.2, zarr 3.4.0) and those are untested here.
+name: goes-virtual
+channels:
+  - conda-forge
+dependencies:
+  - python=3.14
+  # Core of the virtual-reference pipeline.
+  - virtualizarr=2.7.1
+  - icechunk=2.1.2
+  - zarr=3.3.0
+  - xarray=2026.7.0
+  - numcodecs=0.16.5
+  # Object-store access used by the archive listing (obstore) and by
+  # virtualizarr's registry (obspec_utils).
+  - obstore
+  - obspec_utils=0.9.0
+  # HDF parsing for the ABI L1b netCDF4 files.
+  - h5py=3.16.0
+  - h5netcdf=1.8.1
+  # Array/frame stack. dask-core is enough: the ingest uses parallel="dask"
+  # with the threaded scheduler, never distributed.
+  - numpy=2.4.3
+  - pandas=3.0.5
+  - dask-core=2026.7.1
+  - cftime
+  # planetary_datasets.config / .memory, which the ingest reads its store
+  # location and memory settings from.
+  - python-dotenv
+  - psutil
+  - loguru

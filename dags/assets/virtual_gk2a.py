@@ -1,13 +1,11 @@
-import sys
 import xarray as xr
 from obstore.store import from_url
 
-from virtualizarr import open_virtual_dataset, open_virtual_mfdataset
+from virtualizarr import open_virtual_mfdataset
 from virtualizarr.parsers import HDFParser
 from virtualizarr.registry import ObjectStoreRegistry
 import icechunk
 import s3fs
-import os
 from concurrent.futures import ThreadPoolExecutor
 from satpy.readers.core._geos_area import get_area_definition, get_area_extent
 import datetime as dt
@@ -101,11 +99,11 @@ def preprocess(vds: xr.Dataset) -> xr.Dataset:
     vds["orbital_parameters"] = xr.DataArray(
         [orbital_parameters],
         dims=("time",),
-    ).astype(f"U512")
+    ).astype("U512")
     vds["area"] = xr.DataArray(
         [str(area_def)],
         dims=("time",),
-    ).astype(f"U512")
+    ).astype("U512")
     #"""
     return vds
 

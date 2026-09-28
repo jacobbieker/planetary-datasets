@@ -154,10 +154,15 @@ def get_global_mosaic(time: dt.datetime, channels: Optional[list[str]] = None) -
 
 import pandas as pd
 
-v3_range = pd.date_range("2025-03-10-17:00", pd.Timestamp.now(), freq="1H")
-v1_range = pd.date_range("2021-07-13-00:00", pd.Timestamp.now(), freq="1H")
 
-for store_path, date_range in [("/data/gmgsi/gmgsi_v3.icechunk", v3_range),]:
+def rebuild(store_path: str, date_range: pd.DatetimeIndex) -> None:
+    """Delete `store_path` and rebuild it hour by hour from the GMGSI mosaics.
+
+    Destructive and slow, which is why it lives behind a function rather than at module
+    scope. ``dags/loader.py`` imports every module under ``dags/assets/`` to discover
+    assets, and this ran its ``rmtree`` during that import: loading the Dagster code
+    location — or any ``dagster dev`` reload — deleted the store on the host.
+    """
     if os.path.exists(store_path):
         shutil.rmtree(store_path)
     storage = icechunk.local_filesystem_storage(store_path)
@@ -183,7 +188,6 @@ for store_path, date_range in [("/data/gmgsi/gmgsi_v3.icechunk", v3_range),]:
             for v in variables
         }
         encoding["time"] = {"units": "nanoseconds since 1970-01-01"}
-        #data = data.assign_coords({"time": date})
         if first_write:
             session = repo.writable_session("main")
             to_icechunk(data, session, encoding=encoding)
@@ -193,3 +197,13 @@ for store_path, date_range in [("/data/gmgsi/gmgsi_v3.icechunk", v3_range),]:
             session = repo.writable_session("main")
             to_icechunk(data, session, append_dim="time")
             session.commit(f"Added GMGSI data for {date}")
+
+
+def main() -> None:
+    v3_range = pd.date_range("2025-03-10-17:00", pd.Timestamp.now(), freq="1H")
+    for store_path, date_range in [("/data/gmgsi/gmgsi_v3.icechunk", v3_range)]:
+        rebuild(store_path, date_range)
+
+
+if __name__ == "__main__":
+    main()

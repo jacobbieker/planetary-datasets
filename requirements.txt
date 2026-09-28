@@ -29,3 +29,6 @@ psutil
 wetterdienst
 isd
 icechunk
+loguru
+requests
+python-dotenv

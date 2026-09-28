@@ -19,13 +19,10 @@ import functools
 
 import pandas as pd
 from satpy import Scene
-import os
 import pathlib
 import shutil
-from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 
-import nest_asyncio
 import numpy as np
 import s3fs
 import xarray as xr
@@ -326,11 +323,11 @@ class GK2A(VirtualDataset):
         dataset["orbital_parameters"] = xr.DataArray(
             [orbit_params],
             dims=("time",),
-        ).astype(f"U16")
+        ).astype("U16")
         dataset["area"] = xr.DataArray(
             [str(dataset.attrs["area"])],
             dims=("time",),
-        ).astype(f"U512")
+        ).astype("U512")
         # Now reduce to float16 for everything other than latitude/longitude
         for var in dataset.data_vars:
             if var not in [

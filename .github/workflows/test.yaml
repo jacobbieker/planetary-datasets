@@ -1,0 +1,35 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e  # v0.10.2
+        with:
+          pixi-version: v0.81.0
+          # pixi.lock is not committed, so the environment is solved here rather than
+          # restored. Both `locked` and the lockfile-keyed cache need a committed lock.
+          locked: false
+          cache: false
+
+      - name: Install the package
+        run: pixi run pip install -e . --no-deps
+
+      - name: Run tests
+        # Tests must not reach the network or the production bucket; point every store at
+        # a local directory.
+        env:
+          ICECHUNK_LOCAL_PATH: ${{ runner.temp }}/icechunk-stores
+        run: pixi run pytest tests/ -q

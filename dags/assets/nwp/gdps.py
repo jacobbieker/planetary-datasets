@@ -52,7 +52,7 @@ def gpds_download_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResu
 
 def download_gpds(day: dt.datetime) -> list[str]:
     # Get day of year from day
-    path = f"https://dd.weather.gc.ca/model_gem_global/15km/grib2/lat_lon/"
+    path = "https://dd.weather.gc.ca/model_gem_global/15km/grib2/lat_lon/"
     args = ["wget2", "-r", "-c", "--no-parent", path, "-P", ARCHIVE_FOLDER]
     process = Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     process.wait()

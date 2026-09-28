@@ -2,17 +2,14 @@
 
 import datetime as dt
 import os
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import dagster as dg
-import dask.array
 import fsspec
 import s3fs
-import numpy as np
 import pandas as pd
 import xarray as xr
 import zarr
-import icechunk
 from virtualizarr import open_virtual_dataset
 
 if TYPE_CHECKING:
@@ -344,11 +341,9 @@ if __name__ == "__main__":
     #"""
     # exit()
 
-    from kerchunk import hdf, combine, df
+    from kerchunk import hdf, df
     from kerchunk.combine import MultiZarrToZarr
     import fsspec.implementations.reference
-    from fsspec.implementations.reference import LazyReferenceMapper
-    from tempfile import TemporaryDirectory
     import ujson
 
     import xarray as xr
