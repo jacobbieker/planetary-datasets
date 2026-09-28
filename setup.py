@@ -10,7 +10,7 @@ install_requires = (this_directory / "requirements.txt").read_text().splitlines(
 
 setup(
     name="planetary_datasets",
-    version="0.0.1",
+    version="0.0.2",
     description="Datasets for ML models for planetary use-cases (e.g. solar mapping, land use, forecasting)",
     author="Jacob Bieker",
     author_email="jacob@bieker.tech",
