@@ -38,7 +38,7 @@ dagster-webserver = ">=1.12.2,<2"
 dagster-pipes = ">=1.12.2,<2"
 dagster-docker = ">=1!0.28.2,<1!0.29"
 # The virtualized ingests use icechunk 2 (VirtualChunkContainer, manifest
-# splitting); the virtualizarr git dependency below is the matching 2.x API.
+# splitting); the virtualizarr pin below is the matching 2.x API.
 icechunk = ">=2.2,<3"
 cdsapi = ">=0.7.7,<0.8"
 sqlite = ">=3.51.0,<4"
@@ -74,7 +74,10 @@ isd = ">=0.1.0, <0.2"
 ocf-blosc2 = ">=0.0.14, <0.0.15"
 nest-asyncio = ">=1.6.0, <2"
 igra = ">=23.5, <24"
-virtualizarr = { git = "https://github.com/zarr-developers/VirtualiZarr.git", extras = ["all_parsers"] }
+# Pinned to a release rather than tracking the git default branch, so a solve is
+# reproducible. all-parsers brings the HDF parser the virtual-reference ingests read
+# GOES, GK-2A and Himawari through.
+virtualizarr = { version = ">=2.7.3,<3", extras = ["all-parsers"] }
 obspec-utils = ">=0.9, <1"
 ecmwf-api-client = ">=1.6.3, <2"
 gpm-api = ">=0.4, <0.5"
