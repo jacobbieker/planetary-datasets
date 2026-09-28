@@ -16,6 +16,7 @@ ZARR_PATH = "/run/media/jacob/Tester/ghe2.icechunk"
 files = sorted(list(Path(f"{ARCHIVE_FOLDER}rain_rate/").rglob("*.nc.gz")))
 nav = xr.open_dataset(f"{ARCHIVE_FOLDER}NPR.GEO.GHE.v1.Navigation.netcdf").load()
 
+
 def get_ghe_element(filename: str) -> xr.Dataset:
     """Gather the global mosaic of geostationary satellites hydrology estimation from NOAA on AWS
 
@@ -41,6 +42,7 @@ def get_ghe_element(filename: str) -> xr.Dataset:
     ds = ds.astype(np.float16)
     return ds
 
+
 def write_single_timestamp(file):
     storage = icechunk.local_filesystem_storage("eeps.icechunk")
     repo = ic.Repository.open(storage)
@@ -50,8 +52,12 @@ def write_single_timestamp(file):
         try:
             session = repo.writable_session("main")
             # Read the timestamps
-            to_icechunk(data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, region="auto")
-            session.commit(f"add {data.time.values} data to store", rebase_with=icechunk.ConflictDetector())
+            to_icechunk(
+                data.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, region="auto"
+            )
+            session.commit(
+                f"add {data.time.values} data to store", rebase_with=icechunk.ConflictDetector()
+            )
             # Remove source file once it is written
             os.remove(file)
             break
@@ -59,32 +65,56 @@ def write_single_timestamp(file):
             print(f"Failed to write {file}: {e}")
             continue
 
+
 if __name__ == "__main__":
     import os
     import multiprocessing as mp
-    mp.set_start_method('forkserver')
+
+    mp.set_start_method("forkserver")
     storage = icechunk.local_filesystem_storage(ZARR_PATH)
     repo = icechunk.Repository.open_or_create(storage)
 
     session = repo.writable_session("main")
     data = get_ghe_element(files[-1])
-    encoding = {"rainfall_estimate": {
-        "compressors": zarr.codecs.BloscCodec(cname='zstd', clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle)}}
+    encoding = {
+        "rainfall_estimate": {
+            "compressors": zarr.codecs.BloscCodec(
+                cname="zstd", clevel=9, shuffle=zarr.codecs.BloscShuffle.bitshuffle
+            )
+        }
+    }
     encoding["time"] = {"units": "nanoseconds since 1970-01-01"}
     # Get the number of partitions to create
     date_range = pd.date_range(start="2019-06-24T20:00:00", end="2025-03-05T19:15:00", freq="15min")
-    dummies = dask.array.zeros((len(date_range), data.lines.shape[0], data.elems.shape[0]), chunks=(1, -1, -1),
-                               dtype=np.float16)
-    default_dataarray = xr.DataArray(dummies,
-                                     coords={"time": date_range, "latitude": (["lines", "elems"], data.latitude.values),
-                                             "longitude": (["lines", "elems"], data.longitude.values)},
-                                     dims=["time", "lines", "elems"])
-    dummy_dataset = xr.Dataset({v: default_dataarray for v in ["rainfall_estimate"]},
-                               coords={"time": date_range, "latitude": (["lines", "elems"], data.latitude.values),
-                                       "longitude": (["lines", "elems"], data.longitude.values)})
+    dummies = dask.array.zeros(
+        (len(date_range), data.lines.shape[0], data.elems.shape[0]),
+        chunks=(1, -1, -1),
+        dtype=np.float16,
+    )
+    default_dataarray = xr.DataArray(
+        dummies,
+        coords={
+            "time": date_range,
+            "latitude": (["lines", "elems"], data.latitude.values),
+            "longitude": (["lines", "elems"], data.longitude.values),
+        },
+        dims=["time", "lines", "elems"],
+    )
+    dummy_dataset = xr.Dataset(
+        {v: default_dataarray for v in ["rainfall_estimate"]},
+        coords={
+            "time": date_range,
+            "latitude": (["lines", "elems"], data.latitude.values),
+            "longitude": (["lines", "elems"], data.longitude.values),
+        },
+    )
     print(dummy_dataset)
     dummy_dataset.to_zarr(ZARR_PATH, mode="w", compute=False, zarr_format=3, encoding=encoding)
-    to_icechunk(dummy_dataset.chunk({"time": 1, "latitude": -1, "longitude": -1}), session, encoding=encoding)
+    to_icechunk(
+        dummy_dataset.chunk({"time": 1, "latitude": -1, "longitude": -1}),
+        session,
+        encoding=encoding,
+    )
 
     pool = mp.Pool(mp.cpu_count())
     for _ in tqdm.tqdm(pool.imap_unordered(write_single_timestamp, files), total=len(files)):

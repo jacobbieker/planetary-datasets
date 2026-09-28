@@ -13,7 +13,6 @@ import os
 import pathlib
 from pathlib import Path
 import asyncio
-from assimilation.data.load.virtual.utils import datasource_cache_root
 import s3fs
 import nest_asyncio
 import shutil
@@ -78,6 +77,9 @@ class VirtualDataset:
         if not self._cache:
             shutil.rmtree(self.cache, ignore_errors=True)
 
+        if xr_array is None:
+            return None
+
         return xr_array.sortby("time")
 
     def _validate_time(self, times: list[datetime]) -> None:
@@ -125,7 +127,7 @@ class VirtualDataset:
     @property
     def cache(self) -> str:
         """Return appropriate cache location."""
-        cache_location = os.path.join(datasource_cache_root(), self._satellite)
+        cache_location = os.path.join("/data/cache/", self._satellite)
         if not self._cache:
-            cache_location = os.path.join(cache_location, f"tmp_{self._satellite}")
+            cache_location = os.path.join(cache_location, f"tmp2_{self._satellite}")
         return cache_location
