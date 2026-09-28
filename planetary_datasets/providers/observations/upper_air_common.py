@@ -25,16 +25,16 @@ value is already stored.
 
 from __future__ import annotations
 
-from typing import Iterable, List, Mapping, Sequence
+from typing import Mapping, Sequence
 
-import icechunk
 import numpy as np
 import pandas as pd
 import xarray as xr
-from loguru import logger
 
-from planetary_datasets.base import BaseProvider
-from planetary_datasets.common.store import existing_times
+from planetary_datasets.providers.observations._points import (
+    PointObservationProvider as _PointObservationProvider,
+)
+from planetary_datasets.providers.observations._points import clip_to_window
 
 #: Value used for a string field that an observation does not carry. Empty rather than
 #: "nan", so a consumer filtering on truthiness gets the right answer.
@@ -129,12 +129,17 @@ def table_to_dataset(
     return xr.Dataset(data_vars, coords={"time": times}, attrs=dict(attrs or {}))
 
 
-class PointObservationProvider(BaseProvider):
+class PointObservationProvider(_PointObservationProvider):
     """A provider whose partitions are time windows of individually-timed observations.
 
+    The window handling, the append-without-deduplication writer and the bounded scan of
+    stored coordinates all live in
+    :class:`planetary_datasets.providers.observations._points.PointObservationProvider`;
+    this subclass exists for the spelling its providers use and for the daily default.
+
     Subclasses set :attr:`partition_freq` to the width of one partition and are
-    responsible for returning only observations inside
-    :meth:`partition_window` from :meth:`~planetary_datasets.base.BaseProvider.process`.
+    responsible for returning only observations inside :meth:`partition_window` from
+    :meth:`~planetary_datasets.base.BaseProvider.process`.
     """
 
     #: Width of one partition, as a pandas offset alias: ``1D``, ``MS``, ``6h``.
@@ -142,8 +147,7 @@ class PointObservationProvider(BaseProvider):
 
     def partition_window(self, it: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
         """Half-open ``[start, end)`` window of wall-clock time covered by a partition."""
-        start = pd.Timestamp(it)
-        return start, start + pd.tseries.frequencies.to_offset(self.partition_freq)
+        return self.partition_bounds(it)
 
     def trim_to_window(self, ds: xr.Dataset, it: pd.Timestamp) -> xr.Dataset:
         """Drop observations outside the partition window.
@@ -152,37 +156,8 @@ class PointObservationProvider(BaseProvider):
         +/-6 hours, a sonde flight that crosses midnight. Keeping the overspill would
         write the same observation under two partitions.
         """
-        if self.append_dim not in ds.coords or ds.sizes.get(self.append_dim, 0) == 0:
-            return ds
         start, end = self.partition_window(it)
-        times = pd.DatetimeIndex(np.atleast_1d(ds[self.append_dim].values))
-        inside = (times >= start) & (times < end)
-        return ds.isel({self.append_dim: np.flatnonzero(inside)})
-
-    def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
-        """Write, unless the partition turned out to hold no observations.
-
-        A quiet day is normal for these sources and is not a failure. The base
-        implementation would index the first element of an empty time coordinate.
-        """
-        if processed.sizes.get(self.append_dim, 0) == 0:
-            logger.info(f"{self.name}: no observations in this partition, nothing to write")
-            return False
-        return super().write_to_icechunk(repo, processed)
-
-    def missing_timesteps(self, desired: Iterable[pd.Timestamp]) -> List[pd.Timestamp]:
-        """Return the partitions with no stored observation inside their window."""
-        desired = list(desired)
-        stored = existing_times(self.get_icechunk_repo(), append_dim=self.append_dim)
-        if stored.size == 0:
-            return desired
-        stored_index = pd.DatetimeIndex(np.atleast_1d(stored))
-        missing = []
-        for it in desired:
-            start, end = self.partition_window(it)
-            if not ((stored_index >= start) & (stored_index < end)).any():
-                missing.append(it)
-        return missing
+        return clip_to_window(ds, start, end, dim=self.append_dim)
 
 
 def concat_tables(tables: Sequence[pd.DataFrame]) -> pd.DataFrame:

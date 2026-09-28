@@ -622,7 +622,12 @@ class IGRAStationArchive:
             combine="nested",
             concat_dim="station",
             join="outer",
-            parallel=True,
+            # Opened one at a time on purpose. The netCDF4 C library is not thread-safe,
+            # and parallel=True hands the opens to dask threads: handles were crossed
+            # between files, so a station could come back carrying its neighbour's
+            # identifier, and an invalidated handle surfaced as "NetCDF: Not a valid ID".
+            # It failed roughly four runs in ten, more often on a loaded machine.
+            parallel=False,
         )
         return combined.sortby("time")
 

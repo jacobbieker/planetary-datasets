@@ -23,6 +23,7 @@ import pandas as pd
 import xarray as xr
 from loguru import logger
 
+from planetary_datasets.common.store import ALIGNMENT_COORDS
 from planetary_datasets.common.store import (
     missing_timesteps as _missing_timesteps,
 )
@@ -51,6 +52,12 @@ class BaseProvider(ABC):
     #: Guard the process step with a memory ceiling. Set False for providers that manage
     #: their own memory, such as the virtualized ingests.
     guard_memory: bool = True
+
+    #: Coordinates that must match the store exactly before an append. Override to add the
+    #: ones a dataset actually carries — ``step`` for a forecast, ``station`` for a station
+    #: table, a projected ``x``/``y`` for a radar grid. Providers previously reimplemented
+    #: :meth:`write_to_icechunk` solely to pass this through.
+    alignment_coords: tuple[str, ...] = ALIGNMENT_COORDS
 
     def __init__(self, config: Config | None = None):
         self._config = config
@@ -98,15 +105,29 @@ class BaseProvider(ABC):
         """Return the timesteps in ``desired`` that are not yet stored."""
         return _missing_timesteps(self.get_icechunk_repo(), list(desired), append_dim=self.append_dim)
 
+    def prepare_for_write(self, processed: xr.Dataset) -> xr.Dataset:
+        """Last chance to reshape a dataset before it is written.
+
+        Override to rechunk or reorder. Returning the input unchanged is fine; this exists
+        so a provider that only needs to rechunk does not have to reimplement
+        :meth:`write_to_icechunk` around it.
+        """
+        return processed
+
     def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
-        """Write a processed dataset. Providers may override for special handling."""
+        """Write a processed dataset.
+
+        Most providers should set :attr:`alignment_coords` or override
+        :meth:`prepare_for_write` rather than replacing this.
+        """
         return _write_to_icechunk(
             repo,
-            processed,
+            self.prepare_for_write(processed),
             append_dim=self.append_dim,
             # atleast_1d: a provider may hand back a scalar append coordinate, which the
             # writer itself tolerates.
             message=f"{self.name}: {np.atleast_1d(processed[self.append_dim].values)[0]}",
+            alignment_coords=self.alignment_coords,
         )
 
     @staticmethod

@@ -44,7 +44,6 @@ from loguru import logger
 
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common.store import ALIGNMENT_COORDS
-from planetary_datasets.common.store import write_to_icechunk as _write_to_icechunk
 
 STATION_DIM = "station"
 TIME_DIM = "time"
@@ -342,6 +341,8 @@ class StationObservationProvider(BaseProvider):
     max_workers: int = 8
     #: Free-form provenance recorded on the dataset.
     source_url: str = ""
+    #: Station tables align on the station axis as well as the grid coordinates.
+    alignment_coords = OBSERVATION_ALIGNMENT_COORDS
 
     def __init__(self, config=None, stations: Sequence[Station] | Iterable[str] | None = None):
         """Build the provider.
@@ -519,12 +520,3 @@ class StationObservationProvider(BaseProvider):
         """Hook for last-minute adjustments. The default returns ``ds`` unchanged."""
         return ds
 
-    def write_to_icechunk(self, repo, processed: xr.Dataset) -> bool:
-        """Write, refusing to append when the station axis has drifted."""
-        return _write_to_icechunk(
-            repo,
-            processed,
-            append_dim=self.append_dim,
-            message=f"{self.name}: {processed[self.append_dim].values[0]}",
-            alignment_coords=OBSERVATION_ALIGNMENT_COORDS,
-        )

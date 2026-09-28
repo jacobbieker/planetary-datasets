@@ -47,7 +47,6 @@ import xarray as xr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
-from planetary_datasets.common.store import write_to_icechunk as _write_to_icechunk
 from planetary_datasets.config import Config
 
 #: Leading ``YYYYMMDDhhmm`` stamp shared by both naming conventions.
@@ -303,22 +302,18 @@ class LocalArchiveRadarProvider(BaseProvider):
         """Return the timesteps in ``desired`` that are not yet stored, as naive UTC."""
         return super().missing_timesteps(pd.DatetimeIndex([to_naive_utc(t) for t in desired]))
 
+    #: Radar grids carry projected x/y rather than latitude/longitude.
+    alignment_coords = RADAR_ALIGNMENT_COORDS
+
+    def prepare_for_write(self, processed: xr.Dataset) -> xr.Dataset:
+        return self.chunk_for_write(processed)
+
     def chunk_for_write(self, ds: xr.Dataset) -> xr.Dataset:
         """Apply the store's chunking to a processed dataset."""
         chunks = {self.append_dim: self.time_chunk}
         chunks.update({dim: -1 for dim in ds.dims if dim != self.append_dim})
         return ds.chunk(chunks)
 
-    def write_to_icechunk(self, repo, processed: xr.Dataset) -> bool:
-        """Write a processed partition, also requiring the projected grid to line up."""
-        times = np.atleast_1d(processed[self.append_dim].values)
-        return _write_to_icechunk(
-            repo,
-            self.chunk_for_write(processed),
-            append_dim=self.append_dim,
-            message=f"{self.name}: {times[0]}",
-            alignment_coords=RADAR_ALIGNMENT_COORDS,
-        )
 
 
 def odim_grid(where: dict) -> Dict[str, np.ndarray]:
