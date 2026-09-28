@@ -39,7 +39,7 @@ import gc
 import time
 import warnings
 from collections.abc import Iterable, Iterator
-from typing import Any, Literal, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 import obstore as obs
