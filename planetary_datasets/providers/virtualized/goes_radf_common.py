@@ -1037,10 +1037,13 @@ def log_event(
     `channel_label` is the already-formatted channel name — "C13" for GOES ABI,
     a band name like "ir087" for instruments whose channels are not numbered.
     """
-    from pathlib import Path
+    from planetary_datasets.common.paths import safe_component, safe_join
 
-    log_path = Path(log_dir) / f"{satellite}_{channel_label}_ingest.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    # satellite and channel_label come from CLI arguments, so reduce each to a single path
+    # segment rather than letting a stray separator put the log outside log_dir.
+    name = f"{safe_component(satellite)}_{safe_component(channel_label)}_ingest.log"
+    pathlib.Path(log_dir).mkdir(parents=True, exist_ok=True)
+    log_path = safe_join(log_dir, name)
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with open(log_path, "a") as f:
         f.write(f"{timestamp} | {date_str} | {event_type} | {reason}\n")

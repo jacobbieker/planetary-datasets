@@ -25,6 +25,8 @@ from functools import lru_cache
 
 from dotenv import load_dotenv
 
+from planetary_datasets.common.paths import UnsafePath, default_scratch_dir, safe_join
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 DEFAULT_BUCKET = "us-west-2.opendata.source.coop"
@@ -114,7 +116,7 @@ class Config:
     force_path_style: bool | None = None
     allow_http: bool = False
     data_dir: pathlib.Path = field(default_factory=lambda: pathlib.Path("data"))
-    scratch_dir: pathlib.Path = field(default_factory=lambda: pathlib.Path("/tmp"))
+    scratch_dir: pathlib.Path = field(default_factory=default_scratch_dir)
     icechunk_local_path: pathlib.Path | None = None
     hf_repo_id: str | None = None
     memory_fraction: float = 0.8
@@ -133,9 +135,21 @@ class Config:
         one place is how a staging prefix ended up being reported but not written to.
         """
         prefix = prefix.strip("/")
+        if any(part == ".." for part in prefix.split("/")):
+            raise UnsafePath(f"store prefix {prefix!r} may not contain '..'")
         if self.prefix:
             prefix = f"{self.prefix.strip('/')}/{prefix}"
         return prefix
+
+    def local_store_path(self, prefix: str) -> pathlib.Path:
+        """Resolve a store prefix to a directory under the configured local root.
+
+        Raises :class:`~planetary_datasets.common.paths.UnsafePath` if the prefix would
+        escape that root.
+        """
+        if not self.use_local_store:
+            raise ValueError("no local store configured; set ICECHUNK_LOCAL_PATH")
+        return safe_join(self.icechunk_local_path, self.full_prefix(prefix))
 
     def store_path(self, prefix: str) -> str:
         """Resolve a store prefix to a full path.
@@ -144,17 +158,16 @@ class Config:
         It is returned as an ``s3://`` URI, or as a local directory when
         ``ICECHUNK_LOCAL_PATH`` is set.
         """
-        full = self.full_prefix(prefix)
         if self.use_local_store:
-            return str(self.icechunk_local_path / full)
-        return f"s3://{self.bucket}/{full}"
+            return str(self.local_store_path(prefix))
+        return f"s3://{self.bucket}/{self.full_prefix(prefix)}"
 
     def icechunk_storage(self, prefix: str):
         """Build an ``icechunk`` storage object for a store prefix."""
         import icechunk
 
         if self.use_local_store:
-            path = pathlib.Path(self.store_path(prefix))
+            path = self.local_store_path(prefix)
             path.mkdir(parents=True, exist_ok=True)
             return icechunk.local_filesystem_storage(str(path))
 
@@ -219,7 +232,11 @@ def load_config(env_file: str | os.PathLike | None = None, override: bool = Fals
         force_path_style=_env_bool("ICECHUNK_FORCE_PATH_STYLE"),
         allow_http=bool(_env_bool("ICECHUNK_ALLOW_HTTP", False)),
         data_dir=_env_path("PLANETARY_DATASETS_DATA_DIR", str(REPO_ROOT / "data")),
-        scratch_dir=_env_path("PLANETARY_DATASETS_SCRATCH_DIR", "/tmp"),
+        scratch_dir=(
+            pathlib.Path(_env("PLANETARY_DATASETS_SCRATCH_DIR")).expanduser()
+            if _env("PLANETARY_DATASETS_SCRATCH_DIR")
+            else default_scratch_dir()
+        ),
         icechunk_local_path=pathlib.Path(local_path).expanduser() if local_path else None,
         hf_repo_id=_env("HF_REPO_ID"),
         memory_fraction=_env_float("MEMORY_FRACTION", 0.8),
