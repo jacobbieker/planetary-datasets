@@ -1,11 +1,89 @@
-name: Bump version and auto-release
+name: Release
+
 on:
   push:
     branches:
       - main
+  # Lets you cut a release without pushing, and lets a failed publish be retried.
+  workflow_dispatch:
+    inputs:
+      part:
+        description: Which part of the version to bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write   # push the version bump commit and its tag
+  id-token: write   # PyPI trusted publishing
+
+# Never let two releases race for the same version number.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  call-run-python-release:
-    uses: openclimatefix/.github/.github/workflows/python-release.yml@v1.7.2
-    secrets:
-      token: ${{ secrets.PYPI_API_TOKEN }}
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+  release:
+    runs-on: ubuntu-latest
+    # The bump commit is pushed with GITHUB_TOKEN, which does not retrigger workflows, so
+    # this cannot loop. The guard is belt and braces for a manual push of that commit.
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    env:
+      # Trusted publishing is preferred and needs no stored secret, but an API token is
+      # used instead when one is configured. The `secrets` context is not allowed in a
+      # step `if:`, so the decision is made here.
+      HAS_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN != '' }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.13"
+
+      - run: python -m pip install --upgrade bump2version build twine
+
+      - name: Bump the version
+        id: bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          bump2version "${{ inputs.part || 'patch' }}"
+          version=$(python -c "import configparser; c = configparser.ConfigParser(); c.read('.bumpversion.cfg'); print(c['bumpversion']['current_version'])")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${version}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build the distributions
+        run: python -m build
+
+      - name: Check the metadata renders on PyPI
+        run: twine check dist/*
+
+      - name: Push the bump commit and tag
+        # Before publishing: if this fails nothing has been released, and a rerun starts
+        # from a consistent state. The reverse order would leave PyPI ahead of the repo.
+        run: git push --follow-tags
+
+      - name: Publish to PyPI via trusted publishing
+        if: env.HAS_PYPI_TOKEN != 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1
+        with:
+          # Makes a rerun after a partial failure a no-op rather than an error.
+          skip-existing: true
+
+      - name: Publish to PyPI with an API token
+        if: env.HAS_PYPI_TOKEN == 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.bump.outputs.version }}" dist/* \
+            --title "v${{ steps.bump.outputs.version }}" \
+            --generate-notes
