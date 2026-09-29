@@ -565,6 +565,16 @@ def test_epct_providers_publish_what_the_image_staged(ascat, tmp_path, monkeypat
     assert not staged.exists()
 
 
+def test_epct_providers_also_write_the_obs_store(ascat, local_config):
+    orbit = process_eps_netcdf(eps_orbit(along_track=10))
+    assert ascat.obs_store_prefix == "bkr/obs/metop_ascat.icechunk"
+    assert ascat.write_to_icechunk(ascat.get_icechunk_repo(), orbit) is True
+    obs = local_config.icechunk_repo(ascat.obs_store_prefix)
+    stored = xr.open_zarr(obs.readonly_session("main").store, consolidated=False)
+    assert stored.sizes["time"] == 1
+    assert MetopIasiProvider(config=local_config).obs_store_prefix is None
+
+
 def test_epct_download_asset_runs_the_image(local_config, monkeypatch):
     import dagster as dg
 

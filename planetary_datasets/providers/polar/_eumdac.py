@@ -130,6 +130,18 @@ class EumdacProvider(StagedFilesMixin, GranuleProvider):
         """True once the image has run; a partition with no products stages an empty dir."""
         return self.staged_dir(it).is_dir()
 
+    @property
+    def obs_store_prefix(self) -> str | None:
+        """Second store the tailored instruments write, beside the other observation stores."""
+        return f"bkr/obs/{self.name}.icechunk" if self.epct_product is not None else None
+
+    def write_to_icechunk(self, repo, processed) -> bool:
+        """Write the obs store first, so the primary store only ever holds what it does too."""
+        if self.obs_store_prefix is not None:
+            obs_repo = self.config.icechunk_repo(self.obs_store_prefix)
+            super().write_to_icechunk(obs_repo, processed)
+        return super().write_to_icechunk(repo, processed)
+
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
         """Download every product for the partition, or list the tailored files staged for it."""
         if self.epct_product is not None:
