@@ -26,8 +26,14 @@ COPY planetary_datasets ./planetary_datasets
 ENV PYTHONPATH=/app \
     HOME=/tmp \
     KENDA_ARCHIVE_DIR=/data/meteoswiss
-RUN mkdir -p /data/meteoswiss && chmod -R a+rwX /data /app
+# The archive is always a bind mount, which keeps the host directory's ownership, so the
+# image directory needs no write access of its own; nor does /app.
+RUN mkdir -p /data/meteoswiss
 VOLUME ["/data/meteoswiss"]
+
+# Root only for the install above. Dagster runs the container as the host user; run by
+# hand, it falls back to the unprivileged image user rather than root.
+USER $MAMBA_USER
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/_entrypoint.sh", \
             "python", "-m", "planetary_datasets.providers.kenda_download"]
