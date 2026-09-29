@@ -207,6 +207,73 @@ def default_store_prefix(
     return f"{base.strip('/')}/{satellite}_{product}.icechunk"
 
 
+def rename_store_objects(
+    store, old_prefix: str, new_prefix: str, *, max_workers: int = 32
+) -> int:
+    """Move every object under old_prefix to new_prefix. Returns the count.
+
+    Used to freeze the live store when a new codec era begins: it is renamed
+    to the last day it holds and a fresh live store is opened. On S3 each
+    rename is a server-side copy plus a delete, so no data passes through this
+    process, but it is one request pair per object — measured at ~100 obj/s
+    from EC2 with 128 workers, against ~46 obj/s from a laptop. Nothing is
+    deleted until its copy has succeeded, so an interrupted rename leaves both
+    prefixes readable rather than losing objects.
+    """
+    old_prefix = old_prefix.rstrip("/") + "/"
+    new_prefix = new_prefix.rstrip("/") + "/"
+    if old_prefix == new_prefix:
+        return 0
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def move(src: str) -> None:
+        obs.rename(store, src, new_prefix + src[len(old_prefix):])
+
+    moved = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for page in obs.list(store, prefix=old_prefix):
+            paths = [o["path"] for o in page]
+            # Force the map so a failure surfaces here, per page, rather than
+            # being swallowed by the generator.
+            list(pool.map(move, paths))
+            moved += len(paths)
+    return moved
+
+
+def make_s3_store_renamer(
+    bucket: str,
+    prefix_for: Callable[[str], str],
+    *,
+    region: str = "us-west-2",
+    access_key_id: str | None = None,
+    secret_access_key: str | None = None,
+    endpoint_url: str | None = None,
+    max_workers: int = 64,
+):
+    """Build a rename_store_fn that moves one store prefix to another on S3.
+
+    ``prefix_for(suffix)`` returns the key prefix of the store with that
+    suffix, so the caller keeps ownership of its own naming scheme.
+    """
+    def rename(old_suffix: str, new_suffix: str) -> None:
+        kwargs: dict[str, Any] = {"region": region}
+        if access_key_id:
+            kwargs["access_key_id"] = access_key_id
+            kwargs["secret_access_key"] = secret_access_key
+        if endpoint_url:
+            kwargs["endpoint_url"] = endpoint_url
+        store = obs.store.S3Store(bucket, **kwargs)
+        src, dst = prefix_for(old_suffix), prefix_for(new_suffix)
+        with timer(f"Freezing store {src!r} -> {dst!r}"):
+            moved = rename_store_objects(
+                store, src, dst, max_workers=max_workers
+            )
+        print(f"    moved {moved} object(s)", flush=True)
+
+    return rename
+
+
 def suffixed_prefix(prefix: str, *, channel: int | None = None, era: str | None = None) -> str:
     """Append the per-channel and per-era suffixes to a store prefix.
 
@@ -1214,6 +1281,8 @@ def ingest_all_days(
     repo_reopen_fn: Callable[[], "icechunk.Repository"] | None = None,
     reopen_every: int = REOPEN_REPO_EVERY,
     scan_start_fn: Callable[[str], np.datetime64] = parse_scan_start_to_datetime,
+    store_suffix: str = "",
+    rename_store_fn: Callable[[str, str], None] | None = None,
 ) -> None:
     """Ingest every selected day for a single channel into repo, in batches
     of batch_size days per commit.
@@ -1615,22 +1684,56 @@ def ingest_all_days(
                     and retry_from not in rewound_to
                 ):
                     date_str = codec_change_date.isoformat()
+                    # The live store has no era suffix. Freeze it by renaming
+                    # it to the last day it actually holds, then open a fresh
+                    # live store for the new era. Without a rename hook, or
+                    # when this is not the live store, fall back to naming the
+                    # new store for the change date so existing callers work.
+                    frozen_as = None
+                    if rename_store_fn is not None and not store_suffix:
+                        info = _last_committed_day(repo, branch, group)
+                        if info is not None:
+                            (last_year, last_doy), _ = info
+                            frozen_as = _date_from_doy(
+                                last_year, last_doy
+                            ).isoformat()
                     print(
                         f"\nCodec change detected on {date_str} for "
-                        f"{channel_label}. Creating new Icechunk store "
-                        f"with date suffix '{date_str}' and retrying from "
-                        f"batch {retry_from}.",
+                        f"{channel_label}. "
+                        + (
+                            f"Freezing the live store as '{frozen_as}' and "
+                            f"opening a new live store"
+                            if frozen_as
+                            else f"Creating new Icechunk store with date "
+                            f"suffix '{date_str}'"
+                        )
+                        + f", retrying from batch {retry_from}.",
                         flush=True,
                     )
                     if log_dir is not None:
                         log_event(
                             log_dir, satellite, channel_label, date_str,
                             "CODEC_CHANGE",
-                            f"Creating new store for codec era "
-                            f"starting {date_str}, retrying from batch "
-                            f"{retry_from}",
+                            (
+                                f"Froze live store as {frozen_as}; new live "
+                                f"store, retrying from batch {retry_from}"
+                            )
+                            if frozen_as
+                            else (
+                                f"Creating new store for codec era "
+                                f"starting {date_str}, retrying from batch "
+                                f"{retry_from}"
+                            ),
                         )
-                    repo = repo_factory(date_str)
+                    if frozen_as:
+                        # Drop the handle before moving the objects underneath
+                        # it, then reopen the (now empty) live prefix.
+                        del repo
+                        gc.collect()
+                        rename_store_fn("", frozen_as)
+                        repo = repo_factory("")
+                    else:
+                        repo = repo_factory(date_str)
                     preprocess_fn = make_preprocess_no_codec_check(
                         epoch_threshold, keep_data_vars
                     )
@@ -2032,7 +2135,7 @@ def ingest_backwards(
     epoch_threshold: np.datetime64,
     end_date: datetime.date | None = None,
     start_date: datetime.date | None = None,
-    first_store_suffix: str | None = None,
+    first_store_suffix: str = "",
     branch: str = "main",
     group: str | None = "",
     batch_size: int = 1,
@@ -2058,11 +2161,13 @@ def ingest_backwards(
     probe_list_fn: Callable[..., list[str]] | None = None,
     day_urls_fn: Callable[[tuple[int, int]], list[str]] | None = None,
     scan_start_fn: Callable[[str], np.datetime64] = parse_scan_start_to_datetime,
+    rename_store_fn: Callable[[str, str], None] | None = None,
 ) -> list[str]:
     """Ingest a channel backwards from end_date, one store per combinable era.
 
     The newest era is discovered and ingested first, into a store suffixed with
-    first_store_suffix (today's date by default); older eras land in stores
+    first_store_suffix (the LIVE store, unsuffixed by default); older eras
+    are frozen into stores
     suffixed with the date each era ends. Within an era the days are ingested
     forwards, oldest first, because Icechunk can only append along `t`.
 
@@ -2110,10 +2215,12 @@ def ingest_backwards(
     )
 
     for era_index, (era_end, era_days) in enumerate(eras):
+        # The newest era is the LIVE store and carries no era suffix, so its
+        # name stays stable as new days are appended. Older eras are frozen
+        # and named for the last day they hold. A caller can still pin the
+        # first store's suffix to resume an already-suffixed store.
         suffix = (
-            first_store_suffix
-            if era_index == 0 and first_store_suffix
-            else era_end.isoformat()
+            first_store_suffix if era_index == 0 else era_end.isoformat()
         )
         era_start = _date_from_doy(*era_days[0][0])
         label = product_label
@@ -2161,6 +2268,8 @@ def ingest_backwards(
             open_batch_fn=open_batch_fn,
             day_urls_fn=day_urls_fn,
             scan_start_fn=scan_start_fn,
+            store_suffix=suffix,
+            rename_store_fn=rename_store_fn,
             repo_reopen_fn=lambda s=suffix: repo_factory(s),
         )
         suffixes.append(suffix)

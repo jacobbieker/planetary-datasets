@@ -138,6 +138,33 @@ def _open_repo(
     )
 
 
+def _store_prefix(args, channel: int | None, date_suffix: str | None) -> str:
+    """S3 key prefix of one store — mirrors the naming used by _open_repo."""
+    base = args.prefix or common.default_store_prefix(args.satellite)
+    return common.suffixed_prefix(
+        base, channel=channel, era=date_suffix or None
+    )
+
+
+def _make_renamer(args, channel: int | None):
+    """rename_store_fn used to freeze the live store on a codec change.
+
+    Only for explicit ``s3`` storage: ``config`` resolves its bucket through
+    the config layer and ``local`` needs no hook, so both return None and the
+    caller falls back to naming the new store for the change date.
+    """
+    if getattr(args, "storage", None) != "s3":
+        return None
+    return common.make_s3_store_renamer(
+        args.bucket,
+        lambda suffix, ch=channel: _store_prefix(args, ch, suffix),
+        region=args.region,
+        access_key_id=getattr(args, "access_key_id", None),
+        secret_access_key=getattr(args, "secret_access_key", None),
+        endpoint_url=getattr(args, "endpoint_url", None),
+    )
+
+
 def _module_for(satellite: str):
     """Return the per-satellite RadF module."""
     from planetary_datasets.providers.virtualized import (
@@ -171,6 +198,7 @@ def ingest_channel_backwards(
     zarr_async_concurrency: int | None = None,
     log_dir: str | None = None,
     max_eras: int | None = None,
+    rename_store_fn=None,
 ) -> list[str]:
     """Ingest a single channel backwards from end_date, one store per era.
 
@@ -215,11 +243,13 @@ def ingest_channel_backwards(
         end_date=walk_end,
         start_date=max(start_date, mod.ARCHIVE_START_DATE) if start_date
                    else mod.ARCHIVE_START_DATE,
-        # walk_end, not end_date: for a decommissioned satellite the walk is
-        # clamped to the end of its archive, and naming the store after an
-        # unclamped "today" would mint a new one on every run instead of
-        # resuming the previous one.
-        first_store_suffix=walk_end.isoformat(),
+        # The newest era is the LIVE store and carries no era suffix, so its
+        # name is stable as days are appended and a rerun always resumes it.
+        # This also removes the old hazard of naming it after an unclamped
+        # "today", which minted a fresh store on every run for a
+        # decommissioned satellite.
+        first_store_suffix="",
+        rename_store_fn=rename_store_fn,
         branch=branch,
         group="",
         batch_size=batch_size,
@@ -633,6 +663,7 @@ def ingest_channel_from_args(
             zarr_async_concurrency=args.zarr_async_concurrency,
             log_dir=args.log_dir,
             max_eras=args.max_eras,
+            rename_store_fn=_make_renamer(args, channel),
         ))
 
     ingest_channel(

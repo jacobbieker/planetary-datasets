@@ -702,11 +702,14 @@ def test_unified_cli_rejects_an_unknown_satellite():
         ingest_goes_radf._module_for("goes99")
 
 
-def test_backwards_walk_names_the_store_after_the_clamped_anchor(monkeypatch):
+def test_backwards_walk_gives_the_live_store_an_anchor_independent_name(monkeypatch):
     """A decommissioned satellite's newest store must have a stable name.
 
-    The walk is clamped to the archive end, so naming the store after an
-    unclamped "today" renamed it on every run and no run resumed the last.
+    The walk is clamped to the archive end. Naming the newest store after the
+    anchor renamed it whenever the anchor moved, so no run resumed the last
+    one. The newest era is now the live store and carries no era suffix at
+    all, which is stable by construction — asserted here across two different
+    anchors. The clamp still applies to the walk itself.
     """
     from planetary_datasets.providers.virtualized import ingest_goes_radf
 
@@ -720,14 +723,18 @@ def test_backwards_walk_names_the_store_after_the_clamped_anchor(monkeypatch):
     monkeypatch.setattr(mod, "ARCHIVE_END_DATE", datetime.date(2023, 1, 10), raising=False)
     monkeypatch.setattr(common, "ingest_backwards", fake_ingest_backwards)
 
-    ingest_goes_radf.ingest_channel_backwards(
-        lambda suffix: None,
-        "goes17",
-        13,
-        end_date=datetime.date(2026, 9, 27),
-    )
-    assert captured["first_store_suffix"] == "2023-01-10"
-    assert captured["end_date"] == datetime.date(2023, 1, 10)
+    for anchor in (datetime.date(2026, 9, 27), datetime.date(2027, 3, 1)):
+        captured.clear()
+        ingest_goes_radf.ingest_channel_backwards(
+            lambda suffix: None,
+            "goes17",
+            13,
+            end_date=anchor,
+        )
+        # Same store whichever anchor the run used.
+        assert captured["first_store_suffix"] == ""
+        # ...while the walk itself is still clamped to the archive end.
+        assert captured["end_date"] == datetime.date(2023, 1, 10)
 
 
 def test_date_to_fake_url_round_trips_through_parse_url_to_day():
