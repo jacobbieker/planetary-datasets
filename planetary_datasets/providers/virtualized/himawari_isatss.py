@@ -112,11 +112,24 @@ N_TILES = 88
 #: The half-kilometre band, given its own pass as GOES C02 and GK-2A vi006 are.
 HIGH_RES_BAND = "C03"
 
-#: Logical store name, before the satellite, band and era discriminators are
-#: appended. Resolved against the configured bucket, or ``ICECHUNK_LOCAL_PATH``.
-#: Sits under ``bkr/geo/virtualized`` with the other virtualized geostationary
-#: stores, rather than loose in ``bkr/geo`` beside the materialised ones.
-DEFAULT_STORE_BASE = "bkr/geo/virtualized/himawari_isatss"
+#: Root the stores sit under, alongside the other virtualized geostationary
+#: stores rather than loose in ``bkr/geo`` beside the materialised ones.
+#: Resolved against the configured bucket, or ``ICECHUNK_LOCAL_PATH``.
+DEFAULT_STORE_ROOT = "bkr/geo/virtualized"
+
+#: Logical store name, before the band and era discriminators are appended.
+#: The satellite leads the name — ``himawari8_isatss_C01_2022-12-31`` — because
+#: the two spacecraft's archives are separate datasets that happen to share a
+#: product, and that is the layout already written to Source Cooperative.
+#: ``None`` means "derive it from the satellite", which is what every caller
+#: wants; pass a string only to redirect a run somewhere else entirely.
+DEFAULT_STORE_BASE: str | None = None
+
+
+def default_store_base(satellite: str) -> str:
+    """Logical store name for one satellite, e.g. ``.../himawari9_isatss``."""
+    return f"{DEFAULT_STORE_ROOT}/{satellite}_isatss"
+
 
 #: AHI full disk runs a ten-minute cadence, so one day is ~144 scenes. Used as
 #: the manifest split size so a split matches a day-sized commit batch.
@@ -710,10 +723,18 @@ def store_prefix_for(
     satellite: str,
     band: str,
     era: str | None = None,
-    base: str = DEFAULT_STORE_BASE,
+    base: str | None = DEFAULT_STORE_BASE,
 ) -> str:
-    """Store prefix for one satellite and band, optionally for one era."""
-    return virtual_repo.store_prefix(base, satellite, band.upper(), era)
+    """Store prefix for one satellite and band, optionally for one era.
+
+    With no ``base`` the name is derived from the satellite, giving
+    ``bkr/geo/virtualized/himawari9_isatss_C13_2025-12-31.icechunk``. An
+    explicit ``base`` is used as given, so a run can be redirected without the
+    satellite being spliced into the middle of the name.
+    """
+    return virtual_repo.store_prefix(
+        base or default_store_base(satellite), band.upper(), era
+    )
 
 
 def open_repo(
@@ -721,7 +742,7 @@ def open_repo(
     band: str,
     era: str | None = None,
     *,
-    base: str = DEFAULT_STORE_BASE,
+    base: str | None = DEFAULT_STORE_BASE,
     config: Config | None = None,
 ) -> "icechunk.Repository":
     """Open or create the store for one satellite and band, via the config.
@@ -747,7 +768,7 @@ def ingest_day(
     band: str,
     *,
     repo: icechunk.Repository | None = None,
-    base: str = DEFAULT_STORE_BASE,
+    base: str | None = DEFAULT_STORE_BASE,
     config: Config | None = None,
     branch: str = "main",
     group: str | None = "",

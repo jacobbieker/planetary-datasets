@@ -9,10 +9,13 @@
 #   docker run ... goes-virtual --satellite goes19 --channel 13 --max-eras 1 \
 #       --storage s3 --bucket ... --prefix ...
 #
-# Prefix the arguments with `gk2a` to reach the GK-2A CLI instead:
+# Prefix the arguments with `gk2a` (or `himawari`) to reach that CLI instead.
+# Those two take their destination from the config environment rather than
+# from --storage/--bucket flags, so only the store name is given here:
 #
-#   docker run ... goes-virtual gk2a --band ir087 --max-eras 1 \
-#       --storage s3 --bucket ... --prefix ...
+#   docker run ... -e ICECHUNK_BUCKET=... -e AWS_ACCESS_KEY_ID=... \
+#       goes-virtual gk2a --band ir087 --max-eras 1 \
+#       --store-base bkr/geo/virtualized/gk2a_ami_fd
 set -u
 
 RUN="python -u -m planetary_datasets.providers.virtualized.ingest_goes_radf"
@@ -131,17 +134,14 @@ launch() {  # satellite, tag, extra args...
   echo "  $sat/$tag -> pid $! (log: $OUT/${sat}_${tag}.log)"
 }
 
-# The GK-2A and Himawari CLIs do not yet take --storage config, so these two
-# still pass the keys as arguments. Switch them over when they do.
+# Like the GOES CLI, these two resolve the bucket and credentials from the
+# environment exported above; --store-base names the store within it. It is
+# passed explicitly rather than left to the CLI default so that overriding
+# SC_PREFIX_ROOT still moves these stores with the GOES ones.
 launch_gk2a() {  # tag, extra args...
   local tag=$1; shift
   $GK2A_CMD \
-    --storage s3 \
-    --bucket "$SC_BUCKET" \
-    --prefix "${SC_PREFIX_ROOT}/gk2a_ami_fd.icechunk" \
-    --region "$SC_REGION" \
-    --access-key-id "$SC_ACCESS_KEY_ID" \
-    --secret-access-key "$SC_SECRET_ACCESS_KEY" \
+    --store-base "${SC_PREFIX_ROOT}/gk2a_ami_fd" \
     --end-date "$END_DATE" \
     --batch-size "$BATCH_SIZE" \
     --log-dir "$OUT/logs" \
@@ -155,12 +155,7 @@ launch_himawari() {  # satellite, tag, extra args...
   local sat=$1 tag=$2; shift 2
   HIMAWARI_TILE_THREADS=$HIMAWARI_TILE_THREADS $HIMA_CMD \
     --satellite "$sat" \
-    --storage s3 \
-    --bucket "$SC_BUCKET" \
-    --prefix "${SC_PREFIX_ROOT}/${sat}_isatss.icechunk" \
-    --region "$SC_REGION" \
-    --access-key-id "$SC_ACCESS_KEY_ID" \
-    --secret-access-key "$SC_SECRET_ACCESS_KEY" \
+    --store-base "${SC_PREFIX_ROOT}/${sat}_isatss" \
     --end-date "$END_DATE" \
     --batch-size "$BATCH_SIZE" \
     --log-dir "$OUT/logs" \
