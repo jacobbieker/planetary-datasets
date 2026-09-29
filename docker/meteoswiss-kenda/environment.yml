@@ -1,0 +1,21 @@
+# Environment for the MeteoSwiss KENDA-CH1 downloader.
+#
+# Kept apart from the project's pixi environment because meteodata-lab pins numpy<2.4,
+# pandas<3 and an exact eccodes, which the project environment cannot satisfy. The pins
+# are the ones the original download scripts ran with.
+name: meteoswiss-kenda
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy<2.4
+  - pandas<3
+  - eccodes=2.47.0
+  - xarray
+  - requests
+  - loguru
+  - pip
+  - pip:
+      - meteodata-lab==0.7.2
+      # Reports the download back to the launching Dagster asset.
+      - dagster-pipes>=1.12,<2
