@@ -73,6 +73,11 @@ MEMORY_HEADROOM_GB = 1.0
 MEMORY_CLASS_TAG = "planetary/memory_class"
 MEMORY_GB_TAG = "planetary/memory_gb"
 
+#: Set to ``"manual"`` on an asset to keep it out of the scheduled jobs: it is then only
+#: materialised by hand or by a backfill. For ingests whose every partition is heavy
+#: enough that running the newest one on a timer is not wanted by default.
+SCHEDULE_TAG = "planetary/schedule"
+
 #: Memory classes, as (name, inclusive upper bound in GB). Concurrency limits in
 #: ``dags/dagster.yaml`` and in the executor are derived from these bounds.
 MEMORY_CLASSES: tuple[tuple[str, float], ...] = (

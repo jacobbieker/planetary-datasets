@@ -1,31 +1,32 @@
 #!/bin/bash
-# Build the OPERA radar downloader image, and optionally push it.
+# Build the earth2studio downloader image, and optionally push it.
 #
 # The repo root is not a usable build context (planetary_datasets/ can hold terabytes of
-# downloaded data), so the one module the image runs is staged into a temporary
-# directory and built from there.
+# downloaded data), so the modules the image runs are staged into a temporary directory
+# and built from there.
 #
 #   ./build.sh                                      # local image only
 #   REGISTRY=ghcr.io/jacobbieker PUSH=1 ./build.sh  # also push
 #
-# The Dagster asset runs $OPERA_RADAR_IMAGE, which defaults to the local tag below.
+# The Dagster assets run $EARTH2STUDIO_IMAGE, which defaults to the local tag below.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$HERE/../.." && pwd)
 
-IMAGE_NAME=${IMAGE_NAME:-planetary-datasets/opera-radar}
+IMAGE_NAME=${IMAGE_NAME:-planetary-datasets/earth2studio}
 TAG=${TAG:-$(date -u +%Y%m%d)}
 
-CTX=$(mktemp -d "${TMPDIR:-/tmp}/opera-radar-ctx.XXXXXX")
+CTX=$(mktemp -d "${TMPDIR:-/tmp}/earth2studio-ctx.XXXXXX")
 trap 'rm -rf "$CTX"' EXIT
 
 mkdir -p "$CTX/planetary_datasets/providers"
 : > "$CTX/planetary_datasets/__init__.py"
 : > "$CTX/planetary_datasets/providers/__init__.py"
-cp "$REPO_ROOT/planetary_datasets/providers/opera_download.py" \
-   "$CTX/planetary_datasets/providers/opera_download.py"
-cp "$HERE/environment.yml" "$HERE/requirements.txt" "$HERE/Dockerfile" "$CTX/"
+for f in opera_download.py earth2studio_download.py; do
+  cp "$REPO_ROOT/planetary_datasets/providers/$f" "$CTX/planetary_datasets/providers/$f"
+done
+cp "$HERE/environment.yml" "$HERE/requirements.txt" "$HERE/Dockerfile" "$HERE/run.sh" "$CTX/"
 
 docker build -t "$IMAGE_NAME:$TAG" -t "$IMAGE_NAME:latest" "$CTX"
 

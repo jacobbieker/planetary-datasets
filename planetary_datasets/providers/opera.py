@@ -1,7 +1,7 @@
 """EUMETNET OPERA pan-European radar composites.
 
 The processing half of the OPERA pipeline. The download half,
-:mod:`planetary_datasets.providers.opera_download`, runs in the ``docker/opera-radar``
+:mod:`planetary_datasets.providers.opera_download`, runs in the ``docker/earth2studio``
 image (its ``earth2studio`` dependency cannot be installed here) and stages each hour as
 one netCDF file; the providers below read those files and append them to the icechunk
 stores the original scripts built:

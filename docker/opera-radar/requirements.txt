@@ -1,6 +1,0 @@
-# Installed after environment.yml. torch comes from the CPU-only index (see Dockerfile):
-# the OPERA source never touches a GPU, and the CUDA wheels would add several GB.
-torch>=2.5
-earth2studio @ git+https://github.com/NVIDIA/earth2studio.git@bc549d6f2ce49395d6736f8144dbd65067e6e8aa
-# Reports the staged hour back to the launching Dagster asset.
-dagster-pipes>=1.12,<2
