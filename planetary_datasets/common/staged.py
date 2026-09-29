@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import shutil
 from typing import List
 
 import pandas as pd
@@ -33,10 +34,9 @@ class StagedFilesMixin:
         return not self.missing_timesteps(pd.DatetimeIndex([to_naive_utc(it)]))
 
     def discard_staged(self, it: pd.Timestamp, settled: bool = False) -> List[pathlib.Path]:
-        """Delete the staged files once the store no longer accepts the partition."""
+        """Delete the staging directory once the store no longer accepts the partition."""
         if not settled and self.appendable(it):
             return []
         removed = self.staged_files(it)
-        for path in removed:
-            path.unlink(missing_ok=True)
+        shutil.rmtree(self.staged_dir(to_naive_utc(it)), ignore_errors=True)
         return removed

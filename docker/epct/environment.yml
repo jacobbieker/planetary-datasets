@@ -1,0 +1,14 @@
+# The EUMETSAT Data Tailor ships on the eumetsat channel with pins the project env cannot
+# meet. 4.x adds the MetOp-SG products (METimage VIIL1RAD/VIIL2*, UVNS UVNL2*).
+name: epct
+channels:
+  - conda-forge
+  - eumetsat
+dependencies:
+  - python=3.12
+  - epct=4.3.0
+  - epct_plugin_gis=4.2.0
+  - epct_plugin_netcdf_generator=4.1.0
+  - epct_plugin_ncarrays=2.1.0
+  - msg-gdal-driver=1.0.0
+  - eumdac
