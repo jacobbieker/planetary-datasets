@@ -27,8 +27,8 @@ from planetary_datasets.providers.observations.opensky import (
 )
 from planetary_datasets.providers.observations.osmc import (
     PLATFORM_TYPES,
+    OSMCFloat32Provider,
     OSMCProvider,
-    store_prefix_for,
 )
 
 # OpenSky publishes its public samples for Mondays only, and the set is closed: it ends
@@ -106,19 +106,19 @@ def opensky_states_asset(context) -> dg.MaterializeResult:
     )
 
 
-def _osmc_asset(dataset: str):
+def _osmc_asset(dataset: str, provider_cls: type[OSMCProvider] = OSMCProvider):
     """Build the monthly OSMC asset for one platform group."""
-    provider_prefix = store_prefix_for(dataset)
+    template = provider_cls(dataset)
 
     @dg.asset(
-        name=f"osmc_{dataset}",
+        name=template.name,
         description=f"NOAA OSMC GTS marine observations: {dataset}.\n\n{__doc__}",
         group_name="flight_marine",
         partitions_def=osmc_partitions,
         metadata={
             "source": dg.MetadataValue.text("noaa-osmc-erddap"),
             "platform_type": dg.MetadataValue.text(str(PLATFORM_TYPES[dataset] or "all types")),
-            "store": dg.MetadataValue.text(provider_prefix),
+            "store": dg.MetadataValue.text(template.store_prefix),
         },
         compute_kind="python",
         tags={"dagster/concurrency_key": "osmc-erddap"},
@@ -126,7 +126,7 @@ def _osmc_asset(dataset: str):
     # context intentionally unannotated; see opensky_states_asset above.
     def _asset(context) -> dg.MaterializeResult:
         it = naive_utc(context.partition_time_window.start)
-        provider = OSMCProvider(dataset)
+        provider = provider_cls(dataset)
         wrote = provider.run_partition(it)
         return dg.MaterializeResult(
             metadata={
@@ -141,4 +141,8 @@ def _osmc_asset(dataset: str):
 
 # A plain module-level list: dagster's load_assets_from_modules picks up AssetsDefinition
 # objects held in a list as well as bound directly to a module attribute.
-osmc_assets = [_osmc_asset(dataset) for dataset in PLATFORM_TYPES]
+osmc_assets = [
+    _osmc_asset(dataset, cls)
+    for cls in (OSMCProvider, OSMCFloat32Provider)
+    for dataset in PLATFORM_TYPES
+]
