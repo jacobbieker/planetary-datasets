@@ -20,54 +20,48 @@ from planetary_datasets.providers.virtualized import (
     virtual_repo,
 )
 
-EXTRA_CREDENTIAL_VARS = [
-    "EUMETSAT_CONSUMER_KEY",
-    "EUMETSAT_CONSUMER_SECRET",
-    "HF_TOKEN",
-    "HF_REPO_ID",
-]
 
 
 @pytest.fixture
-def bare_config(tmp_path, monkeypatch):
-    """A config with no credentials at all, writing stores under tmp_path."""
-    for var in EXTRA_CREDENTIAL_VARS:
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    return load_config(env_file=tmp_path / "absent.env")
+def repo(local_config):
+    """An empty virtual-reference store under the test's data directory."""
+    return virtual_repo.open_virtual_repo(
+        "bkr/geo/test.icechunk", virtual_buckets=gk2a_ami_fd.BUCKET, config=local_config
+    )
 
 
 # =============================================================================
 # Store naming
 # =============================================================================
-def test_store_prefix_appends_discriminators():
-    assert (
-        virtual_repo.store_prefix("bkr/geo/gk2a", "ir087", "2026-01-01")
-        == "bkr/geo/gk2a_ir087_2026-01-01.icechunk"
-    )
-
-
-def test_store_prefix_drops_empty_parts():
-    assert virtual_repo.store_prefix("bkr/geo/gk2a", "ir087", None) == "bkr/geo/gk2a_ir087.icechunk"
-    assert virtual_repo.store_prefix("bkr/geo/gk2a", "", "") == "bkr/geo/gk2a.icechunk"
-
-
-def test_store_prefix_does_not_double_the_suffix():
-    assert virtual_repo.store_prefix("bkr/geo/gk2a.icechunk", "ir087") == (
-        "bkr/geo/gk2a_ir087.icechunk"
-    )
-
-
-def test_gk2a_store_prefix_lowercases_the_band():
-    assert gk2a_ami_fd.store_prefix_for("IR087") == "bkr/geo/gk2a_ami_fd_ir087.icechunk"
-
-
-def test_himawari_store_prefix_separates_the_satellites():
-    h8 = himawari_isatss.store_prefix_for("himawari8", "c13")
-    h9 = himawari_isatss.store_prefix_for("himawari9", "c13")
-    assert h8 != h9
-    assert h8.endswith("_himawari8_C13.icechunk")
+def test_published_store_prefixes():
+    """Store names are persisted, so each discriminator rule is pinned here."""
+    cases = [
+        (
+            virtual_repo.store_prefix("bkr/geo/gk2a", "ir087", "2026-01-01"),
+            "bkr/geo/gk2a_ir087_2026-01-01.icechunk",
+        ),
+        # Empty discriminators are dropped.
+        (virtual_repo.store_prefix("bkr/geo/gk2a", "ir087", None), "bkr/geo/gk2a_ir087.icechunk"),
+        (virtual_repo.store_prefix("bkr/geo/gk2a", "", ""), "bkr/geo/gk2a.icechunk"),
+        # The suffix is not doubled.
+        (
+            virtual_repo.store_prefix("bkr/geo/gk2a.icechunk", "ir087"),
+            "bkr/geo/gk2a_ir087.icechunk",
+        ),
+        # The band is lowercased for GK-2A...
+        (gk2a_ami_fd.store_prefix_for("IR087"), "bkr/geo/gk2a_ami_fd_ir087.icechunk"),
+        # ...and the Himawari satellites get stores of their own.
+        (
+            himawari_isatss.store_prefix_for("himawari8", "c13"),
+            "bkr/geo/himawari_isatss_himawari8_C13.icechunk",
+        ),
+        (
+            himawari_isatss.store_prefix_for("himawari9", "c13"),
+            "bkr/geo/himawari_isatss_himawari9_C13.icechunk",
+        ),
+    ]
+    for prefix, expected in cases:
+        assert prefix == expected
 
 
 @pytest.mark.parametrize("bucket", ["noaa-gk2a-pds", "s3://noaa-gk2a-pds", "s3://noaa-gk2a-pds/"])
@@ -78,39 +72,26 @@ def test_bucket_urls_are_normalised(bucket):
 # =============================================================================
 # Virtual repositories
 # =============================================================================
-def test_open_virtual_repo_writes_to_the_local_store(bare_config):
-    repo = virtual_repo.open_virtual_repo(
-        "bkr/geo/test.icechunk",
-        virtual_buckets=gk2a_ami_fd.BUCKET,
-        config=bare_config,
-    )
-    assert (bare_config.icechunk_local_path / "bkr/geo/test.icechunk").is_dir()
+def test_open_virtual_repo_writes_to_the_local_store(repo, local_config):
+    assert (local_config.icechunk_local_path / "bkr/geo/test.icechunk").is_dir()
     # A store with no commits yet describes as empty rather than raising.
     assert virtual_repo.describe_store(repo) in ({}, {"timesteps": 0})
 
 
-def test_open_virtual_repo_rejects_an_empty_bucket_list(bare_config):
+def test_open_virtual_repo_rejects_an_empty_bucket_list(local_config):
     with pytest.raises(ValueError, match="at least one virtual source bucket"):
         virtual_repo.open_virtual_repo(
-            "bkr/geo/test.icechunk", virtual_buckets=[], config=bare_config
+            "bkr/geo/test.icechunk", virtual_buckets=[], config=local_config
         )
 
 
-def test_check_stores_counts_unreadable_stores(bare_config):
+def test_check_stores_counts_unreadable_stores_without_creating_them(local_config):
+    prefix = "bkr/geo/never-written.icechunk"
     failed = virtual_repo.check_stores(
-        ["bkr/geo/never-written.icechunk"],
-        virtual_buckets=gk2a_ami_fd.BUCKET,
-        config=bare_config,
+        [prefix], virtual_buckets=gk2a_ami_fd.BUCKET, config=local_config
     )
     assert failed == 1
-
-
-def test_check_stores_does_not_create_the_store_it_checks(bare_config):
-    prefix = "bkr/geo/never-written.icechunk"
-    virtual_repo.check_stores(
-        [prefix], virtual_buckets=gk2a_ami_fd.BUCKET, config=bare_config
-    )
-    assert not (bare_config.icechunk_local_path / prefix).exists()
+    assert not (local_config.icechunk_local_path / prefix).exists()
 
 
 # =============================================================================
@@ -118,7 +99,6 @@ def test_check_stores_does_not_create_the_store_it_checks(bare_config):
 # =============================================================================
 def _write_days(repo, days: list[str], group: str | None = None) -> None:
     """Commit one timestep per named day into an empty virtual-reference store."""
-    import numpy as np
     import xarray as xr
     from icechunk.xarray import to_icechunk
 
@@ -131,12 +111,7 @@ def _write_days(repo, days: list[str], group: str | None = None) -> None:
     session.commit("test data")
 
 
-def test_day_coverage_reports_steps_and_the_newest_timestep(bare_config):
-    repo = virtual_repo.open_virtual_repo(
-        "bkr/geo/coverage.icechunk",
-        virtual_buckets=gk2a_ami_fd.BUCKET,
-        config=bare_config,
-    )
+def test_day_coverage_reports_steps_and_the_newest_timestep(repo):
     assert virtual_repo.day_coverage(repo, dt.date(2026, 1, 1)) == (0, None)
 
     _write_days(repo, ["2026-01-01T00:00", "2026-01-01T00:10", "2026-01-02T00:00"])
@@ -145,51 +120,31 @@ def test_day_coverage_reports_steps_and_the_newest_timestep(bare_config):
     assert newest == np.datetime64("2026-01-02T00:00", "ns")
 
 
-def test_guard_append_order_reports_a_day_already_stored(bare_config):
-    repo = virtual_repo.open_virtual_repo(
-        "bkr/geo/order-ok.icechunk",
-        virtual_buckets=gk2a_ami_fd.BUCKET,
-        config=bare_config,
-    )
+def test_guard_append_order_reports_a_day_already_stored(repo):
     _write_days(repo, ["2026-01-02T00:00"])
     assert virtual_repo.guard_append_order(repo, dt.date(2026, 1, 2), "test") == 1
     # A newer day is still appendable.
     assert virtual_repo.guard_append_order(repo, dt.date(2026, 1, 3), "test") == 0
 
 
-def test_guard_append_order_refuses_a_day_behind_the_store(bare_config):
-    repo = virtual_repo.open_virtual_repo(
-        "bkr/geo/order-bad.icechunk",
-        virtual_buckets=gk2a_ami_fd.BUCKET,
-        config=bare_config,
-    )
+def test_guard_append_order_refuses_a_day_behind_the_store(repo):
     _write_days(repo, ["2026-01-05T00:00"])
     with pytest.raises(virtual_repo.OutOfOrderPartition, match="2026-01-04"):
         virtual_repo.guard_append_order(repo, dt.date(2026, 1, 4), "test")
 
 
-def test_require_committed_raises_when_the_day_is_absent(bare_config):
-    repo = virtual_repo.open_virtual_repo(
-        "bkr/geo/committed.icechunk",
-        virtual_buckets=gk2a_ami_fd.BUCKET,
-        config=bare_config,
-    )
+def test_require_committed_raises_when_the_day_is_absent(repo):
     _write_days(repo, ["2026-01-05T00:00"])
     assert virtual_repo.require_committed(repo, dt.date(2026, 1, 5), "test") == 1
     with pytest.raises(virtual_repo.NothingCommitted, match="2026-01-06"):
         virtual_repo.require_committed(repo, dt.date(2026, 1, 6), "test")
 
 
-def test_the_guards_read_the_subgroup_the_ingest_writes_to(bare_config):
+def test_the_guards_read_the_subgroup_the_ingest_writes_to(repo):
     """Regression: the ingest wrote into a subgroup while the guards read the root.
 
     A successful ingest therefore raised NothingCommitted, and a re-run found nothing to skip.
     """
-    repo = virtual_repo.open_virtual_repo(
-        "bkr/geo/grouped.icechunk",
-        virtual_buckets=gk2a_ami_fd.BUCKET,
-        config=bare_config,
-    )
     group = f"{gk2a_ami_fd.PRODUCT_LABEL}/vi006"
     _write_days(repo, ["2026-01-05T00:00"], group=group)
 
@@ -206,7 +161,7 @@ def test_gk2a_ingest_day_uses_one_group_for_the_write_and_the_guards(monkeypatch
 
     monkeypatch.setattr(
         virtual_repo, "guard_append_order",
-        lambda repo, date, what, **kw: seen.setdefault("guard", kw.get("group")) and 0 or 0,
+        lambda repo, date, what, **kw: seen.__setitem__("guard", kw.get("group")) or 0,
     )
     monkeypatch.setattr(
         gk2a_ami_fd, "list_day_files", lambda *a, **k: ["s3://bucket/one.nc"]
@@ -285,13 +240,14 @@ def test_a_redelivered_himawari_tile_does_not_cost_the_whole_scene():
     assert len(set(slot)) == 3
 
 
+TWO_SCENES = [_isatss_url(slot, 1) for slot in ("20260010000000", "20260010010000")]
+
+
 def test_a_batch_with_a_failed_scene_is_refused(monkeypatch):
     """Regression: the failed scene was logged and dropped and the day committed as complete.
 
     The store only appends along `t`, so the gap could never be filled.
     """
-    urls = [_isatss_url(slot, 1) for slot in ("20260010000000", "20260010010000")]
-
     def stitch(slot_urls, **kwargs):
         if "s20260010010000" in slot_urls[0]:
             raise ValueError("Expected 88 tiles for a full scene, got 40")
@@ -300,12 +256,11 @@ def test_a_batch_with_a_failed_scene_is_refused(monkeypatch):
     monkeypatch.setattr(himawari_isatss, "stitch_slot", stitch)
 
     with pytest.raises(himawari_isatss.IncompleteBatch, match="1 of 2 scene"):
-        himawari_isatss.build_batch(urls, registry=None, parser=object())
+        himawari_isatss.build_batch(TWO_SCENES, registry=None, parser=object())
 
 
 def test_a_batch_with_a_failed_scene_can_be_forced(monkeypatch):
     """For a day the archive genuinely never published in full."""
-    urls = [_isatss_url(slot, 1) for slot in ("20260010000000", "20260010010000")]
     concatenated = []
 
     def stitch(slot_urls, **kwargs):
@@ -320,7 +275,7 @@ def test_a_batch_with_a_failed_scene_can_be_forced(monkeypatch):
 
     assert (
         himawari_isatss.build_batch(
-            urls, registry=None, parser=object(), allow_missing_scenes=True
+            TWO_SCENES, registry=None, parser=object(), allow_missing_scenes=True
         )
         == "out"
     )
@@ -345,50 +300,48 @@ def test_mtg_keeps_only_netcdf_entries():
     assert mtg.select_netcdf(entries) == ["a_chunk.nc", "b_chunk.nc"]
 
 
-def test_mtg_without_credentials_fails_loudly(bare_config):
+def test_mtg_without_credentials_fails_loudly(local_config):
     with pytest.raises(MissingCredential) as exc:
-        mtg.open_datastore(config=bare_config)
+        mtg.open_datastore(config=local_config)
     assert "EUMETSAT_CONSUMER_KEY" in str(exc.value)
     assert "EUMETSAT_CONSUMER_SECRET" in str(exc.value)
 
 
-def test_mtg_archive_dir_is_under_the_configured_data_dir(bare_config):
-    path = mtg.archive_dir("fdhi", dt.datetime(2026, 1, 2, 3), config=bare_config)
-    assert path == bare_config.data_dir / mtg.DATA_SUBDIR / "2026010203" / "FDHI"
+def test_mtg_archive_dir_is_under_the_configured_data_dir(local_config):
+    path = mtg.archive_dir("fdhi", dt.datetime(2026, 1, 2, 3), config=local_config)
+    assert path == local_config.data_dir / mtg.DATA_SUBDIR / "2026010203" / "FDHI"
 
 
 # =============================================================================
 # Hugging Face publishing
 # =============================================================================
-def test_hub_upload_needs_a_repo_id(tmp_path, bare_config):
+@pytest.fixture
+def store_folder(tmp_path):
     folder = tmp_path / "store.zarr"
     folder.mkdir()
+    return folder
+
+
+def test_hub_upload_needs_a_repo_id(store_folder, local_config):
     with pytest.raises(ValueError, match="No Hugging Face repo id"):
-        hub.upload_folder(folder, config=bare_config)
+        hub.upload_folder(store_folder, config=local_config)
 
 
-def test_hub_upload_needs_a_token(tmp_path, bare_config):
-    folder = tmp_path / "store.zarr"
-    folder.mkdir()
+def test_hub_upload_needs_a_token(store_folder, local_config):
     with pytest.raises(MissingCredential, match="HF_TOKEN"):
-        hub.upload_folder(folder, repo_id="someone/some-dataset", config=bare_config)
+        hub.upload_folder(store_folder, repo_id="someone/some-dataset", config=local_config)
 
 
-def test_hub_upload_needs_the_folder_to_exist(tmp_path, bare_config):
+def test_hub_upload_needs_the_folder_to_exist(tmp_path, local_config):
     with pytest.raises(FileNotFoundError):
-        hub.upload_folder(tmp_path / "absent", repo_id="someone/some-dataset", config=bare_config)
+        hub.upload_folder(tmp_path / "absent", repo_id="someone/some-dataset", config=local_config)
 
 
-def test_hub_upload_dry_run_uploads_nothing(tmp_path, monkeypatch):
-    for var in EXTRA_CREDENTIAL_VARS:
-        monkeypatch.delenv(var, raising=False)
+def test_hub_upload_dry_run_uploads_nothing(store_folder, tmp_path, monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "not-a-real-token")
     monkeypatch.setenv("HF_REPO_ID", "someone/some-dataset")
     cfg = load_config(env_file=tmp_path / "absent.env")
-
-    folder = tmp_path / "store.zarr"
-    folder.mkdir()
-    assert hub.upload_folder(folder, config=cfg, dry_run=True) == "someone/some-dataset"
+    assert hub.upload_folder(store_folder, config=cfg, dry_run=True) == "someone/some-dataset"
 
 
 # =============================================================================
@@ -400,11 +353,10 @@ def test_definitions_build_from_the_assets():
 
     from dags.assets import geo_satellites
 
-    defs = dg.Definitions(
+    dg.Definitions(
         assets=geo_satellites.ASSETS,
         resources={"pipes_docker_client": PipesDockerClient()},
     )
-    assert defs is not None
     names = {asset.key.to_user_string() for asset in geo_satellites.ASSETS}
     assert names == {
         "gk2a_ami_fd_virtual",

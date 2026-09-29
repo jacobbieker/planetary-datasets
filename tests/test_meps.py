@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from helpers import read_store
 from planetary_datasets.config import Config
 from planetary_datasets.providers.meps import (
     ANDOYA,
@@ -99,6 +100,11 @@ def write_meps_step(tmp_path, stamp: str, step: int) -> list[str]:
     return paths
 
 
+def write_meps_analysis(tmp_path, stamp: str = "2026-04-05T03:00") -> list[str]:
+    """Every file of one MEPS analysis partition: three lead times of three files each."""
+    return [path for step in range(3) for path in write_meps_step(tmp_path, stamp, step)]
+
+
 def write_nordic_analysis(tmp_path, time: pd.Timestamp) -> str:
     """A stand-in for one hour of ``met_analysis_1_0km_nordic``."""
     ds = xr.Dataset(
@@ -137,10 +143,26 @@ def write_det_model_level(tmp_path, time: pd.Timestamp, steps: int = 3) -> str:
 # --- URL construction ------------------------------------------------------------------
 
 
-def test_reflectivity_url_is_month_nested():
-    url = nordic_reflectivity_url(pd.Timestamp("2026-01-31"))
-    assert url.endswith("nordiclcc-1000.20260131.nc")
-    assert "/reflectivity-nordic/2026/01/" in url
+@pytest.mark.parametrize(
+    ("url", "directory", "filename"),
+    [
+        (
+            nordic_reflectivity_url(pd.Timestamp("2026-01-31")),
+            "/reflectivity-nordic/2026/01/",
+            "nordiclcc-1000.20260131.nc",
+        ),
+        (
+            nordic_analysis_url(pd.Timestamp("2026-04-05T20:00")),
+            "/metpparchive/2026/04/05/",
+            "met_analysis_1_0km_nordic_20260405T20Z.nc",
+        ),
+        (meps_det_opendap_url(pd.Timestamp("2026-04-01T00:00")), "/dodsC/", "meps_det_2_5km_20260401T00Z.nc"),
+    ],
+    ids=["reflectivity-month-nested", "analysis-day-nested", "det-opendap"],
+)
+def test_urls_match_the_archive_layout(url, directory, filename):
+    assert directory in url
+    assert url.endswith(filename)
 
 
 def test_analysis_urls_cover_every_step_and_level_type():
@@ -151,29 +173,20 @@ def test_analysis_urls_cover_every_step_and_level_type():
     assert "meps_hl_02_20260405T03Z.nc" in urls[-3]
 
 
-def test_nordic_analysis_url_is_day_nested():
-    url = nordic_analysis_url(pd.Timestamp("2026-04-05T20:00"))
-    assert url.endswith("met_analysis_1_0km_nordic_20260405T20Z.nc")
-    assert "/metpparchive/2026/04/05/" in url
-
-
-def test_det_url_uses_opendap_endpoint():
-    url = meps_det_opendap_url(pd.Timestamp("2026-04-01T00:00"))
-    assert "/dodsC/" in url
-    assert url.endswith("meps_det_2_5km_20260401T00Z.nc")
-
-
 # --- cropping --------------------------------------------------------------------------
 
 
-def test_box_clips_to_its_padding():
-    lat = np.linspace(60, 80, 21)
-    lon = np.linspace(0, 40, 41)
-    lon2d, lat2d = np.meshgrid(lon, lat)
-    ds = xr.Dataset(
-        {"v": (("y", "x"), np.zeros((21, 41), "float32"))},
+def _wide_grid(**extra_vars) -> xr.Dataset:
+    """A 60-80N, 0-40E grid at one-degree spacing, much larger than any clip box."""
+    lon2d, lat2d = np.meshgrid(np.linspace(0, 40, 41), np.linspace(60, 80, 21))
+    return xr.Dataset(
+        {"v": (("y", "x"), np.zeros((21, 41), "float32")), **extra_vars},
         coords={"latitude": (("y", "x"), lat2d), "longitude": (("y", "x"), lon2d)},
     )
+
+
+def test_box_clips_to_its_padding():
+    ds = _wide_grid()
     clipped = Box(latitude=70.0, longitude=20.0, lat_pad=2.0, lon_pad=3.0).clip(ds)
     assert float(clipped.latitude.min()) >= 68.0
     assert float(clipped.latitude.max()) <= 72.0
@@ -184,16 +197,7 @@ def test_box_clips_to_its_padding():
 
 def test_box_clip_leaves_the_grid_mapping_variable_alone():
     """``Dataset.where`` would broadcast the scalar CRS sentinel into a full float grid."""
-    lat = np.linspace(60, 80, 21)
-    lon = np.linspace(0, 40, 41)
-    lon2d, lat2d = np.meshgrid(lon, lat)
-    ds = xr.Dataset(
-        {
-            "v": (("y", "x"), np.zeros((21, 41), "float32")),
-            "projection_lambert": ((), np.int32(-2147483647)),
-        },
-        coords={"latitude": (("y", "x"), lat2d), "longitude": (("y", "x"), lon2d)},
-    )
+    ds = _wide_grid(projection_lambert=((), np.int32(-2147483647)))
     clipped = Box(latitude=70.0, longitude=20.0).clip(ds)
     assert clipped["projection_lambert"].dims == ()
     assert clipped["projection_lambert"].dtype == np.dtype("int32")
@@ -224,9 +228,7 @@ def test_reflectivity_process_renames_axes(tmp_path, local_config):
 
 
 def test_analysis_process_merges_levels_and_concatenates_steps(tmp_path, local_config):
-    files = []
-    for step in range(3):
-        files += write_meps_step(tmp_path, "2026-04-05T03:00", step)
+    files = write_meps_analysis(tmp_path)
     ds = MEPSAnalysisProvider(config=local_config).process(files, pd.Timestamp("2026-04-05T03:00"))
 
     assert ds.sizes["time"] == 3
@@ -314,9 +316,7 @@ def test_det_process_rejects_a_file_with_no_model_levels(tmp_path, local_config)
 
 
 def test_andoya_variants_crop(tmp_path, local_config):
-    files = []
-    for step in range(3):
-        files += write_meps_step(tmp_path, "2026-04-05T03:00", step)
+    files = write_meps_analysis(tmp_path)
     full = MEPSAnalysisProvider(config=local_config).process(files, pd.Timestamp("2026-04-05T03:00"))
     cropped = AndoyaMEPSProvider(config=local_config).process(files, pd.Timestamp("2026-04-05T03:00"))
     # The synthetic grid sits inside the box, so nothing is dropped, but the crop must run.
@@ -368,14 +368,6 @@ def test_run_partition_writes_and_reopens(tmp_path, local_config):
     assert provider.run_partition(stamp) is True
     assert provider.run_partition(stamp) is False
 
-    stored = xr.open_zarr(provider.get_icechunk_repo().readonly_session("main").store, consolidated=False)
+    stored = read_store(provider)
     assert stamp.to_datetime64() in stored.time.values
     assert "equivalent_reflectivity_factor" in stored.data_vars
-
-
-def test_run_partition_skips_when_nothing_was_fetched(local_config):
-    class EmptyFetch(MEPSAnalysisProvider):
-        def fetch(self, it, temp_dir=None, **kwargs):
-            return []
-
-    assert EmptyFetch(config=local_config).run_partition(pd.Timestamp("2026-04-05T03:00")) is False

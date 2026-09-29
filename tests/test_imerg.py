@@ -10,6 +10,8 @@ import pytest
 import requests
 import xarray as xr
 
+from helpers import read_store
+from planetary_datasets import config as config_module
 from planetary_datasets.config import MissingCredential
 from planetary_datasets.providers.imerg import (
     DEFAULT_VARIABLES,
@@ -24,6 +26,7 @@ from planetary_datasets.providers.imerg import (
 
 LAT = np.arange(-89.75, 90.0, 5.0, dtype="float32")
 LON = np.arange(-179.75, 180.0, 5.0, dtype="float32")
+DAY = pd.Timestamp("2024-01-01")
 
 
 def write_granule(path: pathlib.Path, time: pd.Timestamp, variables=DEFAULT_VARIABLES) -> pathlib.Path:
@@ -55,19 +58,15 @@ def isolated_scratch(tmp_path, monkeypatch):
 @pytest.fixture
 def day_of_granules(tmp_path):
     """Four half-hourly granules for 2024-01-01, written out of order."""
-    day = pd.Timestamp("2024-01-01")
     paths = []
     for i in (2, 0, 3, 1):
-        t = day + pd.Timedelta(minutes=30 * i)
+        t = DAY + pd.Timedelta(minutes=30 * i)
         name = f"3B-HHR.MS.MRG.3IMERG.20240101-S{i:02d}0000-E000000.{i * 30:04d}.V07B.HDF5"
         paths.append(str(write_granule(tmp_path / "granules" / name, t)))
-    return day, paths
+    return paths
 
 
 class TestProducts:
-    def test_three_runs_are_registered(self):
-        assert set(PRODUCTS) == {"early", "late", "final"}
-
     def test_each_run_has_its_own_store(self):
         prefixes = {p.store_prefix for p in PRODUCTS.values()}
         assert len(prefixes) == len(PRODUCTS)
@@ -79,10 +78,8 @@ class TestProducts:
     def test_collections(self, code, collection):
         assert PRODUCTS[code].collection == collection
 
-    def test_lookup_is_case_insensitive(self):
+    def test_lookup_is_case_insensitive_and_passes_products_through(self):
         assert get_product("FINAL") is PRODUCTS["final"]
-
-    def test_product_objects_pass_through(self):
         assert get_product(PRODUCTS["early"]) is PRODUCTS["early"]
 
     def test_unknown_product_is_rejected(self):
@@ -95,26 +92,22 @@ class TestProviderWiring:
         assert IMERGProvider("early", config=local_config).store_prefix.endswith("imerg_early.icechunk")
         assert IMERGProvider("final", config=local_config).store_prefix.endswith("imerg_final.icechunk")
 
-    def test_store_path_is_local_under_test_config(self, local_config, tmp_path):
-        path = IMERGProvider("late", config=local_config).store_path
-        assert path.startswith(str(tmp_path))
-
-    def test_no_absolute_paths_are_hardcoded(self, local_config, tmp_path, monkeypatch):
-        monkeypatch.setenv("PLANETARY_DATASETS_SCRATCH_DIR", str(tmp_path / "scratch"))
-        from planetary_datasets import config as config_module
-
-        cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
-        provider = IMERGProvider("final", config=cfg)
+    def test_no_absolute_paths_are_hardcoded(self, local_config, tmp_path):
+        provider = IMERGProvider("late", config=local_config)
+        assert provider.store_path.startswith(str(tmp_path))
         assert str(provider.staging_dir).startswith(str(tmp_path / "scratch"))
 
-    def test_listing_url_uses_day_of_year(self, local_config):
-        provider = IMERGProvider("final", config=local_config)
-        url = provider.listing_url(pd.Timestamp("2024-03-01"))
-        assert url.endswith("/GPM_3IMERGHH.07/2024/061/")
-
-    def test_listing_url_pads_day_of_year(self, local_config):
-        provider = IMERGProvider("early", config=local_config)
-        assert provider.listing_url(pd.Timestamp("2021-01-05")).endswith("/2021/005/")
+    @pytest.mark.parametrize(
+        ("code", "day", "suffix"),
+        [
+            ("final", "2024-03-01", "/GPM_3IMERGHH.07/2024/061/"),
+            ("early", "2021-01-05", "/GPM_3IMERGHHE.07/2021/005/"),
+        ],
+        ids=["uses_day_of_year", "pads_day_of_year"],
+    )
+    def test_listing_url(self, local_config, code, day, suffix):
+        provider = IMERGProvider(code, config=local_config)
+        assert provider.listing_url(pd.Timestamp(day)).endswith(suffix)
 
     def test_staging_dir_is_per_day(self, local_config):
         provider = IMERGProvider("final", config=local_config)
@@ -135,10 +128,7 @@ class TestCredentials:
     def test_session_is_reused(self, local_config, monkeypatch):
         monkeypatch.setenv("EARTHDATA_USERNAME", "user")
         monkeypatch.setenv("EARTHDATA_PASSWORD", "pass")
-        from planetary_datasets import config as config_module
-
-        cfg = config_module.load_config(env_file=pathlib.Path("/nonexistent.env"))
-        provider = IMERGProvider("final", config=cfg)
+        provider = IMERGProvider("final", config=config_module.load_config())
         assert provider.session() is provider.session()
         assert provider.session().auth == ("user", "pass")
 
@@ -147,43 +137,54 @@ class TestEarthdataSession:
     """The redirect to urs.earthdata.nasa.gov must keep the header, nothing else may."""
 
     @staticmethod
-    def _rebuild(from_url: str, to_url: str) -> bool:
+    def _rebuild(from_url: str, to_url: str, header: bool = True) -> bool:
         session = EarthdataSession()
         prepared = requests.Request("GET", to_url).prepare()
-        prepared.headers["Authorization"] = "Basic secret"
+        if header:
+            prepared.headers["Authorization"] = "Basic secret"
         response = requests.Response()
         response.request = requests.Request("GET", from_url).prepare()
         session.rebuild_auth(prepared, response)
         return "Authorization" in prepared.headers
 
-    def test_header_kept_across_nasa_hosts(self):
-        assert self._rebuild(
-            "https://gpm1.gesdisc.eosdis.nasa.gov/data/x.HDF5",
-            "https://urs.earthdata.nasa.gov/oauth/authorize",
-        )
-
-    def test_header_kept_on_same_host(self):
-        assert self._rebuild("https://gpm1.gesdisc.eosdis.nasa.gov/a", "https://gpm1.gesdisc.eosdis.nasa.gov/b")
-
-    def test_header_stripped_for_third_parties(self):
-        assert not self._rebuild(
-            "https://gpm1.gesdisc.eosdis.nasa.gov/data/x.HDF5",
-            "https://evil.example.com/collect",
-        )
-
-    def test_header_stripped_on_https_downgrade(self):
-        assert not self._rebuild(
-            "https://gpm1.gesdisc.eosdis.nasa.gov/data/x.HDF5",
-            "http://urs.earthdata.nasa.gov/oauth/authorize",
-        )
+    @pytest.mark.parametrize(
+        ("from_url", "to_url", "kept"),
+        [
+            (
+                "https://gpm1.gesdisc.eosdis.nasa.gov/data/x.HDF5",
+                "https://urs.earthdata.nasa.gov/oauth/authorize",
+                True,
+            ),
+            (
+                "https://gpm1.gesdisc.eosdis.nasa.gov/a",
+                "https://gpm1.gesdisc.eosdis.nasa.gov/b",
+                True,
+            ),
+            (
+                "https://gpm1.gesdisc.eosdis.nasa.gov/data/x.HDF5",
+                "https://evil.example.com/collect",
+                False,
+            ),
+            (
+                "https://gpm1.gesdisc.eosdis.nasa.gov/data/x.HDF5",
+                "http://urs.earthdata.nasa.gov/oauth/authorize",
+                False,
+            ),
+        ],
+        ids=[
+            "kept_across_nasa_hosts",
+            "kept_on_same_host",
+            "stripped_for_third_parties",
+            "stripped_on_https_downgrade",
+        ],
+    )
+    def test_header(self, from_url, to_url, kept):
+        assert self._rebuild(from_url, to_url) is kept
 
     def test_absent_header_is_not_invented(self):
-        session = EarthdataSession()
-        prepared = requests.Request("GET", "https://urs.earthdata.nasa.gov/").prepare()
-        response = requests.Response()
-        response.request = requests.Request("GET", "https://example.com/").prepare()
-        session.rebuild_auth(prepared, response)
-        assert "Authorization" not in prepared.headers
+        assert not self._rebuild(
+            "https://example.com/", "https://urs.earthdata.nasa.gov/", header=False
+        )
 
 
 class FakeResponse:
@@ -212,26 +213,18 @@ class TestListing:
         provider._session = type("S", (), {"get": lambda self, url, **kw: response})()
         return provider
 
-    def test_only_hdf5_links_are_returned(self, local_config):
-        granules = self._provider(local_config, FakeResponse(self.LISTING)).list_remote_granules(
-            pd.Timestamp("2024-01-01")
-        )
+    def test_only_hdf5_links_are_returned_absolute_and_sorted(self, local_config):
+        provider = self._provider(local_config, FakeResponse(self.LISTING))
+        granules = provider.list_remote_granules(DAY)
         assert len(granules) == 2
         assert all(g.endswith(".HDF5") for g in granules)
-
-    def test_granules_are_absolute_and_sorted(self, local_config):
-        granules = self._provider(local_config, FakeResponse(self.LISTING)).list_remote_granules(
-            pd.Timestamp("2024-01-01")
-        )
         assert granules == sorted(granules)
         assert granules[0].startswith("https://gpm1.gesdisc.eosdis.nasa.gov/")
         assert "S000000" in granules[0]
 
     def test_absolute_hrefs_are_not_appended_to_the_directory(self, local_config):
         listing = '<a href="/data/GPM_L3/GPM_3IMERGHH.07/2024/001/granule.HDF5">g</a>'
-        granules = self._provider(local_config, FakeResponse(listing)).list_remote_granules(
-            pd.Timestamp("2024-01-01")
-        )
+        granules = self._provider(local_config, FakeResponse(listing)).list_remote_granules(DAY)
         assert granules == [
             "https://gpm1.gesdisc.eosdis.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07/2024/001/granule.HDF5"
         ]
@@ -244,21 +237,19 @@ class TestListing:
 
     def test_server_error_raises(self, local_config):
         with pytest.raises(requests.HTTPError):
-            self._provider(local_config, FakeResponse("boom", 503)).list_remote_granules(
-                pd.Timestamp("2024-01-01")
-            )
+            self._provider(local_config, FakeResponse("boom", 503)).list_remote_granules(DAY)
 
 
 class TestProcess:
     def test_granule_is_tidied(self, local_config, day_of_granules):
-        _, paths = day_of_granules
+        paths = day_of_granules
         data = IMERGProvider("final", config=local_config).open_granule(paths[0])
         assert "latitude" in data.coords and "longitude" in data.coords
         assert not {"lat", "lon", "latv", "lonv"} & set(data.dims)
         assert set(data.data_vars) == set(DEFAULT_VARIABLES)
 
     def test_data_is_float16_but_coords_are_not(self, local_config, day_of_granules):
-        _, paths = day_of_granules
+        paths = day_of_granules
         data = IMERGProvider("final", config=local_config).open_granule(paths[0])
         assert all(data[v].dtype == np.dtype("float16") for v in data.data_vars)
         assert data.latitude.dtype != np.dtype("float16")
@@ -266,36 +257,32 @@ class TestProcess:
         assert np.allclose(data.latitude.values, LAT)
 
     def test_missing_variable_is_an_error(self, local_config, tmp_path):
-        path = write_granule(
-            tmp_path / "short.HDF5", pd.Timestamp("2024-01-01"), variables=("precipitation",)
-        )
+        path = write_granule(tmp_path / "short.HDF5", DAY, variables=("precipitation",))
         with pytest.raises(ValueError, match="missing"):
             IMERGProvider("final", config=local_config).open_granule(path)
 
     def test_variable_subset_is_honoured(self, local_config, day_of_granules):
-        _, paths = day_of_granules
+        paths = day_of_granules
         provider = IMERGProvider("final", config=local_config, variables=["precipitation"])
         assert list(provider.open_granule(paths[0]).data_vars) == ["precipitation"]
 
     def test_day_is_concatenated_in_time_order(self, local_config, day_of_granules):
-        day, paths = day_of_granules
-        data = IMERGProvider("final", config=local_config).process(paths, day)
+        data = IMERGProvider("final", config=local_config).process(day_of_granules, DAY)
         assert data.sizes["time"] == 4
         assert list(data.time.values) == sorted(data.time.values)
         assert data.time.values[0] == np.datetime64("2024-01-01T00:00")
 
     def test_process_records_provenance(self, local_config, day_of_granules):
-        day, paths = day_of_granules
-        data = IMERGProvider("late", config=local_config).process(paths, day)
+        data = IMERGProvider("late", config=local_config).process(day_of_granules, DAY)
         assert data.attrs["imerg_product"] == "late"
         assert data.attrs["imerg_collection"] == "GPM_3IMERGHHL.07"
 
     def test_empty_input_is_an_error(self, local_config):
         with pytest.raises(ValueError, match="no input files"):
-            IMERGProvider("final", config=local_config).process([], pd.Timestamp("2024-01-01"))
+            IMERGProvider("final", config=local_config).process([], DAY)
 
 
-def stage_day(provider, day, count=3):
+def stage_day(provider, day=DAY, count=3):
     """Stage ``count`` granules for ``day`` and return their paths."""
     staged = provider.staging_dir_for(day)
     return [
@@ -320,71 +307,57 @@ class TestStoreRoundTrip:
         monkeypatch.setattr(IMERGProvider, "fetch", fetch)
         return calls
 
-    def test_write_staged_appends_and_cleans_up(self, local_config, no_network):
-        provider = IMERGProvider("final", config=local_config)
-        day = pd.Timestamp("2024-01-01")
-        stage_day(provider, day, count=GRANULES_PER_DAY)
+    @pytest.fixture
+    def provider(self, local_config):
+        return IMERGProvider("final", config=local_config)
 
-        assert provider.write_staged(day) is True
+    def test_write_staged_appends_and_cleans_up(self, provider, no_network):
+        stage_day(provider, count=GRANULES_PER_DAY)
+
+        assert provider.write_staged(DAY) is True
         assert no_network == [], "a complete day must not be re-listed"
-        assert provider.staged_files(day) == []
+        assert provider.staged_files(DAY) == []
 
         repo = provider.get_icechunk_repo()
-        stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+        stored = read_store(repo)
         assert stored.sizes["time"] == GRANULES_PER_DAY
         assert np.datetime64("2024-01-01T00:00") in stored.time.values
 
-    def test_a_short_day_is_refused(self, local_config):
+    def test_a_short_day_is_refused(self, provider):
         """A partial write would mark the day done and leave a permanent gap."""
-        provider = IMERGProvider("final", config=local_config)
-        day = pd.Timestamp("2024-01-01")
-        stage_day(provider, day, count=3)
+        stage_day(provider, count=3)
 
         with pytest.raises(IncompleteDay, match="3/48"):
-            provider.write_staged(day)
-        assert provider.missing_timesteps(pd.DatetimeIndex([day])) == [day]
+            provider.write_staged(DAY)
+        assert provider.missing_timesteps(pd.DatetimeIndex([DAY])) == [DAY]
         # The inputs survive so the retry only has to fetch what is missing.
-        assert len(provider.staged_files(day)) == 3
+        assert len(provider.staged_files(DAY)) == 3
 
-    def test_a_short_day_can_be_forced(self, local_config):
-        provider = IMERGProvider("final", config=local_config)
-        day = pd.Timestamp("2024-01-01")
-        stage_day(provider, day, count=3)
-        assert provider.write_staged(day, allow_partial=True) is True
+    def test_a_forced_short_day_is_written_once(self, provider):
+        stage_day(provider, count=1)
+        assert provider.write_staged(DAY, allow_partial=True) is True
+        assert provider.missing_timesteps(pd.DatetimeIndex([DAY])) == []
 
-    def test_second_run_is_a_no_op(self, local_config):
-        provider = IMERGProvider("final", config=local_config)
-        day = pd.Timestamp("2024-01-01")
-        stage_day(provider, day, count=1)
-        assert provider.write_staged(day, allow_partial=True) is True
-        assert provider.missing_timesteps(pd.DatetimeIndex([day])) == []
-
-        stage_day(provider, day, count=1)
-        assert provider.write_staged(day, allow_partial=True) is False
+        stage_day(provider, count=1)
+        assert provider.write_staged(DAY, allow_partial=True) is False
         # Nothing was written, so the re-staged file is left where it is.
-        assert provider.staged_files(day) != []
+        assert provider.staged_files(DAY) != []
 
-    def test_staged_files_survive_a_rejected_write(self, local_config, monkeypatch):
-        provider = IMERGProvider("final", config=local_config)
-        day = pd.Timestamp("2024-01-01")
-        stage_day(provider, day, count=GRANULES_PER_DAY)
+    def test_staged_files_survive_a_rejected_write(self, provider, monkeypatch):
+        stage_day(provider, count=GRANULES_PER_DAY)
         monkeypatch.setattr(IMERGProvider, "write_to_icechunk", lambda self, repo, ds: False)
 
-        assert provider.write_staged(day) is False
-        assert len(provider.staged_files(day)) == GRANULES_PER_DAY
+        assert provider.write_staged(DAY) is False
+        assert len(provider.staged_files(DAY)) == GRANULES_PER_DAY
 
-    def test_run_partition_uses_the_staging_path(self, local_config):
-        provider = IMERGProvider("final", config=local_config)
-        day = pd.Timestamp("2024-01-01")
-        stage_day(provider, day, count=GRANULES_PER_DAY)
-        assert provider.run_partition(day) is True
-        assert provider.staged_files(day) == []
+    def test_run_partition_uses_the_staging_path(self, provider):
+        stage_day(provider, count=GRANULES_PER_DAY)
+        assert provider.run_partition(DAY) is True
+        assert provider.staged_files(DAY) == []
 
-    def test_publish_reports_a_local_store_as_unpublished(self, local_config):
-        provider = IMERGProvider("final", config=local_config)
-        day = pd.Timestamp("2024-01-01")
-        stage_day(provider, day, count=1)
-        provider.write_staged(day, allow_partial=True)
+    def test_publish_reports_a_local_store_as_unpublished(self, provider):
+        stage_day(provider, count=1)
+        provider.write_staged(DAY, allow_partial=True)
 
         info = provider.publish()
         assert info["published"] is False
@@ -396,23 +369,19 @@ class TestStoreRoundTrip:
         assert info["timesteps"] == 0
         assert info["first_time"] is None
 
-    def test_nothing_staged_and_nothing_remote_is_skipped(self, local_config, monkeypatch):
-        provider = IMERGProvider("final", config=local_config)
-        monkeypatch.setattr(IMERGProvider, "fetch", lambda self, *a, **k: [])
-        assert provider.write_staged(pd.Timestamp("2024-01-01")) is False
+    def test_nothing_staged_and_nothing_remote_is_skipped(self, provider):
+        assert provider.write_staged(DAY) is False
 
-    def test_gaps_are_refilled_before_writing(self, local_config, monkeypatch):
+    def test_gaps_are_refilled_before_writing(self, provider, monkeypatch):
         """A day left short by a timed-out download run is topped up, not written short."""
-        provider = IMERGProvider("final", config=local_config)
-        day = pd.Timestamp("2024-01-01")
-        stage_day(provider, day, count=10)
+        stage_day(provider, count=10)
 
         def fake_fetch(self, it, temp_dir=None, **kwargs):
             stage_day(self, pd.Timestamp(it).normalize(), count=GRANULES_PER_DAY)
             return self.staged_files(it)
 
         monkeypatch.setattr(IMERGProvider, "fetch", fake_fetch)
-        assert provider.write_staged(day) is True
+        assert provider.write_staged(DAY) is True
 
 
 class TestDownload:
@@ -442,10 +411,8 @@ class TestDownload:
 
 
 class TestHelpers:
-    def test_day_range_is_inclusive_and_daily(self):
+    def test_day_range_is_inclusive_daily_and_normalised(self):
         days = day_range("2024-01-01", "2024-01-04")
         assert len(days) == 4
         assert days[-1] == pd.Timestamp("2024-01-04")
-
-    def test_day_range_normalises(self):
-        assert day_range("2024-01-01T13:00", "2024-01-01T23:00")[0] == pd.Timestamp("2024-01-01")
+        assert day_range("2024-01-01T13:00", "2024-01-01T23:00")[0] == DAY

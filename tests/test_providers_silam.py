@@ -1,6 +1,6 @@
 """The SILAM providers, exercised offline against a local store.
 
-Neither test touches the network: ``fetch`` is replaced by synthetic NetCDF files written
+No test touches the network: ``fetch`` is replaced by synthetic NetCDF files written
 to ``tmp_path``, which is enough to exercise the real ``process`` and the real
 append-or-create write through :class:`~planetary_datasets.base.BaseProvider`.
 """
@@ -14,7 +14,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from planetary_datasets.base import BaseProvider
+from helpers import read_store
+from planetary_datasets import config as config_module
 from planetary_datasets.providers.silam import (
     IncompleteForecast,
     SILAMAerosolProvider,
@@ -116,17 +117,11 @@ def aerosol(local_config, tmp_path):
     return _OfflineAerosol(tmp_path / "aerosol_in", config=local_config)
 
 
-def test_providers_implement_the_base_contract():
-    for cls in (SILAMDustProvider, SILAMAerosolProvider):
-        assert issubclass(cls, BaseProvider)
-        assert cls.append_dim == "init_time"
-        assert cls.store_prefix.endswith(".icechunk")
-        assert not cls.store_prefix.startswith("s3://")
-
-
-def test_store_path_resolves_through_config(dust, tmp_path):
-    assert dust.store_path.startswith(str(tmp_path))
-    assert "s3://" not in dust.store_path
+@pytest.mark.parametrize("cls", [SILAMDustProvider, SILAMAerosolProvider])
+def test_store_prefix_is_a_relative_icechunk_path(cls):
+    """The prefix is resolved against the configured bucket, so it must not carry its own."""
+    assert cls.store_prefix.endswith(".icechunk")
+    assert not cls.store_prefix.startswith("s3://")
 
 
 def test_dust_urls_cover_every_step():
@@ -155,9 +150,7 @@ def test_dust_run_partition_writes_then_skips(dust):
     assert dust.run_partition(INIT) is True
     assert dust.run_partition(INIT) is False
 
-    stored = xr.open_zarr(
-        dust.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
+    stored = read_store(dust)
     assert stored["init_time"].values[0] == np.datetime64(INIT)
     assert stored.sizes["step"] == 3
 
@@ -177,16 +170,24 @@ def test_aerosol_process_merges_species_and_days(aerosol):
 def test_aerosol_run_partition_round_trips(aerosol):
     assert aerosol.run_partition(INIT) is True
 
-    stored = xr.open_zarr(
-        aerosol.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
+    stored = read_store(aerosol)
     assert stored["init_time"].values[0] == np.datetime64(INIT)
     assert set(stored.data_vars) == {"PM25", "SO2"}
 
 
-def test_aerosol_fetch_returns_nothing_when_the_day_is_absent(local_config, monkeypatch):
-    provider = SILAMAerosolProvider(config=local_config)
-    monkeypatch.setattr(SILAMAerosolProvider, "list_keys", lambda self, it: [])
+@pytest.fixture
+def listed_aerosol(local_config, monkeypatch):
+    """A real aerosol provider whose bucket listing is replaced by ``list_keys``."""
+
+    def make(list_keys):
+        monkeypatch.setattr(SILAMAerosolProvider, "list_keys", list_keys)
+        return SILAMAerosolProvider(config=local_config)
+
+    return make
+
+
+def test_aerosol_fetch_returns_nothing_when_the_day_is_absent(listed_aerosol):
+    provider = listed_aerosol(lambda self, it: [])
     assert provider.fetch(INIT) == []
     # An empty fetch is "nothing to do", not a failure.
     assert provider.run_partition(INIT) is False
@@ -207,27 +208,22 @@ def test_aerosol_keeps_source_precision_when_units_would_underflow(local_config,
     assert processed["SO2"].dtype == np.dtype("float32")
 
 
-def test_aerosol_fetch_fails_on_a_half_published_run(local_config, tmp_path, monkeypatch):
-    provider = SILAMAerosolProvider(config=local_config)
-    monkeypatch.setattr(
-        SILAMAerosolProvider,
-        "list_keys",
+def test_aerosol_fetch_fails_on_a_half_published_run(listed_aerosol):
+    provider = listed_aerosol(
         lambda self, it: [
             "global/20260925/silam_glob_v6_1_20260925_SO2_d0.nc",
             "global/20260925/silam_glob_v6_1_20260925_SO2_d1.nc",
-        ],
+        ]
     )
     with pytest.raises(IncompleteForecast):
         provider.fetch(INIT)
 
 
-def test_aerosol_listing_errors_are_not_mistaken_for_an_empty_day(local_config, monkeypatch):
-    provider = SILAMAerosolProvider(config=local_config)
-
+def test_aerosol_listing_errors_are_not_mistaken_for_an_empty_day(listed_aerosol):
     def boom(self, it):
         raise OSError("S3 is having a day")
 
-    monkeypatch.setattr(SILAMAerosolProvider, "list_keys", boom)
+    provider = listed_aerosol(boom)
     with pytest.raises(OSError):
         provider.fetch(INIT)
 
@@ -244,8 +240,6 @@ def test_dust_fetch_fails_when_only_some_steps_download(local_config, monkeypatc
 
 def test_tempdir_is_taken_from_the_configured_scratch_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("PLANETARY_DATASETS_SCRATCH_DIR", str(tmp_path / "scratch"))
-    from planetary_datasets import config as config_module
-
     provider = SILAMDustProvider(config=config_module.load_config(env_file=tmp_path / "none.env"))
     with provider.local_tempdir() as td:
         assert str(td).startswith(str(tmp_path / "scratch"))

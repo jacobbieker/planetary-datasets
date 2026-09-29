@@ -9,7 +9,6 @@ from __future__ import annotations
 import datetime as dt
 import pathlib
 import re
-import sys
 
 import dagster as dg
 import numpy as np
@@ -17,12 +16,9 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from planetary_datasets.providers import opera, opera_download  # noqa: E402
-from planetary_datasets.providers.opera_download import (  # noqa: E402
+from helpers import assert_pipes_accepts, read_store
+from planetary_datasets.providers import opera, opera_download
+from planetary_datasets.providers.opera_download import (
     PRODUCTS,
     IncompleteHour,
     download_opera,
@@ -69,22 +65,29 @@ class FakeOPERA:
 
 
 @pytest.fixture
-def local_config(tmp_path, monkeypatch):
-    """Stores and staging under tmp_path, with a generous memory budget."""
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("MEMORY_CEILING_GB", "64")
-    monkeypatch.delenv(opera.ARCHIVE_ENV, raising=False)
-    config_module.reset_config_cache()
-    yield tmp_path
-    config_module.reset_config_cache()
+def opera_root(local_config, tmp_path) -> pathlib.Path:
+    """Where the providers look for staged hours under the local data directory."""
+    return tmp_path / "data" / "opera"
 
 
-def stage(tmp_path: pathlib.Path, product: str, hour: dt.datetime, **kwargs) -> dict:
-    root = tmp_path / "data" / "opera"
-    return download_opera(product, hour, root, source=FakeOPERA(), **kwargs)
+@pytest.fixture
+def stage(opera_root):
+    """Stage an hour where the providers look for it, as the downloader image would."""
+
+    def stage(product: str, hour: dt.datetime, source=None, **kwargs) -> dict:
+        return download_opera(product, hour, opera_root, source=source or FakeOPERA(), **kwargs)
+
+    return stage
+
+
+def materialize_dbz_download(client):
+    from dags.assets import radar
+
+    return dg.materialize(
+        [radar.opera_dbz_download],
+        partition_key="2026-09-29-06:00",
+        resources={"pipes_docker_client": client},
+    )
 
 
 # --- products ---------------------------------------------------------------------------
@@ -149,20 +152,22 @@ def test_a_missing_frame_fails_the_hour_unless_allowed(tmp_path):
     assert len(source.calls) == 1 + 4, "the whole hour, then frame by frame to find the gap"
 
 
-def test_an_hour_with_no_frames_at_all_fails_even_when_partial_is_allowed(tmp_path):
-    frames = set(PRODUCTS["dbz"].frame_times(HOUR))
-    with pytest.raises(IncompleteHour, match="no frames"):
-        download_opera("dbz", HOUR, tmp_path, source=FakeOPERA(missing=frames), allow_partial=True)
-
-
-def test_reflectivity_before_the_1km_grid_is_refused(tmp_path):
-    with pytest.raises(ValueError, match="only staged from 2024-07-01"):
-        download_opera("dbz", dt.datetime(2024, 6, 30, 23), tmp_path, source=FakeOPERA())
-
-
-def test_a_time_that_is_not_on_the_hour_is_refused(tmp_path):
-    with pytest.raises(ValueError, match="start of an hour"):
-        download_opera("rainfall", "2026-09-29T06:15", tmp_path, source=FakeOPERA())
+@pytest.mark.parametrize(
+    ("product", "hour", "missing", "error", "match"),
+    [
+        ("dbz", HOUR, set(PRODUCTS["dbz"].frame_times(HOUR)), IncompleteHour, "no frames"),
+        ("dbz", dt.datetime(2024, 6, 30, 23), set(), ValueError, "only staged from 2024-07-01"),
+        ("rainfall", "2026-09-29T06:15", set(), ValueError, "start of an hour"),
+    ],
+    ids=["no-frames-at-all", "reflectivity-before-the-1km-grid", "not-on-the-hour"],
+)
+def test_an_hour_is_refused_even_when_partial_is_allowed(
+    tmp_path, product, hour, missing, error, match
+):
+    with pytest.raises(error, match=match):
+        download_opera(
+            product, hour, tmp_path, source=FakeOPERA(missing=missing), allow_partial=True
+        )
 
 
 def test_tz_aware_times_are_converted_to_naive_utc():
@@ -170,26 +175,22 @@ def test_tz_aware_times_are_converted_to_naive_utc():
 
 
 def test_pipes_accepts_the_summary():
-    from dagster_pipes import _normalize_param_metadata
-
     summary = {"frames": 4, "missing_frames": [], "grid": [2200, 1900], "path": "x.nc"}
-    _normalize_param_metadata(
-        opera_download.pipes_metadata(summary), "report_asset_materialization", "metadata"
-    )
+    assert_pipes_accepts(opera_download.pipes_metadata(summary))
 
 
 # --- providers --------------------------------------------------------------------------
 
 
-def test_the_provider_finds_and_reads_a_staged_hour(local_config):
-    stage(local_config, "dbz", HOUR)
+def test_the_provider_finds_and_reads_a_staged_hour(stage, opera_root):
+    stage("dbz", HOUR)
     provider = opera.OPERAReflectivityProvider()
     it = pd.Timestamp(HOUR)
 
     files = provider.fetch(it)
     ds = provider.process(files, it)
 
-    assert provider.archive_dir == local_config / "data" / "opera" / "dbz"
+    assert provider.archive_dir == opera_root / "dbz"
     assert len(files) == 1
     assert ds.sizes == {"time": 12, "y": NY, "x": NX}
     assert list(ds.data_vars) == ["dbz"]
@@ -201,40 +202,35 @@ def test_the_archive_root_honours_the_environment(tmp_path, local_config, monkey
     assert provider.archive_dir == tmp_path / "elsewhere" / "rainfall"
 
 
-def test_an_absent_hour_is_nothing_to_do(local_config):
-    (local_config / "data" / "opera" / "rainfall").mkdir(parents=True)
+def test_an_absent_hour_is_nothing_to_do(opera_root):
+    (opera_root / "rainfall").mkdir(parents=True)
     assert opera.OPERARainfallProvider().fetch(pd.Timestamp(HOUR)) == []
 
 
-def test_a_partial_staged_hour_is_rejected_by_default(local_config):
+def test_a_partial_staged_hour_is_rejected_by_default(stage):
     gap = HOUR + dt.timedelta(minutes=15)
-    root = local_config / "data" / "opera"
-    download_opera("rainfall", HOUR, root, source=FakeOPERA(missing={gap}), allow_partial=True)
+    stage("rainfall", HOUR, source=FakeOPERA(missing={gap}), allow_partial=True)
     provider = opera.OPERARainfallProvider()
     it = pd.Timestamp(HOUR)
 
     with pytest.raises(ValueError, match="06:15"):
         provider.process(provider.fetch(it), it)
-    assert (
-        opera.OPERARainfallProvider(allow_partial=True)
-        .process(provider.fetch(it), it)
-        .sizes["time"]
-        == 3
-    )
+    partial = opera.OPERARainfallProvider(allow_partial=True).process(provider.fetch(it), it)
+    assert partial.sizes["time"] == 3
 
 
-def test_a_staged_file_of_the_wrong_product_is_rejected(local_config):
-    summary = stage(local_config, "dbz", HOUR)
+def test_a_staged_file_of_the_wrong_product_is_rejected(stage):
+    summary = stage("dbz", HOUR)
     provider = opera.OPERARainfallProvider()
     with pytest.raises(ValueError, match="expected"):
         provider.process([summary["path"]], pd.Timestamp(HOUR))
 
 
-def test_hours_append_to_the_store_and_staging_is_cleared(local_config):
+def test_hours_append_to_the_store_and_staging_is_cleared(stage, opera_root):
     provider = opera.OPERARainfallProvider()
     first, second = pd.Timestamp(HOUR), pd.Timestamp(HOUR) + pd.Timedelta("1h")
     for hour in (first, second):
-        stage(local_config, "rainfall", hour.to_pydatetime())
+        stage("rainfall", hour.to_pydatetime())
 
     assert provider.discard_staged(first) == [], "nothing is deleted before it is stored"
     assert provider.run_partition(first)
@@ -243,24 +239,24 @@ def test_hours_append_to_the_store_and_staging_is_cleared(local_config):
 
     removed = provider.discard_staged(first) + provider.discard_staged(second)
     assert len(removed) == 2
-    assert not list((local_config / "data" / "opera").rglob("*.nc"))
+    assert not list(opera_root.rglob("*.nc"))
 
-    stored = xr.open_zarr(provider.get_icechunk_repo().readonly_session("main").store)
+    stored = read_store(provider)
     assert stored.sizes["time"] == 8
     assert pd.DatetimeIndex(stored["time"].values).is_monotonic_increasing
     assert set(stored.data_vars) == {"rainfall_rate", "accumulated_rainfall_1hour"}
     assert stored["latitude"].dims == ("y", "x")
 
 
-def test_hours_before_the_store_end_are_not_appendable_and_are_discarded(local_config):
+def test_hours_before_the_store_end_are_not_appendable_and_are_discarded(stage):
     """The existing stores have gaps before their latest time that cannot be filled."""
     provider = opera.OPERARainfallProvider()
     early, late = pd.Timestamp(HOUR), pd.Timestamp(HOUR) + pd.Timedelta("2h")
     assert provider.appendable(early), "an empty store accepts anything"
 
-    stage(local_config, "rainfall", late.to_pydatetime())
+    stage("rainfall", late.to_pydatetime())
     assert provider.run_partition(late)
-    stage(local_config, "rainfall", early.to_pydatetime())
+    stage("rainfall", early.to_pydatetime())
 
     assert not provider.appendable(early)
     assert provider.appendable(late + pd.Timedelta("1h"))
@@ -271,82 +267,43 @@ def test_hours_before_the_store_end_are_not_appendable_and_are_discarded(local_c
 # --- Dagster assets ---------------------------------------------------------------------
 
 
-class FakeInvocation:
-    def get_materialize_result(self):
-        return dg.MaterializeResult(metadata={"fake": True})
-
-
-class FakeDockerClient:
-    def __init__(self):
-        self.calls: list[dict] = []
-
-    def run(self, **kwargs):
-        self.calls.append(kwargs)
-        return FakeInvocation()
-
-
-def test_the_download_asset_runs_the_image_for_a_missing_hour(local_config, monkeypatch):
+def test_the_download_asset_runs_the_image_for_a_missing_hour(
+    opera_root, monkeypatch, fake_docker_client
+):
     from dags.assets import radar
 
     monkeypatch.setenv(radar.OPERA_IMAGE_ENV, "example/opera:test")
-    client = FakeDockerClient()
-    result = dg.materialize(
-        [radar.opera_dbz_download],
-        partition_key="2026-09-29-06:00",
-        resources={"pipes_docker_client": client},
-    )
+    assert materialize_dbz_download(fake_docker_client).success
 
-    assert result.success
-    (call,) = client.calls
+    (call,) = fake_docker_client.calls
     assert call["image"] == "example/opera:test"
     assert call["command"] == [
         "opera", "--product", "dbz", "--time", "2026-09-29T06:00", "--target", "/data/opera",
     ]  # fmt: skip
-    root = str((local_config / "data" / "opera").resolve())
+    root = str(opera_root.resolve())
     assert call["container_kwargs"]["volumes"] == {root: {"bind": "/data/opera", "mode": "rw"}}
 
 
-def test_the_download_asset_skips_an_hour_already_in_the_store(local_config):
+@pytest.mark.parametrize(
+    "stored_hour",
+    [HOUR, HOUR + dt.timedelta(hours=3)],
+    ids=["already-in-the-store", "before-the-store-end"],
+)
+def test_the_download_asset_skips_an_hour_the_store_will_not_take(
+    stage, fake_docker_client, stored_hour
+):
+    stage("dbz", stored_hour)
+    assert opera.OPERAReflectivityProvider().run_partition(pd.Timestamp(stored_hour))
+
+    assert materialize_dbz_download(fake_docker_client).success
+    assert fake_docker_client.calls == []
+
+
+def test_the_processing_asset_writes_and_clears_the_staged_hour(stage):
     from dags.assets import radar
 
-    stage(local_config, "dbz", HOUR)
-    assert opera.OPERAReflectivityProvider().run_partition(pd.Timestamp(HOUR))
-
-    client = FakeDockerClient()
-    result = dg.materialize(
-        [radar.opera_dbz_download],
-        partition_key="2026-09-29-06:00",
-        resources={"pipes_docker_client": client},
-    )
-    assert result.success
-    assert client.calls == []
-
-
-def test_the_download_asset_skips_an_hour_the_store_cannot_accept(local_config):
-    from dags.assets import radar
-
-    later = HOUR + dt.timedelta(hours=3)
-    stage(local_config, "dbz", later)
-    assert opera.OPERAReflectivityProvider().run_partition(pd.Timestamp(later))
-
-    client = FakeDockerClient()
-    result = dg.materialize(
-        [radar.opera_dbz_download],
-        partition_key="2026-09-29-06:00",
-        resources={"pipes_docker_client": client},
-    )
-    assert result.success
-    assert client.calls == []
-
-
-def test_the_processing_asset_writes_and_clears_the_staged_hour(local_config):
-    from dags.assets import radar
-
-    stage(local_config, "rainfall", HOUR)
-    result = dg.materialize(
-        [radar.opera_rainfall],
-        partition_key="2026-09-29-06:00",
-    )
+    stage("rainfall", HOUR)
+    result = dg.materialize([radar.opera_rainfall], partition_key="2026-09-29-06:00")
 
     assert result.success
     (materialization,) = result.asset_materializations_for_node("opera_rainfall")

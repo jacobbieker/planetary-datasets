@@ -9,6 +9,7 @@ and a codec check that accepts everything lets two eras into one store.
 from __future__ import annotations
 
 import datetime
+import os
 import types
 
 import numpy as np
@@ -24,23 +25,6 @@ pytest.importorskip("obstore", reason="virtualizarr 2.x stack not installed")
 pytest.importorskip("obspec_utils", reason="virtualizarr 2.x stack not installed")
 
 from planetary_datasets.providers.virtualized import goes_radf_common as common  # noqa: E402
-
-
-@pytest.fixture
-def local_store_config(tmp_path, monkeypatch):
-    """Make ``get_config()`` itself resolve to a store under ``tmp_path``.
-
-    The ingest reads the process-wide config rather than being handed one, so
-    the shared ``local_config`` fixture is not enough here: this also points
-    ``REPO_ROOT`` at an empty directory so a developer's real ``.env`` cannot
-    leak back in through ``load_dotenv``.
-    """
-    monkeypatch.setattr(config_module, "REPO_ROOT", tmp_path)
-    monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    config_module.reset_config_cache()
-    yield config_module.get_config()
-    config_module.reset_config_cache()
 
 
 RADF_URL = (
@@ -73,14 +57,17 @@ def test_parse_scan_start_rejects_a_truncated_token():
         common.parse_scan_start_to_datetime("OR_ABI-L1b-RadF-M6C13_G16_s2023109_e1_c1.nc")
 
 
-def test_aborted_scans_are_those_whose_start_and_end_tokens_match():
-    aborted = RADF_URL.replace("e20231091209525", "e20231091200205")
-    assert common._is_aborted_scan(aborted)
-    assert not common._is_aborted_scan(RADF_URL)
-
-
-def test_aborted_scan_check_tolerates_a_filename_without_tokens():
-    assert not common._is_aborted_scan("s3://noaa-goes16/index.html")
+@pytest.mark.parametrize(
+    "url,aborted",
+    [
+        (RADF_URL.replace("e20231091209525", "e20231091200205"), True),
+        (RADF_URL, False),
+        # A filename without the tokens must not crash the check.
+        ("s3://noaa-goes16/index.html", False),
+    ],
+)
+def test_aborted_scans_are_those_whose_start_and_end_tokens_match(url, aborted):
+    assert common._is_aborted_scan(url) is aborted
 
 
 def test_parse_url_to_day_prefers_the_first_matching_product_key():
@@ -286,46 +273,32 @@ def test_metadata_only_filter_needs_a_population_to_judge_against():
     assert common._drop_metadata_only_files(urls, sizes, 13) == urls
 
 
-def test_a_file_missing_a_required_variable_is_dropped():
+def test_a_file_missing_a_required_variable_is_dropped(monkeypatch):
     """The full-size case size cannot catch: an observed file had ``Rad`` at normal shape
     and codecs but no ``DQF``, at 119% of the day's median.
     """
     import xarray as xr
-
-    complete = ["s3://b/a.nc", "s3://b/c.nc"]
 
     def fake_open(url, **kwargs):
         if url == "s3://b/b.nc":
             return xr.Dataset({"Rad": ("t", [1.0])})
         return xr.Dataset({"Rad": ("t", [1.0]), "DQF": ("t", [0.0])})
 
-    original = common.vz.open_virtual_dataset
-    common.vz.open_virtual_dataset = fake_open
-    try:
-        kept = common.drop_files_missing_required_vars(
-            ["s3://b/a.nc", "s3://b/b.nc", "s3://b/c.nc"], registry=None, parser=None
-        )
-    finally:
-        common.vz.open_virtual_dataset = original
-
-    assert kept == complete
+    monkeypatch.setattr(common.vz, "open_virtual_dataset", fake_open)
+    kept = common.drop_files_missing_required_vars(
+        ["s3://b/a.nc", "s3://b/b.nc", "s3://b/c.nc"], registry=None, parser=None
+    )
+    assert kept == ["s3://b/a.nc", "s3://b/c.nc"]
 
 
-def test_a_file_that_cannot_be_opened_is_dropped_too():
+def test_a_file_that_cannot_be_opened_is_dropped_too(monkeypatch):
     """Unreadable here means unusable in the combine as well."""
 
     def fake_open(url, **kwargs):
         raise OSError("truncated file")
 
-    original = common.vz.open_virtual_dataset
-    common.vz.open_virtual_dataset = fake_open
-    try:
-        kept = common.drop_files_missing_required_vars(
-            ["s3://b/a.nc"], registry=None, parser=None
-        )
-    finally:
-        common.vz.open_virtual_dataset = original
-
+    monkeypatch.setattr(common.vz, "open_virtual_dataset", fake_open)
+    kept = common.drop_files_missing_required_vars(["s3://b/a.nc"], registry=None, parser=None)
     assert kept == []
 
 
@@ -385,13 +358,13 @@ def test_suffixed_prefix_handles_a_prefix_without_the_extension():
     assert common.suffixed_prefix("goes16_radf", channel=1) == "goes16_radf_C01"
 
 
-def test_store_prefix_resolves_through_the_shared_config(local_store_config):
+def test_store_prefix_resolves_through_the_shared_config(local_config):
     prefix = common.suffixed_prefix(
         common.default_store_prefix("goes16"), channel=13, era="2024-01-01"
     )
-    resolved = local_store_config.store_path(prefix)
+    resolved = local_config.store_path(prefix)
     assert resolved.endswith("goes16_radf_C13_2024-01-01.icechunk")
-    assert str(local_store_config.icechunk_local_path) in resolved
+    assert str(local_config.icechunk_local_path) in resolved
 
 
 def test_virtual_chunk_buckets_are_bare_names_and_deduplicated():
@@ -416,14 +389,14 @@ def test_virtual_chunk_buckets_include_a_configured_mirror(monkeypatch):
     assert "noaa-goes18" in buckets
 
 
-def test_default_log_dir_is_under_the_configured_data_dir(local_store_config):
-    assert common.default_log_dir() == local_store_config.data_dir / "logs" / "virtualized"
+def test_default_log_dir_is_under_the_configured_data_dir(local_config):
+    assert common.default_log_dir() == local_config.data_dir / "logs" / "virtualized"
 
 
 def test_configure_ingest_process_bounds_glibc_arenas(monkeypatch):
     monkeypatch.delenv("MALLOC_ARENA_MAX", raising=False)
     common.configure_ingest_process()
-    assert __import__("os").environ["MALLOC_ARENA_MAX"] == "2"
+    assert os.environ["MALLOC_ARENA_MAX"] == "2"
 
 
 def test_rss_gb_reports_a_current_positive_figure():
@@ -435,7 +408,6 @@ def test_rss_gb_reports_a_current_positive_figure():
 # ---------------------------------------------------------------------------
 # Codec-era splitting in the forward ingest
 # ---------------------------------------------------------------------------
-
 class _FakeIndex(list):
     """A `t` index just complete enough for the strictly-increasing check."""
 
@@ -503,13 +475,14 @@ def _run_forward_ingest(
     *,
     repos,
     codec_bad_from,
-    last_committed,
-    days=range(1, 7),
+    last_committed=lambda r, b, g=None: None,
+    broken_in_every_store=False,
 ):
-    """Drive ingest_all_days offline, with a codec change part-way through.
+    """Drive ingest_all_days offline over days 1-6, with a codec change part-way through.
 
     Days from ``codec_bad_from`` raise a codec error while the first store is
-    current, which is how a real era boundary presents itself.
+    current, which is how a real era boundary presents itself; with
+    ``broken_in_every_store`` they fail against the new era's store too.
     """
     state = {"repo": repos[0]}
 
@@ -519,7 +492,7 @@ def _run_forward_ingest(
 
     def open_batch_fn(urls, **kwargs):
         day = int(urls[0])
-        if day >= codec_bad_from and state["repo"] is repos[0]:
+        if day >= codec_bad_from and (broken_in_every_store or state["repo"] is repos[0]):
             raise ValueError("Codec validation failed:\n  Rad: mismatch")
         return _FakeVirtualDataset(day, state["repo"].writes)
 
@@ -534,7 +507,7 @@ def _run_forward_ingest(
         satellite="test",
         product_label="RadF",
         archive_start_date=datetime.date(2023, 1, 1),
-        all_days=[((2023, d), [str(d)]) for d in days],
+        all_days=[((2023, d), [str(d)]) for d in range(1, 7)],
         preprocess_fn=lambda ds: ds,
         bucket="s3://noaa-goes16",
         open_batch_fn=open_batch_fn,
@@ -553,12 +526,7 @@ def test_codec_change_retries_the_days_that_proved_the_boundary(monkeypatch):
     MAX_CONSECUTIVE_FAILED_DAYS gap at every era boundary.
     """
     repos = [_FakeRepo("old"), _FakeRepo("new")]
-    _run_forward_ingest(
-        monkeypatch,
-        repos=repos,
-        codec_bad_from=4,
-        last_committed=lambda r, b, g=None: None,
-    )
+    _run_forward_ingest(monkeypatch, repos=repos, codec_bad_from=4)
 
     assert [day for day, _ in repos[0].writes] == [1, 2, 3]
     assert [day for day, _ in repos[1].writes] == [4, 5, 6]
@@ -593,42 +561,10 @@ def test_codec_change_appends_to_an_era_store_that_already_exists(monkeypatch):
 def test_a_day_that_keeps_failing_does_not_loop_forever(monkeypatch):
     """The rewind must not bounce between "new era" and "still failing"."""
     repos = [_FakeRepo("old"), _FakeRepo("new")]
-    state = {"repo": repos[0]}
-
-    monkeypatch.setattr(common, "MAX_CONSECUTIVE_FAILED_DAYS", 2)
-    monkeypatch.setattr(common, "_schema_exists", lambda r, b, g=None: False)
-    monkeypatch.setattr(common, "_last_committed_day", lambda r, b, g=None: None)
-
-    def open_batch_fn(urls, **kwargs):
-        day = int(urls[0])
-        if day >= 4:  # broken in *both* stores
-            raise ValueError("Codec validation failed:\n  Rad: mismatch")
-        return _FakeVirtualDataset(day, state["repo"].writes)
-
-    def repo_factory(suffix):
-        state["repo"] = repos[1]
-        return repos[1]
-
-    common.ingest_all_days(
-        repos[0],
-        13,
-        satellite_name="TEST",
-        satellite="test",
-        product_label="RadF",
-        archive_start_date=datetime.date(2023, 1, 1),
-        all_days=[((2023, d), [str(d)]) for d in range(1, 7)],
-        preprocess_fn=lambda ds: ds,
-        bucket="s3://noaa-goes16",
-        open_batch_fn=open_batch_fn,
-        repo_factory=repo_factory,
-        epoch_threshold=np.datetime64("2017-01-01", "ns"),
-        keep_data_vars=frozenset({"Rad"}),
-        loadable_variables=(),
-    )
+    _run_forward_ingest(monkeypatch, repos=repos, codec_bad_from=4, broken_in_every_store=True)
 
     assert [day for day, _ in repos[0].writes] == [1, 2, 3]
     assert repos[1].writes == []
-
 
 
 # ---------------------------------------------------------------------------
@@ -655,20 +591,20 @@ def test_satellite_modules_agree_with_the_shared_config(module_name, satellite):
     assert mod.EPOCH_THRESHOLD.dtype == common.DATETIME_NS
 
 
-def test_unified_cli_resolves_the_store_from_the_config(local_store_config):
+def test_unified_cli_resolves_the_store_from_the_config(local_config):
     from planetary_datasets.providers.virtualized import ingest_goes_radf
 
     args = ingest_goes_radf.build_args("goes17", end_date=datetime.date(2024, 5, 1))
     assert args.storage == "config"
     assert args.max_eras is None
-    assert args.region == local_store_config.region
+    assert args.region == local_config.region
     summary = ingest_goes_radf._storage_summary(args)
-    assert str(local_store_config.icechunk_local_path) in summary
+    assert str(local_config.icechunk_local_path) in summary
     assert "goes17_radf.icechunk" in summary
 
 
 def test_reported_store_path_matches_the_one_written_under_a_prefix(
-    local_store_config, monkeypatch
+    local_config, monkeypatch
 ):
     """The path the run prints must be the path it writes to.
 
@@ -742,20 +678,16 @@ def test_date_to_fake_url_round_trips_through_parse_url_to_day():
 # ---------------------------------------------------------------------------
 # Dagster assets
 # ---------------------------------------------------------------------------
-def _goes_virtual_assets():
-    import importlib
-    import pathlib
-    import sys
-
-    dags_dir = str(pathlib.Path(__file__).resolve().parent.parent / "dags")
-    if dags_dir not in sys.path:
-        sys.path.insert(0, dags_dir)
+@pytest.fixture
+def gv():
+    """The GOES virtual Dagster asset module."""
     pytest.importorskip("dagster")
-    return importlib.import_module("dags.assets.goes_virtual")
+    from dags.assets import goes_virtual
+
+    return goes_virtual
 
 
-def test_assets_carry_their_own_concurrency_key_and_a_long_runtime():
-    gv = _goes_virtual_assets()
+def test_assets_carry_their_own_concurrency_key_and_a_long_runtime(gv):
     assert len(gv.all_assets) == len(gv.SATELLITES)
     for asset in gv.all_assets:
         tags = asset.node_def.tags
@@ -764,8 +696,7 @@ def test_assets_carry_their_own_concurrency_key_and_a_long_runtime():
         assert float(tags["dagster/max_runtime"]) >= 6 * 60 * 60
 
 
-def test_assets_are_partitioned_by_every_abi_channel():
-    gv = _goes_virtual_assets()
+def test_assets_are_partitioned_by_every_abi_channel(gv):
     assert gv.channel_partitions.get_partition_keys() == [
         f"C{c:02d}" for c in range(1, 17)
     ]
@@ -776,23 +707,19 @@ def test_assets_are_partitioned_by_every_abi_channel():
         gv._channel_number("banana")
 
 
-def test_anchor_is_unpinned_until_configured(monkeypatch):
+def test_anchor_is_unpinned_until_configured(gv):
     """An unpinned anchor must be visible to the caller, not silently today.
 
     The anchor names the newest era's store: defaulting it to today writes a
     new store every run and re-ingests the era from nothing.
     """
-    gv = _goes_virtual_assets()
-    monkeypatch.delenv("GOES_VIRTUAL_END_DATE", raising=False)
     end_date, max_eras, batch_size = gv._run_options({})
     assert end_date is None
     assert (max_eras, batch_size) == (1, 1)
 
 
-def test_anchor_comes_from_the_environment_then_the_run_tag(monkeypatch):
-    gv = _goes_virtual_assets()
+def test_anchor_comes_from_the_environment_then_the_run_tag(gv, monkeypatch):
     monkeypatch.setenv("GOES_VIRTUAL_END_DATE", "2026-09-01")
-    config_module.reset_config_cache()
     assert gv._run_options({})[0] == datetime.date(2026, 9, 1)
     # A run tag overrides the deployment-wide pin.
     assert gv._run_options({"goes_virtual/end_date": "2025-01-05"})[0] == datetime.date(
@@ -800,8 +727,7 @@ def test_anchor_comes_from_the_environment_then_the_run_tag(monkeypatch):
     )
 
 
-def test_max_eras_all_means_every_era():
-    gv = _goes_virtual_assets()
+def test_max_eras_all_means_every_era(gv):
     assert gv._run_options({"goes_virtual/max_eras": "all"})[1] is None
     assert gv._run_options({"goes_virtual/max_eras": "3"})[1] == 3
     assert gv._run_options({"goes_virtual/batch_size": "5"})[2] == 5

@@ -15,6 +15,7 @@ does not exist, such a module simply fails its first line and looks clean.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import subprocess
 import sys
@@ -147,22 +148,25 @@ def _module_names() -> list[str]:
     return names
 
 
-def test_no_module_performs_network_io_at_import():
-    import json
-
-    modules = _module_names()
-    assert modules, "found no modules to scan; the layout must have moved"
-
+def _probe(modules: list[str], timeout: int) -> tuple[subprocess.CompletedProcess, list[str]]:
+    """Import ``modules`` under the probe; return the run and its JSON output lines."""
     result = subprocess.run(
         [sys.executable, "-c", PROBE, json.dumps(modules)],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        timeout=900,
+        timeout=timeout,
     )
-    assert result.returncode == 0, f"probe failed:\n{result.stderr[-2000:]}"
-
     lines = [line for line in result.stdout.strip().splitlines() if line.startswith(("[", "{"))]
+    return result, lines
+
+
+def test_no_module_performs_network_io_at_import():
+    modules = _module_names()
+    assert modules, "found no modules to scan; the layout must have moved"
+
+    result, lines = _probe(modules, timeout=900)
+    assert result.returncode == 0, f"probe failed:\n{result.stderr[-2000:]}"
     assert lines, f"probe produced no result:\n{result.stdout[-2000:]}\n{result.stderr[-2000:]}"
 
     hung = [json.loads(line) for line in lines if line.startswith("{")]
@@ -176,19 +180,10 @@ def test_no_module_performs_network_io_at_import():
 
 def _run_canary(source: str) -> list[dict]:
     """Import a throwaway module under the probe and return what it flagged."""
-    import json
-
     canary = REPO_ROOT / "_canary_side_effect_at_import.py"
     canary.write_text(source)
     try:
-        result = subprocess.run(
-            [sys.executable, "-c", PROBE, json.dumps(["_canary_side_effect_at_import"])],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        lines = [line for line in result.stdout.strip().splitlines() if line.startswith(("[", "{"))]
+        _, lines = _probe([canary.stem], timeout=120)
         return json.loads(lines[-1])
     finally:
         canary.unlink(missing_ok=True)

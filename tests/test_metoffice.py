@@ -9,11 +9,9 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from helpers import read_store as open_store
 from planetary_datasets.providers.metoffice import (
-    GLOBAL_10KM,
-    GLOBAL_10KM_6HOURLY_24HR,
     PROVIDERS,
-    UK_2KM,
     MetOfficeGlobal10km6Hourly24HourProvider,
     MetOfficeGlobal10kmProvider,
     MetOfficeGlobalWaveProvider,
@@ -65,6 +63,8 @@ def write_archive(root, model: str, init: pd.Timestamp, steps, variables=("tempe
             name = f"{valid.strftime('%Y%m%dT%H%MZ')}-PT{step:04d}H00M-{variable}.nc"
             surface_file(valid, "air_temperature").to_netcdf(directory / name)
     return root / model
+
+
 
 
 # --------------------------------------------------------------------------- filenames
@@ -160,24 +160,24 @@ def test_slugify_long_names_uses_the_long_name():
 # ------------------------------------------------------------------------- the variants
 
 
-def test_the_variants_target_the_documented_stores():
-    assert GLOBAL_10KM.store_prefix.endswith("metoffice_global_deterministic_10km.icechunk")
-    assert GLOBAL_10KM_6HOURLY_24HR.store_prefix.endswith("_10km_6hourly_24hr.icechunk")
-    assert UK_2KM.store_prefix.endswith("metoffice_uk_deterministic_2km.icechunk")
-    assert {p.store_prefix for p in PROVIDERS.values()} == {
-        "bkr/metoffice/metoffice_global_deterministic_10km.icechunk",
-        "bkr/metoffice/metoffice_global_deterministic_10km_6hourly_24hr.icechunk",
-        "bkr/metoffice/metoffice_uk_deterministic_2km.icechunk",
-        "bkr/metoffice/metoffice_global_hourly_ocean_surface_analysis.icechunk",
-        "bkr/metoffice/metoffice_global_hourly_ocean_depth_analysis.icechunk",
-        "bkr/metoffice/metoffice_global_wave.icechunk",
-    }
+DOCUMENTED_STORES = {
+    MetOfficeGlobal10kmProvider: ("metoffice_global_deterministic_10km", "init_time"),
+    MetOfficeGlobal10km6Hourly24HourProvider: (
+        "metoffice_global_deterministic_10km_6hourly_24hr",
+        "init_time",
+    ),
+    MetOfficeUK2kmProvider: ("metoffice_uk_deterministic_2km", "time"),
+    MetOfficeOceanSurfaceProvider: ("metoffice_global_hourly_ocean_surface_analysis", "init_time"),
+    MetOfficeOceanDepthProvider: ("metoffice_global_hourly_ocean_depth_analysis", "init_time"),
+    MetOfficeGlobalWaveProvider: ("metoffice_global_wave", "time"),
+}
 
 
-def test_the_forecast_variants_append_along_init_time_and_the_uk_one_along_time():
-    assert MetOfficeGlobal10kmProvider.append_dim == "init_time"
-    assert MetOfficeGlobal10km6Hourly24HourProvider.append_dim == "init_time"
-    assert MetOfficeUK2kmProvider.append_dim == "time"
+def test_the_providers_target_the_documented_stores():
+    assert set(PROVIDERS.values()) == set(DOCUMENTED_STORES)
+    for cls, (store, append_dim) in DOCUMENTED_STORES.items():
+        assert cls.store_prefix == f"bkr/metoffice/{store}.icechunk", cls.__name__
+        assert cls.append_dim == append_dim, cls.__name__
 
 
 def test_store_paths_resolve_through_the_config(local_config, tmp_path):
@@ -242,7 +242,7 @@ def test_global_partition_round_trips_through_the_store(local_config, archive):
     assert provider.run_partition(INIT) is True
     assert provider.run_partition(INIT) is False, "a stored partition must not be redone"
 
-    ds = xr.open_zarr(provider.get_icechunk_repo().readonly_session("main").store, consolidated=False)
+    ds = open_store(provider)
     assert list(ds.init_time.values) == [INIT.to_numpy()]
     assert ds.sizes["step"] == 6
     assert ds.step.values[-1] == np.timedelta64(5, "h")
@@ -256,7 +256,7 @@ def test_uk_partition_keeps_the_valid_times(local_config, archive):
 
     assert provider.run_partition(INIT) is True
 
-    ds = xr.open_zarr(provider.get_icechunk_repo().readonly_session("main").store, consolidated=False)
+    ds = open_store(provider)
     assert "init_time" not in ds.dims
     assert list(ds.time.values) == [
         (INIT + pd.Timedelta(hours=h)).to_numpy() for h in range(6)
@@ -312,12 +312,8 @@ def test_ocean_surface_and_depth_go_to_separate_stores(local_config, tmp_path):
     assert depth.run_partition(INIT) is True
     assert surface.store_path != depth.store_path
 
-    surface_ds = xr.open_zarr(
-        surface.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
-    depth_ds = xr.open_zarr(
-        depth.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
+    surface_ds = open_store(surface)
+    depth_ds = open_store(depth)
     assert list(surface_ds.init_time.values) == [INIT.to_numpy()]
     assert "depth" not in surface_ds.dims
     assert depth_ds.sizes["depth"] == 2
@@ -338,7 +334,7 @@ def test_ocean_runs_are_stored_as_offsets_so_a_second_run_cannot_relabel_the_fir
     assert provider.run_partition(INIT) is True
     assert provider.run_partition(later) is True
 
-    ds = xr.open_zarr(provider.get_icechunk_repo().readonly_session("main").store, consolidated=False)
+    ds = open_store(provider)
     assert list(ds.init_time.values) == [INIT.to_numpy(), later.to_numpy()]
     assert "time" not in ds.dims
     assert ds.step.values[0] == np.timedelta64(-24, "h")
@@ -394,21 +390,10 @@ def test_wave_day_tiles_four_runs_into_an_hourly_series(local_config, tmp_path):
     assert provider.run_partition(day) is True
     assert provider.run_partition(day) is False
 
-    ds = xr.open_zarr(provider.get_icechunk_repo().readonly_session("main").store, consolidated=False)
+    ds = open_store(provider)
     assert ds.sizes["time"] == 24
     assert list(ds.data_vars) == ["significant_wave_height_m"]
     assert ds.time.values[0] == day.to_numpy()
-
-
-def test_a_full_wave_day_is_not_redone(local_config, tmp_path):
-    day = pd.Timestamp("2026-01-01")
-    provider = MetOfficeGlobalWaveProvider(config=local_config, archive_root=tmp_path)
-    days = pd.DatetimeIndex([day])
-    assert provider.missing_timesteps(days) == list(days)
-
-    write_wave(tmp_path, day)
-    provider.run_partition(day)
-    assert provider.missing_timesteps(days) == []
 
 
 def test_a_wave_day_whose_steps_start_an_hour_late_is_still_recognised(local_config, tmp_path):

@@ -10,18 +10,14 @@ import dataclasses
 import datetime as dt
 import hashlib
 import pathlib
-import sys
 
 import dagster as dg
 import pandas as pd
 import pytest
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from planetary_datasets.providers import kenda, kenda_download  # noqa: E402
-from planetary_datasets.providers.kenda_download import (  # noqa: E402
+from helpers import assert_pipes_accepts
+from planetary_datasets.providers import kenda, kenda_download
+from planetary_datasets.providers.kenda_download import (
     ANALYSIS_VARIABLES,
     CONSTANTS,
     FORECAST_VARIABLES,
@@ -76,14 +72,9 @@ class FakeOGD:
     Request = FakeRequest
 
     def __init__(self, published: dict[int, set[str]] | None = None, corrupt: set[str] = ()):
-        self.published = (
-            published
-            if published is not None
-            else {
-                0: set(ANALYSIS_VARIABLES),
-                1: set(FORECAST_VARIABLES),
-            }
-        )
+        if published is None:
+            published = {0: set(ANALYSIS_VARIABLES), 1: set(FORECAST_VARIABLES)}
+        self.published = published
         self.corrupt = set(corrupt)
         self.requests: list[FakeRequest] = []
         self.fetched: list[str] = []
@@ -123,12 +114,9 @@ class ExplodingOGD(FakeOGD):
         raise AssertionError("the API must not be queried for files already on disk")
 
 
-def test_step_variable_sets_are_disjoint_and_cover_the_original_scripts():
+def test_downloaded_files_cover_the_original_scripts_and_what_the_provider_reads():
     assert not set(ANALYSIS_VARIABLES) & set(FORECAST_VARIABLES)
     assert set(ANALYSIS_VARIABLES) | set(FORECAST_VARIABLES) == ORIGINAL_SCRIPT_VARIABLES
-
-
-def test_constants_match_the_names_the_provider_reads():
     assert set(CONSTANTS) == {kenda.HORIZONTAL_CONSTANTS, kenda.VERTICAL_CONSTANTS}
 
 
@@ -274,13 +262,9 @@ def test_run_fails_on_an_incomplete_hour_unless_allowed(tmp_path, monkeypatch):
 
 def test_pipes_accepts_the_metadata_of_a_complete_hour():
     """A complete hour has an empty ``missing`` dict, which Pipes rejects untagged."""
-    from dagster_pipes import _normalize_param_metadata
-
     summary = kenda_download.DownloadReport(ref_time=REF_TIME).summary()
     assert summary["missing"] == {}
-    _normalize_param_metadata(
-        kenda_download.pipes_metadata(summary), "report_asset_materialization", "metadata"
-    )
+    assert_pipes_accepts(kenda_download.pipes_metadata(summary))
 
 
 def test_the_provider_reads_what_the_downloader_writes(tmp_path):
@@ -298,63 +282,42 @@ def test_the_provider_reads_what_the_downloader_writes(tmp_path):
 # --- Dagster asset --------------------------------------------------------------------
 
 
-class FakeInvocation:
-    def get_materialize_result(self):
-        return dg.MaterializeResult(metadata={"fake": True})
-
-
-class FakeDockerClient:
-    def __init__(self):
-        self.calls: list[dict] = []
-
-    def run(self, **kwargs):
-        self.calls.append(kwargs)
-        return FakeInvocation()
-
-
-def test_the_download_asset_mounts_the_archive_and_passes_the_hour(tmp_path, monkeypatch):
+def materialize_download(client):
     from dags.assets.nwp import regional_lam
-    from planetary_datasets import config as config_module
 
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
-    monkeypatch.setenv(regional_lam.KENDA_IMAGE_ENV, "example/kenda:test")
-    config_module.reset_config_cache()
-    client = FakeDockerClient()
-    result = dg.materialize(
+    return dg.materialize(
         [regional_lam.kenda_download_asset],
         partition_key="2026-09-29-06:00",
         resources={"pipes_docker_client": client},
     )
 
-    assert result.success
-    (call,) = client.calls
+
+def test_the_download_asset_mounts_the_archive_and_passes_the_hour(
+    local_config, tmp_path, monkeypatch, fake_docker_client
+):
+    from dags.assets.nwp import regional_lam
+
+    monkeypatch.setenv(regional_lam.KENDA_IMAGE_ENV, "example/kenda:test")
+    assert materialize_download(fake_docker_client).success
+
+    (call,) = fake_docker_client.calls
     assert call["image"] == "example/kenda:test"
     assert call["command"] == [
         "--ref-time", "2026-09-29T06:00:00Z", "--target", regional_lam.KENDA_CONTAINER_ARCHIVE,
     ]  # fmt: skip
-    archive = str((tmp_path / "meteoswiss").resolve())
+    archive = tmp_path / "data" / "meteoswiss"
     assert call["container_kwargs"]["volumes"] == {
-        archive: {"bind": regional_lam.KENDA_CONTAINER_ARCHIVE, "mode": "rw"}
+        str(archive.resolve()): {"bind": regional_lam.KENDA_CONTAINER_ARCHIVE, "mode": "rw"}
     }
-    assert (tmp_path / "meteoswiss").is_dir()
+    assert archive.is_dir()
 
 
-def test_the_download_asset_skips_an_hour_both_stores_already_hold(tmp_path, monkeypatch):
-    from dags.assets.nwp import regional_lam
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
-    config_module.reset_config_cache()
+def test_the_download_asset_skips_an_hour_both_stores_already_hold(
+    local_config, monkeypatch, fake_docker_client
+):
     monkeypatch.setattr(kenda.KENDAProviderBase, "missing_timesteps", lambda self, desired: [])
-    client = FakeDockerClient()
-    result = dg.materialize(
-        [regional_lam.kenda_download_asset],
-        partition_key="2026-09-29-06:00",
-        resources={"pipes_docker_client": client},
-    )
-    assert result.success
-    assert client.calls == []
+    assert materialize_download(fake_docker_client).success
+    assert fake_docker_client.calls == []
 
 
 def test_the_kenda_stores_depend_on_the_download_after_key_prefixing():

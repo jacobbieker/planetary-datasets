@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from helpers import read_store as _stored
 from planetary_datasets.providers.observations import igra as igra_module
 from planetary_datasets.providers.observations import sondehub as sondehub_module
 from planetary_datasets.providers.observations.amdar import (
@@ -54,6 +55,9 @@ from planetary_datasets.providers.observations.upper_air_common import (
     concat_tables,
     table_to_dataset,
 )
+
+
+
 
 # --- table_to_dataset -------------------------------------------------------------------
 
@@ -142,18 +146,16 @@ def stub_provider(local_config):
     return StubPointProvider(config=local_config)
 
 
-def test_partition_window_is_half_open(stub_provider):
-    start, end = stub_provider.partition_window(pd.Timestamp("2026-03-04"))
-    assert start == pd.Timestamp("2026-03-04")
-    assert end == pd.Timestamp("2026-03-05")
-
-
-def test_monthly_partition_window():
-    class Monthly(StubPointProvider):
-        partition_freq = "MS"
-
-    start, end = Monthly().partition_window(pd.Timestamp("2026-01-01"))
-    assert end == pd.Timestamp("2026-02-01")
+@pytest.mark.parametrize(
+    ("freq", "start", "end"),
+    [("1D", "2026-03-04", "2026-03-05"), ("MS", "2026-01-01", "2026-02-01")],
+)
+def test_partition_window_is_half_open(stub_provider, freq, start, end):
+    stub_provider.partition_freq = freq
+    assert stub_provider.partition_window(pd.Timestamp(start)) == (
+        pd.Timestamp(start),
+        pd.Timestamp(end),
+    )
 
 
 def test_trim_to_window_drops_the_overspill(stub_provider):
@@ -178,8 +180,7 @@ def test_round_trip_through_a_local_store(stub_provider):
     stub_provider.run_partition(pd.Timestamp("2026-03-04"))
     stub_provider.run_partition(pd.Timestamp("2026-03-05"))
 
-    repo = stub_provider.get_icechunk_repo()
-    stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    stored = _stored(stub_provider)
     assert stored.sizes["time"] == 4
     assert pd.Timestamp(stored["time"].values[0]) == pd.Timestamp("2026-03-04T01:00")
     assert pd.Timestamp(stored["time"].values[-1]) == pd.Timestamp("2026-03-05T23:00")
@@ -197,10 +198,7 @@ def test_sub_second_times_survive_a_store_created_from_whole_seconds(stub_provid
     fine = StubPointProvider(config=stub_provider.config, offsets=("1h 0.1s",))
     assert fine.run_partition(pd.Timestamp("2026-03-05")) is True
 
-    stored = xr.open_zarr(
-        stub_provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
-    assert pd.DatetimeIndex(stored["time"].values).tolist() == [
+    assert pd.DatetimeIndex(_stored(stub_provider)["time"].values).tolist() == [
         pd.Timestamp("2026-03-04T01:00"),
         pd.Timestamp("2026-03-05T01:00"),
     ]
@@ -245,44 +243,42 @@ def test_find_pb2nc_names_the_missing_toolkit(monkeypatch):
     assert not pb2nc_available()
 
 
-def _stub_pb2nc(tmp_path: pathlib.Path, body: str) -> pathlib.Path:
-    """Write an executable stand-in for pb2nc so the shell-out can be tested offline."""
-    script = tmp_path / "pb2nc"
-    script.write_text("#!/bin/sh\n" + body)
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
-    return script
+@pytest.fixture
+def stub_pb2nc(tmp_path, monkeypatch):
+    """Install an executable stand-in for pb2nc, so the shell-out can be tested offline."""
+
+    def install(body: str) -> None:
+        script = tmp_path / "pb2nc"
+        script.write_text("#!/bin/sh\n" + body)
+        script.chmod(script.stat().st_mode | stat.S_IXUSR)
+        monkeypatch.setenv("PB2NC_BINARY", str(script))
+
+    return install
 
 
-def test_run_pb2nc_raises_with_the_tools_own_error(tmp_path, monkeypatch):
-    script = _stub_pb2nc(tmp_path, 'echo "bad bufr record" >&2\nexit 3\n')
-    monkeypatch.setenv("PB2NC_BINARY", str(script))
+def test_run_pb2nc_raises_with_the_tools_own_error(tmp_path, stub_pb2nc):
+    stub_pb2nc('echo "bad bufr record" >&2\nexit 3\n')
     with pytest.raises(RuntimeError, match="bad bufr record"):
         run_pb2nc(tmp_path / "in.bufr", tmp_path / "out.nc", tmp_path / "cfg")
     assert not (tmp_path / "out.nc").exists()
     assert not (tmp_path / "out.nc.part").exists()
 
 
-def test_run_pb2nc_rejects_a_success_that_wrote_nothing(tmp_path, monkeypatch):
-    script = _stub_pb2nc(tmp_path, "exit 0\n")
-    monkeypatch.setenv("PB2NC_BINARY", str(script))
+def test_run_pb2nc_rejects_a_success_that_wrote_nothing(tmp_path, stub_pb2nc):
+    stub_pb2nc("exit 0\n")
     with pytest.raises(RuntimeError, match="wrote no output"):
         run_pb2nc(tmp_path / "in.bufr", tmp_path / "out.nc", tmp_path / "cfg")
 
 
-def test_run_pb2nc_renames_only_a_complete_output(tmp_path, monkeypatch):
-    script = _stub_pb2nc(tmp_path, 'printf data > "$2"\nexit 0\n')
-    monkeypatch.setenv("PB2NC_BINARY", str(script))
+def test_run_pb2nc_renames_only_a_complete_output(tmp_path, stub_pb2nc):
+    stub_pb2nc('printf data > "$2"\nexit 0\n')
     out = run_pb2nc(tmp_path / "in.bufr", tmp_path / "out.nc", tmp_path / "cfg")
     assert out.read_text() == "data"
     assert not (tmp_path / "out.nc.part").exists()
 
 
-def test_convert_many_skips_a_failing_file(tmp_path, monkeypatch):
-    script = _stub_pb2nc(
-        tmp_path,
-        'case "$1" in *bad*) exit 1;; esac\nprintf data > "$2"\nexit 0\n',
-    )
-    monkeypatch.setenv("PB2NC_BINARY", str(script))
+def test_convert_many_skips_a_failing_file(tmp_path, stub_pb2nc):
+    stub_pb2nc('case "$1" in *bad*) exit 1;; esac\nprintf data > "$2"\nexit 0\n')
     for name in ("good.bufr", "bad.bufr"):
         (tmp_path / name).write_text("x")
     outputs = convert_many(
@@ -427,49 +423,40 @@ def test_amdar_fetch_raises_when_the_directory_is_missing(local_config, tmp_path
         provider.fetch(pd.Timestamp("2026-03-04"))
 
 
-def test_amdar_fetch_matches_on_the_partition_date(local_config, tmp_path):
+@pytest.fixture
+def amdar_dir(tmp_path, stub_pb2nc):
+    """A BUFR directory holding one day's file, with pb2nc stubbed to emit the MET sample."""
     raw = tmp_path / "amdar"
     raw.mkdir()
-    for name in ("gdas.20260304.t00z.48h", "gdas.20260305.t00z.48h"):
-        (raw / name).write_text("x")
-    provider = AMDARProvider(config=local_config, bufr_dir=raw)
+    (raw / "gdas.20260304.t00z.48h").write_text("x")
+    sample = tmp_path / "sample.nc"
+    _met_point_dataset().to_netcdf(sample)
+    stub_pb2nc(f'cp "{sample}" "$2"\nexit 0\n')
+    return raw
+
+
+def test_amdar_fetch_matches_on_the_partition_date(local_config, amdar_dir):
+    (amdar_dir / "gdas.20260305.t00z.48h").write_text("x")
+    provider = AMDARProvider(config=local_config, bufr_dir=amdar_dir)
     found = provider.fetch(pd.Timestamp("2026-03-04"))
     assert [pathlib.Path(p).name for p in found] == ["gdas.20260304.t00z.48h"]
     assert provider.fetch(pd.Timestamp("2026-03-06")) == []
 
 
-def test_amdar_process_converts_trims_and_writes(local_config, tmp_path, monkeypatch):
+def test_amdar_process_converts_trims_and_writes(local_config, amdar_dir):
     """The whole AMDAR leg with pb2nc stubbed out by a script that writes a MET file."""
-    raw = tmp_path / "amdar"
-    raw.mkdir()
-    (raw / "gdas.20260304.t00z.48h").write_text("x")
-
-    sample = tmp_path / "sample.nc"
-    _met_point_dataset().to_netcdf(sample)
-    script = _stub_pb2nc(tmp_path, f'cp "{sample}" "$2"\nexit 0\n')
-    monkeypatch.setenv("PB2NC_BINARY", str(script))
-
-    provider = AMDARProvider(config=local_config, bufr_dir=raw)
+    provider = AMDARProvider(config=local_config, bufr_dir=amdar_dir)
     assert provider.run_partition(pd.Timestamp("2026-03-04")) is True
 
-    stored = xr.open_zarr(
-        provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
+    stored = _stored(provider)
     assert stored.sizes["time"] == 2
     assert set(stored.data_vars) == set(AMDAR_SCHEMA)
     assert stored["station_id"].values.tolist() == ["ABC123", "DEF456"]
 
 
-def test_amdar_bbox_crops(local_config, tmp_path, monkeypatch):
-    raw = tmp_path / "amdar"
-    raw.mkdir()
-    (raw / "gdas.20260304.t00z.48h").write_text("x")
-    sample = tmp_path / "sample.nc"
-    _met_point_dataset().to_netcdf(sample)
-    monkeypatch.setenv("PB2NC_BINARY", str(_stub_pb2nc(tmp_path, f'cp "{sample}" "$2"\nexit 0\n')))
-
-    provider = AMDARProvider(config=local_config, bufr_dir=raw, bbox=(0.0, 60.0, 30.0, 80.0))
-    raw_file = str(raw / "gdas.20260304.t00z.48h")
+def test_amdar_bbox_crops(local_config, tmp_path, amdar_dir):
+    provider = AMDARProvider(config=local_config, bufr_dir=amdar_dir, bbox=(0.0, 60.0, 30.0, 80.0))
+    raw_file = str(amdar_dir / "gdas.20260304.t00z.48h")
     ds = provider.process([raw_file], pd.Timestamp("2026-03-04"), tmp_path)
     assert ds.sizes["time"] == 1
     assert ds["station_id"].values.tolist() == ["ABC123"]
@@ -706,7 +693,8 @@ def test_read_station_builds_a_station_time_level_cube(monkeypatch):
     assert ds["temperature"].dtype == np.float32
 
 
-def _staged_archive(local_config, monkeypatch, tmp_path, **kwargs):
+@pytest.fixture
+def staged_archive(local_config, monkeypatch, tmp_path):
     """An archive whose downloads and parsing are stubbed, staging into tmp_path."""
     monkeypatch.setattr(igra_module, "station_table", lambda path: _fake_station_table())
     monkeypatch.setattr(
@@ -718,14 +706,11 @@ def _staged_archive(local_config, monkeypatch, tmp_path, **kwargs):
         config=local_config,
         levels=[85000.0, 50000.0],
         stage_dir=tmp_path / "staged",
-        **kwargs,
     )
 
 
-def test_station_archive_stages_each_station_on_its_own_time_axis(
-    local_config, monkeypatch, tmp_path
-):
-    archive = _staged_archive(local_config, monkeypatch, tmp_path)
+def test_station_archive_stages_each_station_on_its_own_time_axis(staged_archive, tmp_path):
+    archive = staged_archive
     staged = archive.stage({"AAA": tmp_path / "AAA", "BBB": tmp_path / "BBB"})
 
     assert [p.name for p in staged] == ["AAA.nc", "BBB.nc"]
@@ -735,10 +720,8 @@ def test_station_archive_stages_each_station_on_its_own_time_axis(
     assert archive.stage({"AAA": tmp_path / "AAA"}) == [staged[0]]
 
 
-def test_station_archive_writes_in_time_slices_and_is_idempotent(
-    local_config, monkeypatch, tmp_path
-):
-    archive = _staged_archive(local_config, monkeypatch, tmp_path)
+def test_station_archive_writes_in_time_slices_and_is_idempotent(local_config, staged_archive):
+    archive = staged_archive
 
     # slice_size of 1 forces more than one commit, exercising the append path.
     assert archive.build(idents=["AAA", "BBB"], slice_size=1) == 2
@@ -746,37 +729,32 @@ def test_station_archive_writes_in_time_slices_and_is_idempotent(
     assert archive.build(idents=["AAA", "BBB"], slice_size=1) == 0
 
     repo = local_config.icechunk_repo(archive.store_prefix)
-    stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    stored = _stored(repo)
     assert stored["station"].values.tolist() == ["AAA", "BBB"]
     assert dict(stored.sizes) == {"station": 2, "time": 2, "level": 2}
     assert stored["level"].values.tolist() == [85000.0, 50000.0]
 
 
-def test_station_archive_stages_each_level_set_separately(local_config, monkeypatch, tmp_path):
+def test_station_archive_stages_each_level_set_separately(local_config, staged_archive, tmp_path):
     """Two level sets must not reuse each other's staged files."""
-    sixteen = _staged_archive(local_config, monkeypatch, tmp_path)
-    two = IGRAStationArchive(
-        config=local_config, levels=[85000.0], stage_dir=tmp_path / "staged"
-    )
-    assert sixteen.stage_dir != two.stage_dir
+    one = IGRAStationArchive(config=local_config, levels=[85000.0], stage_dir=tmp_path / "staged")
+    assert staged_archive.stage_dir != one.stage_dir
 
 
-def test_station_archive_refresh_redownloads(local_config, monkeypatch, tmp_path):
-    archive = _staged_archive(local_config, monkeypatch, tmp_path)
+def test_station_archive_refresh_redownloads(staged_archive, monkeypatch):
     seen = []
     monkeypatch.setattr(
         IGRAStationArchive,
         "download",
         lambda self, idents, overwrite=False: seen.append(overwrite) or {},
     )
-    archive.build(idents=["AAA"], refresh=True)
+    staged_archive.build(idents=["AAA"], refresh=True)
     assert seen == [True]
 
 
-def test_station_archive_with_nothing_to_download(local_config, monkeypatch, tmp_path):
-    archive = _staged_archive(local_config, monkeypatch, tmp_path)
+def test_station_archive_with_nothing_to_download(staged_archive, monkeypatch):
     monkeypatch.setattr(IGRAStationArchive, "download", lambda self, idents, overwrite=False: {})
-    assert archive.build(idents=["AAA"]) == 0
+    assert staged_archive.build(idents=["AAA"]) == 0
 
 
 # --- Sondehub ---------------------------------------------------------------------------
@@ -817,6 +795,19 @@ def test_frames_to_table_maps_fields_and_drops_undated_frames():
     assert table["serial"].tolist() == ["DFM09-17027735"] * 2
 
 
+@pytest.fixture
+def sample_json(tmp_path):
+    """SAMPLE_FRAMES as the archive serves them: one JSON list per serial."""
+    path = tmp_path / "DFM09-17027735.json"
+    path.write_text(json.dumps(SAMPLE_FRAMES))
+    return path
+
+
+def _list_day_keys(monkeypatch, keys) -> None:
+    """Stand in for the archive's ``date/`` index listing."""
+    monkeypatch.setattr(sondehub_module, "list_day_keys", lambda *a, **k: list(keys))
+
+
 def test_frames_to_table_on_nothing():
     assert frames_to_table([]).empty
 
@@ -847,24 +838,18 @@ def test_flight_summary_on_an_empty_flight():
     }
 
 
-def test_read_frames_normalises_a_single_object(tmp_path):
-    path = tmp_path / "one.json"
-    path.write_text(json.dumps(SAMPLE_FRAMES[0]))
-    assert len(read_frames(str(path))) == 1
+@pytest.mark.parametrize(
+    ("payload", "expected"), [(SAMPLE_FRAMES[0], 1), (SAMPLE_FRAMES, 3)], ids=["object", "list"]
+)
+def test_read_frames_normalises_to_a_list(tmp_path, payload, expected):
+    path = tmp_path / "frames.json"
+    path.write_text(json.dumps(payload))
+    assert len(read_frames(str(path))) == expected
 
 
-def test_read_frames_reads_a_list(tmp_path):
-    path = tmp_path / "many.json"
-    path.write_text(json.dumps(SAMPLE_FRAMES))
-    assert len(read_frames(str(path))) == 3
-
-
-def test_sondehub_process_builds_the_full_schema(local_config, tmp_path):
-    path = tmp_path / "DFM09-17027735.json"
-    path.write_text(json.dumps(SAMPLE_FRAMES))
-
+def test_sondehub_process_builds_the_full_schema(local_config, sample_json):
     provider = SondehubProvider(config=local_config)
-    ds = provider.process([str(path)], pd.Timestamp("2018-10-01"))
+    ds = provider.process([str(sample_json)], pd.Timestamp("2018-10-01"))
     assert ds.sizes["time"] == 2
     assert set(ds.data_vars) == set(SONDEHUB_SCHEMA)
     # Not reported by these frames, so present and all-missing rather than absent.
@@ -872,48 +857,36 @@ def test_sondehub_process_builds_the_full_schema(local_config, tmp_path):
     assert ds["sonde_type"].values.tolist() == ["DFM", "DFM"]
 
 
-def test_sondehub_process_trims_to_the_day(local_config, tmp_path):
-    path = tmp_path / "s.json"
-    path.write_text(json.dumps(SAMPLE_FRAMES))
+def test_sondehub_process_trims_to_the_day(local_config, sample_json):
     provider = SondehubProvider(config=local_config)
-    ds = provider.process([str(path)], pd.Timestamp("2018-10-02"))
+    ds = provider.process([str(sample_json)], pd.Timestamp("2018-10-02"))
     assert ds.sizes["time"] == 0
 
 
-def test_sondehub_write_round_trip(local_config, tmp_path, monkeypatch):
-    path = tmp_path / "DFM09-17027735.json"
-    path.write_text(json.dumps(SAMPLE_FRAMES))
-    monkeypatch.setattr(
-        sondehub_module, "list_day_keys", lambda *args, **kwargs: [str(path)]
-    )
+def test_sondehub_write_round_trip(local_config, sample_json, monkeypatch):
+    _list_day_keys(monkeypatch, [str(sample_json)])
 
     provider = SondehubProvider(config=local_config)
     assert provider.run_partition(pd.Timestamp("2018-10-01")) is True
     # Re-running the same partition is a no-op, not a duplicate.
     assert provider.run_partition(pd.Timestamp("2018-10-01")) is False
 
-    stored = xr.open_zarr(
-        provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
+    stored = _stored(provider)
     assert stored.sizes["time"] == 2
     assert stored["serial"].values.tolist() == ["DFM09-17027735"] * 2
 
 
-def test_sondehub_process_survives_one_unreadable_object(local_config, tmp_path):
-    good = tmp_path / "good.json"
-    good.write_text(json.dumps(SAMPLE_FRAMES))
+def test_sondehub_process_survives_one_unreadable_object(local_config, tmp_path, sample_json):
     bad = tmp_path / "bad.json"
     bad.write_text("{ not json")
 
     provider = SondehubProvider(config=local_config)
-    ds = provider.process([str(good), str(bad)], pd.Timestamp("2018-10-01"))
+    ds = provider.process([str(sample_json), str(bad)], pd.Timestamp("2018-10-01"))
     assert ds.sizes["time"] == 2
 
 
 def test_max_sondes_limits_the_day(local_config, monkeypatch):
-    monkeypatch.setattr(
-        sondehub_module, "list_day_keys", lambda *args, **kwargs: ["a", "b", "c"]
-    )
+    _list_day_keys(monkeypatch, ["a", "b", "c"])
     provider = SondehubProvider(config=local_config, max_sondes=2)
     assert provider.fetch(pd.Timestamp("2018-10-01")) == ["a", "b"]
 
@@ -985,10 +958,6 @@ def test_merging_can_be_turned_off_to_count_receiver_coverage():
     assert len(frames_to_table(MULTI_RECEIVER_FRAMES, merge=False)) == 4
 
 
-def test_undated_frames_are_still_dropped_when_merging():
-    assert len(frames_to_table(SAMPLE_FRAMES)) == 2
-
-
 # --- serial listing -----------------------------------------------------------------------
 
 
@@ -998,10 +967,9 @@ def test_serials_are_listed_through_the_date_index(monkeypatch):
     The objects are still public, so a direct read works; only the enumeration had to move
     to the ``date/`` index, which is listable.
     """
-    monkeypatch.setattr(
-        sondehub_module,
-        "list_day_keys",
-        lambda *a, **k: [
+    _list_day_keys(
+        monkeypatch,
+        [
             "sondehub-history/date/2018/10/01/DFM09-17027735.json",
             "sondehub-history/date/2018/10/01/P1440495.json",
         ],
@@ -1010,7 +978,7 @@ def test_serials_are_listed_through_the_date_index(monkeypatch):
 
 
 def test_a_day_the_archive_does_not_cover_lists_no_serials(monkeypatch):
-    monkeypatch.setattr(sondehub_module, "list_day_keys", lambda *a, **k: [])
+    _list_day_keys(monkeypatch, [])
     assert sondehub_module.list_serials("1990-01-01") == []
 
 
@@ -1064,7 +1032,7 @@ def test_flights_round_trip_through_the_ragged_store(local_config, flight_store)
     assert flight.attrs["launch_site"] == "06458"
 
 
-def test_no_flight_is_ever_split_across_a_chunk_boundary(local_config, flight_store):
+def test_no_flight_is_ever_split_across_a_chunk_boundary(flight_store):
     """The whole point of the rectilinear grid: reading one serial touches one chunk.
 
     Flights run from ~1k to ~450k samples, so a regular chunk either scatters the big ones
@@ -1081,7 +1049,7 @@ def test_no_flight_is_ever_split_across_a_chunk_boundary(local_config, flight_st
     assert chunk_bounds <= flight_bounds
 
 
-def test_the_ragged_index_places_every_flight_end_to_end(local_config, flight_store):
+def test_the_ragged_index_places_every_flight_end_to_end(flight_store):
     _write_flights(flight_store, THREE_FLIGHTS)
 
     flights = sondehub_module.SondeFlights(flight_store).flights()
@@ -1090,7 +1058,7 @@ def test_the_ragged_index_places_every_flight_end_to_end(local_config, flight_st
     assert list(flights["obs_count"].values) == [30, 70, 25]
 
 
-def test_a_serial_already_stored_is_not_written_twice(local_config, flight_store):
+def test_a_serial_already_stored_is_not_written_twice(flight_store):
     """Re-running an interrupted day must not duplicate what already landed."""
     _write_flights(flight_store, [("AAA", 30)])
 
@@ -1103,20 +1071,20 @@ def test_a_serial_already_stored_is_not_written_twice(local_config, flight_store
     assert len(sondehub_module.SondeFlights(flight_store)) == 2
 
 
-def test_an_unknown_serial_is_reported_not_guessed(local_config, flight_store):
+def test_an_unknown_serial_is_reported_not_guessed(flight_store):
     _write_flights(flight_store, [("AAA", 30)])
 
     with pytest.raises(KeyError, match="not in the store"):
         sondehub_module.SondeFlights(flight_store).sel("NOPE")
 
 
-def test_a_flight_with_no_samples_is_refused(local_config, flight_store):
+def test_a_flight_with_no_samples_is_refused(flight_store):
     writer = sondehub_module.FlightWriter(flight_store)
     empty = xr.Dataset(coords={"time": pd.DatetimeIndex([])}, attrs={"serial": "EMPTY"})
     assert writer.add(empty) is False
 
 
-def test_a_variable_the_sonde_never_reported_is_filled_not_omitted(local_config, flight_store):
+def test_a_variable_the_sonde_never_reported_is_filled_not_omitted(flight_store):
     """Every flight must contribute the same columns or the obs arrays fall out of step."""
     _write_flights(flight_store, [("AAA", 10)])  # _fake_flight reports no temperature
 
@@ -1134,16 +1102,12 @@ def test_the_flight_store_is_separate_from_the_day_partitioned_cube(local_config
 
 
 def test_write_flights_skips_a_day_the_archive_has_no_serials_for(local_config, monkeypatch):
-    monkeypatch.setattr(sondehub_module, "list_day_keys", lambda *a, **k: [])
+    _list_day_keys(monkeypatch, [])
     assert SondehubProvider(config=local_config).write_flights("1990-01-01") == 0
 
 
 def test_write_flights_ingests_a_day_and_is_resumable(local_config, monkeypatch, flight_store):
-    monkeypatch.setattr(
-        sondehub_module,
-        "list_day_keys",
-        lambda *a, **k: [f"x/date/2026/01/01/{s}.json" for s in ("AAA", "BBB")],
-    )
+    _list_day_keys(monkeypatch, [f"x/date/2026/01/01/{s}.json" for s in ("AAA", "BBB")])
     provider = SondehubProvider(config=local_config)
     monkeypatch.setattr(
         provider, "flight_dataset", lambda serial: _fake_flight(serial, 12, "2026-01-01")
@@ -1156,11 +1120,7 @@ def test_write_flights_ingests_a_day_and_is_resumable(local_config, monkeypatch,
 
 
 def test_write_flights_survives_one_unreadable_sonde(local_config, monkeypatch, flight_store):
-    monkeypatch.setattr(
-        sondehub_module,
-        "list_day_keys",
-        lambda *a, **k: [f"x/date/2026/01/01/{s}.json" for s in ("AAA", "BAD", "BBB")],
-    )
+    _list_day_keys(monkeypatch, [f"x/date/2026/01/01/{s}.json" for s in ("AAA", "BAD", "BBB")])
     provider = SondehubProvider(config=local_config)
 
     def one(serial):

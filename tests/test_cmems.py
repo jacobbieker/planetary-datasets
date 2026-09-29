@@ -11,9 +11,12 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from planetary_datasets.config import MissingCredential
+from helpers import read_store
+from planetary_datasets import config as config_module
+from planetary_datasets.config import Config, MissingCredential
 from planetary_datasets.providers import cmems
 from planetary_datasets.providers.cmems import client as cmems_client
+from planetary_datasets.providers.cmems.global_ocean import _day_files
 
 
 def _wave_day(day: str, n_time: int = 3, descending_lat: bool = True) -> xr.Dataset:
@@ -32,6 +35,14 @@ def _wave_day(day: str, n_time: int = 3, descending_lat: bool = True) -> xr.Data
     )
 
 
+@pytest.fixture
+def credentialed_config(local_config, monkeypatch):
+    """``local_config`` with Copernicus Marine credentials set."""
+    monkeypatch.setenv("COPERNICUSMARINE_SERVICE_USERNAME", "someone")
+    monkeypatch.setenv("COPERNICUSMARINE_SERVICE_PASSWORD", "secret")
+    return config_module.load_config()
+
+
 # --------------------------------------------------------------------------- region table
 
 
@@ -48,23 +59,24 @@ def test_region_table_is_self_consistent():
     assert len(dataset_ids) == len(cmems.WAVE_REGIONS)
 
 
-def test_arctic_keeps_its_legacy_dataset_id():
-    assert cmems.WAVE_REGIONS["arctic"].dataset_id == "dataset-wam-arctic-1hr3km-be"
-
-
-def test_nwshelf_does_not_reuse_the_ibi_dataset_id():
-    """The pre-consolidation module had NWSHELF pointing at the IBI dataset id."""
-    assert cmems.WAVE_REGIONS["nwshelf"].dataset_id == "cmems_mod_nws_wav_anfc_1.5km_PT1H-i"
-    assert (
-        cmems.WAVE_REGIONS["nwshelf"].dataset_id != cmems.WAVE_REGIONS["ibi"].dataset_id
-    )
+@pytest.mark.parametrize(
+    ("key", "dataset_id"),
+    [
+        # The Arctic product keeps its legacy dataset id.
+        ("arctic", "dataset-wam-arctic-1hr3km-be"),
+        # The pre-consolidation module had NWSHELF pointing at the IBI dataset id.
+        ("nwshelf", "cmems_mod_nws_wav_anfc_1.5km_PT1H-i"),
+        ("medsea", "cmems_mod_med_wav_anfc_4.2km_PT1H-i"),
+    ],
+)
+def test_upstream_dataset_ids(key, dataset_id):
+    assert cmems.CMEMSWaveProvider(key).dataset_id == dataset_id
 
 
 def test_wave_provider_accepts_key_or_region():
     by_key = cmems.CMEMSWaveProvider("medsea")
     by_region = cmems.CMEMSWaveProvider(cmems.WAVE_REGIONS["medsea"])
     assert by_key.name == by_region.name == "cmems_wave_medsea"
-    assert by_key.dataset_id == "cmems_mod_med_wav_anfc_4.2km_PT1H-i"
 
 
 def test_unknown_region_names_the_known_ones():
@@ -83,8 +95,6 @@ def test_store_path_uses_config(local_config):
 
 
 def test_store_path_defaults_to_the_public_bucket():
-    from planetary_datasets.config import Config
-
     provider = cmems.CMEMSWaveProvider("arctic", config=Config())
     assert provider.store_path == (
         "s3://us-west-2.opendata.source.coop/bkr/cmems-wave/arctic.icechunk"
@@ -99,13 +109,8 @@ def test_credentials_required(local_config):
         cmems.credentials(local_config)
 
 
-def test_credentials_returned_when_set(monkeypatch, tmp_path):
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("COPERNICUSMARINE_SERVICE_USERNAME", "someone")
-    monkeypatch.setenv("COPERNICUSMARINE_SERVICE_PASSWORD", "secret")
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
-    assert cmems.credentials(cfg) == ("someone", "secret")
+def test_credentials_returned_when_set(credentialed_config):
+    assert cmems.credentials(credentialed_config) == ("someone", "secret")
 
 
 def test_fetch_without_credentials_raises(local_config, tmp_path):
@@ -131,14 +136,9 @@ def test_dataset_dir_lives_under_the_configured_data_dir(local_config):
     assert path == local_config.data_dir / "cmems" / "cmems_mod_glo_phy_anfc_0.083deg_PT1H-m"
 
 
-def test_download_dataset_passes_credentials_and_config(monkeypatch, tmp_path):
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("COPERNICUSMARINE_SERVICE_USERNAME", "someone")
-    monkeypatch.setenv("COPERNICUSMARINE_SERVICE_PASSWORD", "secret")
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
-
+def test_download_dataset_passes_credentials_and_config(
+    monkeypatch, tmp_path, credentialed_config
+):
     seen: dict = {}
 
     class _File:
@@ -154,7 +154,9 @@ def test_download_dataset_passes_credentials_and_config(monkeypatch, tmp_path):
 
     monkeypatch.setattr("copernicusmarine.get", fake_get)
 
-    paths = cmems.download_dataset("global_phy_hourly", file_filter="*2026*", config=cfg)
+    paths = cmems.download_dataset(
+        "global_phy_hourly", file_filter="*2026*", config=credentialed_config
+    )
 
     assert [p.name for p in paths] == ["a.nc"]
     assert seen["dataset_id"] == "cmems_mod_glo_phy_anfc_0.083deg_PT1H-m"
@@ -177,50 +179,35 @@ def test_download_datasets_continues_past_failures(monkeypatch, tmp_path):
     assert len(results["cmems_mod_glo_phy_anfc_merged-sl_PT1H-i"]) == 1
 
 
-def test_subset_day_reports_missing_output(monkeypatch, tmp_path):
-    from planetary_datasets import config as config_module
+def _no_data_for_this_day(**kwargs):
+    raise RuntimeError("no data for this day")
 
-    monkeypatch.setenv("COPERNICUSMARINE_SERVICE_USERNAME", "someone")
-    monkeypatch.setenv("COPERNICUSMARINE_SERVICE_PASSWORD", "secret")
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
 
-    monkeypatch.setattr("copernicusmarine.subset", lambda **kwargs: None)
+@pytest.mark.parametrize(
+    "subset",
+    [lambda **kwargs: None, _no_data_for_this_day],
+    ids=["missing_output", "toolbox_error"],
+)
+def test_subset_day_reports_a_missing_day_as_none(
+    monkeypatch, tmp_path, credentialed_config, subset
+):
+    monkeypatch.setattr("copernicusmarine.subset", subset)
     assert (
         cmems_client.subset_day(
-            "some-dataset", ["VHM0"], pd.Timestamp("2026-01-01"), tmp_path, "out.nc", cfg
+            "some-dataset",
+            ["VHM0"],
+            pd.Timestamp("2026-01-01"),
+            tmp_path,
+            "out.nc",
+            credentialed_config,
         )
         is None
     )
 
 
-def test_subset_day_swallows_toolbox_errors(monkeypatch, tmp_path):
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("COPERNICUSMARINE_SERVICE_USERNAME", "someone")
-    monkeypatch.setenv("COPERNICUSMARINE_SERVICE_PASSWORD", "secret")
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
-
-    def boom(**kwargs):
-        raise RuntimeError("no data for this day")
-
-    monkeypatch.setattr("copernicusmarine.subset", boom)
-    assert (
-        cmems_client.subset_day(
-            "some-dataset", ["VHM0"], pd.Timestamp("2026-01-01"), tmp_path, "out.nc", cfg
-        )
-        is None
-    )
-
-
-def test_subset_day_reraises_malformed_requests(monkeypatch, tmp_path):
+def test_subset_day_reraises_malformed_requests(monkeypatch, tmp_path, credentialed_config):
     """An unknown variable is a bug, not a gap: it must not look like a missing day."""
     import copernicusmarine
-
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("COPERNICUSMARINE_SERVICE_USERNAME", "someone")
-    monkeypatch.setenv("COPERNICUSMARINE_SERVICE_PASSWORD", "secret")
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
 
     def boom(**kwargs):
         raise copernicusmarine.VariableDoesNotExistInTheDataset("NOPE")
@@ -228,7 +215,12 @@ def test_subset_day_reraises_malformed_requests(monkeypatch, tmp_path):
     monkeypatch.setattr("copernicusmarine.subset", boom)
     with pytest.raises(copernicusmarine.VariableDoesNotExistInTheDataset):
         cmems_client.subset_day(
-            "some-dataset", ["NOPE"], pd.Timestamp("2026-01-01"), tmp_path, "out.nc", cfg
+            "some-dataset",
+            ["NOPE"],
+            pd.Timestamp("2026-01-01"),
+            tmp_path,
+            "out.nc",
+            credentialed_config,
         )
 
 
@@ -323,14 +315,8 @@ def test_reanalysis_process_downcasts_and_deduplicates(tmp_path, local_config):
     assert out.time.to_index().is_monotonic_increasing
 
 
-def test_reanalysis_fetch_finds_mirrored_files(tmp_path, monkeypatch):
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
-
-    provider = cmems.CMEMSGlobalWaveReanalysisProvider(config=cfg)
+def test_reanalysis_fetch_finds_mirrored_files(local_config):
+    provider = cmems.CMEMSGlobalWaveReanalysisProvider(config=local_config)
     day_dir = provider.source_dir / "2026" / "01"
     day_dir.mkdir(parents=True)
     wanted = day_dir / "mfwamglocep_2026010100_R20260102.nc"
@@ -342,8 +328,6 @@ def test_reanalysis_fetch_finds_mirrored_files(tmp_path, monkeypatch):
 
 def test_day_files_ignores_the_production_date_stamp(tmp_path):
     """``..._R20260102.nc`` holds 1 January's data; it must not match 2 January."""
-    from planetary_datasets.providers.cmems.global_ocean import _day_files
-
     first = tmp_path / "mfwamglocep_2026010100_R20260102.nc"
     second = tmp_path / "mfwamglocep_2026010200_R20260103.nc"
     first.touch()
@@ -355,31 +339,27 @@ def test_day_files_ignores_the_production_date_stamp(tmp_path):
 
 
 def test_day_files_on_a_missing_directory(tmp_path):
-    from planetary_datasets.providers.cmems.global_ocean import _day_files
-
     assert _day_files(tmp_path / "nope", pd.Timestamp("2026-01-01")) == []
 
 
-def test_reanalysis_fetch_skips_download_when_disabled(tmp_path, monkeypatch):
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
-
-    provider = cmems.CMEMSGlobalWaveReanalysisProvider(config=cfg)
+def test_reanalysis_fetch_skips_download_when_disabled(local_config):
+    provider = cmems.CMEMSGlobalWaveReanalysisProvider(config=local_config)
     provider.download_if_missing = False
     assert provider.fetch(pd.Timestamp("2026-01-01")) == []
 
 
-def _forecast_inputs(root, day="2026-01-01"):
-    """Write one synthetic day for each of the three global forecast datasets.
+@pytest.fixture
+def forecast(local_config):
+    """A forecast provider with one synthetic day for each of its three datasets mirrored.
 
     The variable sets mirror the real catalogue, where all three products publish some of
     the same fields: the base product serves ``thetao``/``so``/``uo``/``vo``/``zos``, the
     currents product ``uo``/``vo`` and the sea-level product its own sea surface height.
+    Returns the provider, the mirror root and the written paths (base, currents, sea level).
     """
-    provider = cmems.CMEMSGlobalOceanForecastProvider()
-    times = pd.date_range(day, periods=2, freq="1h")
+    provider = cmems.CMEMSGlobalOceanForecastProvider(config=local_config)
+    root = local_config.data_dir / "cmems"
+    times = pd.date_range("2026-01-01", periods=2, freq="1h")
     lat = np.array([1.0, 2.0])
     lon = np.array([10.0, 11.0])
     fields = {
@@ -409,51 +389,31 @@ def _forecast_inputs(root, day="2026-01-01"):
             ds[var].attrs["standard_name"] = standard_name
         directory = root / dataset_id
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"{dataset_id}_{pd.Timestamp(day):%Y%m%d}00.nc"
+        path = directory / f"{dataset_id}_2026010100.nc"
         ds.to_netcdf(path)
         paths.append(path)
-    return provider, paths
+    return provider, root, paths
 
 
-def test_forecast_fetch_requires_every_dataset(tmp_path, monkeypatch):
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
-    provider = cmems.CMEMSGlobalOceanForecastProvider(config=cfg)
-
-    root = cfg.data_dir / "cmems"
-    _forecast_inputs(root)
-
-    files = provider.fetch(pd.Timestamp("2026-01-01"))
-    assert len(files) == 3
+def test_forecast_fetch_requires_every_dataset(forecast):
+    provider, root, _ = forecast
+    assert len(provider.fetch(pd.Timestamp("2026-01-01"))) == 3
 
     # Remove one dataset's file: the day is no longer complete.
     (root / provider.currents_dataset_id).rename(root / "unused")
     assert provider.fetch(pd.Timestamp("2026-01-01")) == []
 
 
-def test_forecast_fetch_skips_ambiguous_days(tmp_path, monkeypatch):
+def test_forecast_fetch_skips_ambiguous_days(forecast):
     """Two production runs for one day: there is no way to tell which to trust."""
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
-    provider = cmems.CMEMSGlobalOceanForecastProvider(config=cfg)
-
-    root = cfg.data_dir / "cmems"
-    _forecast_inputs(root)
-    assert len(provider.fetch(pd.Timestamp("2026-01-01"))) == 3
-
+    provider, root, _ = forecast
     duplicate = root / provider.base_dataset_id / "rerun_2026010100_R20260105.nc"
     duplicate.touch()
     assert provider.fetch(pd.Timestamp("2026-01-01")) == []
 
 
-def test_forecast_process_merges_onto_the_sea_level_grid(tmp_path, local_config):
-    _, paths = _forecast_inputs(tmp_path / "cmems")
-    provider = cmems.CMEMSGlobalOceanForecastProvider(config=local_config)
-
+def test_forecast_process_merges_onto_the_sea_level_grid(forecast):
+    provider, _, paths = forecast
     out = provider.process([str(p) for p in reversed(paths)], pd.Timestamp("2026-01-01"))
 
     assert set(out.data_vars) == {
@@ -466,11 +426,9 @@ def test_forecast_process_merges_onto_the_sea_level_grid(tmp_path, local_config)
     assert out.chunksizes["time"][0] == 1
 
 
-def test_forecast_process_prefers_the_most_specific_product(tmp_path, local_config):
+def test_forecast_process_prefers_the_most_specific_product(forecast):
     """Overlapping fields must not raise, and must come from the specialised product."""
-    _, paths = _forecast_inputs(tmp_path / "cmems")
-    provider = cmems.CMEMSGlobalOceanForecastProvider(config=local_config)
-
+    provider, _, paths = forecast
     out = provider.process([str(p) for p in paths], pd.Timestamp("2026-01-01"))
 
     # The currents product is the only source with a single variable, written with value
@@ -480,9 +438,8 @@ def test_forecast_process_prefers_the_most_specific_product(tmp_path, local_conf
     assert float(out["sea_surface_height_above_geoid"].isel(time=0).max()) == 1.0
 
 
-def test_forecast_process_rejects_incomplete_inputs(tmp_path, local_config):
-    _, paths = _forecast_inputs(tmp_path / "cmems")
-    provider = cmems.CMEMSGlobalOceanForecastProvider(config=local_config)
+def test_forecast_process_rejects_incomplete_inputs(forecast):
+    provider, _, paths = forecast
     with pytest.raises(ValueError, match="no input file"):
         provider.process([str(paths[0])], pd.Timestamp("2026-01-01"))
 
@@ -506,7 +463,7 @@ def test_run_partition_writes_and_skips(tmp_path, local_config, monkeypatch):
     # The timestep is in the store now, so a second run is a no-op.
     assert provider.run_partition(day) is False
 
-    stored = xr.open_zarr(provider.get_icechunk_repo().readonly_session("main").store)
+    stored = read_store(provider)
     assert pd.Timestamp(stored.time.values[0]) == day
     assert "VHM0" in stored.data_vars
 

@@ -2,33 +2,87 @@
 
 from __future__ import annotations
 
+import pathlib
+import sys
+
 import pytest
 
-from planetary_datasets import config as config_module
+# ``dags`` is not an installed package; the tests import it from the checkout.
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-CREDENTIAL_VARS = [
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_PROFILE",
-    "AWS_REGION",
+from planetary_datasets import config as config_module  # noqa: E402
+
+#: Everything the code reads from the environment that changes what a test sees:
+#: destinations, credentials, archive and staging roots, image names, tuning knobs. A
+#: developer with any of these set in their shell would otherwise get different results.
+ISOLATED_ENV_VARS = [
+    # Stores and config.
     "ICECHUNK_BUCKET",
     "ICECHUNK_PREFIX",
     "ICECHUNK_LOCAL_PATH",
+    "ICECHUNK_ENDPOINT_URL",
+    "ICECHUNK_FORCE_PATH_STYLE",
+    "ICECHUNK_ALLOW_HTTP",
     "MEMORY_FRACTION",
     "MEMORY_CEILING_GB",
     "PLANETARY_DATASETS_DATA_DIR",
     "PLANETARY_DATASETS_SCRATCH_DIR",
-    # Archive roots the radar providers read from; an operator who has these set in their
-    # shell would otherwise see the default-path tests fail.
+    "HF_REPO_ID",
+    # Credentials.
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_REQUEST_CHECKSUM_CALCULATION",
+    "CDSAPI_KEY",
+    "CDSAPI_URL",
+    "CDSAPI_RC",
+    "COPERNICUSMARINE_SERVICE_USERNAME",
+    "COPERNICUSMARINE_SERVICE_PASSWORD",
+    "DESTINE_PAT",
+    "EARTHDATA_USERNAME",
+    "EARTHDATA_PASSWORD",
+    "ECMWF_API_KEY",
+    "ECMWF_API_EMAIL",
+    "ECMWF_API_URL",
+    "EUMETSAT_CONSUMER_KEY",
+    "EUMETSAT_CONSUMER_SECRET",
+    "GPM_PPS_USERNAME",
+    "GPM_PPS_PASSWORD",
+    "HF_TOKEN",
+    "NREL_API_KEY",
+    "NREL_EMAIL",
+    "PC_SDK_SUBSCRIPTION_KEY",
+    "VIRES_TOKEN",
+    # Archive and staging roots, private buckets, and the images that fill them.
     "UK_RADAR_ARCHIVE_DIR",
     "FMI_RADAR_ARCHIVE_DIR",
+    "OPERA_ARCHIVE_DIR",
+    "E2S_OBS_ARCHIVE_DIR",
+    "KENDA_ARCHIVE_DIR",
+    "AMDAR_BUFR_DIR",
+    "AMDAR_PB2NC_CONFIG",
+    "PB2NC_BINARY",
+    "IGRA_STATION_DIR",
+    "MEPS_ANDOYA_BUCKET",
+    "IFS_REGRID_BUCKET",
+    "IFS_REGRID_REGION",
+    "GOES_SOURCE_REGION",
+    "GOES_STORE_ROOT",
+    "GOES_VIRTUAL_END_DATE",
+    "EARTH2STUDIO_CACHE",
+    "EARTH2STUDIO_IMAGE",
+    "METEOSWISS_KENDA_IMAGE",
+    "DAGSTER_PIPES_CONTEXT",
 ]
 
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     """Isolate each test from the developer's real environment and .env file."""
-    for var in CREDENTIAL_VARS:
+    for var in ISOLATED_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
     config_module.reset_config_cache()
     yield
@@ -37,10 +91,58 @@ def clean_env(monkeypatch):
 
 @pytest.fixture
 def local_config(tmp_path, monkeypatch):
-    """A Config writing every store under tmp_path."""
+    """Point the process-wide config at ``tmp_path`` and return it.
+
+    Stores go under ``tmp_path/stores`` and the data directory (archives, staging,
+    rosters) under ``tmp_path/data``. ``REPO_ROOT`` is pointed at ``tmp_path`` too, so a
+    developer's real ``.env`` cannot leak back in through ``load_dotenv``. The memory
+    ceiling is generous so the memory guard never trips on a test dataset.
+    """
+    monkeypatch.setattr(config_module, "REPO_ROOT", tmp_path)
     monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
+    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("MEMORY_CEILING_GB", "512")
     config_module.reset_config_cache()
-    return config_module.load_config(env_file=tmp_path / "nonexistent.env")
+    return config_module.get_config()
+
+
+@pytest.fixture
+def load_env_config(tmp_path, monkeypatch):
+    """Load a config from the given environment, with no ``.env`` file behind it.
+
+    For tests of the configuration itself: ``load_env_config(ICECHUNK_PREFIX="x")``.
+    """
+
+    def _load(**env):
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        return config_module.load_config(env_file=tmp_path / "absent.env")
+
+    return _load
+
+
+class FakeDockerClient:
+    """Stands in for ``PipesDockerClient``: records each run, reports a materialisation."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def run(self, **kwargs):
+        import dagster as dg
+
+        self.calls.append(kwargs)
+
+        class Invocation:
+            def get_materialize_result(self):
+                return dg.MaterializeResult(metadata={"fake": True})
+
+        return Invocation()
+
+
+@pytest.fixture
+def fake_docker_client():
+    """A :class:`FakeDockerClient` to pass as the ``pipes_docker_client`` resource."""
+    return FakeDockerClient()
 
 
 @pytest.fixture
