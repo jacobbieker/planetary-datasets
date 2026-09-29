@@ -217,6 +217,119 @@ def test_codec_change_detected_carries_the_boundary_date():
 
 
 # ---------------------------------------------------------------------------
+# Unreadable source files
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Unable to synchronously open file (truncated file: eof = 1234)",
+        "Unable to open file (file signature not found)",
+        "Unable to read data (bad object header version number)",
+    ],
+)
+def test_h5py_corruption_is_recognised_as_an_unreadable_source(message):
+    """h5py reports every one of these as a bare OSError, so the text is all there is."""
+    assert common._is_unreadable_source_error(OSError(message))
+    assert common._is_unreadable_source_error(
+        common.RadFValidationError("file.nc", OSError(message))
+    )
+
+
+def test_our_own_failures_are_not_blamed_on_the_source():
+    """The two are bounded separately, so the classifier must not over-claim."""
+    assert not common._is_unreadable_source_error(ValueError("Codec validation failed"))
+    assert not common._is_unreadable_source_error(KeyError("Rad"))
+    # An OSError that is not corruption: a network blip is ours to retry, not a dead file.
+    assert not common._is_unreadable_source_error(OSError("Connection reset by peer"))
+
+
+def test_unreadable_days_get_a_far_higher_threshold_than_other_failures():
+    """A corrupt file in NOAA's bucket will never succeed, but the good days past it
+    still should.
+
+    GK-2A ir105 hit a run of truncated files and abandoned the rest of two year-windows.
+    """
+    assert common.MAX_CONSECUTIVE_UNREADABLE_DAYS > common.MAX_CONSECUTIVE_FAILED_DAYS
+
+
+# ---------------------------------------------------------------------------
+# Malformed RadF files
+# ---------------------------------------------------------------------------
+def test_metadata_only_files_are_dropped_from_the_listing():
+    """NOAA publishes the odd RadF file with every ancillary variable but no imagery.
+
+    One is enough to make xarray fill ``Rad`` across the whole day, which indexes
+    positionally into a ManifestArray and costs the entire channel-day. They are 1-2% of
+    the median size, so the listing alone separates them.
+    """
+    urls = [f"s3://b/good{i}.nc" for i in range(10)] + ["s3://b/metadata_only.nc"]
+    sizes = {u: 9_000_000 for u in urls}
+    sizes["s3://b/metadata_only.nc"] = 81_000
+
+    kept = common._drop_metadata_only_files(urls, sizes, 13)
+
+    assert "s3://b/metadata_only.nc" not in kept
+    assert len(kept) == 10
+
+
+def test_a_normal_days_spread_of_sizes_is_left_alone():
+    """Real files vary 6.9-14.8MB; nothing in that range may be mistaken for metadata."""
+    sizes = {f"s3://b/f{i}.nc": s for i, s in enumerate([6_900_000, 9_000_000, 14_800_000])}
+    urls = list(sizes)
+    assert common._drop_metadata_only_files(urls, sizes, 13) == urls
+
+
+def test_metadata_only_filter_needs_a_population_to_judge_against():
+    """With one or two files there is no meaningful median, so nothing is dropped."""
+    urls = ["s3://b/a.nc", "s3://b/b.nc"]
+    sizes = {"s3://b/a.nc": 9_000_000, "s3://b/b.nc": 81_000}
+    assert common._drop_metadata_only_files(urls, sizes, 13) == urls
+
+
+def test_a_file_missing_a_required_variable_is_dropped():
+    """The full-size case size cannot catch: an observed file had ``Rad`` at normal shape
+    and codecs but no ``DQF``, at 119% of the day's median.
+    """
+    import xarray as xr
+
+    complete = ["s3://b/a.nc", "s3://b/c.nc"]
+
+    def fake_open(url, **kwargs):
+        if url == "s3://b/b.nc":
+            return xr.Dataset({"Rad": ("t", [1.0])})
+        return xr.Dataset({"Rad": ("t", [1.0]), "DQF": ("t", [0.0])})
+
+    original = common.vz.open_virtual_dataset
+    common.vz.open_virtual_dataset = fake_open
+    try:
+        kept = common.drop_files_missing_required_vars(
+            ["s3://b/a.nc", "s3://b/b.nc", "s3://b/c.nc"], registry=None, parser=None
+        )
+    finally:
+        common.vz.open_virtual_dataset = original
+
+    assert kept == complete
+
+
+def test_a_file_that_cannot_be_opened_is_dropped_too():
+    """Unreadable here means unusable in the combine as well."""
+
+    def fake_open(url, **kwargs):
+        raise OSError("truncated file")
+
+    original = common.vz.open_virtual_dataset
+    common.vz.open_virtual_dataset = fake_open
+    try:
+        kept = common.drop_files_missing_required_vars(
+            ["s3://b/a.nc"], registry=None, parser=None
+        )
+    finally:
+        common.vz.open_virtual_dataset = original
+
+    assert kept == []
+
+
+# ---------------------------------------------------------------------------
 # Batch schema check
 # ---------------------------------------------------------------------------
 def test_validate_batch_data_vars_reports_missing_and_extra():
