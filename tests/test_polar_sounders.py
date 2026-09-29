@@ -84,6 +84,52 @@ def eps_orbit(along_track: int = 10, across_track: int = 4) -> xr.Dataset:
     )
 
 
+def write_orbit(tmp_path, along_track: int) -> str:
+    """Write :func:`eps_orbit` to ``tmp_path`` and return the path."""
+    path = tmp_path / "orbit.nc"
+    eps_orbit(along_track=along_track).to_netcdf(path)
+    return str(path)
+
+
+def one_row_per_time(*stamps: str) -> xr.Dataset:
+    """A dataset with one value of ``a`` per timestamp along ``time``."""
+    times = pd.DatetimeIndex(stamps)
+    return xr.Dataset({"a": ("time", np.arange(1.0, len(times) + 1))}, coords={"time": times})
+
+
+@pytest.fixture
+def jpss(local_config):
+    return JpssAtmsProvider(config=local_config)
+
+
+@pytest.fixture
+def avhrr(local_config):
+    return MetopAvhrrProvider(config=local_config)
+
+
+@pytest.fixture
+def ascat(local_config):
+    return MetopAscatProvider(config=local_config)
+
+
+@pytest.fixture
+def iasi(local_config):
+    return MetopIasiProvider(config=local_config)
+
+
+@pytest.fixture
+def gome(local_config):
+    return MetopGomeProvider(config=local_config)
+
+
+@pytest.fixture
+def amsua(local_config):
+    """An AMSU-A provider padding to a test-sized 16 rows instead of the archive's 1100."""
+    provider = MetopAmsuaProvider(config=local_config)
+    provider.along_track_length = 16
+    return provider
+
+
 # --------------------------------------------------------------------- store wiring
 
 
@@ -106,75 +152,55 @@ def test_eumdac_providers_require_credentials(provider_cls, local_config):
         provider.datastore()
 
 
-def test_eumdac_fetch_surfaces_missing_credentials(local_config):
-    provider = MetopIasiProvider(config=local_config)
+def test_eumdac_fetch_surfaces_missing_credentials(iasi):
     with pytest.raises(MissingCredential):
-        provider.fetch(pd.Timestamp("2025-01-01T00:00"))
+        iasi.fetch(pd.Timestamp("2025-01-01T00:00"))
 
 
 # --------------------------------------------------------------------- window dedupe
 
 
-def test_partition_window_matches_provider_width(local_config):
-    provider = MetopIasiProvider(config=local_config)
-    start, end = provider.partition_window(pd.Timestamp("2025-01-01T04:00"))
+def test_partition_window_matches_provider_width(iasi):
+    start, end = iasi.partition_window(pd.Timestamp("2025-01-01T04:00"))
     assert end - start == pd.Timedelta("2h")
 
 
-def test_partition_window_drops_timezone(local_config):
-    provider = JpssAtmsProvider(config=local_config)
-    start, _ = provider.partition_window(pd.Timestamp("2025-01-01T04:00", tz="UTC"))
+def test_partition_window_drops_timezone(jpss):
+    start, _ = jpss.partition_window(pd.Timestamp("2025-01-01T04:00", tz="UTC"))
     assert start.tzinfo is None
 
 
-def test_missing_timesteps_uses_the_window_not_the_exact_stamp(local_config, sample_dataset):
+def test_missing_timesteps_uses_the_window_not_the_exact_stamp(jpss, sample_dataset):
     """A granule at 04:17 must mark the 04:00 partition as done."""
-    provider = JpssAtmsProvider(config=local_config)
-    stored = sample_dataset.assign_coords(time=pd.DatetimeIndex(["2025-01-01T04:17:33"]))
-    provider.write_to_icechunk(provider.get_icechunk_repo(), stored)
-
     partitions = pd.DatetimeIndex(["2025-01-01T04:00", "2025-01-01T05:00"])
-    assert provider.missing_timesteps(partitions) == [pd.Timestamp("2025-01-01T05:00")]
+    assert jpss.missing_timesteps(partitions) == list(partitions)
+
+    stored = sample_dataset.assign_coords(time=pd.DatetimeIndex(["2025-01-01T04:17:33"]))
+    jpss.write_to_icechunk(jpss.get_icechunk_repo(), stored)
+    assert jpss.missing_timesteps(partitions) == [pd.Timestamp("2025-01-01T05:00")]
 
 
-def test_restrict_to_window_drops_rows_owned_by_the_neighbour(local_config):
-    """A boundary-crossing orbit belongs to exactly one partition."""
-    provider = MetopAvhrrProvider(config=local_config)  # 4 hour window
-    times = pd.DatetimeIndex(["2025-01-01T03:30", "2025-01-01T04:30"])
-    ds = xr.Dataset({"a": ("time", [1.0, 2.0])}, coords={"time": times})
-
-    first = provider.restrict_to_window(ds, pd.Timestamp("2025-01-01T00:00"))
-    second = provider.restrict_to_window(ds, pd.Timestamp("2025-01-01T04:00"))
+def test_restrict_to_window_drops_rows_owned_by_the_neighbour(avhrr):
+    """A boundary-crossing orbit belongs to exactly one partition (AVHRR: 4 hour window)."""
+    ds = one_row_per_time("2025-01-01T03:30", "2025-01-01T04:30")
+    first = avhrr.restrict_to_window(ds, pd.Timestamp("2025-01-01T00:00"))
+    second = avhrr.restrict_to_window(ds, pd.Timestamp("2025-01-01T04:00"))
     assert list(first["time"].values) == [np.datetime64("2025-01-01T03:30")]
     assert list(second["time"].values) == [np.datetime64("2025-01-01T04:30")]
+    # A partition none of the rows fall in is left empty.
+    later = one_row_per_time("2025-01-01T09:00")
+    assert avhrr.restrict_to_window(later, pd.Timestamp("2025-01-01T00:00")).sizes["time"] == 0
 
 
-def test_restrict_to_window_can_empty_a_partition(local_config):
-    provider = MetopAvhrrProvider(config=local_config)
-    ds = xr.Dataset(
-        {"a": ("time", [1.0])}, coords={"time": pd.DatetimeIndex(["2025-01-01T09:00"])}
-    )
-    assert provider.restrict_to_window(ds, pd.Timestamp("2025-01-01T00:00")).sizes["time"] == 0
-
-
-def test_restricted_writes_leave_the_neighbouring_partition_missing(local_config):
+def test_restricted_writes_leave_the_neighbouring_partition_missing(avhrr):
     """The bug the restriction exists to prevent: one write marking two partitions done."""
-    provider = MetopAvhrrProvider(config=local_config)
-    times = pd.DatetimeIndex(["2025-01-01T03:30", "2025-01-01T04:30"])
-    ds = xr.Dataset({"a": ("time", [1.0, 2.0])}, coords={"time": times})
-
+    ds = one_row_per_time("2025-01-01T03:30", "2025-01-01T04:30")
     first = pd.Timestamp("2025-01-01T00:00")
     second = pd.Timestamp("2025-01-01T04:00")
-    provider.write_to_icechunk(provider.get_icechunk_repo(), provider.restrict_to_window(ds, first))
+    avhrr.write_to_icechunk(avhrr.get_icechunk_repo(), avhrr.restrict_to_window(ds, first))
 
-    assert provider.missing_timesteps(pd.DatetimeIndex([first])) == []
-    assert provider.missing_timesteps(pd.DatetimeIndex([second])) == [second]
-
-
-def test_missing_timesteps_on_empty_store_returns_everything(local_config):
-    provider = JpssAtmsProvider(config=local_config)
-    partitions = pd.DatetimeIndex(["2025-01-01T04:00", "2025-01-01T05:00"])
-    assert provider.missing_timesteps(partitions) == list(partitions)
+    assert avhrr.missing_timesteps(pd.DatetimeIndex([first])) == []
+    assert avhrr.missing_timesteps(pd.DatetimeIndex([second])) == [second]
 
 
 # --------------------------------------------------------------------- JPSS ATMS
@@ -183,6 +209,10 @@ def test_missing_timesteps_on_empty_store_returns_everything(local_config):
 def test_granule_key_pairs_sdr_with_geolocation():
     assert granule_key(SDR_NAME) == granule_key(GEO_NAME)
     assert granule_key(SDR_NAME) == ("j02", "d20250601", "t0000244", "e0000560", "b13247")
+    # Leading directories are ignored.
+    assert granule_key(f"noaa-nesdis-n21-pds/ATMS-SDR/2025/06/01/{SDR_NAME}") == (
+        granule_key(SDR_NAME)
+    )
 
 
 def test_granule_key_separates_spacecraft():
@@ -191,27 +221,27 @@ def test_granule_key_separates_spacecraft():
     assert granule_key(SDR_NAME) != granule_key(other)
 
 
-def test_granule_key_ignores_leading_directories():
-    assert granule_key(f"noaa-nesdis-n21-pds/ATMS-SDR/2025/06/01/{SDR_NAME}") == granule_key(SDR_NAME)
-
-
-def test_granule_start_decodes_tenths_of_a_second():
-    assert granule_start(SDR_NAME) == pd.Timestamp("2025-06-01T00:00:24.400")
-
-
 def test_granule_key_rejects_other_filenames():
     with pytest.raises(ValueError):
         granule_key("something_else.h5")
 
 
-def test_granule_end_decodes_the_end_field():
-    assert granule_end(SDR_NAME) == pd.Timestamp("2025-06-01T00:00:56.000")
-
-
-def test_granule_end_rolls_over_midnight():
-    """Only the start day is in the filename, so an end before the start is the next day."""
-    name = SDR_NAME.replace("t0000244", "t2359344").replace("e0000560", "e0000060")
-    assert granule_end(name) == pd.Timestamp("2025-06-02T00:00:06.000")
+@pytest.mark.parametrize(
+    "name,start,end",
+    [
+        (SDR_NAME, "2025-06-01T00:00:24.400", "2025-06-01T00:00:56.000"),
+        # Only the start day is in the filename, so an end before the start is the next day.
+        (
+            SDR_NAME.replace("t0000244", "t2359344").replace("e0000560", "e0000060"),
+            "2025-06-01T23:59:34.400",
+            "2025-06-02T00:00:06.000",
+        ),
+    ],
+    ids=["same-day", "over-midnight"],
+)
+def test_granule_start_and_end_decode_tenths_of_a_second(name, start, end):
+    assert granule_start(name) == pd.Timestamp(start)
+    assert granule_end(name) == pd.Timestamp(end)
 
 
 def test_granule_overlap_selects_a_granule_the_next_partition_owns():
@@ -227,19 +257,17 @@ def test_granule_overlap_excludes_a_granule_in_another_hour():
     assert not granule_overlaps(SDR_NAME, hour, hour + pd.Timedelta("1h"))
 
 
-def test_days_to_list_only_reaches_back_at_midnight(local_config):
+def test_days_to_list_only_reaches_back_at_midnight(jpss):
     """Listing the previous day costs a full extra listing, so only do it when it can help."""
-    provider = JpssAtmsProvider(config=local_config)
-    midnight = provider._days_to_list(*provider.partition_window(pd.Timestamp("2025-06-01T00:00")))
-    later = provider._days_to_list(*provider.partition_window(pd.Timestamp("2025-06-01T05:00")))
+    midnight = jpss._days_to_list(*jpss.partition_window(pd.Timestamp("2025-06-01T00:00")))
+    later = jpss._days_to_list(*jpss.partition_window(pd.Timestamp("2025-06-01T05:00")))
     assert list(midnight) == [pd.Timestamp("2025-05-31"), pd.Timestamp("2025-06-01")]
     assert list(later) == [pd.Timestamp("2025-06-01")]
 
 
-def test_index_keys_skips_objects_that_are_not_granules(local_config):
+def test_index_keys_skips_objects_that_are_not_granules(jpss):
     """One stray object in a day prefix must not take the partition down."""
-    provider = JpssAtmsProvider(config=local_config)
-    indexed = provider._index_keys([f"bucket/ATMS-SDR/{SDR_NAME}", "bucket/ATMS-SDR/index.html"])
+    indexed = jpss._index_keys([f"bucket/ATMS-SDR/{SDR_NAME}", "bucket/ATMS-SDR/index.html"])
     assert list(indexed.values()) == [f"bucket/ATMS-SDR/{SDR_NAME}"]
 
 
@@ -248,9 +276,8 @@ def test_jpss_rejects_unknown_satellites(local_config):
         JpssAtmsProvider(config=local_config, satellites=("n19",))
 
 
-def test_jpss_process_pairs_files_and_skips_unmatched(local_config, monkeypatch):
+def test_jpss_process_pairs_files_and_skips_unmatched(jpss, monkeypatch):
     """Downloads come back as a flat list; process must re-pair them by granule key."""
-    provider = JpssAtmsProvider(config=local_config)
     seen = []
 
     def fake_granule(sdr, geo):
@@ -260,9 +287,11 @@ def test_jpss_process_pairs_files_and_skips_unmatched(local_config, monkeypatch)
             coords={"time": pd.DatetimeIndex([granule_start(sdr)])},
         )
 
-    monkeypatch.setattr(provider, "process_granule", fake_granule)
+    monkeypatch.setattr(jpss, "process_granule", fake_granule)
     lonely = SDR_NAME.replace("b13247", "b13248")
-    ds = provider.process([f"/tmp/{GEO_NAME}", f"/tmp/{SDR_NAME}", f"/tmp/{lonely}"], pd.Timestamp("2025-06-01"))
+    ds = jpss.process(
+        [f"/tmp/{GEO_NAME}", f"/tmp/{SDR_NAME}", f"/tmp/{lonely}"], pd.Timestamp("2025-06-01")
+    )
 
     assert seen == [(SDR_NAME, GEO_NAME)]
     assert ds.sizes["time"] == 1
@@ -282,10 +311,7 @@ def test_process_eps_netcdf_lifts_the_sensing_window_onto_time():
     assert ds["time"].values[0] == np.datetime64("2025-07-18T01:29:51")
     assert ds["platform_name"].values[0] == "MetOp-C"
     assert ds["start_time"].values[0] == np.datetime64("2025-07-18T00:37:19")
-
-
-def test_process_eps_netcdf_renames_swath_dims():
-    ds = process_eps_netcdf(eps_orbit())
+    # The swath dims are renamed and lat/lon promoted to data variables.
     assert set(ds.dims) == {"time", "y", "x"}
     assert "latitude" in ds.data_vars and "longitude" in ds.data_vars
 
@@ -305,50 +331,44 @@ def test_process_eps_netcdf_leaves_long_orbits_alone():
 
 
 def test_amsua_pads_to_the_archive_maximum():
+    """The padded length is the ``y`` size of the published store, fixed by its first write."""
     assert MetopAmsuaProvider.along_track_length == 1100
 
 
-def test_amsua_open_tailored_reads_a_netcdf_and_downcasts_channels(local_config, tmp_path):
+def test_amsua_open_tailored_reads_a_netcdf_and_downcasts_channels(amsua, tmp_path):
     """The whole AMSU-A process path bar the Data Tailor call itself."""
-    path = tmp_path / "orbit.nc"
-    eps_orbit(along_track=10).to_netcdf(path)
-
-    provider = MetopAmsuaProvider(config=local_config)
-    provider.along_track_length = 16
-    ds = provider.open_tailored(str(path))
+    ds = amsua.open_tailored(write_orbit(tmp_path, 10))
 
     assert ds.sizes == {"time": 1, "y": 16, "x": 4}
     assert ds["channel_1"].dtype == np.float16
     assert ds["platform_name"].values[0] == "MetOp-C"
 
 
-def test_ascat_reads_an_orbit_at_its_natural_length(local_config, tmp_path):
-    path = tmp_path / "orbit.nc"
-    eps_orbit(along_track=10).to_netcdf(path)
-
-    ds = MetopAscatProvider(config=local_config).open_tailored(str(path))
-    assert ds.sizes["y"] == 10
+def test_amsua_drops_an_over_long_orbit(amsua, tmp_path):
+    """An orbit longer than the padding target would otherwise break the concat."""
+    assert amsua.open_tailored(write_orbit(tmp_path, 20)) is None
 
 
-def test_ascat_target_length_is_the_longest_orbit_when_the_store_is_empty(local_config):
-    provider = MetopAscatProvider(config=local_config)
+def test_ascat_reads_an_orbit_at_its_natural_length(ascat, tmp_path):
+    assert ascat.open_tailored(write_orbit(tmp_path, 10)).sizes["y"] == 10
+
+
+def test_ascat_target_length_is_the_longest_orbit_when_the_store_is_empty(ascat):
     orbits = [process_eps_netcdf(eps_orbit(along_track=n)) for n in (10, 14, 12)]
-    assert provider.target_length(orbits) == 14
+    assert ascat.target_length(orbits) == 14
 
 
-def test_ascat_target_length_follows_the_store_once_it_exists(local_config):
+def test_ascat_target_length_follows_the_store_once_it_exists(ascat):
     """A store's dimensions are fixed by its first write, so later orbits must match it."""
-    provider = MetopAscatProvider(config=local_config)
     first = process_eps_netcdf(eps_orbit(along_track=14))
-    provider.write_to_icechunk(provider.get_icechunk_repo(), first)
+    ascat.write_to_icechunk(ascat.get_icechunk_repo(), first)
 
     shorter = [process_eps_netcdf(eps_orbit(along_track=9))]
-    assert provider.target_length(shorter) == 14
+    assert ascat.target_length(shorter) == 14
 
 
-def test_ascat_pads_differing_orbits_so_they_concatenate(local_config, tmp_path, monkeypatch):
+def test_ascat_pads_differing_orbits_so_they_concatenate(ascat, tmp_path):
     """Orbits of different lengths used to raise an AlignmentError out of the concat."""
-    provider = MetopAscatProvider(config=local_config)
     paths = []
     for index, length in enumerate((10, 14)):
         path = tmp_path / f"orbit{index}.nc"
@@ -358,7 +378,7 @@ def test_ascat_pads_differing_orbits_so_they_concatenate(local_config, tmp_path,
         orbit.to_netcdf(path)
         paths.append(str(path))
 
-    ds = provider.process(paths, pd.Timestamp("2025-07-18T00:00"))
+    ds = ascat.process(paths, pd.Timestamp("2025-07-18T00:00"))
     assert ds.sizes == {"time": 2, "y": 14, "x": 4}
 
 
@@ -377,15 +397,18 @@ def iasi_product(periods: int = 5) -> xr.Dataset:
     )
 
 
-def test_iasi_reads_soundings_without_inventing_rows(local_config, monkeypatch):
-    """No chunk padding: every stored row is a real sounding at its real time."""
-    provider = MetopIasiProvider(config=local_config)
+@pytest.fixture
+def fake_harp(monkeypatch):
+    """Make harp hand back :func:`iasi_product` for any native file."""
     monkeypatch.setattr(
         "planetary_datasets.providers.polar.metop_iasi.harp_to_dataset",
         lambda _: iasi_product(),
     )
 
-    ds = provider.process_granule("IASI_xxx_1C_M01_2025.nat")
+
+def test_iasi_reads_soundings_without_inventing_rows(iasi, fake_harp):
+    """No chunk padding: every stored row is a real sounding at its real time."""
+    ds = iasi.process_granule("IASI_xxx_1C_M01_2025.nat")
     assert ds.sizes["time"] == 5
     assert "datetime" not in ds.variables and "orbit_index" not in ds.variables
     assert list(ds["platform_name"].values) == ["Metop-B"] * 5
@@ -394,53 +417,29 @@ def test_iasi_reads_soundings_without_inventing_rows(local_config, monkeypatch):
     assert (ds["time"].values == np.sort(ds["time"].values)).all()
 
 
-def test_iasi_process_restricts_to_the_window_and_chunks(local_config, monkeypatch):
-    provider = MetopIasiProvider(config=local_config)
-    provider.chunk_soundings = 2
-    monkeypatch.setattr(
-        "planetary_datasets.providers.polar.metop_iasi.harp_to_dataset",
-        lambda _: iasi_product(),
-    )
-    monkeypatch.setattr(provider, "iter_natives", lambda *a, **k: iter(["one.nat"]))
+def test_iasi_process_restricts_to_the_window_and_chunks(iasi, fake_harp, monkeypatch):
+    iasi.chunk_soundings = 2
+    monkeypatch.setattr(iasi, "iter_natives", lambda *a, **k: iter(["one.nat"]))
 
-    inside = provider.process([], pd.Timestamp("2025-01-01T00:00"))
+    inside = iasi.process([], pd.Timestamp("2025-01-01T00:00"))
     assert inside.sizes["time"] == 5
     assert inside.chunksizes["time"][0] == 2
 
-    outside = provider.process([], pd.Timestamp("2025-01-01T06:00"))
+    outside = iasi.process([], pd.Timestamp("2025-01-01T06:00"))
     assert outside.sizes.get("time", 0) == 0
 
 
-def test_avhrr_align_pads_short_orbits(local_config):
-    provider = MetopAvhrrProvider(config=local_config)
-    provider.swath_shape = {"y": 8, "x": 4}
-    ds = xr.Dataset({"a": (("y", "x"), np.ones((5, 4), dtype="float32"))})
-    assert provider.align(ds).sizes == {"y": 8, "x": 4}
+@pytest.mark.parametrize("rows,expected", [(5, {"y": 8, "x": 4}), (9, None)], ids=["pads", "drops"])
+def test_avhrr_align_pads_short_orbits_and_drops_oversized_ones(avhrr, rows, expected):
+    avhrr.swath_shape = {"y": 8, "x": 4}
+    aligned = avhrr.align(xr.Dataset({"a": (("y", "x"), np.ones((rows, 4), dtype="float32"))}))
+    assert (aligned if expected is None else dict(aligned.sizes)) == expected
 
 
-def test_avhrr_align_drops_oversized_orbits(local_config):
-    provider = MetopAvhrrProvider(config=local_config)
-    provider.swath_shape = {"y": 8, "x": 4}
-    ds = xr.Dataset({"a": (("y", "x"), np.ones((9, 4), dtype="float32"))})
-    assert provider.align(ds) is None
-
-
-def test_fit_to_shape_keeps_integer_dtypes(local_config):
-    provider = JpssAtmsProvider(config=local_config)
-    ds = xr.Dataset({"flag": ("y", np.ones(3, dtype="int8"))})
-    out = provider.fit_to_shape(ds, {"y": 5})
+def test_fit_to_shape_keeps_integer_dtypes(jpss):
+    out = jpss.fit_to_shape(xr.Dataset({"flag": ("y", np.ones(3, dtype="int8"))}), {"y": 5})
     assert out["flag"].dtype == np.int8
     assert out["flag"].values[-1] == -1
-
-
-def test_amsua_drops_an_over_long_orbit(local_config, tmp_path):
-    """An orbit longer than the padding target would otherwise break the concat."""
-    path = tmp_path / "orbit.nc"
-    eps_orbit(along_track=20).to_netcdf(path)
-
-    provider = MetopAmsuaProvider(config=local_config)
-    provider.along_track_length = 16
-    assert provider.open_tailored(str(path)) is None
 
 
 # --------------------------------------------------------------------- downloads
@@ -474,26 +473,22 @@ class _FakeProduct:
         return _Ctx()
 
 
-def test_download_product_retries_then_succeeds(local_config, tmp_path):
-    provider = MetopGomeProvider(config=local_config)
+def test_download_product_retries_then_succeeds(gome, tmp_path):
     product = _FakeProduct("p.zip", failures=2)
-    path = provider._download_product(product, tmp_path)
+    path = gome._download_product(product, tmp_path)
     assert path is not None and path.read_bytes() == b"payload"
     assert product.opens == 3
 
 
-def test_download_product_gives_up_and_leaves_no_partial(local_config, tmp_path):
-    provider = MetopGomeProvider(config=local_config)
+def test_download_product_gives_up_and_leaves_no_partial(gome, tmp_path):
     product = _FakeProduct("p.zip", failures=99)
-    assert provider._download_product(product, tmp_path) is None
+    assert gome._download_product(product, tmp_path) is None
     assert list(tmp_path.iterdir()) == []
 
 
-def test_download_product_skips_an_existing_file(local_config, tmp_path):
-    provider = MetopGomeProvider(config=local_config)
+def test_download_product_skips_an_existing_file(gome, tmp_path):
     (tmp_path / "p.zip").write_bytes(b"already here")
-    product = _FakeProduct("p.zip")
-    path = provider._download_product(product, tmp_path)
+    path = gome._download_product(_FakeProduct("p.zip"), tmp_path)
     assert path.read_bytes() == b"already here"
 
 
@@ -556,9 +551,9 @@ def test_extract_native_finds_the_member_matching_the_archive(tmp_path):
     assert found.endswith("product.nat")
 
 
-def test_epct_providers_publish_what_the_image_staged(local_config, tmp_path, monkeypatch):
+def test_epct_providers_publish_what_the_image_staged(ascat, tmp_path, monkeypatch):
     monkeypatch.setenv("EPCT_ARCHIVE_DIR", str(tmp_path / "epct"))
-    provider = MetopAscatProvider(config=local_config)
+    provider = ascat
     it = pd.Timestamp("2025-07-18")
     assert not provider.has_staged(it)
     staged = tmp_path / "epct" / "ASCATL1SZR" / "20250718T0000"
@@ -612,22 +607,15 @@ def test_epct_download_skips_a_staged_partition(tmp_path):
     assert epct_download.main(argv) == 0
 
 
-def test_concat_granules_sorts_by_time(local_config):
-    provider = JpssAtmsProvider(config=local_config)
-    late = xr.Dataset({"a": ("time", [2.0])}, coords={"time": pd.DatetimeIndex(["2025-01-01T01:00"])})
-    early = xr.Dataset({"a": ("time", [1.0])}, coords={"time": pd.DatetimeIndex(["2025-01-01T00:00"])})
-    out = provider.concat_granules([late, early])
-    assert list(out["a"].values) == [1.0, 2.0]
+def test_concat_granules_sorts_by_time(jpss):
+    late = one_row_per_time("2025-01-01T01:00")
+    early = one_row_per_time("2025-01-01T00:00").assign(a=("time", [0.0]))
+    assert list(jpss.concat_granules([late, early])["a"].values) == [0.0, 1.0]
 
 
-def test_concat_granules_returns_an_empty_dataset_for_an_empty_partition(local_config):
-    assert JpssAtmsProvider(config=local_config).concat_granules([]).sizes == {}
-
-
-def test_empty_partition_is_not_written(local_config):
-    provider = JpssAtmsProvider(config=local_config)
-    repo = provider.get_icechunk_repo()
-    assert provider.write_to_icechunk(repo, xr.Dataset()) is False
+def test_an_empty_partition_concatenates_to_nothing_and_is_not_written(jpss):
+    assert jpss.concat_granules([]).sizes == {}
+    assert jpss.write_to_icechunk(jpss.get_icechunk_repo(), xr.Dataset()) is False
 
 
 # --------------------------------------------------------------------- dagster wiring

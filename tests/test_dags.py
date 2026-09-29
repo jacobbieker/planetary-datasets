@@ -12,12 +12,9 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from dags import loader as loader_module  # noqa: E402
-from dags.factory import (  # noqa: E402
+from helpers import read_store
+from dags import loader as loader_module
+from dags.factory import (
     DEFAULT_MEMORY_GB,
     MEMORY_CLASS_TAG,
     MEMORY_GB_TAG,
@@ -28,7 +25,8 @@ from dags.factory import (  # noqa: E402
     make_provider_assets,
     memory_class_for,
 )
-from planetary_datasets.base import BaseProvider  # noqa: E402
+from planetary_datasets import config as config_module
+from planetary_datasets.base import BaseProvider
 
 PARTITION = "2024-06-01"
 
@@ -58,16 +56,10 @@ class AlwaysFailsProvider(TinyProvider):
         raise RuntimeError("upstream is down")
 
 
-@pytest.fixture
-def local_stores(tmp_path, monkeypatch):
-    """Point every store at tmp_path and give the memory guard a generous budget."""
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
-    monkeypatch.setenv("MEMORY_CEILING_GB", "512")
-    config_module.reset_config_cache()
-    yield tmp_path
-    config_module.reset_config_cache()
+def materialisation_metadata(result) -> dict:
+    """The metadata of the single materialisation in ``result``."""
+    (event,) = result.get_asset_materialization_events()
+    return event.materialization.metadata
 
 
 # --- memory classes ----------------------------------------------------------------
@@ -90,14 +82,11 @@ def test_memory_class_boundaries(memory_gb, expected):
     assert memory_class_for(memory_gb) == expected
 
 
-def test_concurrency_limits_shrink_as_memory_need_grows():
+def test_concurrency_limits_shrink_as_memory_need_grows_but_never_below_one():
     limits = {name: concurrency_limit_for(name, budget_gb=64.0) for name in
               ("small", "medium", "large", "xlarge")}
     assert limits == {"small": 16, "medium": 4, "large": 1, "xlarge": 1}
-
-
-def test_concurrency_limit_never_drops_below_one_on_a_small_host():
-    assert concurrency_limit_for("large", budget_gb=2.0) == 1
+    assert concurrency_limit_for("large", budget_gb=2.0) == 1, "on a small host"
 
 
 def test_executor_limits_cover_every_class():
@@ -133,17 +122,14 @@ def test_factory_defaults_the_name_to_the_provider_name():
     assert next(iter(asset.specs)).key == dg.AssetKey("tiny-provider")
 
 
-def test_factory_rejects_a_non_provider():
-    class NotAProvider:
-        pass
-
-    with pytest.raises(TypeError):
-        make_provider_asset(NotAProvider)
-
-
-def test_factory_rejects_a_nonsense_memory_declaration():
-    with pytest.raises(ValueError):
-        make_provider_asset(TinyProvider, memory_gb=0)
+@pytest.mark.parametrize(
+    ("provider", "kwargs", "error"),
+    [(object, {}, TypeError), (TinyProvider, {"memory_gb": 0}, ValueError)],
+    ids=["not-a-provider", "nonsense-memory-declaration"],
+)
+def test_factory_rejects_bad_arguments(provider, kwargs, error):
+    with pytest.raises(error):
+        make_provider_asset(provider, **kwargs)
 
 
 def test_make_provider_assets_builds_one_asset_per_variant():
@@ -161,17 +147,17 @@ def test_make_provider_assets_builds_one_asset_per_variant():
 # --- materialisation ---------------------------------------------------------------
 
 
-def test_materialising_a_partition_writes_every_init_time(local_stores):
+def test_materialising_a_partition_writes_every_init_time(local_config, tmp_path):
+    import icechunk
+
     asset = make_provider_asset(TinyProvider, name="tiny", freq="6h", memory_gb=2)
 
     result = dg.materialize([asset], partition_key=PARTITION)
     assert result.success
 
-    import icechunk
-
-    store_dir = local_stores / "stores" / "test" / "tiny.icechunk"
+    store_dir = tmp_path / "stores" / "test" / "tiny.icechunk"
     repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store_dir)))
-    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    ds = read_store(repo)
 
     assert list(pd.DatetimeIndex(ds.time.values)) == list(
         pd.date_range(PARTITION, periods=4, freq="6h")
@@ -179,29 +165,19 @@ def test_materialising_a_partition_writes_every_init_time(local_stores):
     assert ds.value.values.tolist() == [0.0, 6.0, 12.0, 18.0]
 
 
-def test_materialising_twice_is_a_no_op(local_stores):
+def test_materialising_twice_is_a_no_op(local_config):
     asset = make_provider_asset(TinyProvider, name="tiny", freq="12h", memory_gb=2)
 
     dg.materialize([asset], partition_key=PARTITION)
-    result = dg.materialize([asset], partition_key=PARTITION)
-
-    (materialisation,) = [
-        e.materialization
-        for e in result.get_asset_materialization_events()
-    ]
-    metadata = materialisation.metadata
+    metadata = materialisation_metadata(dg.materialize([asset], partition_key=PARTITION))
     assert metadata["written"].value == 0
     assert metadata["skipped"].value == 2
 
 
-def test_materialisation_reports_memory_and_store_metadata(local_stores):
+def test_materialisation_reports_memory_and_store_metadata(local_config):
     asset = make_provider_asset(TinyProvider, name="tiny", freq="1D", memory_gb=2)
 
-    result = dg.materialize([asset], partition_key=PARTITION)
-    (materialisation,) = [
-        e.materialization for e in result.get_asset_materialization_events()
-    ]
-    metadata = materialisation.metadata
+    metadata = materialisation_metadata(dg.materialize([asset], partition_key=PARTITION))
 
     assert metadata["written"].value == 1
     assert metadata["declared_memory_gb"].value == 2
@@ -210,14 +186,14 @@ def test_materialisation_reports_memory_and_store_metadata(local_stores):
     assert metadata["peak_memory_gb"].value >= 0
 
 
-def test_a_partition_where_everything_fails_fails_the_asset(local_stores):
+def test_a_partition_where_everything_fails_fails_the_asset(local_config):
     asset = make_provider_asset(AlwaysFailsProvider, name="broken", freq="12h", memory_gb=2)
 
     result = dg.materialize([asset], partition_key=PARTITION, raise_on_error=False)
     assert not result.success
 
 
-def test_a_partly_failed_day_is_red_so_dagster_retries_the_holes(local_stores):
+def test_a_partly_failed_day_is_red_so_dagster_retries_the_holes(local_config):
     class HalfBrokenProvider(TinyProvider):
         name = "half-broken-provider"
         store_prefix = "test/half_broken.icechunk"
@@ -236,7 +212,7 @@ def test_a_partly_failed_day_is_red_so_dagster_retries_the_holes(local_stores):
     assert not dg.materialize([asset], partition_key=PARTITION, raise_on_error=False).success
 
 
-def test_an_unavailable_timestep_is_skipped_rather_than_failed(local_stores):
+def test_an_unavailable_timestep_is_skipped_rather_than_failed(local_config):
     class NothingAvailableProvider(TinyProvider):
         name = "nothing-available-provider"
         store_prefix = "test/nothing_available.icechunk"
@@ -251,16 +227,12 @@ def test_an_unavailable_timestep_is_skipped_rather_than_failed(local_stores):
     result = dg.materialize([asset], partition_key=PARTITION)
     assert result.success
 
-    (materialisation,) = [
-        e.materialization for e in result.get_asset_materialization_events()
-    ]
-    assert materialisation.metadata["skipped"].value == 2
-    assert materialisation.metadata["failed"].value == 0
+    metadata = materialisation_metadata(result)
+    assert metadata["skipped"].value == 2
+    assert metadata["failed"].value == 0
 
 
-def test_the_memory_guard_refuses_work_that_cannot_fit(local_stores, monkeypatch):
-    from planetary_datasets import config as config_module
-
+def test_the_memory_guard_refuses_work_that_cannot_fit(local_config, tmp_path, monkeypatch):
     monkeypatch.setenv("MEMORY_CEILING_GB", "1")
     config_module.reset_config_cache()
 
@@ -268,22 +240,41 @@ def test_the_memory_guard_refuses_work_that_cannot_fit(local_stores, monkeypatch
     result = dg.materialize([asset], partition_key=PARTITION, raise_on_error=False)
 
     assert not result.success
-    store_dir = local_stores / "stores" / "test" / "tiny.icechunk"
+    store_dir = tmp_path / "stores" / "test" / "tiny.icechunk"
     assert not any(store_dir.glob("**/*.json")), "no work should have started"
 
 
 # --- discovery ---------------------------------------------------------------------
 
 
+ASSET_MODULE = "import dagster as dg\n\n@dg.asset\ndef {}():\n    return 1\n"
+
+# Swallows Exception in a loop, the way cdsapi's retry handling does.
+HANGS_ON_IMPORT = """
+    import time
+
+    while True:
+        try:
+            time.sleep(0.05)
+        except Exception:
+            pass
+    """
+
+
 def _write_package(root: pathlib.Path, name: str, modules: dict[str, str]):
-    """Create an importable package on disk and return it."""
+    """Create an importable package on disk and return it.
+
+    A module name may contain ``/`` to place it in a subpackage.
+    """
     import importlib
 
     package_dir = root / name
     package_dir.mkdir()
     (package_dir / "__init__.py").write_text("")
     for module_name, source in modules.items():
-        (package_dir / f"{module_name}.py").write_text(textwrap.dedent(source))
+        path = package_dir / f"{module_name}.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(textwrap.dedent(source))
     sys.path.insert(0, str(root))
     try:
         return importlib.import_module(name)
@@ -291,13 +282,22 @@ def _write_package(root: pathlib.Path, name: str, modules: dict[str, str]):
         sys.path.remove(str(root))
 
 
+def _loaded_keys(package) -> list[str]:
+    """Discover and load ``package``'s assets, and return their keys."""
+    modules, _ = loader_module.discover_asset_modules(package)
+    assets, failures = loader_module.load_assets(modules)
+    assert failures == {}
+    return sorted(k.to_user_string() for a in assets for k in a.keys)
+
+
 def test_discovery_skips_a_broken_module_and_keeps_the_rest(tmp_path):
     package = _write_package(
         tmp_path,
         "pd_discovery_ok",
         {
-            "good": "import dagster as dg\n\n@dg.asset\ndef good_asset():\n    return 1\n",
+            "good": ASSET_MODULE.format("good_asset"),
             "broken": "raise RuntimeError('this module is deliberately broken')\n",
+            "quitter": "import sys\nsys.exit(2)\n",
             "_private": "raise RuntimeError('never imported')\n",
         },
     )
@@ -305,45 +305,22 @@ def test_discovery_skips_a_broken_module_and_keeps_the_rest(tmp_path):
     modules, failures = loader_module.discover_asset_modules(package)
 
     assert [m.__name__ for m in modules] == ["pd_discovery_ok.good"]
-    assert "pd_discovery_ok.broken" in failures
     assert "deliberately broken" in failures["pd_discovery_ok.broken"]
+    assert "pd_discovery_ok.quitter" in failures, "sys.exit must not end discovery"
     assert "pd_discovery_ok._private" not in failures
 
 
-def test_discovery_survives_a_module_that_calls_sys_exit(tmp_path):
+def test_discovery_survives_a_subpackage_whose_init_is_broken(tmp_path):
     package = _write_package(
         tmp_path,
-        "pd_discovery_exit",
+        "pd_discovery_subpkg",
         {
-            "good": "import dagster as dg\n\n@dg.asset\ndef ok_asset():\n    return 1\n",
-            "quitter": "import sys\nsys.exit(2)\n",
+            "good": ASSET_MODULE.format("fine"),
+            # Not an ImportError, so walk_packages re-raises it out of the generator.
+            "broken_pkg/__init__": "raise RuntimeError('bad subpackage')\n",
+            "broken_pkg/child": ASSET_MODULE.format("child"),
         },
     )
-
-    modules, failures = loader_module.discover_asset_modules(package)
-
-    assert [m.__name__ for m in modules] == ["pd_discovery_exit.good"]
-    assert "pd_discovery_exit.quitter" in failures
-
-
-def test_discovery_survives_a_subpackage_whose_init_is_broken(tmp_path):
-    import importlib
-
-    root = tmp_path / "pd_discovery_subpkg"
-    root.mkdir()
-    (root / "__init__.py").write_text("")
-    (root / "good.py").write_text("import dagster as dg\n\n@dg.asset\ndef fine():\n    return 1\n")
-    broken = root / "broken_pkg"
-    broken.mkdir()
-    # Not an ImportError, so walk_packages re-raises it out of the generator.
-    (broken / "__init__.py").write_text("raise RuntimeError('bad subpackage')\n")
-    (broken / "child.py").write_text("import dagster as dg\n\n@dg.asset\ndef child():\n    return 1\n")
-
-    sys.path.insert(0, str(tmp_path))
-    try:
-        package = importlib.import_module("pd_discovery_subpkg")
-    finally:
-        sys.path.remove(str(tmp_path))
 
     modules, failures = loader_module.discover_asset_modules(package)
 
@@ -358,18 +335,7 @@ def test_discovery_stops_importing_once_the_budget_is_gone(tmp_path, monkeypatch
     package = _write_package(
         tmp_path,
         "pd_discovery_budget",
-        {
-            "a_hangs": """
-                import time
-
-                while True:
-                    try:
-                        time.sleep(0.05)
-                    except Exception:
-                        pass
-                """,
-            "z_never_reached": "import dagster as dg\n\n@dg.asset\ndef late():\n    return 1\n",
-        },
+        {"a_hangs": HANGS_ON_IMPORT, "z_never_reached": ASSET_MODULE.format("late")},
     )
 
     modules, failures = loader_module.discover_asset_modules(package)
@@ -384,19 +350,7 @@ def test_discovery_times_out_a_module_that_hangs_on_import(tmp_path, monkeypatch
     package = _write_package(
         tmp_path,
         "pd_discovery_hang",
-        {
-            "good": "import dagster as dg\n\n@dg.asset\ndef fine_asset():\n    return 1\n",
-            # Swallows Exception in a loop, the way cdsapi's retry handling does.
-            "hangs": """
-                import time
-
-                while True:
-                    try:
-                        time.sleep(0.05)
-                    except Exception:
-                        pass
-                """,
-        },
+        {"good": ASSET_MODULE.format("fine_asset"), "hangs": HANGS_ON_IMPORT},
     )
 
     modules, failures = loader_module.discover_asset_modules(package)
@@ -410,17 +364,11 @@ def test_loaded_assets_are_namespaced_by_family_and_deduplicated(tmp_path):
         tmp_path,
         "dags_fake_assets",
         {
-            "alpha": "import dagster as dg\n\n@dg.asset\ndef shared():\n    return 1\n",
+            "alpha": ASSET_MODULE.format("shared"),
             "beta": "from dags_fake_assets.alpha import shared\n",
         },
     )
-    modules, _ = loader_module.discover_asset_modules(package)
-
-    assets, failures = loader_module.load_assets(modules)
-
-    assert failures == {}
-    keys = sorted(k.to_user_string() for a in assets for k in a.keys)
-    assert keys == ["alpha/shared"]
+    assert _loaded_keys(package) == ["alpha/shared"]
 
 
 @pytest.mark.parametrize(
@@ -452,14 +400,8 @@ def test_an_asset_that_chose_its_own_key_prefix_keeps_it(tmp_path):
             ),
         },
     )
-    modules, _ = loader_module.discover_asset_modules(package)
-
-    assets, failures = loader_module.load_assets(modules)
-
-    assert failures == {}
-    keys = sorted(k.to_user_string() for a in assets for k in a.keys)
     # The explicit prefix survives; the bare asset is namespaced under its family.
-    assert keys == ["cmems/cmems_forecast", "ocean/cmems_analysis"]
+    assert _loaded_keys(package) == ["cmems/cmems_forecast", "ocean/cmems_analysis"]
 
 
 def _resolved(assets, jobs, schedules):
@@ -594,16 +536,10 @@ def test_a_spec_only_asset_does_not_take_down_the_code_location(tmp_path):
                 "import dagster as dg\n\n"
                 "upstream = dg.AssetsDefinition(specs=[dg.AssetSpec('upstream_thing')])\n"
             ),
-            "normal": "import dagster as dg\n\n@dg.asset\ndef normal_asset():\n    return 1\n",
+            "normal": ASSET_MODULE.format("normal_asset"),
         },
     )
-    modules, _ = loader_module.discover_asset_modules(package)
-
-    assets, failures = loader_module.load_assets(modules)
-
-    assert failures == {}
-    keys = sorted(k.to_user_string() for a in assets for k in a.keys)
-    assert keys == ["external/upstream_thing", "normal/normal_asset"]
+    assert _loaded_keys(package) == ["external/upstream_thing", "normal/normal_asset"]
 
 
 def test_skip_prefixes_match_at_package_boundaries():
@@ -614,11 +550,13 @@ def test_skip_prefixes_match_at_package_boundaries():
     assert not loader_module._is_skipped("dags.assets.virtual_gk2a")
 
 
-def test_executor_parallelism_is_bounded_by_the_memory_budget():
-    executor = loader_module.build_executor(budget_gb=8.0)
-    config = executor.executor_creation_fn is not None
-    assert config  # the executor is configured, not the bare definition
-    assert executor.name == "multiprocess"
+@pytest.mark.parametrize("budget_gb", [4.0, 8.0])
+def test_executor_parallelism_is_bounded_by_the_memory_budget(budget_gb):
+    executor = loader_module.build_executor(budget_gb=budget_gb)
+    config = executor.config_schema.resolve_config({}).value["config"]
+    # One default-sized step fits in 8 GB, and a smaller host still gets one slot.
+    assert config["max_concurrent"] == 1
+    assert config["tag_concurrency_limits"] == executor_tag_concurrency_limits(budget_gb)
 
 
 def test_dagster_yaml_is_valid_instance_config(tmp_path, monkeypatch):
@@ -628,7 +566,8 @@ def test_dagster_yaml_is_valid_instance_config(tmp_path, monkeypatch):
 
     dagster_home = tmp_path / "dagster_home"
     dagster_home.mkdir()
-    shutil.copy(REPO_ROOT / "dags" / "dagster.yaml", dagster_home / "dagster.yaml")
+    dagster_yaml = pathlib.Path(loader_module.__file__).parent / "dagster.yaml"
+    shutil.copy(dagster_yaml, dagster_home / "dagster.yaml")
     monkeypatch.setenv("DAGSTER_HOME", str(dagster_home))
 
     with DagsterInstance.get() as instance:

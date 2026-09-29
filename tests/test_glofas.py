@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from planetary_datasets import config as config_module
 from planetary_datasets.config import MissingCredential
 from planetary_datasets.providers import glofas
 
@@ -82,18 +83,12 @@ def test_forecast_requests_one_archive_per_variable(local_config):
         "glofas_forecast_runoff_water_equivalent_20260304.zip",
     ]
     first = requests[0][1]
+    # The original script asked for every year at once, which returned the wrong days.
     assert first["year"] == ["2026"]
     assert first["month"] == ["03"]
     assert first["day"] == ["04"]
     assert first["leadtime_hour"] == ["24", "48", "72", "96", "120", "144", "168"]
     assert provider.dataset == "cems-glofas-forecast"
-
-
-def test_forecast_request_never_leaks_other_years(local_config):
-    """The original script asked for every year at once, which returned the wrong days."""
-    provider = glofas.GloFASForecastProvider(config=local_config)
-    _, request = provider.requests_for(pd.Timestamp("2026-01-30"))[0]
-    assert request["year"] == ["2026"]
 
 
 def test_reforecast_requests_one_archive_per_leadtime(local_config):
@@ -147,13 +142,9 @@ def test_providers_write_to_separate_stores(local_config):
     assert len(paths) == len(glofas.PROVIDERS)
 
 
-def test_archive_dir_is_under_the_configured_data_dir(tmp_path, monkeypatch):
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
-    provider = glofas.GloFASForecastProvider(config=cfg)
-    assert provider.archive_dir == tmp_path / "data" / "glofas" / "glofas-forecast"
+def test_archive_dir_is_under_the_configured_data_dir(local_config):
+    provider = glofas.GloFASForecastProvider(config=local_config)
+    assert provider.archive_dir == local_config.data_dir / "glofas" / "glofas-forecast"
 
 
 # --- credentials ----------------------------------------------------------------------
@@ -165,15 +156,13 @@ def test_cds_client_without_any_credentials_raises(local_config, no_cdsapirc):
     assert "CDSAPI_KEY" in str(excinfo.value)
 
 
-def test_cds_client_prefers_configured_credentials(tmp_path, monkeypatch, no_cdsapirc):
+def test_cds_client_prefers_configured_credentials(local_config, monkeypatch, no_cdsapirc):
     """Configured credentials are passed through instead of being left to ~/.cdsapirc."""
     import cdsapi
 
-    from planetary_datasets import config as config_module
-
     monkeypatch.setenv("CDSAPI_URL", "https://cds.example/api")
     monkeypatch.setenv("CDSAPI_KEY", "42:abc123")
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
+    cfg = config_module.load_config()
 
     built: dict[str, str] = {}
     monkeypatch.setattr(cdsapi, "Client", lambda **kwargs: built.update(kwargs) or "client")
@@ -182,19 +171,16 @@ def test_cds_client_prefers_configured_credentials(tmp_path, monkeypatch, no_cds
     assert built == {"url": "https://cds.example/api", "key": "42:abc123"}
 
 
-def test_cds_client_falls_back_to_cdsapirc(tmp_path, monkeypatch):
+def test_cds_client_falls_back_to_cdsapirc(local_config, tmp_path, monkeypatch):
     """With no configured key, the client is left to find ~/.cdsapirc itself."""
     import cdsapi
-
-    from planetary_datasets import config as config_module
 
     rc = tmp_path / "cdsapirc"
     rc.write_text("url: https://cds.example/api\nkey: 42:abc123\n")
     monkeypatch.setenv("CDSAPI_RC", str(rc))
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
 
     monkeypatch.setattr(cdsapi, "Client", lambda **kwargs: ("client", kwargs))
-    assert glofas.cds_client(cfg) == ("client", {})
+    assert glofas.cds_client(local_config) == ("client", {})
 
 
 # --- retrieval ------------------------------------------------------------------------
@@ -341,15 +327,25 @@ def test_historical_renames_a_valid_time_axis_to_time(local_config):
     assert pd.DatetimeIndex(out.time.values).is_monotonic_increasing
 
 
-class OfflineForecastProvider(glofas.GloFASForecastProvider):
-    """The forecast provider with the CDS call replaced by a prebuilt archive."""
+class OfflineFetch:
+    """Mixin replacing the CDS call with prebuilt archives, recording each partition fetched."""
 
     def __init__(self, archives, **kwargs):
         super().__init__(**kwargs)
         self.archives = [str(p) for p in archives]
+        self.fetch_calls: list[pd.Timestamp] = []
 
     def fetch(self, it, temp_dir=None, **kwargs):
+        self.fetch_calls.append(pd.Timestamp(it))
         return list(self.archives)
+
+
+class OfflineForecastProvider(OfflineFetch, glofas.GloFASForecastProvider):
+    pass
+
+
+class OfflineReforecastProvider(OfflineFetch, glofas.GloFASReforecastProvider):
+    pass
 
 
 @pytest.fixture
@@ -384,7 +380,7 @@ def test_process_without_any_netcdf_members_raises(local_config, tmp_path):
     empty = tmp_path / "empty.zip"
     with zipfile.ZipFile(empty, "w") as zf:
         zf.writestr("readme.txt", "no data here")
-    provider = OfflineForecastProvider([empty], config=local_config)
+    provider = glofas.GloFASForecastProvider(config=local_config)
 
     with pytest.raises(ValueError, match="no NetCDF members"):
         provider.process([str(empty)], pd.Timestamp("2026-01-01"), temp_dir=tmp_path / "scratch")
@@ -401,19 +397,6 @@ def test_run_partition_writes_and_then_skips(local_config, forecast_archives):
     stored = xr.open_zarr(session.store, consolidated=False)
     assert pd.Timestamp(stored.init_time.values[0]) == it
     assert set(stored.data_vars) == {"dis24", "rowe"}
-
-
-class OfflineReforecastProvider(glofas.GloFASReforecastProvider):
-    """The reforecast provider with the CDS call replaced by a prebuilt archive."""
-
-    def __init__(self, archives, **kwargs):
-        super().__init__(**kwargs)
-        self.archives = [str(p) for p in archives]
-        self.fetch_calls: list[pd.Timestamp] = []
-
-    def fetch(self, it, temp_dir=None, **kwargs):
-        self.fetch_calls.append(pd.Timestamp(it))
-        return list(self.archives)
 
 
 def test_a_stored_reforecast_month_is_skipped(local_config, tmp_path):

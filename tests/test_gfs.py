@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import pathlib
+import sys
 
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
 
+from helpers import read_store as _stored
 from planetary_datasets.providers import gfs
 from planetary_datasets.providers.gfs import GFSProvider
 
@@ -124,18 +126,19 @@ def test_filter_datasets_drops_multi_height_datasets():
     assert gfs.filter_datasets([ds]) == []
 
 
-def test_strip_height_prefixes():
-    ds = xr.Dataset({"2m_temperature": ("x", [1.0]), "pressure": ("x", [2.0])})
-    stripped = gfs._strip_height_prefixes(ds)
-    assert set(stripped.data_vars) == {"temperature", "pressure"}
-
-
-def test_strip_height_prefixes_keeps_a_colliding_name():
-    # Both GDEX files can spell the same field differently; renaming one onto the other
-    # would raise and take the whole init time down.
-    ds = xr.Dataset({"2m_temperature": ("x", [1.0]), "temperature": ("x", [2.0])})
-    stripped = gfs._strip_height_prefixes(ds)
-    assert set(stripped.data_vars) == {"2m_temperature", "temperature"}
+@pytest.mark.parametrize(
+    ("names", "expected"),
+    [
+        (["2m_temperature", "pressure"], {"temperature", "pressure"}),
+        # Both GDEX files can spell the same field differently; renaming one onto the other
+        # would raise and take the whole init time down.
+        (["2m_temperature", "temperature"], {"2m_temperature", "temperature"}),
+    ],
+    ids=["strips", "keeps_a_colliding_name"],
+)
+def test_strip_height_prefixes(names, expected):
+    ds = xr.Dataset({name: ("x", [float(i)]) for i, name in enumerate(names)})
+    assert set(gfs._strip_height_prefixes(ds).data_vars) == expected
 
 
 def test_temperature_levels_defines_the_vertical_grid():
@@ -154,7 +157,7 @@ def test_temperature_levels_defines_the_vertical_grid():
 
 
 def test_regrid_falls_back_when_metview_is_missing(tmp_path, monkeypatch):
-    monkeypatch.setitem(__import__("sys").modules, "metview", None)
+    monkeypatch.setitem(sys.modules, "metview", None)
     grib = tmp_path / "gfs.0p25.2016010100.f000.grib2"
     grib.write_bytes(b"GRIB")
     # A None entry in sys.modules makes the import raise ImportError.
@@ -172,13 +175,21 @@ def test_regrid_reuses_an_existing_output(tmp_path):
 # --- Fetch -----------------------------------------------------------------------------
 
 
-def test_fetch_downloads_both_datasets_for_every_step(provider, tmp_path, monkeypatch):
-    def fake_download_one(url, dest, **kwargs):
+def _fake_download_one(unavailable: str | None = None):
+    """A ``download_one`` that writes a stub GRIB, or None for URLs containing ``unavailable``."""
+
+    def download_one(url, dest, **kwargs):
+        if unavailable and unavailable in url:
+            return None
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"GRIB")
         return dest
 
-    monkeypatch.setattr(gfs, "download_one", fake_download_one)
+    return download_one
+
+
+def test_fetch_downloads_both_datasets_for_every_step(provider, tmp_path, monkeypatch):
+    monkeypatch.setattr(gfs, "download_one", _fake_download_one())
     provider.regrid_degrees = None
     files = provider.fetch(pd.Timestamp("2016-01-01T00:00"), temp_dir=tmp_path)
     assert len(files) == 4
@@ -186,14 +197,7 @@ def test_fetch_downloads_both_datasets_for_every_step(provider, tmp_path, monkey
 
 
 def test_fetch_returns_nothing_when_a_file_is_unavailable(provider, tmp_path, monkeypatch):
-    def fake_download_one(url, dest, **kwargs):
-        if ".f006." in url:
-            return None
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(b"GRIB")
-        return dest
-
-    monkeypatch.setattr(gfs, "download_one", fake_download_one)
+    monkeypatch.setattr(gfs, "download_one", _fake_download_one(unavailable=".f006."))
     # A partial init time must be skipped entirely, not written with holes.
     assert provider.fetch(pd.Timestamp("2016-01-01T00:00"), temp_dir=tmp_path) == []
 
@@ -241,20 +245,24 @@ def _step_dataset(step_hours: int) -> xr.Dataset:
     )
 
 
-def test_process_builds_a_time_and_step_cube(provider, monkeypatch):
+@pytest.fixture
+def fake_merge(monkeypatch):
+    """Replace GRIB merging with a synthetic step read off the main file's name."""
     monkeypatch.setattr(
         gfs, "merge_step", lambda main, extra: _step_dataset(int(main.split(".f")[1][:3]))
     )
+
+
+def _downloaded(main_steps=(0, 6), extra_steps=(0, 6)) -> list[str]:
+    """Paths as ``fetch`` returns them, for the given steps of each GDEX dataset."""
+    return [f"/tmp/gfs.0p25.2016010100.f{h:03d}.grib2" for h in main_steps] + [
+        f"/tmp/gfs.0p25b.2016010100.f{h:03d}.grib2" for h in extra_steps
+    ]
+
+
+def test_process_builds_a_time_and_step_cube(provider, fake_merge):
     it = pd.Timestamp("2016-01-01T00:00")
-    ds = provider.process(
-        [
-            "/tmp/gfs.0p25.2016010100.f000.grib2",
-            "/tmp/gfs.0p25b.2016010100.f000.grib2",
-            "/tmp/gfs.0p25.2016010100.f006.grib2",
-            "/tmp/gfs.0p25b.2016010100.f006.grib2",
-        ],
-        it,
-    )
+    ds = provider.process(_downloaded(), it)
     assert ds.sizes["time"] == 1
     assert ds.sizes["step"] == 2
     assert ds.time.values[0] == np.datetime64(it)
@@ -264,29 +272,17 @@ def test_process_builds_a_time_and_step_cube(provider, monkeypatch):
     assert (ds.longitude.diff("longitude") > 0).all()
 
 
-def test_process_rejects_a_partial_init_time(provider, monkeypatch):
-    monkeypatch.setattr(gfs, "merge_step", lambda main, extra: _step_dataset(0))
-    with pytest.raises(ValueError, match="expected forecast steps"):
-        provider.process(
-            [
-                "/tmp/gfs.0p25.2016010100.f000.grib2",
-                "/tmp/gfs.0p25b.2016010100.f000.grib2",
-            ],
-            pd.Timestamp("2016-01-01T00:00"),
-        )
-
-
-def test_process_rejects_a_step_missing_its_companion_file(provider, monkeypatch):
-    monkeypatch.setattr(gfs, "merge_step", lambda main, extra: _step_dataset(0))
-    with pytest.raises(ValueError, match="missing a GDEX file"):
-        provider.process(
-            [
-                "/tmp/gfs.0p25.2016010100.f000.grib2",
-                "/tmp/gfs.0p25b.2016010100.f000.grib2",
-                "/tmp/gfs.0p25.2016010100.f006.grib2",
-            ],
-            pd.Timestamp("2016-01-01T00:00"),
-        )
+@pytest.mark.parametrize(
+    ("files", "match"),
+    [
+        (_downloaded(main_steps=(0,), extra_steps=(0,)), "expected forecast steps"),
+        (_downloaded(extra_steps=(0,)), "missing a GDEX file"),
+    ],
+    ids=["partial_init_time", "step_missing_its_companion_file"],
+)
+def test_process_rejects_incomplete_inputs(provider, fake_merge, files, match):
+    with pytest.raises(ValueError, match=match):
+        provider.process(files, pd.Timestamp("2016-01-01T00:00"))
 
 
 # --- Writing ---------------------------------------------------------------------------
@@ -311,55 +307,57 @@ def _cube(it: str, levels=(850.0, 1000.0), extra_var: bool = False) -> xr.Datase
     )
 
 
-def test_write_appends_a_second_init_time(provider):
-    repo = provider.get_icechunk_repo()
+def _cube_with_steps(it: str, steps) -> xr.Dataset:
+    return xr.Dataset(
+        {
+            "temperature": (
+                ("time", "step", "latitude"),
+                np.zeros((1, len(steps), 3), dtype="float32"),
+            )
+        },
+        coords={
+            "time": pd.DatetimeIndex([it]),
+            "step": [pd.Timedelta(hours=h) for h in steps],
+            "latitude": [-1.0, 0.0, 1.0],
+        },
+    )
+
+
+@pytest.fixture
+def repo(provider):
+    return provider.get_icechunk_repo()
+
+
+
+
+def test_write_appends_a_second_init_time(provider, repo):
     assert provider.write_to_icechunk(repo, _cube("2016-01-01T00:00")) is True
     assert provider.write_to_icechunk(repo, _cube("2016-01-01T06:00")) is True
-    stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
-    assert list(pd.DatetimeIndex(stored.time.values).strftime("%H")) == ["00", "06"]
+    assert list(pd.DatetimeIndex(_stored(repo).time.values).strftime("%H")) == ["00", "06"]
 
 
-def test_write_drops_levels_and_variables_the_store_does_not_have(provider):
-    repo = provider.get_icechunk_repo()
+def test_write_drops_levels_and_variables_the_store_does_not_have(provider, repo):
     provider.write_to_icechunk(repo, _cube("2016-01-01T00:00"))
     # A later init time with an extra level and an extra variable must still land.
     richer = _cube("2016-01-01T06:00", levels=(700.0, 850.0, 1000.0), extra_var=True)
     assert provider.write_to_icechunk(repo, richer) is True
-    stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    stored = _stored(repo)
     assert list(stored.level.values) == [850.0, 1000.0]
     assert set(stored.data_vars) == {"temperature"}
     assert stored.sizes["time"] == 2
 
 
-def test_write_refuses_an_init_time_with_a_different_step_list(provider):
-    def cube_with_steps(it, steps):
-        return xr.Dataset(
-            {
-                "temperature": (
-                    ("time", "step", "latitude"),
-                    np.zeros((1, len(steps), 3), dtype="float32"),
-                )
-            },
-            coords={
-                "time": pd.DatetimeIndex([it]),
-                "step": [pd.Timedelta(hours=h) for h in steps],
-                "latitude": [-1.0, 0.0, 1.0],
-            },
-        )
-
-    repo = provider.get_icechunk_repo()
-    provider.write_to_icechunk(repo, cube_with_steps("2016-01-01T00:00", (0, 6)))
+def test_write_refuses_an_init_time_with_a_different_step_list(provider, repo):
+    provider.write_to_icechunk(repo, _cube_with_steps("2016-01-01T00:00", (0, 6)))
     # A short forecast must be refused cleanly rather than failing inside the append.
-    assert provider.write_to_icechunk(repo, cube_with_steps("2016-01-01T06:00", (0,))) is False
+    assert provider.write_to_icechunk(repo, _cube_with_steps("2016-01-01T06:00", (0,))) is False
 
 
-def test_write_refuses_an_init_time_that_is_missing_a_stored_level(provider):
-    repo = provider.get_icechunk_repo()
+def test_write_refuses_an_init_time_that_is_missing_a_stored_level(provider, repo):
     provider.write_to_icechunk(repo, _cube("2016-01-01T00:00"))
     thinner = _cube("2016-01-01T06:00", levels=(1000.0,))
     assert provider.write_to_icechunk(repo, thinner) is False
-    stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
-    assert stored.sizes["time"] == 1
+    assert _stored(repo).sizes["time"] == 1
 
 
 # --- Lifecycle -------------------------------------------------------------------------
@@ -401,16 +399,11 @@ def _stub_provider(monkeypatch, written: bool, still_missing: bool):
     return asset_module
 
 
-def test_asset_reports_a_written_init_time(monkeypatch):
-    module = _stub_provider(monkeypatch, written=True, still_missing=False)
+@pytest.mark.parametrize("written", [True, False], ids=["written", "already_stored"])
+def test_asset_succeeds_once_the_init_time_is_stored(monkeypatch, written):
+    module = _stub_provider(monkeypatch, written=written, still_missing=False)
     result = module.run_gfs_partition(pd.Timestamp("2016-01-01T00:00"))
-    assert result.metadata["written"].value is True
-
-
-def test_asset_accepts_an_init_time_that_was_already_stored(monkeypatch):
-    module = _stub_provider(monkeypatch, written=False, still_missing=False)
-    result = module.run_gfs_partition(pd.Timestamp("2016-01-01T00:00"))
-    assert result.metadata["written"].value is False
+    assert result.metadata["written"].value is written
 
 
 def test_asset_fails_when_nothing_was_written_and_the_init_time_is_still_absent(monkeypatch):
@@ -422,7 +415,7 @@ def test_asset_fails_when_nothing_was_written_and_the_init_time_is_still_absent(
         module.run_gfs_partition(pd.Timestamp("2016-01-01T00:00"))
 
 
-def test_the_asset_definitions_load(monkeypatch):
+def test_the_asset_definitions_load():
     import dagster as dg
     from dagster_docker import PipesDockerClient
 

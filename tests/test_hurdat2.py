@@ -8,8 +8,8 @@ import textwrap
 import numpy as np
 import pandas as pd
 import pytest
-import xarray as xr
 
+from helpers import read_store
 from planetary_datasets.providers import hurdat2 as h2
 
 # Two real storms trimmed to a few entries, plus the 1969 line whose latitude and
@@ -123,8 +123,13 @@ def test_unparseable_line_is_skipped_not_fatal():
         h2.parse_hurdat2(text.splitlines())
 
 
-def test_dataset_layout_and_padding(storms):
-    ds = h2.storms_to_dataset(storms[1:], pd.Timestamp("2011-01-01"), basin="atlantic")
+@pytest.fixture
+def irene_season(storms):
+    return h2.storms_to_dataset(storms[1:], pd.Timestamp("2011-01-01"), basin="atlantic")
+
+
+def test_dataset_layout_and_padding(irene_season):
+    ds = irene_season
     assert ds.sizes == {"time": 1, "storm": h2.MAX_STORMS, "record": h2.MAX_RECORDS}
     assert ds.storm_id.values[0, 0] == "AL092011"
     assert ds.storm_id.values[0, 1] == ""
@@ -136,8 +141,8 @@ def test_dataset_layout_and_padding(storms):
     assert ds.max_sustained_wind_knots.dtype == np.float32
 
 
-def test_record_time_is_cf_encoded_seconds(storms):
-    ds = h2.storms_to_dataset(storms[1:], pd.Timestamp("2011-01-01"), basin="atlantic")
+def test_record_time_is_cf_encoded_seconds(irene_season):
+    ds = irene_season
     assert ds.record_time.attrs["units"] == "seconds since 1970-01-01"
     expected = pd.Timestamp("2011-08-21T00:00").value / 1e9
     assert ds.record_time.values[0, 0, 0] == pytest.approx(expected)
@@ -167,13 +172,9 @@ def test_release_date_parsing(token, expected):
     assert got is None if expected is None else got == pd.Timestamp(expected)
 
 
-def test_latest_release_url_picks_newest(monkeypatch):
-    listing = """
-    <a href="hurdat2-1851-2024-040425.txt">a</a>
-    <a href="hurdat2-1851-2025-02272026.txt">b</a>
-    <a href="hurdat2-1851-2025-091226.txt">c</a>
-    <a href="hurdat2-nepac-1949-2025-091426.txt">d</a>
-    """
+def _serve_listing(monkeypatch, listing: str) -> None:
+    """Stand in for the NHC directory listing that ``latest_release_url`` reads."""
+    import fsspec
 
     class _Ctx:
         def __enter__(self):
@@ -182,44 +183,39 @@ def test_latest_release_url_picks_newest(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-    import fsspec
-
     monkeypatch.setattr(fsspec, "open", lambda *a, **k: _Ctx())
-    assert h2.latest_release_url("atlantic").endswith("hurdat2-1851-2025-091226.txt")
-    assert h2.latest_release_url("pacific").endswith("hurdat2-nepac-1949-2025-091426.txt")
 
 
-def test_latest_release_url_prefers_a_same_day_revision(monkeypatch):
-    """A re-release on the same date is published with a trailing letter."""
-    listing = """
-    <a href="hurdat2-nepac-1949-2020-043021.txt">a</a>
-    <a href="hurdat2-nepac-1949-2020-043021a.txt">b</a>
-    """
+RELEASE_LISTING = """
+<a href="hurdat2-1851-2024-040425.txt">a</a>
+<a href="hurdat2-1851-2025-02272026.txt">b</a>
+<a href="hurdat2-1851-2025-091226.txt">c</a>
+<a href="hurdat2-nepac-1949-2025-091426.txt">d</a>
+"""
 
-    class _Ctx:
-        def __enter__(self):
-            return io.StringIO(listing)
 
-        def __exit__(self, *exc):
-            return False
-
-    import fsspec
-
-    monkeypatch.setattr(fsspec, "open", lambda *a, **k: _Ctx())
-    assert h2.latest_release_url("pacific").endswith("hurdat2-nepac-1949-2020-043021a.txt")
+@pytest.mark.parametrize(
+    ("listing", "basin", "expected"),
+    [
+        (RELEASE_LISTING, "atlantic", "hurdat2-1851-2025-091226.txt"),
+        (RELEASE_LISTING, "pacific", "hurdat2-nepac-1949-2025-091426.txt"),
+        # A re-release on the same date is published with a trailing letter.
+        (
+            '<a href="hurdat2-nepac-1949-2020-043021.txt">a</a>\n'
+            '<a href="hurdat2-nepac-1949-2020-043021a.txt">b</a>',
+            "pacific",
+            "hurdat2-nepac-1949-2020-043021a.txt",
+        ),
+    ],
+    ids=["atlantic", "pacific", "same-day-revision"],
+)
+def test_latest_release_url_picks_the_newest_release(monkeypatch, listing, basin, expected):
+    _serve_listing(monkeypatch, listing)
+    assert h2.latest_release_url(basin).endswith(expected)
 
 
 def test_latest_release_url_raises_when_naming_changes(monkeypatch):
-    class _Ctx:
-        def __enter__(self):
-            return io.StringIO("<a href='hurdat3-whatever.txt'>x</a>")
-
-        def __exit__(self, *exc):
-            return False
-
-    import fsspec
-
-    monkeypatch.setattr(fsspec, "open", lambda *a, **k: _Ctx())
+    _serve_listing(monkeypatch, "<a href='hurdat3-whatever.txt'>x</a>")
     with pytest.raises(h2.HURDAT2ParseError, match="naming scheme"):
         h2.latest_release_url("atlantic")
 
@@ -229,13 +225,12 @@ def local_provider(tmp_path, local_config):
     """A provider reading a pinned local file and writing to a local store."""
     source = tmp_path / "hurdat2-1851-2011-010101.txt"
     source.write_text(SAMPLE)
-    provider = h2.HURDAT2Provider(
+    return h2.HURDAT2Provider(
         basin="atlantic",
         url=source.as_uri(),
         cache_dir=tmp_path / "cache",
         config=local_config,
     )
-    return provider
 
 
 def test_fetch_returns_empty_for_a_season_with_no_storms(local_provider):
@@ -255,7 +250,7 @@ def test_run_partition_round_trip(local_provider):
     assert local_provider.run_partition(pd.Timestamp("2011-01-01")) is False
 
     repo = local_provider.get_icechunk_repo()
-    stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    stored = read_store(repo)
     assert list(pd.DatetimeIndex(stored.time.values)) == [
         pd.Timestamp("1851-01-01"),
         pd.Timestamp("2011-01-01"),
@@ -276,7 +271,7 @@ def test_run_range_snaps_to_seasons_and_does_not_repeat_work(local_provider):
     assert local_provider.run_range(mid_season) == 0
 
     repo = local_provider.get_icechunk_repo()
-    stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    stored = read_store(repo)
     assert sorted(pd.DatetimeIndex(stored.time.values)) == [
         pd.Timestamp("1851-01-01"),
         pd.Timestamp("2011-01-01"),

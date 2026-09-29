@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from planetary_datasets import config as config_module
 from planetary_datasets.config import MissingCredential
 from planetary_datasets.providers import icon
 
@@ -45,26 +46,26 @@ def art_subset():
 # -- configuration ----------------------------------------------------------------------
 
 
-def test_every_variant_is_valid():
+def test_every_variant_has_its_own_valid_store():
     for name, config in icon.VARIANTS.items():
         assert config.store_prefix.startswith("bkr/icon/"), name
         assert config.store_prefix.endswith(".icechunk"), name
         assert config.url_style in ("filename", "path"), name
-
-
-def test_variant_store_prefixes_are_unique():
     prefixes = [c.store_prefix for c in icon.VARIANTS.values()]
     assert len(prefixes) == len(set(prefixes))
 
 
-def test_config_rejects_unknown_url_style():
-    with pytest.raises(ValueError, match="url_style"):
-        dataclasses.replace(icon.EUROPE_CONFIG, url_style="ftp")
-
-
-def test_config_rejects_empty_variable_lists():
-    with pytest.raises(ValueError, match="at least one"):
-        dataclasses.replace(icon.EUROPE_CONFIG, vars_2d=[], vars_3d=[])
+@pytest.mark.parametrize(
+    ("changes", "match"),
+    [
+        ({"url_style": "ftp"}, "url_style"),
+        ({"vars_2d": [], "vars_3d": []}, "at least one"),
+    ],
+    ids=["unknown_url_style", "empty_variable_lists"],
+)
+def test_config_rejects_invalid_settings(changes, match):
+    with pytest.raises(ValueError, match=match):
+        dataclasses.replace(icon.EUROPE_CONFIG, **changes)
 
 
 def test_case_follows_the_variant():
@@ -292,14 +293,11 @@ def test_provider_rejects_an_unknown_variant():
         icon.ICONProvider("mars")
 
 
-def test_provider_accepts_an_explicit_config(eu_subset, local_config):
-    provider = icon.ICONProvider("eu", config=local_config, icon_config=eu_subset)
-    assert provider.store_prefix == "bkr/icon/test_eu.icechunk"
-
-
-def test_store_prefix_override(local_config):
-    provider = icon.ICONProvider("eu", config=local_config, store_prefix="bkr/icon/other.icechunk")
-    assert provider.store_prefix == "bkr/icon/other.icechunk"
+def test_store_prefix_follows_an_explicit_config_or_override(eu_subset, local_config):
+    explicit = icon.ICONProvider("eu", config=local_config, icon_config=eu_subset)
+    assert explicit.store_prefix == "bkr/icon/test_eu.icechunk"
+    override = icon.ICONProvider("eu", config=local_config, store_prefix="bkr/icon/other.icechunk")
+    assert override.store_prefix == "bkr/icon/other.icechunk"
 
 
 def test_download_dir_is_per_variant_and_run(tmp_path, local_config):
@@ -315,12 +313,9 @@ def test_hf_repo_id_defaults_to_the_variant(local_config):
     assert icon.ICONProvider("eu", config=local_config).hf_repo_id == "openclimatefix/dwd-icon-eu"
 
 
-def test_hf_repo_id_honours_the_environment(tmp_path, monkeypatch):
-    monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path))
+def test_hf_repo_id_honours_the_environment(local_config, monkeypatch):
     monkeypatch.setenv("HF_REPO_ID", "someone/else")
-    from planetary_datasets import config as config_module
-
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
+    cfg = config_module.load_config()
     assert icon.ICONProvider("global", config=cfg).hf_repo_id == "someone/else"
 
 
@@ -332,31 +327,36 @@ def test_hf_repo_id_raises_when_unconfigured(local_config, eu_subset):
         _ = provider.hf_repo_id
 
 
-def test_publish_dry_run_does_not_need_a_token(tmp_path, local_config):
+@pytest.fixture
+def global_provider(local_config):
+    return icon.ICONProvider("global", config=local_config)
+
+
+@pytest.fixture
+def store_dir(tmp_path):
+    """An existing local directory to publish."""
     folder = tmp_path / "store"
     folder.mkdir()
-    provider = icon.ICONProvider("global", config=local_config)
-    assert provider.publish(folder, dry_run=True) == "openclimatefix/dwd-icon-global"
+    return folder
 
 
-def test_publish_rejects_a_missing_directory(tmp_path, local_config):
-    provider = icon.ICONProvider("global", config=local_config)
-    with pytest.raises(FileNotFoundError):
-        provider.publish(tmp_path / "nope")
+def test_publish_dry_run_does_not_need_a_token(global_provider, store_dir):
+    assert global_provider.publish(store_dir, dry_run=True) == "openclimatefix/dwd-icon-global"
 
 
-def test_publish_rejects_an_object_store_uri(local_config):
-    provider = icon.ICONProvider("global", config=local_config)
-    with pytest.raises(ValueError, match="local directory"):
-        provider.publish("s3://us-west-2.opendata.source.coop/bkr/icon/icon_global.icechunk")
-
-
-def test_publish_requires_a_token(tmp_path, local_config):
-    folder = tmp_path / "store"
-    folder.mkdir()
-    provider = icon.ICONProvider("global", config=local_config)
+def test_publish_requires_a_token(global_provider, store_dir):
     with pytest.raises(MissingCredential, match="HF_TOKEN"):
-        provider.publish(folder)
+        global_provider.publish(store_dir)
+
+
+def test_publish_rejects_a_missing_directory(global_provider, tmp_path):
+    with pytest.raises(FileNotFoundError):
+        global_provider.publish(tmp_path / "nope")
+
+
+def test_publish_rejects_an_object_store_uri(global_provider):
+    with pytest.raises(ValueError, match="local directory"):
+        global_provider.publish("s3://us-west-2.opendata.source.coop/bkr/icon/icon_global.icechunk")
 
 
 def test_process_refuses_an_empty_run(eu_subset, local_config):
@@ -410,14 +410,13 @@ def test_ruc_fetch_returns_nothing_when_the_mirror_is_absent(tmp_path, local_con
 
 def test_ruc_fetch_finds_analysis_files_in_the_mirror(tmp_path, local_config):
     mirror = tmp_path / "mirror"
-    wanted = mirror / "T_2M" / "r" / "2026-09-27T14:00" / "s" / "PT000H00M.grib2"
-    wanted.parent.mkdir(parents=True)
-    wanted.write_bytes(b"")
-    other = mirror / "T_2M" / "r" / "2026-09-27T15:00" / "s" / "PT000H00M.grib2"
-    other.parent.mkdir(parents=True)
-    other.write_bytes(b"")
-    forecast = mirror / "T_2M" / "r" / "2026-09-27T14:00" / "s" / "PT003H00M.grib2"
-    forecast.write_bytes(b"")
+    runs = mirror / "T_2M" / "r"
+    wanted = runs / "2026-09-27T14:00" / "s" / "PT000H00M.grib2"
+    other_run = runs / "2026-09-27T15:00" / "s" / "PT000H00M.grib2"
+    forecast = runs / "2026-09-27T14:00" / "s" / "PT003H00M.grib2"
+    for path in (wanted, other_run, forecast):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
 
     provider = icon.ICOND2RUCProvider("60min", config=local_config, grib_dir=mirror)
     assert provider.fetch(pd.Timestamp("2026-09-27T14:00")) == [str(wanted)]
@@ -431,26 +430,26 @@ def _ruc_dataset(minutes):
     )
 
 
-def test_ruc_cadence_accepts_correctly_spaced_times(local_config):
-    provider = icon.ICOND2RUCProvider("15min", config=local_config)
-    assert provider._matches_cadence(_ruc_dataset([0, 15, 30, 45]), "CAPE_ML") is True
-
-
-def test_ruc_cadence_rejects_a_partially_mirrored_five_minute_variable(local_config):
-    # Four valid times, but five minutes apart: this is a half-mirrored 5-minute variable,
-    # not a 15-minute one.
-    provider = icon.ICOND2RUCProvider("15min", config=local_config)
-    assert provider._matches_cadence(_ruc_dataset([0, 5, 10, 15]), "TOT_PREC") is False
-
-
-def test_ruc_cadence_rejects_the_wrong_number_of_times(local_config):
-    provider = icon.ICOND2RUCProvider("5min", config=local_config)
-    assert provider._matches_cadence(_ruc_dataset([0, 5]), "TOT_PREC") is False
-
-
-def test_ruc_cadence_accepts_a_single_hourly_time(local_config):
-    provider = icon.ICOND2RUCProvider("60min", config=local_config)
-    assert provider._matches_cadence(_ruc_dataset([0]), "PMSL") is True
+@pytest.mark.parametrize(
+    ("timestep", "minutes", "variable", "expected"),
+    [
+        ("15min", [0, 15, 30, 45], "CAPE_ML", True),
+        # Four valid times, but five minutes apart: this is a half-mirrored 5-minute
+        # variable, not a 15-minute one.
+        ("15min", [0, 5, 10, 15], "TOT_PREC", False),
+        ("5min", [0, 5], "TOT_PREC", False),
+        ("60min", [0], "PMSL", True),
+    ],
+    ids=[
+        "accepts_correctly_spaced_times",
+        "rejects_a_partially_mirrored_five_minute_variable",
+        "rejects_the_wrong_number_of_times",
+        "accepts_a_single_hourly_time",
+    ],
+)
+def test_ruc_cadence(local_config, timestep, minutes, variable, expected):
+    provider = icon.ICOND2RUCProvider(timestep, config=local_config)
+    assert provider._matches_cadence(_ruc_dataset(minutes), variable) is expected
 
 
 def test_ruc_process_refuses_an_empty_run(local_config):
@@ -476,54 +475,48 @@ def _icon_run(init: pd.Timestamp, variables: list[str], steps: int = 3) -> xr.Da
     )
 
 
-def test_a_fresh_run_does_not_create_the_store(local_config):
+def _hours_ago(hours: int) -> pd.Timestamp:
+    return pd.Timestamp.utcnow().tz_localize(None).floor("h") - pd.Timedelta(hours=hours)
+
+
+@pytest.fixture
+def eu_provider(local_config):
+    return icon.ICONProvider("eu", config=local_config, store_prefix="bkr/icon/test.icechunk")
+
+
+def test_a_fresh_run_does_not_create_the_store(eu_provider):
     """Regression: a half-uploaded run is indistinguishable from a sparse one.
 
     A truncated first run fixed the store's schema and locked every complete run out afterwards,
     while the asset went on reporting success.
     """
-    provider = icon.ICONProvider("eu", config=local_config, store_prefix="bkr/icon/fresh.icechunk")
-    just_now = pd.Timestamp.utcnow().tz_localize(None).floor("h")
-
     with pytest.raises(icon.IncompleteRun, match="possibly still uploading"):
-        provider.write_to_icechunk(
-            provider.get_icechunk_repo(), _icon_run(just_now, ["t_2m", "u_10m"])
+        eu_provider.write_to_icechunk(
+            eu_provider.get_icechunk_repo(), _icon_run(_hours_ago(0), ["t_2m", "u_10m"])
         )
 
 
-def test_a_settled_run_creates_the_store(local_config):
-    provider = icon.ICONProvider(
-        "eu", config=local_config, store_prefix="bkr/icon/settled.icechunk"
-    )
-    old = pd.Timestamp.utcnow().tz_localize(None).floor("h") - pd.Timedelta(days=1)
-
-    assert (
-        provider.write_to_icechunk(
-            provider.get_icechunk_repo(), _icon_run(old, ["t_2m", "u_10m"])
-        )
-        is True
-    )
+def test_a_settled_run_creates_the_store(eu_provider):
+    run = _icon_run(_hours_ago(24), ["t_2m", "u_10m"])
+    assert eu_provider.write_to_icechunk(eu_provider.get_icechunk_repo(), run) is True
 
 
-def test_a_run_short_of_the_stores_variables_is_refused(local_config):
-    provider = icon.ICONProvider("eu", config=local_config, store_prefix="bkr/icon/short.icechunk")
-    repo = provider.get_icechunk_repo()
-    first = pd.Timestamp.utcnow().tz_localize(None).floor("h") - pd.Timedelta(days=2)
-    provider.write_to_icechunk(repo, _icon_run(first, ["t_2m", "u_10m"]))
+@pytest.mark.parametrize(
+    ("stored", "incoming", "match"),
+    [
+        ((["t_2m", "u_10m"], 3), (["t_2m"], 3), "1 variable"),
+        ((["t_2m"], 4), (["t_2m"], 2), "2 of 4 step"),
+    ],
+    ids=["short_of_the_stores_variables", "short_step_axis"],
+)
+def test_an_incomplete_run_is_refused(eu_provider, stored, incoming, match):
+    repo = eu_provider.get_icechunk_repo()
+    first = _hours_ago(48)
+    eu_provider.write_to_icechunk(repo, _icon_run(first, stored[0], steps=stored[1]))
 
-    with pytest.raises(icon.IncompleteRun, match="1 variable"):
-        provider.write_to_icechunk(repo, _icon_run(first + pd.Timedelta(hours=6), ["t_2m"]))
-
-
-def test_a_run_with_a_short_step_axis_is_refused(local_config):
-    provider = icon.ICONProvider("eu", config=local_config, store_prefix="bkr/icon/steps.icechunk")
-    repo = provider.get_icechunk_repo()
-    first = pd.Timestamp.utcnow().tz_localize(None).floor("h") - pd.Timedelta(days=2)
-    provider.write_to_icechunk(repo, _icon_run(first, ["t_2m"], steps=4))
-
-    with pytest.raises(icon.IncompleteRun, match="2 of 4 step"):
-        provider.write_to_icechunk(
-            repo, _icon_run(first + pd.Timedelta(hours=6), ["t_2m"], steps=2)
+    with pytest.raises(icon.IncompleteRun, match=match):
+        eu_provider.write_to_icechunk(
+            repo, _icon_run(first + pd.Timedelta(hours=6), incoming[0], steps=incoming[1])
         )
 
 
@@ -551,26 +544,24 @@ def test_open_model_level_half_heights_rejects_an_empty_list():
         icon.open_model_level_half_heights([])
 
 
-def test_static_heights_refuses_a_partial_field(local_config, monkeypatch):
-    # Only two of the three requested levels came back; writing that would cache an
-    # incomplete field forever.
-    monkeypatch.setattr(icon, "download_run", lambda urls, dest, **kw: ["a.grib2", "b.grib2"])
-    assert (
-        icon.write_model_level_half_heights(
-            date=dt.date(2026, 9, 27), config=local_config, levels=[1, 2, 3]
-        )
-        is False
+@pytest.mark.parametrize(
+    ("downloaded", "levels"),
+    [
+        # Only two of the three requested levels came back; writing that would cache an
+        # incomplete field forever.
+        (["a.grib2", "b.grib2"], [1, 2, 3]),
+        ([], [1]),
+    ],
+    ids=["partial_field", "no_data"],
+)
+def test_static_heights_refuses_an_incomplete_download(
+    local_config, monkeypatch, downloaded, levels
+):
+    monkeypatch.setattr(icon, "download_run", lambda urls, dest, **kw: downloaded)
+    written = icon.write_model_level_half_heights(
+        date=dt.date(2026, 9, 27), config=local_config, levels=levels
     )
-
-
-def test_static_heights_reports_no_data(local_config, monkeypatch):
-    monkeypatch.setattr(icon, "download_run", lambda urls, dest, **kw: [])
-    assert (
-        icon.write_model_level_half_heights(
-            date=dt.date(2026, 9, 27), config=local_config, levels=[1]
-        )
-        is False
-    )
+    assert written is False
 
 
 # -- Dagster ----------------------------------------------------------------------------
@@ -581,9 +572,6 @@ def test_dagster_assets_load():
 
     from dags.assets import icon as icon_assets
 
-    defs = dg.Definitions(assets=icon_assets.icon_assets)
+    dg.Definitions(assets=icon_assets.icon_assets)
     keys = {a.key.to_user_string() for a in icon_assets.icon_assets}
-    assert "icon_global" in keys
-    assert "icon_d2_ruc_5min" in keys
-    assert "icon_global_model_level_half_heights" in keys
-    assert defs is not None
+    assert {"icon_global", "icon_d2_ruc_5min", "icon_global_model_level_half_heights"} <= keys

@@ -10,9 +10,10 @@ import pytest
 import requests
 import xarray as xr
 
+from helpers import read_store
+from planetary_datasets.providers import ifs
 from planetary_datasets.providers.ifs import (
     ATMOSPHERE_VAR_CODES,
-    KEEP_FLOAT32_VARS,
     SURFACE_VAR_CODES,
     IFSAnalysisProvider,
     IFSRegriddedAnalysisProvider,
@@ -72,18 +73,28 @@ def analysis_pair():
     return surface, atmos
 
 
-def test_surface_url_uses_table_228_for_100m_winds():
-    assert surface_url(DAY, "246", "100u").endswith(
-        "ec.oper.an.sfc/202601/ec.oper.an.sfc.228_246_100u.regn1280sc.20260102.nc"
-    )
-    assert "128_167_2t" in surface_url(DAY, "167", "2t")
+@pytest.fixture
+def merged(analysis_pair):
+    return merge_surface_and_atmosphere(*analysis_pair)
 
 
-def test_atmosphere_url_uses_the_vector_grid_for_winds():
-    assert atmosphere_url(DAY, "12", "131", "u", suffix="grb").endswith(
-        "ec.oper.an.pl/202601/ec.oper.an.pl.128_131_u.regn1280uv.2026010212.grb"
-    )
-    assert "regn1280sc" in atmosphere_url(DAY, "00", "130", "t")
+@pytest.mark.parametrize(
+    ("url", "fragment"),
+    [
+        # 100 m winds live in table 228, not 128.
+        (surface_url(DAY, "246", "100u"), "ec.oper.an.sfc/202601/ec.oper.an.sfc.228_246_100u.regn1280sc.20260102.nc"),
+        (surface_url(DAY, "167", "2t"), "128_167_2t"),
+        # Winds are on the vector grid, everything else on the scalar one.
+        (
+            atmosphere_url(DAY, "12", "131", "u", suffix="grb"),
+            "ec.oper.an.pl/202601/ec.oper.an.pl.128_131_u.regn1280uv.2026010212.grb",
+        ),
+        (atmosphere_url(DAY, "00", "130", "t"), "regn1280sc"),
+    ],
+    ids=["surface-100m-wind", "surface-2t", "atmosphere-wind", "atmosphere-scalar"],
+)
+def test_urls_match_the_archive_layout(url, fragment):
+    assert fragment in url
 
 
 def test_urls_cover_every_variable_and_hour():
@@ -113,35 +124,28 @@ def test_to_float16_except_keeps_the_named_variables(analysis_pair):
     assert out["2t"].dtype == np.float16
 
 
-def test_merge_renames_by_long_name_and_drops_static_and_metadata(analysis_pair):
-    surface, atmos = analysis_pair
-    ds = merge_surface_and_atmosphere(surface, atmos)
-    assert "2_metre_temperature" in ds.data_vars
-    assert "temperature" in ds.data_vars
+def test_merge_renames_by_long_name_and_drops_static_and_metadata(merged):
+    assert "2_metre_temperature" in merged.data_vars
+    assert "temperature" in merged.data_vars
     # land-sea mask is static, divergence is dropped, utc_date is bookkeeping.
-    assert "land-sea_mask" not in ds.data_vars
-    assert "divergence" not in ds.data_vars
-    assert not any("utc_date" in v for v in ds.data_vars)
+    assert "land-sea_mask" not in merged.data_vars
+    assert "divergence" not in merged.data_vars
+    assert not any("utc_date" in v for v in merged.data_vars)
 
 
-def test_merge_applies_the_precision_policy(analysis_pair):
-    surface, atmos = analysis_pair
-    ds = merge_surface_and_atmosphere(surface, atmos)
-    assert "specific_humidity" in KEEP_FLOAT32_VARS
-    assert ds["specific_humidity"].dtype == np.float32
-    assert ds["surface_pressure"].dtype == np.float32
-    assert ds["temperature"].dtype == np.float16
+def test_merge_applies_the_precision_policy(merged, analysis_pair):
+    assert merged["specific_humidity"].dtype == np.float32
+    assert merged["surface_pressure"].dtype == np.float32
+    assert merged["temperature"].dtype == np.float16
 
-    ds32 = merge_surface_and_atmosphere(surface, atmos, float16=False)
+    ds32 = merge_surface_and_atmosphere(*analysis_pair, float16=False)
     assert ds32["temperature"].dtype == np.float32
 
 
-def test_merge_normalises_longitudes(analysis_pair):
-    surface, atmos = analysis_pair
-    ds = merge_surface_and_atmosphere(surface, atmos)
-    assert float(ds.longitude.min()) >= -180
-    assert float(ds.longitude.max()) <= 180
-    assert (ds.longitude.diff("longitude") > 0).all()
+def test_merge_normalises_longitudes(merged):
+    assert float(merged.longitude.min()) >= -180
+    assert float(merged.longitude.max()) <= 180
+    assert (merged.longitude.diff("longitude") > 0).all()
 
 
 def test_surface_suffix_disambiguates_colliding_long_names():
@@ -188,25 +192,21 @@ def test_process_rejects_a_partial_day(local_config):
         provider.process(["ec.oper.an.sfc.128_167_2t.regn1280sc.20260102.nc"], DAY)
 
 
+def _fail_downloads(monkeypatch, absent: bool):
+    """Make every download fail, with the archive probe reporting the file ``absent`` or not."""
+    monkeypatch.setattr(ifs, "download_one", lambda url, dest, **kw: None)
+    monkeypatch.setattr(ifs, "url_is_absent", lambda url: absent)
+
+
 def test_fetch_skips_a_day_the_archive_does_not_have(monkeypatch, tmp_path, local_config):
-    provider = IFSAnalysisProvider(config=local_config)
-    monkeypatch.setattr(
-        "planetary_datasets.providers.ifs.download_one", lambda url, dest, **kw: None
-    )
-    monkeypatch.setattr("planetary_datasets.providers.ifs.url_is_absent", lambda url: True)
-    assert provider.fetch(DAY, temp_dir=tmp_path) == []
+    _fail_downloads(monkeypatch, absent=True)
+    assert IFSAnalysisProvider(config=local_config).fetch(DAY, temp_dir=tmp_path) == []
 
 
-def test_fetch_raises_when_a_download_fails_but_the_file_exists(
-    monkeypatch, tmp_path, local_config
-):
-    provider = IFSAnalysisProvider(config=local_config)
-    monkeypatch.setattr(
-        "planetary_datasets.providers.ifs.download_one", lambda url, dest, **kw: None
-    )
-    monkeypatch.setattr("planetary_datasets.providers.ifs.url_is_absent", lambda url: False)
+def test_fetch_raises_when_a_download_fails_but_the_file_exists(monkeypatch, tmp_path, local_config):
+    _fail_downloads(monkeypatch, absent=False)
     with pytest.raises(RuntimeError, match="failed to download"):
-        provider.fetch(DAY, temp_dir=tmp_path)
+        IFSAnalysisProvider(config=local_config).fetch(DAY, temp_dir=tmp_path)
 
 
 def test_url_is_absent_treats_a_failed_probe_as_present(monkeypatch):
@@ -224,31 +224,18 @@ def test_fetch_returns_every_downloaded_file(monkeypatch, tmp_path, local_config
         dest.write_bytes(b"x")
         return dest
 
-    monkeypatch.setattr("planetary_datasets.providers.ifs.download_one", fake_download)
+    monkeypatch.setattr(ifs, "download_one", fake_download)
     paths = provider.fetch(DAY, temp_dir=tmp_path)
     assert len(paths) == len(provider.urls(DAY))
 
 
-def test_run_partition_round_trips_through_a_local_store(
-    monkeypatch, tmp_path, analysis_pair, local_config
-):
-    surface, atmos = analysis_pair
+def test_run_partition_round_trips_through_a_local_store(monkeypatch, merged, local_config):
     provider = IFSAnalysisProvider(config=local_config)
-    monkeypatch.setattr(
-        IFSAnalysisProvider, "fetch", lambda self, it, temp_dir=None, **kw: ["sfc", "pl"]
-    )
-    monkeypatch.setattr(
-        IFSAnalysisProvider,
-        "process",
-        lambda self, files, it, temp_dir=None, **kw: merge_surface_and_atmosphere(
-            surface, atmos
-        ),
-    )
+    monkeypatch.setattr(provider, "fetch", lambda it, temp_dir=None, **kw: ["sfc", "pl"])
+    monkeypatch.setattr(provider, "process", lambda files, it, temp_dir=None, **kw: merged)
     assert provider.run_partition(DAY) is True
 
-    stored = xr.open_zarr(
-        provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
+    stored = read_store(provider)
     assert DAY.to_numpy() in stored.time.values
     assert "temperature" in stored.data_vars
     # Second run is a no-op, the timestep is already there.
@@ -266,9 +253,7 @@ def test_regrid_provider_bucket_comes_from_the_environment(monkeypatch, local_co
     assert provider.surface_suffix == "_sfc"
 
 
-def test_regrid_provider_falls_back_to_the_configured_bucket(monkeypatch, local_config):
-    monkeypatch.delenv("IFS_REGRID_BUCKET", raising=False)
-    monkeypatch.delenv("IFS_REGRID_REGION", raising=False)
+def test_regrid_provider_falls_back_to_the_configured_bucket(local_config):
     provider = IFSRegriddedAnalysisProvider(config=local_config)
     assert provider.config.bucket == local_config.bucket
 

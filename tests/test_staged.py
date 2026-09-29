@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pathlib
-import sys
 
 import dagster as dg
 import icechunk
@@ -12,13 +11,10 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from dags import staged  # noqa: E402
-from planetary_datasets.base import BaseProvider  # noqa: E402
-from planetary_datasets.common import store  # noqa: E402
+from helpers import read_store
+from dags import staged
+from planetary_datasets.base import BaseProvider
+from planetary_datasets.common import store
 
 
 def frame(when: str, static: float) -> xr.Dataset:
@@ -41,7 +37,7 @@ def test_an_append_leaves_static_variables_as_first_written(repo):
     assert store.write_to_icechunk(repo, frame("2020-01-01", 1.0))
     assert store.write_to_icechunk(repo, frame("2020-01-02", 99.0))
 
-    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    ds = read_store(repo)
     assert ds.sizes["time"] == 2
     assert ds["footprint"].values.tolist() == [1.0, 1.0, 1.0]
 

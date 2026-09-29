@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from helpers import read_store
 from planetary_datasets.providers import eeps
 
 ATTRS = {
@@ -40,10 +41,18 @@ def write_fake_eeps(directory, timestamp="202401011200", end="202401011210", att
     return path
 
 
-class TestFilenameParsing:
-    def test_timestamp(self):
-        name = "RRQPE-BLEND-GLB-5km_v1r0_blend_s202401011200_e202401011210_c202401011215.nc"
-        assert eeps.timestamp_from_filename(name) == pd.Timestamp("2024-01-01T12:00:00")
+@pytest.fixture
+def source_dir(tmp_path):
+    """A source directory holding two consecutive granules, 12:00 and 12:10."""
+    directory = tmp_path / "EEPS"
+    write_fake_eeps(directory)
+    write_fake_eeps(directory, timestamp="202401011210", end="202401011220")
+    return directory
+
+
+def test_timestamp_from_filename():
+    name = "RRQPE-BLEND-GLB-5km_v1r0_blend_s202401011200_e202401011210_c202401011215.nc"
+    assert eeps.timestamp_from_filename(name) == pd.Timestamp("2024-01-01T12:00:00")
 
 
 class TestGrid:
@@ -95,12 +104,12 @@ class TestOpen:
 
 
 class TestProvider:
-    def test_fetch_matches_on_timestamp(self, tmp_path):
-        write_fake_eeps(tmp_path / "EEPS")
-        write_fake_eeps(tmp_path / "EEPS", timestamp="202401011210", end="202401011220")
-        provider = eeps.EEPSProvider(source_dir=tmp_path / "EEPS")
+    @pytest.mark.parametrize("tz", [None, "UTC"], ids=["naive", "aware"])
+    def test_fetch_matches_on_timestamp(self, source_dir, tz):
+        """Dagster hands over tz-aware starts; a naive comparison would silently miss."""
+        provider = eeps.EEPSProvider(source_dir=source_dir)
 
-        found = provider.fetch(pd.Timestamp("2024-01-01T12:10"))
+        found = provider.fetch(pd.Timestamp("2024-01-01T12:10", tz=tz))
 
         assert len(found) == 1
         assert "s202401011210" in found[0]
@@ -109,38 +118,23 @@ class TestProvider:
         provider = eeps.EEPSProvider(source_dir=tmp_path / "EEPS")
         assert provider.fetch(pd.Timestamp("2024-01-01T12:10")) == []
 
-    def test_available_timestamps(self, tmp_path):
-        write_fake_eeps(tmp_path / "EEPS")
-        write_fake_eeps(tmp_path / "EEPS", timestamp="202401011210", end="202401011220")
-        provider = eeps.EEPSProvider(source_dir=tmp_path / "EEPS")
+    def test_available_timestamps(self, source_dir):
+        provider = eeps.EEPSProvider(source_dir=source_dir)
         assert list(provider.available_timestamps()) == [
             pd.Timestamp("2024-01-01T12:00"),
             pd.Timestamp("2024-01-01T12:10"),
         ]
-
-    def test_fetch_accepts_a_timezone_aware_partition_start(self, tmp_path):
-        """Dagster hands over tz-aware starts; a naive comparison would silently miss."""
-        write_fake_eeps(tmp_path / "EEPS")
-        provider = eeps.EEPSProvider(source_dir=tmp_path / "EEPS")
-        found = provider.fetch(pd.Timestamp("2024-01-01T12:00", tz="UTC"))
-        assert len(found) == 1
-
-    def test_round_trip_with_aware_partition_start(self, tmp_path, local_config):
-        write_fake_eeps(tmp_path / "EEPS")
-        provider = eeps.EEPSProvider(source_dir=tmp_path / "EEPS", config=local_config)
-        assert provider.run_partition(pd.Timestamp("2024-01-01T12:00", tz="UTC")) is True
 
     def test_round_trip_through_the_store(self, tmp_path, local_config):
         write_fake_eeps(tmp_path / "EEPS")
         provider = eeps.EEPSProvider(source_dir=tmp_path / "EEPS", config=local_config)
         it = pd.Timestamp("2024-01-01T12:00")
 
-        assert provider.run_partition(it) is True
+        # A tz-aware partition start, as Dagster passes it, must land on the naive timestep.
+        assert provider.run_partition(it.tz_localize("UTC")) is True
         # A second run must find the timestep already stored and do nothing.
         assert provider.run_partition(it) is False
 
-        stored = xr.open_zarr(
-            provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-        )
+        stored = read_store(provider)
         assert pd.Timestamp(stored.time.values[0]) == it
         assert set(stored.data_vars) >= {"RRQPE", "DQF"}

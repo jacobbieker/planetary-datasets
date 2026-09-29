@@ -9,8 +9,8 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import json
+import os
 import pathlib
-import sys
 
 import dagster as dg
 import numpy as np
@@ -20,13 +20,11 @@ import pyarrow.parquet as pq
 import pytest
 import xarray as xr
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from planetary_datasets.common.parquet import ParquetSink  # noqa: E402
-from planetary_datasets.providers import earth2studio_download as dl  # noqa: E402
-from planetary_datasets.providers import earth2studio_obs as obs  # noqa: E402
+from helpers import assert_pipes_accepts, read_store
+from planetary_datasets import config as config_module
+from planetary_datasets.common.parquet import ParquetSink
+from planetary_datasets.providers import earth2studio_download as dl
+from planetary_datasets.providers import earth2studio_obs as obs
 
 #: Every source listed under "Direct Observations" in the earth2studio catalog, less OPERA
 #: (which has its own provider).
@@ -164,38 +162,47 @@ def grid_dataset(**overrides) -> dl.Dataset:
     return dl.Dataset(**base)
 
 
-@pytest.fixture
-def local_config(tmp_path, monkeypatch):
-    """Stores and staging under tmp_path, with a generous memory budget."""
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("MEMORY_CEILING_GB", "64")
-    monkeypatch.delenv(obs.ARCHIVE_ENV, raising=False)
-    for name in ("EUMETSAT_CONSUMER_KEY", "EUMETSAT_CONSUMER_SECRET"):
-        monkeypatch.delenv(name, raising=False)
-    config_module.reset_config_cache()
+@pytest.fixture(autouse=True)
+def reset_fakes():
     FakeTable.instances.clear()
     FakeGrid.calls.clear()
     FakeGrid.fail_at = set()
-    yield tmp_path
-    config_module.reset_config_cache()
+
+
+@pytest.fixture
+def staging(local_config, tmp_path) -> pathlib.Path:
+    """The earth2studio staging root under the local data directory."""
+    return tmp_path / "data" / "earth2studio"
 
 
 @pytest.fixture
 def registered(monkeypatch):
-    """Register extra datasets for the duration of a test."""
+    """Register an extra dataset for the duration of a test, and return it."""
 
-    def add(*datasets: dl.Dataset):
-        for dataset in datasets:
-            monkeypatch.setitem(dl.DATASETS, dataset.name, dataset)
+    def add(dataset: dl.Dataset) -> dl.Dataset:
+        monkeypatch.setitem(dl.DATASETS, dataset.name, dataset)
+        return dataset
 
     return add
 
 
-def staging(tmp_path) -> pathlib.Path:
-    return tmp_path / "data" / "earth2studio"
+@pytest.fixture
+def staged_table(registered, staging) -> dl.Dataset:
+    """The fake table dataset, registered, with its ``HOUR`` partition staged."""
+    dataset = registered(table_dataset())
+    dl.download(dataset.name, HOUR, staging, factory=FakeTable)
+    return dataset
+
+
+def materialize_download(dataset, client, partition_key="2026-09-01", **kwargs):
+    from dags.assets import earth2studio_obs as assets
+
+    return dg.materialize(
+        [assets.build_download_asset(dataset)],
+        partition_key=partition_key,
+        resources={"pipes_docker_client": client},
+        **kwargs,
+    )
 
 
 HOUR = dt.datetime(2020, 1, 1, 6)
@@ -241,7 +248,7 @@ def test_every_store_goes_under_obs_without_clashing_with_an_existing_one():
 
     source = "\n".join(
         path.read_text()
-        for path in (REPO_ROOT / "planetary_datasets").rglob("*.py")
+        for path in pathlib.Path(obs.__file__).parents[1].rglob("*.py")
         if path.name not in {"earth2studio_obs.py", "parquet.py"}
     )
     existing = set(re.findall(r"[\"'](bkr/[\w./-]+\.(?:icechunk|parquet|zarr))[\"']", source))
@@ -281,16 +288,13 @@ def test_viirs_granule_times_come_from_the_filename():
 # --- tables -----------------------------------------------------------------------------
 
 
-def test_a_table_partition_is_widened_then_cut_to_its_window(local_config, registered):
-    dataset = table_dataset()
-    registered(dataset)
-    summary = dl.download(dataset.name, HOUR, staging(local_config), factory=FakeTable)
+def test_a_table_partition_is_widened_then_cut_to_its_window(registered, staging):
+    dataset = registered(table_dataset())
+    summary = dl.download(dataset.name, HOUR, staging, factory=FakeTable)
 
     (source,) = FakeTable.instances
     assert source.tolerance == (-dt.timedelta(minutes=30), dt.timedelta(hours=1))
-    table = pq.read_table(
-        staging(local_config) / "fake_table/2020/01/01/fake_table_202001010600.parquet"
-    )
+    table = pq.read_table(staging / "fake_table/2020/01/01/fake_table_202001010600.parquet")
     times = pd.DatetimeIndex(table.column("time").to_pandas())
     assert times.min() == pd.Timestamp(HOUR)
     assert times.max() < pd.Timestamp(HOUR) + pd.Timedelta("1h")
@@ -298,63 +302,48 @@ def test_a_table_partition_is_widened_then_cut_to_its_window(local_config, regis
     assert table.schema.field("station").type == pa.string(), "categoricals are cast to the schema"
 
 
-def test_an_empty_result_is_still_a_typed_partition(local_config, registered):
-    dataset = table_dataset(name="fake_empty")
-    registered(dataset)
-    dl.download(dataset.name, HOUR, staging(local_config), factory=EmptyTable)
-    table = pq.read_table(next(staging(local_config).rglob("*.parquet")))
+def test_an_empty_result_is_still_a_typed_partition(registered, staging):
+    dataset = registered(table_dataset(name="fake_empty"))
+    dl.download(dataset.name, HOUR, staging, factory=EmptyTable)
+    table = pq.read_table(next(staging.rglob("*.parquet")))
     assert table.num_rows == 0
     assert table.schema.field("time").type == pa.timestamp("ns")
 
 
-def test_stations_are_enumerated_and_chunked(local_config, registered, monkeypatch):
-    dataset = table_dataset(
-        name="fake_stations", stations="ghcnd", station_chunk=2, freq="1D", lead="0s"
+def test_stations_are_enumerated_and_chunked(registered, staging, monkeypatch):
+    dataset = registered(
+        table_dataset(name="fake_stations", stations="ghcnd", station_chunk=2, freq="1D", lead="0s")
     )
-    registered(dataset)
     monkeypatch.setattr(dl, "list_stations", lambda network, start, end: ["S1", "S2", "S3"])
-    summary = dl.download(
-        dataset.name, dt.datetime(2020, 1, 1), staging(local_config), factory=FakeTable
-    )
+    summary = dl.download(dataset.name, dt.datetime(2020, 1, 1), staging, factory=FakeTable)
 
     assert [s.kwargs["stations"] for s in FakeTable.instances] == [["S1", "S2"], ["S3"]]
     assert summary["rows"] == 96 * 3 * 2
 
 
-def test_credentials_are_required_before_anything_is_fetched(local_config, registered):
-    dataset = table_dataset(name="fake_secure", credentials=dl.EUMETSAT)
-    registered(dataset)
+def test_credentials_are_required_before_anything_is_fetched(registered, staging):
+    dataset = registered(table_dataset(name="fake_secure", credentials=dl.EUMETSAT))
     with pytest.raises(RuntimeError, match="EUMETSAT_CONSUMER_KEY"):
-        dl.download(dataset.name, HOUR, staging(local_config), factory=FakeTable)
+        dl.download(dataset.name, HOUR, staging, factory=FakeTable)
     assert FakeTable.instances == []
 
 
-def test_a_table_partition_is_published_once_and_its_staging_cleared(local_config, registered):
-    dataset = table_dataset()
-    registered(dataset)
-    dl.download(dataset.name, HOUR, staging(local_config), factory=FakeTable)
-    publisher = obs.provider_for(dataset.name)
+def test_a_table_partition_is_published_once_byte_for_byte_and_its_staging_cleared(
+    staged_table, staging
+):
+    staged = next(staging.rglob("*.parquet")).read_bytes()
+    publisher = obs.provider_for(staged_table.name)
 
     assert publisher.discard_staged(HOUR) == [], "nothing is deleted before it is published"
     assert publisher.run_partition(HOUR)
     assert not publisher.run_partition(HOUR), "a published partition is skipped"
     assert publisher.partition_stored(HOUR)
     assert len(publisher.discard_staged(HOUR)) == 2
-    assert not any(staging(local_config).rglob("*.*"))
+    assert not any(staging.rglob("*.*"))
 
-    published = pd.read_parquet(publisher.store_path)
-    assert len(published) == 8
-    assert publisher.sink.partitions()[0].endswith("date=2020-01-01/part-202001010600.parquet")
-
-
-def test_a_table_partition_is_published_byte_for_byte(local_config, registered):
-    dataset = table_dataset()
-    registered(dataset)
-    dl.download(dataset.name, HOUR, staging(local_config), factory=FakeTable)
-    staged = next(staging(local_config).rglob("*.parquet")).read_bytes()
-    publisher = obs.provider_for(dataset.name)
-    assert publisher.run_partition(HOUR)
     assert pathlib.Path(publisher.sink.path(pd.Timestamp(HOUR))).read_bytes() == staged
+    assert len(pd.read_parquet(publisher.store_path)) == 8
+    assert publisher.sink.partitions()[0].endswith("date=2020-01-01/part-202001010600.parquet")
 
 
 def test_time_bounds_come_from_the_parquet_footer(tmp_path):
@@ -367,8 +356,6 @@ def test_time_bounds_come_from_the_parquet_footer(tmp_path):
 
 
 def test_parquet_and_icechunk_share_one_s3_configuration(monkeypatch):
-    from planetary_datasets import config as config_module
-
     monkeypatch.setenv("ICECHUNK_ENDPOINT_URL", "https://data.source.coop")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "k")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "s")
@@ -380,74 +367,66 @@ def test_parquet_and_icechunk_share_one_s3_configuration(monkeypatch):
     assert (options["key"], options["secret"]) == ("k", "s")
 
 
-def test_a_staged_file_with_rows_outside_its_window_is_refused(local_config, registered):
-    dataset = table_dataset()
-    registered(dataset)
-    dl.download(dataset.name, HOUR, staging(local_config), factory=FakeTable)
-    path = next(staging(local_config).rglob("*.parquet"))
+def test_a_staged_file_with_rows_outside_its_window_is_refused(staged_table, staging):
+    path = next(staging.rglob("*.parquet"))
     table = pq.read_table(path)
     shifted = table.set_column(
         0, "time", pa.array(pd.DatetimeIndex(table.column("time").to_pandas()) - pd.Timedelta("2h"))
     )
     pq.write_table(shifted, path)
     with pytest.raises(obs.StagedPartitionError, match="outside"):
-        obs.provider_for(dataset.name).run_partition(HOUR)
+        obs.provider_for(staged_table.name).run_partition(HOUR)
 
 
-def test_nothing_is_published_without_a_manifest(local_config, registered):
-    dataset = table_dataset()
-    registered(dataset)
-    dl.download(dataset.name, HOUR, staging(local_config), factory=FakeTable)
-    next(staging(local_config).rglob("*.json")).unlink()
-    assert not obs.provider_for(dataset.name).run_partition(HOUR)
+def test_nothing_is_published_without_a_manifest(staged_table, staging):
+    next(staging.rglob("*.json")).unlink()
+    assert not obs.provider_for(staged_table.name).run_partition(HOUR)
 
 
 # --- grids ------------------------------------------------------------------------------
 
 
-def test_a_grid_partition_is_staged_in_batches(local_config, registered):
-    dataset = grid_dataset()
-    registered(dataset)
-    summary = dl.download(dataset.name, HOUR, staging(local_config), factory=FakeGrid)
+def test_a_grid_partition_is_staged_in_batches_with_the_manifest_written_last(
+    registered, staging
+):
+    dataset = registered(grid_dataset())
+    summary = dl.download(dataset.name, HOUR, staging, factory=FakeGrid)
 
     assert [len(c) for c in FakeGrid.calls] == [2, 2, 2]
     assert len(summary["files"]) == 3 and summary["missing_frames"] == []
-    with xr.open_dataset(
-        staging(local_config) / "fake_grid/2020/01/01" / summary["files"][0]
-    ) as ds:
+    manifest = dl.manifest_path(staging, dataset, HOUR)
+    assert len(json.loads(manifest.read_text())["files"]) == 3
+    assert max(manifest.parent.iterdir(), key=lambda p: p.stat().st_mtime_ns) == manifest
+    with xr.open_dataset(staging / "fake_grid/2020/01/01" / summary["files"][0]) as ds:
         assert set(ds.data_vars) == {"b1", "b2"}
         assert ds["b1"].dtype == np.float32
         assert ds["latitude"].dims == ("y", "x") and "_lat" not in ds.variables
 
 
-def test_a_failed_frame_fails_the_partition_unless_partial_is_allowed(local_config, registered):
-    dataset = grid_dataset()
-    registered(dataset)
+def test_a_failed_frame_fails_the_partition_unless_partial_is_allowed(registered, staging):
+    dataset = registered(grid_dataset())
     FakeGrid.fail_at = {HOUR + dt.timedelta(minutes=20)}
     with pytest.raises(dl.IncompletePartition, match="06:20"):
-        dl.download(dataset.name, HOUR, staging(local_config), factory=FakeGrid)
-    assert not any(staging(local_config).rglob("*.*")), "nothing is left staged"
+        dl.download(dataset.name, HOUR, staging, factory=FakeGrid)
+    assert not any(staging.rglob("*.*")), "nothing is left staged"
 
-    summary = dl.download(
-        dataset.name, HOUR, staging(local_config), allow_partial=True, factory=FakeGrid
-    )
+    summary = dl.download(dataset.name, HOUR, staging, allow_partial=True, factory=FakeGrid)
     assert len(summary["files"]) == 2
     assert summary["missing_frames"] == ["2020-01-01T06:20:00", "2020-01-01T06:30:00"]
 
 
 def test_grid_partitions_append_frame_batches_and_keep_static_geolocation_once(
-    local_config, registered
+    registered, staging
 ):
-    dataset = grid_dataset()
-    registered(dataset)
+    dataset = registered(grid_dataset())
     publisher = obs.provider_for(dataset.name)
     second = HOUR + dt.timedelta(hours=1)
     for hour in (HOUR, second):
-        dl.download(dataset.name, hour, staging(local_config), factory=FakeGrid)
+        dl.download(dataset.name, hour, staging, factory=FakeGrid)
         assert publisher.run_partition(hour)
         assert publisher.discard_staged(hour)
 
-    store = xr.open_zarr(publisher.get_icechunk_repo().readonly_session("main").store)
+    store = read_store(publisher)
     assert store.sizes == {"time": 12, "y": 4, "x": 3}
     assert pd.DatetimeIndex(store["time"].values).is_monotonic_increasing
     assert store["latitude"].dims == ("y", "x")
@@ -456,39 +435,40 @@ def test_grid_partitions_append_frame_batches_and_keep_static_geolocation_once(
     assert publisher.appendable(second + dt.timedelta(hours=1))
 
 
-def test_a_missing_tile_fails_the_day_unless_partial_is_allowed(
-    local_config, registered, monkeypatch
-):
-    dataset = grid_dataset(
-        name="fake_tiles",
-        source="FakeTiles",
-        freq="1D",
-        step="1D",
-        variables=("fmask",),
-        tiles=("h00v08", "h00v09", "h00v10"),
-        platform="MOD14A1",
-        dtype="uint8",
-        frames_per_call=0,
+def test_a_missing_tile_fails_the_day_unless_partial_is_allowed(registered, staging, monkeypatch):
+    dataset = registered(
+        grid_dataset(
+            name="fake_tiles",
+            source="FakeTiles",
+            freq="1D",
+            step="1D",
+            variables=("fmask",),
+            tiles=("h00v08", "h00v09", "h00v10"),
+            platform="MOD14A1",
+            dtype="uint8",
+            frames_per_call=0,
+        )
     )
-    registered(dataset)
     monkeypatch.setattr(dl._TiledSource, "attempts", 1)
     monkeypatch.setattr(FakeTiles, "instances", 0)
     day = dt.datetime(2020, 1, 1)
     with pytest.raises(dl.IncompletePartition, match="h00v09"):
-        dl.download(dataset.name, day, staging(local_config), factory=FakeTiles)
-    assert not any(staging(local_config).rglob("*.*"))
+        dl.download(dataset.name, day, staging, factory=FakeTiles)
+    assert not any(staging.rglob("*.*"))
 
-    summary = dl.download(
-        dataset.name, day, staging(local_config), allow_partial=True, factory=FakeTiles
-    )
+    summary = dl.download(dataset.name, day, staging, allow_partial=True, factory=FakeTiles)
     assert summary["missing_tiles"] == ["h00v09"]
     assert FakeTiles.instances == 2, "one source instance per run, not one per tile"
     assert summary["absent_tiles"] == ["h00v10"], "an unpublished tile is not a failure"
-    with xr.open_dataset(next(staging(local_config).rglob("*.nc"))) as ds:
+    with xr.open_dataset(next(staging.rglob("*.nc"))) as ds:
         assert ds["fmask"].dims == ("time", "tile", "y", "x")
         assert ds["fmask"].dtype == np.uint8
         assert list(ds["tile"].values) == ["h00v08", "h00v09", "h00v10"]
         assert int(ds["fmask"].sel(tile="h00v09").max()) == 0
+
+
+class Base:
+    """Stands in for the earth2studio class the granule and platform wrappers subclass."""
 
 
 def test_sentinel3_granules_are_selected_by_nearest_nominal_time():
@@ -496,10 +476,7 @@ def test_sentinel3_granules_are_selected_by_nearest_nominal_time():
     class Item:
         datetime: dt.datetime
 
-    class Base:
-        pass
-
-    exact = dl._granule_source(dataclasses.replace(dl.DATASETS["pc_sentinel3_aod"]), Base)
+    exact = dl._granule_source(dl.DATASETS["pc_sentinel3_aod"], Base)
     assert exact.SEARCH_TOLERANCE == dt.timedelta(seconds=5)
     when = dt.datetime(2026, 9, 20, 1, 35, 2)
     items = [
@@ -517,9 +494,6 @@ def test_modis_items_are_pinned_to_one_platform_and_the_covering_period():
     class Item:
         id: str
         properties: dict
-
-    class Base:
-        pass
 
     terra = dl._platform_source(Base, "MOD14A1")
     period = lambda start, end: {"start_datetime": start, "end_datetime": end}  # noqa: E731
@@ -543,10 +517,7 @@ def test_sentinel_values_below_the_valid_minimum_become_nan():
     assert float(ds["refc"].max()) == 0.0
 
 
-def test_each_run_gets_a_private_cache_that_is_removed_afterwards(tmp_path, monkeypatch):
-    import os
-
-    monkeypatch.delenv("EARTH2STUDIO_CACHE", raising=False)
+def test_each_run_gets_a_private_cache_that_is_removed_afterwards(tmp_path):
     with dl.private_cache(tmp_path):
         cache = pathlib.Path(os.environ["EARTH2STUDIO_CACHE"])
         assert cache.parent == tmp_path / ".cache" and cache.is_dir()
@@ -555,12 +526,8 @@ def test_each_run_gets_a_private_cache_that_is_removed_afterwards(tmp_path, monk
 
 
 def test_pipes_accepts_the_summaries():
-    from dagster_pipes import _normalize_param_metadata
-
     summary = {"files": [], "missing_frames": [], "missing_tiles": [], "rows": 0, "start": "x"}
-    _normalize_param_metadata(
-        dl.pipes_metadata(summary), "report_asset_materialization", "metadata"
-    )
+    assert_pipes_accepts(dl.pipes_metadata(summary))
 
 
 def test_the_parquet_sink_layout(local_config):
@@ -576,99 +543,55 @@ def test_the_parquet_sink_layout(local_config):
 # --- Dagster assets ---------------------------------------------------------------------
 
 
-class FakeInvocation:
-    def get_materialize_result(self):
-        return dg.MaterializeResult(metadata={"fake": True})
-
-
-class FakeDockerClient:
-    def __init__(self):
-        self.calls: list[dict] = []
-
-    def run(self, **kwargs):
-        self.calls.append(kwargs)
-        return FakeInvocation()
-
-
 def test_the_download_asset_runs_the_image_with_only_the_credentials_it_needs(
-    local_config, monkeypatch
+    local_config, tmp_path, monkeypatch, fake_docker_client
 ):
-    from dags.assets import earth2studio_obs as assets
-    from planetary_datasets import config as config_module
-
     monkeypatch.setenv("EUMETSAT_CONSUMER_KEY", "key")
     monkeypatch.setenv("EUMETSAT_CONSUMER_SECRET", "secret")
     config_module.reset_config_cache()
-    dataset = dl.DATASETS["metop_amsua"]
-    client = FakeDockerClient()
-    result = dg.materialize(
-        [assets.build_download_asset(dataset)],
-        partition_key="2026-09-01",
-        resources={"pipes_docker_client": client},
-    )
 
-    assert result.success
-    (call,) = client.calls
-    assert call["command"] == [
+    assert materialize_download(dl.DATASETS["metop_amsua"], fake_docker_client).success
+    materialize_download(dl.DATASETS["iem_asos"], fake_docker_client)
+
+    metop, iem = fake_docker_client.calls
+    assert metop["command"] == [
         "obs", "--dataset", "metop_amsua", "--time", "2026-09-01T00:00", "--target", "/data/earth2studio",
     ]  # fmt: skip
-    assert call["env"]["EUMETSAT_CONSUMER_KEY"] == "key"
-    root = str((local_config / "data" / "earth2studio").resolve())
-    assert call["container_kwargs"]["volumes"] == {
+    assert metop["env"]["EUMETSAT_CONSUMER_KEY"] == "key"
+    root = str((tmp_path / "data" / "earth2studio").resolve())
+    assert metop["container_kwargs"]["volumes"] == {
         root: {"bind": "/data/earth2studio", "mode": "rw"}
     }
-
-    iem = FakeDockerClient()
-    dg.materialize(
-        [assets.build_download_asset(dl.DATASETS["iem_asos"])],
-        partition_key="2026-09-01",
-        resources={"pipes_docker_client": iem},
-    )
-    assert "EUMETSAT_CONSUMER_KEY" not in iem.calls[0]["env"]
+    assert "EUMETSAT_CONSUMER_KEY" not in iem["env"]
 
 
-def test_the_download_asset_fails_fast_without_credentials(local_config):
-    from dags.assets import earth2studio_obs as assets
-
-    client = FakeDockerClient()
-    result = dg.materialize(
-        [assets.build_download_asset(dl.DATASETS["metop_mhs"])],
-        partition_key="2026-09-01",
-        resources={"pipes_docker_client": client},
-        raise_on_error=False,
+def test_the_download_asset_fails_fast_without_credentials(local_config, fake_docker_client):
+    result = materialize_download(
+        dl.DATASETS["metop_mhs"], fake_docker_client, raise_on_error=False
     )
     assert not result.success
-    assert client.calls == []
+    assert fake_docker_client.calls == []
 
 
-def test_the_download_asset_skips_a_published_partition(local_config, registered):
-    from dags.assets import earth2studio_obs as assets
+def test_the_download_asset_skips_a_published_partition(staged_table, fake_docker_client):
+    assert obs.provider_for(staged_table.name).run_partition(HOUR)
 
-    dataset = table_dataset()
-    registered(dataset)
-    dl.download(dataset.name, HOUR, staging(local_config), factory=FakeTable)
-    assert obs.provider_for(dataset.name).run_partition(HOUR)
-
-    client = FakeDockerClient()
-    result = dg.materialize(
-        [assets.build_download_asset(dataset)],
-        partition_key="2020-01-01-06:00",
-        resources={"pipes_docker_client": client},
+    result = materialize_download(
+        staged_table, fake_docker_client, partition_key="2020-01-01-06:00"
     )
-    assert result.success and client.calls == []
+    assert result.success and fake_docker_client.calls == []
 
 
-def test_the_publish_asset_fails_when_nothing_was_staged(local_config, registered):
+def test_the_publish_asset_fails_when_nothing_was_staged(registered, staging):
     from dags.assets import earth2studio_obs as assets
 
-    dataset = table_dataset()
-    registered(dataset)
+    dataset = registered(table_dataset())
     download = assets.build_download_asset(dataset)
     publish = assets.build_publish_asset(dataset, download)
     result = dg.materialize([publish], partition_key="2020-01-01-06:00", raise_on_error=False)
     assert not result.success
 
-    dl.download(dataset.name, HOUR, staging(local_config), factory=FakeTable)
+    dl.download(dataset.name, HOUR, staging, factory=FakeTable)
     result = dg.materialize([publish], partition_key="2020-01-01-06:00")
     (materialization,) = result.asset_materializations_for_node(dataset.name)
     assert materialization.metadata["written"].value is True
@@ -695,13 +618,3 @@ def test_manual_datasets_are_left_out_of_the_scheduled_jobs():
     assert graph[dg.AssetKey(["earth2studio_obs", "iem_asos"])] == {
         dg.AssetKey(["earth2studio_obs", "iem_asos_download"])
     }
-
-
-def test_the_manifest_is_the_last_thing_written(local_config, registered):
-    dataset = grid_dataset()
-    registered(dataset)
-    dl.download(dataset.name, HOUR, staging(local_config), factory=FakeGrid)
-    manifest = dl.manifest_path(staging(local_config), dataset, HOUR)
-    listed = json.loads(manifest.read_text())["files"]
-    newest = max(manifest.parent.iterdir(), key=lambda p: p.stat().st_mtime_ns)
-    assert newest == manifest and len(listed) == 3

@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from helpers import read_store
 from planetary_datasets.config import MissingCredential
 from planetary_datasets.providers import cams
 
@@ -28,7 +29,7 @@ def _no_cds_env(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
 
-def _sfc_dataset(run: pd.Timestamp, lead: int) -> xr.Dataset:
+def _sfc_dataset(run: pd.Timestamp = RUN, lead: int = LEAD_HOURS) -> xr.Dataset:
     data = np.linspace(0, 1, 2 * 3, dtype="float32").reshape(1, 1, 2, 3)
     return xr.Dataset(
         {
@@ -47,7 +48,7 @@ def _sfc_dataset(run: pd.Timestamp, lead: int) -> xr.Dataset:
     )
 
 
-def _plev_dataset(run: pd.Timestamp, lead: int) -> xr.Dataset:
+def _plev_dataset(run: pd.Timestamp = RUN, lead: int = LEAD_HOURS) -> xr.Dataset:
     data = np.ones((1, 1, 2, 2, 3), dtype="float32")
     return xr.Dataset(
         {
@@ -74,14 +75,26 @@ def _plev_dataset(run: pd.Timestamp, lead: int) -> xr.Dataset:
 
 
 @pytest.fixture
+def composition(local_config, tmp_path):
+    """A composition provider archiving under ``tmp_path``."""
+    return cams.CAMSGlobalCompositionProvider(config=local_config, archive_dir=tmp_path / "archive")
+
+
+def _aod(local_config, tmp_path, variables):
+    return cams.CAMSGlobalAODProvider(
+        config=local_config, archive_dir=tmp_path / "archive", variables=variables
+    )
+
+
+@pytest.fixture
 def cams_zip(tmp_path: pathlib.Path) -> pathlib.Path:
     """A ``.nc.zip`` bundle shaped like a single-lead ADS download."""
     raw = tmp_path / "raw"
     raw.mkdir()
     sfc = raw / "data_sfc.nc"
     plev = raw / "data_plev.nc"
-    _sfc_dataset(RUN, LEAD_HOURS).to_netcdf(sfc)
-    _plev_dataset(RUN, LEAD_HOURS).to_netcdf(plev)
+    _sfc_dataset().to_netcdf(sfc)
+    _plev_dataset().to_netcdf(plev)
 
     bundle = tmp_path / "cams_composition_20240301_1500.nc.zip"
     with zipfile.ZipFile(bundle, "w") as archive:
@@ -93,13 +106,15 @@ def cams_zip(tmp_path: pathlib.Path) -> pathlib.Path:
 # --------------------------------------------------------------------------- naming
 
 
-def test_slugify_long_name_matches_store_naming():
-    assert cams.slugify_long_name("Total Aerosol Optical Depth at 550nm") == (
-        "total_aerosol_optical_depth_at_550nm"
-    )
-    assert cams.slugify_long_name("Dust Aerosol (0.03 - 0.55 um) Mixing Ratio") == (
-        "dust_aerosol_0.03_to_0.55_um_mixing_ratio"
-    )
+@pytest.mark.parametrize(
+    ("long_name", "slug"),
+    [
+        ("Total Aerosol Optical Depth at 550nm", "total_aerosol_optical_depth_at_550nm"),
+        ("Dust Aerosol (0.03 - 0.55 um) Mixing Ratio", "dust_aerosol_0.03_to_0.55_um_mixing_ratio"),
+    ],
+)
+def test_slugify_long_name_matches_store_naming(long_name, slug):
+    assert cams.slugify_long_name(long_name) == slug
 
 
 def test_colliding_long_names_do_not_raise():
@@ -167,17 +182,13 @@ def test_open_cams_zip_without_netcdf_members(tmp_path):
 
 
 def test_preproc_cams_rejects_multiple_lead_times():
-    ds = _sfc_dataset(RUN, LEAD_HOURS).reindex(
-        forecast_period=np.array([0, 1], dtype="timedelta64[h]")
-    )
+    ds = _sfc_dataset().reindex(forecast_period=np.array([0, 1], dtype="timedelta64[h]"))
     with pytest.raises(ValueError, match="single lead time"):
         cams.preproc_cams(ds)
 
 
 def test_preproc_cams_forecast_keeps_run_and_lead_axes():
-    ds = _sfc_dataset(RUN, LEAD_HOURS).reindex(
-        forecast_period=np.array([0, 1, 2], dtype="timedelta64[h]")
-    )
+    ds = _sfc_dataset().reindex(forecast_period=np.array([0, 1, 2], dtype="timedelta64[h]"))
     out = cams.preproc_cams_forecast(ds)
     assert out.sizes["init_time"] == 1
     assert out.sizes["step"] == 3
@@ -223,7 +234,6 @@ def test_cdsapi_credentials_defaults_to_ads(local_config):
 
 
 def test_cds_client_raises_without_credentials(monkeypatch, local_config, tmp_path):
-    monkeypatch.delenv("CDSAPI_RC", raising=False)
     monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: tmp_path))
     with pytest.raises(MissingCredential, match="Copernicus ADS credentials"):
         cams.cds_client(local_config)
@@ -239,20 +249,17 @@ def test_cds_client_accepts_rc_file(monkeypatch, local_config, tmp_path):
 # --------------------------------------------------------------------------- requests
 
 
-def test_run_and_leadtime_picks_the_freshest_run():
+@pytest.mark.parametrize(
+    ("valid", "run", "lead"),
+    [
+        ("2024-03-01T00:00", "2024-03-01T00:00", 0),
+        ("2024-03-01T11:00", "2024-03-01T00:00", 11),
+        ("2024-03-01T15:00", "2024-03-01T12:00", 3),
+    ],
+)
+def test_run_and_leadtime_picks_the_freshest_run(valid, run, lead):
     provider = cams.CAMSGlobalCompositionProvider()
-    assert provider.run_and_leadtime(pd.Timestamp("2024-03-01T00:00")) == (
-        pd.Timestamp("2024-03-01T00:00"),
-        0,
-    )
-    assert provider.run_and_leadtime(pd.Timestamp("2024-03-01T11:00")) == (
-        pd.Timestamp("2024-03-01T00:00"),
-        11,
-    )
-    assert provider.run_and_leadtime(pd.Timestamp("2024-03-01T15:00")) == (
-        pd.Timestamp("2024-03-01T12:00"),
-        3,
-    )
+    assert provider.run_and_leadtime(pd.Timestamp(valid)) == (pd.Timestamp(run), lead)
 
 
 def test_composition_request_shape():
@@ -265,24 +272,18 @@ def test_composition_request_shape():
     assert request["data_format"] == "netcdf_zip"
 
 
-def test_composition_fetch_skips_leads_beyond_the_archive(local_config, tmp_path):
-    provider = cams.CAMSGlobalCompositionProvider(
-        config=local_config, archive_dir=tmp_path / "archive"
-    )
-    provider.max_leadtime_hour = 2
-    assert provider.fetch(pd.Timestamp("2024-03-01T05:00")) == []
+def test_composition_fetch_skips_leads_beyond_the_archive(composition):
+    composition.max_leadtime_hour = 2
+    assert composition.fetch(pd.Timestamp("2024-03-01T05:00")) == []
 
 
-def test_composition_fetch_reuses_an_existing_download(local_config, tmp_path, cams_zip):
-    provider = cams.CAMSGlobalCompositionProvider(
-        config=local_config, archive_dir=tmp_path / "archive"
-    )
+def test_composition_fetch_reuses_an_existing_download(composition, cams_zip):
     it = pd.Timestamp("2024-03-01T15:00")
-    target = provider.target_path(it)
+    target = composition.target_path(it)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(cams_zip.read_bytes())
     # No credentials are configured, so reaching the ADS at all would raise.
-    assert provider.fetch(it) == [str(target)]
+    assert composition.fetch(it) == [str(target)]
 
 
 def test_weekly_request_shapes():
@@ -320,11 +321,7 @@ def test_a_week_missing_a_variable_fails_rather_than_writing_a_subset(local_conf
     complete week out afterwards; on a later week the write is silently refused and the asset
     still reports success. Neither is visible without someone reading the logs.
     """
-    provider = cams.CAMSGlobalAODProvider(
-        config=local_config,
-        archive_dir=tmp_path / "archive",
-        variables=["dust", "sea_salt"],
-    )
+    provider = _aod(local_config, tmp_path, ["dust", "sea_salt"])
     provider._retrieve = lambda request, dst: None if "sea_salt" in request["variable"] else dst
 
     with pytest.raises(cams.IncompleteWeek, match="1 of 2 variable"):
@@ -333,9 +330,7 @@ def test_a_week_missing_a_variable_fails_rather_than_writing_a_subset(local_conf
 
 def test_a_week_with_nothing_at_all_is_a_skip_not_a_failure(local_config, tmp_path):
     """Nothing published is "no work to do"; half published is an error."""
-    provider = cams.CAMSGlobalAODProvider(
-        config=local_config, archive_dir=tmp_path / "archive", variables=["dust"]
-    )
+    provider = _aod(local_config, tmp_path, ["dust"])
     provider._retrieve = lambda request, dst: None
 
     assert provider.fetch(pd.Timestamp("2024-03-04")) == []
@@ -346,27 +341,29 @@ def test_archive_dir_defaults_under_the_data_dir(local_config):
     assert provider.archive_dir == local_config.data_dir / "cams" / "composition"
 
 
-def test_store_paths_are_local_under_test(local_config):
-    provider = cams.CAMSGlobalCompositionProvider(config=local_config)
-    assert provider.store_path.endswith("bkr/cams/cams_analysis_and_forecast.icechunk")
-    assert not provider.store_path.startswith("s3://")
+@pytest.mark.parametrize(
+    ("provider_cls", "prefix"),
+    [
+        (cams.CAMSGlobalCompositionProvider, "bkr/cams/cams_analysis_and_forecast.icechunk"),
+        (cams.CAMSGlobalAODProvider, "bkr/cams/cams_global_aod.icechunk"),
+        (cams.CAMSEuropeAirQualityProvider, "bkr/cams/cams_europe_air_quality.icechunk"),
+    ],
+)
+def test_store_prefixes_are_the_ones_already_published(provider_cls, prefix):
+    assert provider_cls.store_prefix == prefix
 
 
 # --------------------------------------------------------------------------- store
 
 
-def test_run_partition_writes_and_is_idempotent(local_config, tmp_path, cams_zip, monkeypatch):
-    provider = cams.CAMSGlobalCompositionProvider(
-        config=local_config, archive_dir=tmp_path / "archive"
-    )
-    monkeypatch.setattr(provider, "fetch", lambda it, temp_dir=None, **kw: [str(cams_zip)])
+def test_run_partition_writes_and_is_idempotent(composition, cams_zip, monkeypatch):
+    monkeypatch.setattr(composition, "fetch", lambda it, temp_dir=None, **kw: [str(cams_zip)])
 
     it = RUN + pd.Timedelta(hours=LEAD_HOURS)
-    assert provider.run_partition(it) is True
-    assert provider.run_partition(it) is False
+    assert composition.run_partition(it) is True
+    assert composition.run_partition(it) is False
 
-    stored = xr.open_zarr(provider.get_icechunk_repo().readonly_session("main").store,
-                          consolidated=False)
+    stored = read_store(composition)
     assert np.datetime64(it) in stored["time"].values
     assert "total_aerosol_optical_depth_at_550nm" in stored.data_vars
     assert stored["total_aerosol_optical_depth_at_550nm"].dtype == np.float32

@@ -12,8 +12,9 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from helpers import read_store
 from planetary_datasets.providers import dmi_harmonie as dmi
-from planetary_datasets.providers import hawaii_nam, hrrr_alaska, kenda
+from planetary_datasets.providers import hawaii_nam, hrrr_alaska, kenda, regional_lam_common
 from planetary_datasets.providers.regional_lam_common import (
     GribMergeSpec,
     chunk_present,
@@ -26,31 +27,38 @@ from planetary_datasets.providers.regional_lam_common import (
     soil_level_count,
 )
 
-ALL_PROVIDERS = [
-    dmi.DMIHarmonieProvider,
-    dmi.DMIHarmonieModelLevelProvider,
-    hrrr_alaska.AlaskaHRRRProvider,
-    hawaii_nam.HawaiiNAMProvider,
-    kenda.KENDAAnalysisProvider,
-    kenda.KENDAForecastProvider,
-]
-
-
 # --------------------------------------------------------------------------- helpers
+
+
+def _subset(long_names: dict, level: tuple | None = None, **scalars) -> xr.Dataset:
+    """A cfgrib-shaped sub-dataset on a 2x3 y/x grid.
+
+    ``long_names`` maps each variable to its ``long_name`` (``None`` for none), ``level``
+    is an optional ``(name, values)`` leading dimension, and ``scalars`` become scalar
+    coordinates such as a level type.
+    """
+    dims = ("y", "x") if level is None else (level[0], "y", "x")
+    shape = (2, 3) if level is None else (len(level[1]), 2, 3)
+    coords = {"y": np.arange(2), "x": np.arange(3), **scalars}
+    if level is not None:
+        coords[level[0]] = level[1]
+    ds = xr.Dataset(
+        {name: (dims, np.full(shape, i, dtype="float32")) for i, name in enumerate(long_names)},
+        coords=coords,
+    )
+    for name, long_name in long_names.items():
+        if long_name is not None:
+            ds[name].attrs["long_name"] = long_name
+    return ds
 
 
 def _surface_subset(**coords) -> xr.Dataset:
     """A cfgrib-shaped sub-dataset with one surface field on a y/x grid."""
-    ds = xr.Dataset(
-        {"t": (("y", "x"), np.zeros((2, 3), dtype="float32"))},
-        coords={"y": np.arange(2), "x": np.arange(3), "surface": 0.0, "time": pd.Timestamp("2026-01-01")},
-    )
-    ds["t"].attrs["long_name"] = "Temperature"
-    return ds.assign_coords(coords) if coords else ds
+    return _subset({"t": "Temperature"}, surface=0.0, time=pd.Timestamp("2026-01-01"), **coords)
 
 
 def _alaska_step(step_hours: int) -> xr.Dataset:
-    ds = xr.Dataset(
+    return xr.Dataset(
         {"temperature_at_surface": (("isobaricInhPa", "y", "x"), np.ones((2, 2, 3), dtype="float32"))},
         coords={
             "isobaricInhPa": np.array([500.0, 1000.0]),
@@ -60,7 +68,6 @@ def _alaska_step(step_hours: int) -> xr.Dataset:
             "time": pd.Timestamp("2026-01-01T00:00"),
         },
     )
-    return ds
 
 
 def _hawaii_step(valid_time: str) -> xr.Dataset:
@@ -81,33 +88,35 @@ def _hawaii_step(valid_time: str) -> xr.Dataset:
 # ------------------------------------------------------------------ provider contract
 
 
-@pytest.mark.parametrize("provider_cls", ALL_PROVIDERS)
-def test_providers_declare_the_base_contract(provider_cls):
+@pytest.mark.parametrize(
+    ("provider_cls", "store_prefix"),
+    [
+        (dmi.DMIHarmonieProvider, "bkr/dmi/harmonie_greenland_iceland_3.icechunk"),
+        (dmi.DMIHarmonieModelLevelProvider, "bkr/dmi/harmonie_greenland_iceland_model_level.icechunk"),
+        (hrrr_alaska.AlaskaHRRRProvider, "bkr/dmi/alaska_hrrr.icechunk"),
+        (hawaii_nam.HawaiiNAMProvider, "bkr/dmi/hawaii_nams.icechunk"),
+        # The KENDA prefixes are the ones the original scripts wrote to.
+        (kenda.KENDAAnalysisProvider, "bkr/dmi/kenda_switzerland.icechunk"),
+        (kenda.KENDAForecastProvider, "bkr/dmi/kenda_forecast_switzerland.icechunk"),
+        # The old name still resolves to the analysis store.
+        (kenda.KENDAProvider, "bkr/dmi/kenda_switzerland.icechunk"),
+    ],
+    ids=[
+        "harmonie", "harmonie-model-level", "alaska-hrrr", "hawaii-nam",
+        "kenda-analysis", "kenda-forecast", "kenda-legacy-name",
+    ],
+)  # fmt: skip
+def test_providers_keep_their_published_store(provider_cls, store_prefix):
     assert provider_cls.name
     assert provider_cls.append_dim == "time"
-    assert provider_cls.store_prefix.startswith("bkr/dmi/")
-    assert provider_cls.store_prefix.endswith(".icechunk")
+    assert provider_cls.store_prefix == store_prefix
 
 
-def test_store_prefixes_are_distinct():
-    prefixes = [cls.store_prefix for cls in ALL_PROVIDERS]
-    assert len(set(prefixes)) == len(prefixes)
-
-
-def test_kenda_store_prefixes_match_the_original_scripts():
-    assert kenda.KENDAAnalysisProvider.store_prefix == "bkr/dmi/kenda_switzerland.icechunk"
-    assert kenda.KENDAForecastProvider.store_prefix == "bkr/dmi/kenda_forecast_switzerland.icechunk"
-    # KENDAProvider used to expose icechunk_path as a property; it now resolves to the
-    # analysis store via a plain class attribute like every other provider.
-    assert kenda.KENDAProvider.store_prefix == kenda.KENDAAnalysisProvider.store_prefix
-    assert isinstance(type(kenda.KENDAProvider).__dict__.get("store_prefix", None), type(None))
-
-
-@pytest.mark.parametrize("provider_cls", ALL_PROVIDERS)
-def test_no_hardcoded_credentials_in_provider_sources(provider_cls):
+@pytest.mark.parametrize("module", [dmi, hrrr_alaska, hawaii_nam, kenda])
+def test_no_hardcoded_credentials_in_provider_sources(module):
     import inspect
 
-    source = inspect.getsource(inspect.getmodule(provider_cls))
+    source = inspect.getsource(module)
     assert "AKIA" not in source
     assert "access_key" not in source
 
@@ -171,26 +180,60 @@ def test_soil_level_count_treats_a_scalar_as_no_profile():
     assert soil_level_count(profile) == 9
 
 
-def test_unwanted_level_types_are_dropped_whole():
-    spec = GribMergeSpec()
-    assert clean_grib_subset(_surface_subset(tropopause=0.0), spec) is None
-    assert clean_grib_subset(_surface_subset(potentialVorticity=2e-6), spec) is None
+HAWAII_FLUX_BLOCK = {
+    "prate": "Precipitation rate",
+    "dswrf": "Surface downward short-wave radiation flux",
+    "gflux": "Ground heat flux",
+}
 
 
-def test_height_above_ground_as_a_dimension_is_dropped():
-    ds = xr.Dataset(
-        {"t": (("heightAboveGround", "y", "x"), np.zeros((2, 2, 3), dtype="float32"))},
-        coords={"heightAboveGround": [2.0, 10.0], "y": np.arange(2), "x": np.arange(3)},
-    )
-    assert clean_grib_subset(ds, GribMergeSpec()) is None
+@pytest.mark.parametrize(
+    ("subset", "spec"),
+    [
+        pytest.param(_surface_subset(tropopause=0.0), GribMergeSpec(), id="tropopause-level"),
+        pytest.param(
+            _surface_subset(potentialVorticity=2e-6), GribMergeSpec(), id="pv-level"
+        ),
+        pytest.param(
+            _subset({"t": None}, level=("heightAboveGround", [2.0, 10.0])),
+            GribMergeSpec(),
+            id="height-above-ground-as-a-dimension",
+        ),
+        pytest.param(
+            _subset({"unknown": None, "SBT124": None, "refc": None}, surface=0.0),
+            GribMergeSpec(),
+            id="undecodable-and-simulated-imagery",
+        ),
+        pytest.param(
+            _subset({"t": "Something deprecated"}, surface=0.0), GribMergeSpec(), id="deprecated"
+        ),
+        # It arrives again, with its partner, on a kept level.
+        pytest.param(
+            _subset({"u": "U component of wind"}, level=("isobaricInhPa", [500.0, 1000.0])),
+            GribMergeSpec(),
+            id="lone-wind-component",
+        ),
+        pytest.param(
+            _subset({"gh": "Geopotential Height"}), GribMergeSpec(), id="bare-geopotential-height"
+        ),
+        pytest.param(
+            _subset({"pres": "Pressure"}),
+            hawaii_nam.HAWAII_MERGE_SPEC,
+            id="hawaii-duplicate-pressure",
+        ),
+        pytest.param(
+            _subset(HAWAII_FLUX_BLOCK, surface=0.0),
+            hawaii_nam.HAWAII_MERGE_SPEC,
+            id="hawaii-duplicate-flux-block",
+        ),
+    ],
+)
+def test_unwanted_subsets_are_dropped_whole(subset, spec):
+    assert clean_grib_subset(subset, spec) is None
 
 
 def test_soil_profile_threshold_differs_between_the_two_nests():
-    ds = xr.Dataset(
-        {"st": (("depthBelowLandLayer", "y", "x"), np.zeros((4, 2, 3), dtype="float32"))},
-        coords={"depthBelowLandLayer": np.linspace(0, 2, 4), "y": np.arange(2), "x": np.arange(3)},
-    )
-    ds["st"].attrs["long_name"] = "Soil Temperature"
+    ds = _subset({"st": "Soil Temperature"}, level=("depthBelowLandLayer", np.linspace(0, 2, 4)))
     # HRRR Alaska only wants the full 9-layer profile; the Hawaii nest keeps this one.
     assert clean_grib_subset(ds, hrrr_alaska.ALASKA_MERGE_SPEC) is None
     kept = clean_grib_subset(ds, hawaii_nam.HAWAII_MERGE_SPEC)
@@ -198,77 +241,34 @@ def test_soil_profile_threshold_differs_between_the_two_nests():
     assert "soil_temperature" in kept.data_vars
 
 
-def test_variables_are_renamed_by_long_name_with_a_level_suffix():
-    kept = clean_grib_subset(_surface_subset(), GribMergeSpec())
-    assert list(kept.data_vars) == ["temperature_at_surface"]
-    assert "surface" not in kept.coords
-
-
-def test_height_above_ground_scalar_becomes_a_name_suffix():
-    ds = _surface_subset()
-    ds = ds.drop_vars("surface").assign_coords(heightAboveGround=2.0)
-    kept = clean_grib_subset(ds, GribMergeSpec())
-    assert list(kept.data_vars) == ["temperature_at_2.0m"]
-    assert "heightAboveGround" not in kept.coords
-
-
-def test_undecodable_and_simulated_imagery_variables_are_dropped():
-    ds = xr.Dataset(
-        {
-            "unknown": (("y", "x"), np.zeros((2, 3), dtype="float32")),
-            "SBT124": (("y", "x"), np.zeros((2, 3), dtype="float32")),
-            "refc": (("y", "x"), np.zeros((2, 3), dtype="float32")),
-        },
-        coords={"y": np.arange(2), "x": np.arange(3), "surface": 0.0},
-    )
-    assert clean_grib_subset(ds, GribMergeSpec()) is None
-
-
-def test_deprecated_fields_are_dropped():
-    ds = _surface_subset()
-    ds["t"].attrs["long_name"] = "Something deprecated"
-    assert clean_grib_subset(ds, GribMergeSpec()) is None
-
-
-def test_a_lone_wind_component_is_dropped():
-    """A wind component with no partner is dropped; it arrives again on a kept level."""
-    ds = xr.Dataset(
-        {"u": (("isobaricInhPa", "y", "x"), np.zeros((2, 2, 3), dtype="float32"))},
-        coords={"isobaricInhPa": [500.0, 1000.0], "y": np.arange(2), "x": np.arange(3)},
-    )
-    ds["u"].attrs["long_name"] = "U component of wind"
-    assert clean_grib_subset(ds, GribMergeSpec()) is None
-
-
-def test_a_bare_geopotential_height_field_is_dropped():
-    ds = xr.Dataset(
-        {"gh": (("y", "x"), np.zeros((2, 3), dtype="float32"))},
-        coords={"y": np.arange(2), "x": np.arange(3)},
-    )
-    ds["gh"].attrs["long_name"] = "Geopotential Height"
-    assert clean_grib_subset(ds, GribMergeSpec()) is None
-
-
-def test_hawaii_drops_its_extra_duplicate_blocks():
-    spec = hawaii_nam.HAWAII_MERGE_SPEC
-    pressure_only = xr.Dataset(
-        {"pres": (("y", "x"), np.zeros((2, 3), dtype="float32"))},
-        coords={"y": np.arange(2), "x": np.arange(3)},
-    )
-    pressure_only["pres"].attrs["long_name"] = "Pressure"
-    assert clean_grib_subset(pressure_only, spec) is None
-
-    flux_block = xr.Dataset(
-        {
-            name: (("y", "x"), np.zeros((2, 3), dtype="float32"))
-            for name in ("prate", "dswrf", "gflux")
-        },
-        coords={"y": np.arange(2), "x": np.arange(3), "surface": 0.0},
-    )
-    flux_block["prate"].attrs["long_name"] = "Precipitation rate"
-    flux_block["dswrf"].attrs["long_name"] = "Surface downward short-wave radiation flux"
-    flux_block["gflux"].attrs["long_name"] = "Ground heat flux"
-    assert clean_grib_subset(flux_block, spec) is None
+@pytest.mark.parametrize(
+    ("subset", "expected", "level_coord"),
+    [
+        pytest.param(
+            _surface_subset(), ["temperature_at_surface"], "surface", id="level-type-suffix"
+        ),
+        pytest.param(
+            _subset({"t": "Temperature"}, heightAboveGround=2.0),
+            ["temperature_at_2.0m"],
+            "heightAboveGround",
+            id="height-above-ground-suffix",
+        ),
+        # Two messages sharing a long_name would make Dataset.rename raise; the loser is
+        # dropped rather than the whole timestep.
+        pytest.param(
+            _subset(
+                {"t": "Temperature", "t2": "Temperature", "r": "Relative humidity"}, surface=0.0
+            ),
+            ["relative_humidity_at_surface", "temperature_at_surface"],
+            "surface",
+            id="duplicated-long-name",
+        ),
+    ],
+)
+def test_variables_are_renamed_by_long_name_with_a_level_suffix(subset, expected, level_coord):
+    kept = clean_grib_subset(subset, GribMergeSpec())
+    assert sorted(kept.data_vars) == expected
+    assert level_coord not in kept.coords
 
 
 # ------------------------------------------------------------------------- combining
@@ -299,16 +299,17 @@ def test_hawaii_combine_turns_forecast_hours_into_a_time_axis():
     assert ds["soil_temperature"].dtype == np.dtype("float16")
 
 
-def test_nest_process_rejects_an_incomplete_file_set():
-    provider = hrrr_alaska.AlaskaHRRRProvider()
-    with pytest.raises(ValueError, match="expected 9 files"):
-        provider.process(["a.grib2"], pd.Timestamp("2026-01-01T00:00"))
-
-
-def test_harmonie_process_rejects_an_incomplete_file_set():
-    provider = dmi.DMIHarmonieProvider()
-    with pytest.raises(ValueError, match="expected 6 files"):
-        provider.process(["a.grib", "b.grib"], pd.Timestamp("2026-01-01T00:00"))
+@pytest.mark.parametrize(
+    ("provider_cls", "files", "expected"),
+    [
+        (hrrr_alaska.AlaskaHRRRProvider, ["a.grib2"], 9),
+        (dmi.DMIHarmonieProvider, ["a.grib", "b.grib"], 6),
+    ],
+    ids=["nest", "harmonie"],
+)
+def test_process_rejects_an_incomplete_file_set(provider_cls, files, expected):
+    with pytest.raises(ValueError, match=f"expected {expected} files"):
+        provider_cls().process(files, pd.Timestamp("2026-01-01T00:00"))
 
 
 # ------------------------------------------------------------------- dataset helpers
@@ -321,55 +322,27 @@ def test_rename_present_ignores_names_that_are_not_there():
     assert "depth" not in renamed.dims
 
 
-def test_resolve_renames_drops_sources_that_are_not_there():
-    ds = xr.Dataset({"a": ("x", np.zeros(2))})
-    assert resolve_renames(ds, {"a": "alpha", "twater": "total_water"}) == {"a": "alpha"}
-
-
-def test_resolve_renames_lets_the_first_claim_on_a_name_win():
-    """GRIB reuses a long_name across level types; renaming both would raise."""
-    ds = xr.Dataset({"a": ("x", np.zeros(2)), "b": ("x", np.zeros(2))})
-    assert resolve_renames(ds, {"a": "shared", "b": "shared"}) == {"a": "shared"}
-    assert ds.rename(resolve_renames(ds, {"a": "shared", "b": "shared"})) is not None
-
-
-def test_resolve_renames_will_not_collide_with_a_variable_left_alone():
-    ds = xr.Dataset({"a": ("x", np.zeros(2)), "keep": ("x", np.zeros(2))})
-    assert resolve_renames(ds, {"a": "keep"}) == {}
-
-
-def test_resolve_renames_rechecks_after_dropping_a_rename():
-    """Dropping b->c leaves b in place, so a->b must be dropped too, not just b->c."""
-    ds = xr.Dataset({name: ("x", np.zeros(2)) for name in ("a", "b", "c")})
-    resolved = resolve_renames(ds, {"a": "b", "b": "c"})
-    assert resolved == {}
-    ds.rename(resolved)  # would raise if the mapping still conflicted
-
-
-def test_resolve_renames_allows_a_simultaneous_swap():
-    ds = xr.Dataset({"a": ("x", np.zeros(2)), "b": ("x", np.ones(2))})
-    resolved = resolve_renames(ds, {"a": "b", "b": "a"})
-    assert resolved == {"a": "b", "b": "a"}
-    swapped = ds.rename(resolved)
-    assert list(swapped["a"].values) == [1.0, 1.0]
-
-
-def test_a_duplicated_long_name_drops_the_loser_rather_than_the_timestep():
-    """Two messages sharing a long_name would make Dataset.rename raise."""
-    ds = xr.Dataset(
-        {
-            "t": (("y", "x"), np.zeros((2, 3), dtype="float32")),
-            "t2": (("y", "x"), np.ones((2, 3), dtype="float32")),
-            "r": (("y", "x"), np.ones((2, 3), dtype="float32")),
-        },
-        coords={"y": np.arange(2), "x": np.arange(3), "surface": 0.0},
-    )
-    ds["t"].attrs["long_name"] = "Temperature"
-    ds["t2"].attrs["long_name"] = "Temperature"
-    ds["r"].attrs["long_name"] = "Relative humidity"
-
-    kept = clean_grib_subset(ds, GribMergeSpec())
-    assert sorted(kept.data_vars) == ["relative_humidity_at_surface", "temperature_at_surface"]
+@pytest.mark.parametrize(
+    ("names", "renames", "expected"),
+    [
+        pytest.param(
+            "a", {"a": "alpha", "twater": "total_water"}, {"a": "alpha"}, id="absent-source"
+        ),
+        # GRIB reuses a long_name across level types; renaming both would raise.
+        pytest.param("ab", {"a": "shared", "b": "shared"}, {"a": "shared"}, id="first-claim-wins"),
+        pytest.param("ak", {"a": "k"}, {}, id="collides-with-a-variable-left-alone"),
+        # Dropping b->c leaves b in place, so a->b must be dropped too, not just b->c.
+        pytest.param("abc", {"a": "b", "b": "c"}, {}, id="rechecks-after-a-drop"),
+        pytest.param("ab", {"a": "b", "b": "a"}, {"a": "b", "b": "a"}, id="simultaneous-swap"),
+    ],
+)
+def test_resolve_renames_yields_a_mapping_rename_accepts(names, renames, expected):
+    ds = xr.Dataset({name: ("x", np.full(2, i)) for i, name in enumerate(names)})
+    resolved = resolve_renames(ds, renames)
+    assert resolved == expected
+    renamed = ds.rename(resolved)  # would raise if the mapping still conflicted
+    for source, target in resolved.items():
+        assert renamed[target].equals(ds[source])
 
 
 def test_download_dir_separates_init_times_when_no_temp_dir_is_given(tmp_path):
@@ -392,20 +365,14 @@ def test_chunk_present_ignores_dimensions_that_are_not_there():
 
 
 def test_harmonie_surface_height_split_keeps_the_unsuffixed_pressure_name():
-    ds = xr.Dataset(
-        {"pres": (("y", "x"), np.zeros((2, 3), dtype="float32"))},
-        coords={"y": np.arange(2), "x": np.arange(3), "heightAboveGround": 0.0},
-    )
+    ds = _subset({"pres": None}, heightAboveGround=0.0)
     split = dmi._split_by_height(ds, "heightAboveGround", "height_above_ground", rename_scalar=False)
     assert list(split.data_vars) == ["pres"]
     assert "heightAboveGround" not in split.coords
 
 
 def test_harmonie_surface_height_split_fans_out_a_height_stack():
-    ds = xr.Dataset(
-        {"t": (("heightAboveGround", "y", "x"), np.zeros((2, 2, 3), dtype="float32"))},
-        coords={"heightAboveGround": [2.0, 10.0], "y": np.arange(2), "x": np.arange(3)},
-    )
+    ds = _subset({"t": None}, level=("heightAboveGround", [2.0, 10.0]))
     split = dmi._split_by_height(ds, "heightAboveGround", "height_above_ground")
     assert sorted(split.data_vars) == [
         "t_at_height_above_ground_10.0",
@@ -417,48 +384,41 @@ def test_harmonie_surface_height_split_fans_out_a_height_stack():
 # ------------------------------------------------------------------------------ KENDA
 
 
-def test_kenda_archive_path_defaults_under_the_data_dir(local_config, tmp_path, monkeypatch):
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    from planetary_datasets import config as config_module
-
-    config_module.reset_config_cache()
-    provider = kenda.KENDAAnalysisProvider()
-    assert provider.archive_path == tmp_path / "data" / "meteoswiss"
+KENDA_IT = pd.Timestamp("2026-06-20T02:00")
 
 
-def test_kenda_archive_path_can_be_overridden(tmp_path):
-    provider = kenda.KENDAForecastProvider(archive_path=tmp_path)
-    assert provider.archive_path == tmp_path
+def _write_kenda(root, steps=(0,), constants=True):
+    """Empty stand-ins for one init time's files: a ``t`` field per step, and the constants."""
+    for step in steps:
+        (root / f"kenda-ch1-{KENDA_IT:%Y%m%d%H00}-{step}-t-ctrl.grib2").write_bytes(b"")
+    if constants:
+        (root / kenda.HORIZONTAL_CONSTANTS).write_bytes(b"")
+        (root / kenda.VERTICAL_CONSTANTS).write_bytes(b"")
 
 
-def test_kenda_fetch_returns_nothing_when_the_feed_is_empty(tmp_path):
+def test_kenda_archive_path_defaults_under_the_data_dir(local_config, tmp_path):
+    assert kenda.KENDAAnalysisProvider().archive_path == tmp_path / "data" / "meteoswiss"
+
+
+def test_kenda_fetch_requires_the_data_and_the_constants(tmp_path):
     provider = kenda.KENDAAnalysisProvider(archive_path=tmp_path)
-    assert provider.fetch(pd.Timestamp("2026-06-20T02:00")) == []
+    assert provider.fetch(KENDA_IT) == [], "an empty feed"
 
+    _write_kenda(tmp_path, constants=False)
+    assert provider.fetch(KENDA_IT) == [], "no constants"
 
-def test_kenda_fetch_requires_the_constants(tmp_path):
-    it = pd.Timestamp("2026-06-20T02:00")
-    (tmp_path / f"kenda-ch1-{it.strftime('%Y%m%d%H00')}-0-t-ctrl.grib2").write_bytes(b"")
-    provider = kenda.KENDAAnalysisProvider(archive_path=tmp_path)
-    assert provider.fetch(it) == []
-
-    (tmp_path / kenda.HORIZONTAL_CONSTANTS).write_bytes(b"")
-    (tmp_path / kenda.VERTICAL_CONSTANTS).write_bytes(b"")
-    found = provider.fetch(it)
+    _write_kenda(tmp_path)
+    found = provider.fetch(KENDA_IT)
     assert len(found) == 3
     assert sum("constants" in f for f in found) == 2
 
 
 def test_kenda_analysis_and_forecast_read_different_steps(tmp_path):
-    it = pd.Timestamp("2026-06-20T02:00")
-    stamp = it.strftime("%Y%m%d%H00")
-    (tmp_path / kenda.HORIZONTAL_CONSTANTS).write_bytes(b"")
-    (tmp_path / kenda.VERTICAL_CONSTANTS).write_bytes(b"")
-    (tmp_path / f"kenda-ch1-{stamp}-0-t-ctrl.grib2").write_bytes(b"")
-    (tmp_path / f"kenda-ch1-{stamp}-1-t-ctrl.grib2").write_bytes(b"")
+    _write_kenda(tmp_path, steps=(0, 1))
+    stamp = f"{KENDA_IT:%Y%m%d%H00}"
 
-    analysis = kenda.KENDAAnalysisProvider(archive_path=tmp_path).fetch(it)
-    forecast = kenda.KENDAForecastProvider(archive_path=tmp_path).fetch(it)
+    analysis = kenda.KENDAAnalysisProvider(archive_path=tmp_path).fetch(KENDA_IT)
+    forecast = kenda.KENDAForecastProvider(archive_path=tmp_path).fetch(KENDA_IT)
     assert any(f"-{stamp}-0-" in f for f in analysis)
     assert not any(f"-{stamp}-1-" in f for f in analysis)
     assert any(f"-{stamp}-1-" in f for f in forecast)
@@ -515,9 +475,6 @@ def test_nest_fetch_skips_an_init_time_with_missing_files(tmp_path, monkeypatch)
     def _only_two(urls, dest_dir, **kwargs):
         return [tmp_path / "a", tmp_path / "b"]
 
-    monkeypatch.setattr(hrrr_alaska.GribNestProvider.__module__ + ".download_many", _only_two)
-    from planetary_datasets.providers import regional_lam_common
-
     monkeypatch.setattr(regional_lam_common, "download_many", _only_two)
     assert provider.fetch(pd.Timestamp("2026-01-01T00:00"), temp_dir=tmp_path) == []
 
@@ -542,10 +499,6 @@ def test_run_partition_writes_and_then_skips(local_config, monkeypatch):
     assert provider.run_partition(it) is True
     assert provider.run_partition(it) is False
 
-    import xarray as xr_
-
-    stored = xr_.open_zarr(
-        provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
+    stored = read_store(provider)
     assert pd.Timestamp(stored.time.values[0]) == it
     assert stored.sizes["step"] == 3

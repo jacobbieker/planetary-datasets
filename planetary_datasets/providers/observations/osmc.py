@@ -35,6 +35,7 @@ import requests
 import xarray as xr
 from loguru import logger
 
+from planetary_datasets.common.dataset import rename_vars_by_long_name
 from planetary_datasets.providers.observations._points import (
     PointObservationProvider,
     clip_to_window,
@@ -359,3 +360,23 @@ class OSMCProvider(PointObservationProvider):
         rows = ds.sizes.get("time", 0)
         logger.info(f"{self.name}: {rows} observation(s) for {naive_utc(it):%Y-%m}")
         return ds.chunk({"time": min(self.chunk_rows, max(1, rows))})
+
+
+class OSMCFloat32Provider(OSMCProvider):
+    """OSMC with string columns dropped, float32 values and long-name variable names.
+
+    The layout of the published ``bkr/aoml/aoml_<dataset>_2.icechunk`` stores.
+    """
+
+    chunk_rows = 25_000
+
+    def __init__(self, dataset: str = "drifters", config=None):
+        super().__init__(dataset, config=config)
+        self.store_prefix = self.store_prefix.replace(".icechunk", "_2.icechunk")
+        self.name = f"{self.name}_2"
+
+    def process(self, input_files, it, temp_dir=None, **kwargs) -> xr.Dataset:
+        """Reshape as :class:`OSMCProvider` does, then compact to float32."""
+        ds = super().process(input_files, it, temp_dir=temp_dir, **kwargs)
+        ds = ds.drop_vars([v for v in ds.data_vars if ds[v].dtype.kind in "OSU"])
+        return rename_vars_by_long_name(ds.astype("float32"))
