@@ -17,30 +17,60 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from planetary_datasets import config as config_module
+from helpers import read_store as _stored
+from planetary_datasets.common.store import write_to_icechunk
+from planetary_datasets.config import MissingCredential
+from planetary_datasets.providers.observations import asos as asos_module
+from planetary_datasets.providers.observations import base as base_module
+from planetary_datasets.providers.observations import ghcn as ghcn_module
+from planetary_datasets.providers.observations import isd as isd_module
+from planetary_datasets.providers.observations.aeronet import AeronetProvider, parse_web_data
+from planetary_datasets.providers.observations.asos import ASOSOneMinuteProvider
 from planetary_datasets.providers.observations.base import (
+    OBSERVATION_ALIGNMENT_COORDS,
     NoStationDataError,
     Station,
     StationObservationProvider,
     align_to_grid,
     frames_to_dataset,
+    partial_path,
     partition_time_index,
     safe_filename,
 )
+from planetary_datasets.providers.observations.cds import long_table_to_cube
+from planetary_datasets.providers.observations.ghcn import (
+    GHCNHourlyProvider,
+    GHCNHourlyStationProvider,
+)
+from planetary_datasets.providers.observations.gnss import GNSSProvider
+from planetary_datasets.providers.observations.isd import ISDProvider, parse_isd_text
+from planetary_datasets.providers.observations.meteostat import (
+    MeteostatHourlyProvider,
+    _station_entry,
+)
+from planetary_datasets.providers.observations.midc import MIDCProvider, midc_sites
+from planetary_datasets.providers.observations.pvlive import PVLiveProvider, read_month_zip
+from planetary_datasets.providers.observations.rahm import ARCHIVE, RAHMProvider
+from planetary_datasets.providers.observations.solrad import SolradProvider
+from planetary_datasets.providers.observations.surfrad import SurfradProvider, file_url
+
+#: The hourly grid of one daily partition, shared by most of the reshape tests.
+DAY = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
 
 
-@pytest.fixture
-def local_config(tmp_path, monkeypatch):
-    """The shared local_config, plus a redirected data directory.
 
-    Several of these providers cache a station roster under ``data_dir``, which the
-    shared fixture leaves pointing at the checkout. Overriding it here keeps the tests
-    from dropping cache files into the repository.
-    """
-    monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    config_module.reset_config_cache()
-    return config_module.load_config(env_file=tmp_path / "nonexistent.env")
+
+def _serve_bytes(monkeypatch, module, payload: bytes) -> None:
+    """Replace ``module.fsspec.open`` with a context manager yielding ``payload``."""
+
+    class FakeHandle(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(module.fsspec, "open", lambda *a, **k: FakeHandle(payload))
 
 
 # --------------------------------------------------------------------------------------
@@ -65,8 +95,7 @@ def test_consecutive_partitions_do_not_overlap():
 def test_align_to_grid_exact_drops_off_grid_readings():
     index = pd.DatetimeIndex(["2026-01-01T00:00", "2026-01-01T00:17", "2026-01-01T01:00"])
     df = pd.DataFrame({"t": [1.0, 2.0, 3.0]}, index=index)
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
-    out = align_to_grid(df, times, "1h", how="exact")
+    out = align_to_grid(df, DAY, "1h", how="exact")
     assert out["t"].iloc[0] == 1.0
     assert out["t"].iloc[1] == 3.0
     assert out["t"].iloc[2:].isna().all()
@@ -75,8 +104,7 @@ def test_align_to_grid_exact_drops_off_grid_readings():
 def test_align_to_grid_last_keeps_the_final_report_in_each_hour():
     index = pd.DatetimeIndex(["2026-01-01T00:20", "2026-01-01T00:50", "2026-01-01T01:10"])
     df = pd.DataFrame({"t": [1.0, 2.0, 3.0]}, index=index)
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
-    out = align_to_grid(df, times, "1h", how="last")
+    out = align_to_grid(df, DAY, "1h", how="last")
     assert out["t"].iloc[0] == 2.0
     assert out["t"].iloc[1] == 3.0
 
@@ -84,8 +112,7 @@ def test_align_to_grid_last_keeps_the_final_report_in_each_hour():
 def test_align_to_grid_converts_tz_aware_input_to_naive_utc():
     index = pd.DatetimeIndex(["2026-01-01T00:00", "2026-01-01T01:00"], tz="America/Denver")
     df = pd.DataFrame({"t": [1.0, 2.0]}, index=index)
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
-    out = align_to_grid(df, times, "1h", how="exact")
+    out = align_to_grid(df, DAY, "1h", how="exact")
     # 00:00 MST is 07:00 UTC.
     assert out["t"].iloc[7] == 1.0
     assert out["t"].iloc[8] == 2.0
@@ -94,15 +121,13 @@ def test_align_to_grid_converts_tz_aware_input_to_naive_utc():
 def test_align_to_grid_keeps_the_later_of_duplicate_timestamps():
     index = pd.DatetimeIndex(["2026-01-01T00:00", "2026-01-01T00:00"])
     df = pd.DataFrame({"t": [1.0, 5.0]}, index=index)
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
-    assert align_to_grid(df, times, "1h")["t"].iloc[0] == 5.0
+    assert align_to_grid(df, DAY, "1h")["t"].iloc[0] == 5.0
 
 
 def test_align_to_grid_rejects_an_unknown_mode():
     df = pd.DataFrame({"t": [1.0]}, index=pd.DatetimeIndex(["2026-01-01"]))
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
     with pytest.raises(ValueError, match="unknown alignment mode"):
-        align_to_grid(df, times, "1h", how="median")
+        align_to_grid(df, DAY, "1h", how="median")
 
 
 STATIONS = [
@@ -111,26 +136,19 @@ STATIONS = [
 ]
 
 
-def test_frames_to_dataset_builds_a_dense_cube():
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
-    frames = {"AAA": pd.DataFrame({"temp": np.arange(24.0)}, index=times)}
-    ds = frames_to_dataset(frames, STATIONS, times, variables=["temp"])
+def _one_station(columns=("temp",)) -> dict[str, pd.DataFrame]:
+    """Station AAA reporting ``columns`` for every hour of :data:`DAY`; BBB silent."""
+    return {"AAA": pd.DataFrame({c: np.arange(24.0) for c in columns}, index=DAY)}
+
+
+def test_frames_to_dataset_builds_a_dense_cube_with_station_coords():
+    ds = frames_to_dataset(_one_station(), STATIONS, DAY, variables=["temp"])
 
     assert ds["temp"].dims == ("time", "station")
     assert ds.sizes == {"time": 24, "station": 2}
     assert ds["temp"].sel(station="AAA").values[3] == 3.0
     # A station that did not report still occupies its column.
     assert bool(np.isnan(ds["temp"].sel(station="BBB").values).all())
-
-
-def test_frames_to_dataset_carries_station_metadata_as_coords():
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
-    ds = frames_to_dataset(
-        {"AAA": pd.DataFrame({"temp": np.zeros(24)}, index=times)},
-        STATIONS,
-        times,
-        variables=["temp"],
-    )
     assert list(ds["latitude"].values) == [1.0, 4.0]
     assert list(ds["longitude"].values) == [2.0, 5.0]
     assert list(ds["elevation"].values) == [3.0, 6.0]
@@ -138,13 +156,7 @@ def test_frames_to_dataset_carries_station_metadata_as_coords():
 
 
 def test_frames_to_dataset_writes_declared_variables_even_when_absent():
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
-    ds = frames_to_dataset(
-        {"AAA": pd.DataFrame({"temp": np.zeros(24)}, index=times)},
-        STATIONS,
-        times,
-        variables=["temp", "pressure"],
-    )
+    ds = frames_to_dataset(_one_station(), STATIONS, DAY, variables=["temp", "pressure"])
     # The variable set must not depend on what a given day happened to contain, or the
     # next append is refused for a variable mismatch.
     assert set(ds.data_vars) == {"temp", "pressure"}
@@ -158,9 +170,6 @@ def test_a_roster_with_an_unknown_position_can_still_be_appended_to(local_config
     match itself: the first partition created it, and every later one was silently skipped while
     the Dagster asset still went green.
     """
-    from planetary_datasets.common.store import write_to_icechunk
-    from planetary_datasets.providers.observations.base import OBSERVATION_ALIGNMENT_COORDS
-
     stations = [
         Station(id="AAA", latitude=1.0, longitude=2.0, elevation=3.0, name="Alpha"),
         Station(id="NOPOS", latitude=None, longitude=None, elevation=None, name="Unknown"),
@@ -169,48 +178,29 @@ def test_a_roster_with_an_unknown_position_can_still_be_appended_to(local_config
 
     def day(date: str):
         times = partition_time_index(pd.Timestamp(date), "D", "1h")
-        return frames_to_dataset(
-            {"AAA": pd.DataFrame({"temp": np.zeros(24)}, index=times)},
-            stations,
-            times,
-            variables=["temp"],
-        )
+        frames = {"AAA": pd.DataFrame({"temp": np.zeros(24)}, index=times)}
+        return frames_to_dataset(frames, stations, times, variables=["temp"])
 
     first = day("2026-01-01")
     assert bool(np.isnan(first["latitude"].values[1]))
-    assert write_to_icechunk(
-        repo, first, alignment_coords=OBSERVATION_ALIGNMENT_COORDS
-    ) is True
-    assert write_to_icechunk(
-        repo, day("2026-01-02"), alignment_coords=OBSERVATION_ALIGNMENT_COORDS
-    ) is True
+    for ds in (first, day("2026-01-02")):
+        assert write_to_icechunk(repo, ds, alignment_coords=OBSERVATION_ALIGNMENT_COORDS) is True
 
 
 def test_frames_to_dataset_infers_variables_when_not_declared():
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
-    ds = frames_to_dataset(
-        {"AAA": pd.DataFrame({"b": np.zeros(24), "a": np.zeros(24)}, index=times)},
-        STATIONS,
-        times,
-    )
+    ds = frames_to_dataset(_one_station(columns=("b", "a")), STATIONS, DAY)
     assert list(ds.data_vars) == ["a", "b"]
 
 
 def test_frames_to_dataset_rejects_an_unknown_station():
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
+    frames = {"ZZZ": _one_station()["AAA"]}
     with pytest.raises(ValueError, match="missing from the canonical list"):
-        frames_to_dataset(
-            {"ZZZ": pd.DataFrame({"temp": np.zeros(24)}, index=times)},
-            STATIONS,
-            times,
-            variables=["temp"],
-        )
+        frames_to_dataset(frames, STATIONS, DAY, variables=["temp"])
 
 
 def test_frames_to_dataset_rejects_duplicate_station_ids():
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
     with pytest.raises(ValueError, match="must be unique"):
-        frames_to_dataset({}, [STATIONS[0], STATIONS[0]], times, variables=["temp"])
+        frames_to_dataset({}, [STATIONS[0], STATIONS[0]], DAY, variables=["temp"])
 
 
 def test_safe_filename_strips_path_separators():
@@ -254,8 +244,7 @@ class FakeNetwork(StationObservationProvider):
         return path
 
     def read_station(self, path, station, it):
-        df = pd.read_csv(path, index_col="time", parse_dates=True)
-        return df
+        return pd.read_csv(path, index_col="time", parse_dates=True)
 
 
 @pytest.fixture
@@ -263,12 +252,10 @@ def fake_network(local_config):
     return FakeNetwork(config=local_config)
 
 
-def test_run_partition_writes_a_station_cube(fake_network, tmp_path):
-    stamp = pd.Timestamp("2026-01-01")
-    assert fake_network.run_partition(stamp) is True
+def test_run_partition_writes_a_station_cube(fake_network):
+    assert fake_network.run_partition(pd.Timestamp("2026-01-01")) is True
 
-    repo = fake_network.get_icechunk_repo()
-    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    ds = _stored(fake_network)
     assert ds.sizes == {"time": 24, "station": 2}
     assert list(ds["station"].values) == ["AAA", "BBB"]
     assert float(ds["temp"].isel(time=5, station=0)) == 5.0
@@ -278,38 +265,32 @@ def test_consecutive_partitions_append(fake_network):
     assert fake_network.run_partition(pd.Timestamp("2026-01-01")) is True
     assert fake_network.run_partition(pd.Timestamp("2026-01-02")) is True
 
-    repo = fake_network.get_icechunk_repo()
-    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
-    assert ds.sizes["time"] == 48
-    assert ds.sizes["station"] == 2
+    assert _stored(fake_network).sizes == {"time": 48, "station": 2}
 
 
 def test_a_station_absent_from_the_archive_is_still_a_column(local_config):
     provider = FakeNetwork(config=local_config, absent={"BBB"})
     provider.run_partition(pd.Timestamp("2026-01-01"))
-    ds = xr.open_zarr(
-        provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
+    ds = _stored(provider)
     assert list(ds["station"].values) == ["AAA", "BBB"]
     assert bool(np.isnan(ds["temp"].sel(station="BBB").values).all())
 
 
-def test_every_station_failing_raises_rather_than_reporting_an_empty_partition(
-    local_config, tmp_path
+@pytest.mark.parametrize(
+    ("absent", "broken"),
+    [
+        # An empty fetch is recorded as "nothing to do" and never retried, so a total
+        # upstream outage must surface as a failure.
+        pytest.param((), {"AAA", "BBB"}, id="every-station-failing"),
+        # The rest of the roster being legitimately absent must not disguise the one
+        # station whose request blew up: nothing was written, so the partition is unproven.
+        pytest.param({"AAA"}, {"BBB"}, id="nothing-fetched-plus-one-error"),
+    ],
+)
+def test_nothing_fetched_with_an_error_is_a_failure_not_an_empty_partition(
+    local_config, tmp_path, absent, broken
 ):
-    # An empty fetch is recorded as "nothing to do" and never retried, so a total
-    # upstream outage must surface as a failure.
-    provider = FakeNetwork(config=local_config, broken={"AAA", "BBB"})
-    with pytest.raises(RuntimeError, match="nothing fetched"):
-        provider.fetch(pd.Timestamp("2026-01-01"), temp_dir=tmp_path)
-
-
-def test_nothing_fetched_plus_one_error_is_a_failure_not_an_empty_partition(
-    local_config, tmp_path
-):
-    # The rest of the roster being legitimately absent must not disguise the one station
-    # whose request blew up: nothing was written, so the partition is unproven.
-    provider = FakeNetwork(config=local_config, absent={"AAA"}, broken={"BBB"})
+    provider = FakeNetwork(config=local_config, absent=absent, broken=broken)
     with pytest.raises(RuntimeError, match="nothing fetched"):
         provider.fetch(pd.Timestamp("2026-01-01"), temp_dir=tmp_path)
 
@@ -321,8 +302,6 @@ def test_a_wholly_absent_partition_is_reported_empty(local_config, tmp_path):
 
 
 def test_partial_paths_are_unique_per_process_and_call():
-    from planetary_datasets.providers.observations.base import partial_path
-
     dest = pathlib.Path("/tmp/010010-99999-2023.gz")
     first, second = partial_path(dest), partial_path(dest)
     # Twelve monthly partitions of one year share the cached file; a fixed .part name
@@ -332,7 +311,7 @@ def test_partial_paths_are_unique_per_process_and_call():
     assert first.name.startswith(dest.name)
 
 
-def test_some_stations_failing_still_writes_the_rest(local_config, tmp_path):
+def test_some_stations_failing_still_writes_the_rest(local_config):
     provider = FakeNetwork(config=local_config, broken={"BBB"})
     assert provider.run_partition(pd.Timestamp("2026-01-01")) is True
 
@@ -356,10 +335,6 @@ def test_unknown_station_subset_is_rejected(local_config):
         provider.station_list()
 
 
-def test_store_path_stays_local_under_the_test_config(fake_network, tmp_path):
-    assert fake_network.store_path.startswith(str(tmp_path))
-
-
 # --------------------------------------------------------------------------------------
 # ASOS
 # --------------------------------------------------------------------------------------
@@ -372,8 +347,6 @@ ASOS_CSV = (
 
 
 def test_asos_url_covers_exactly_one_utc_day(local_config):
-    from planetary_datasets.providers.observations.asos import ASOSOneMinuteProvider
-
     provider = ASOSOneMinuteProvider(config=local_config)
     url = provider.station_url(Station(id="DSM"), pd.Timestamp("2026-09-20"))
     assert "sts=2026-09-20T00:00Z" in url
@@ -383,8 +356,6 @@ def test_asos_url_covers_exactly_one_utc_day(local_config):
 
 
 def test_asos_parses_the_iem_csv(local_config, tmp_path):
-    from planetary_datasets.providers.observations.asos import ASOSOneMinuteProvider
-
     path = tmp_path / "DSM.csv"
     path.write_text(ASOS_CSV)
     provider = ASOSOneMinuteProvider(config=local_config)
@@ -394,16 +365,12 @@ def test_asos_parses_the_iem_csv(local_config, tmp_path):
 
 
 def test_asos_treats_a_header_only_response_as_no_data(local_config, tmp_path, monkeypatch):
-    from planetary_datasets.providers.observations import asos as asos_module
-
-    provider = asos_module.ASOSOneMinuteProvider(config=local_config)
+    provider = ASOSOneMinuteProvider(config=local_config)
     monkeypatch.setattr(provider, "_get_text", lambda url: "station,valid(UTC),tmpf\n")
     assert provider.fetch_station(Station(id="DSM"), pd.Timestamp("2026-09-20"), tmp_path) is None
 
 
 def test_asos_raises_after_exhausting_retries(local_config, monkeypatch):
-    from planetary_datasets.providers.observations import asos as asos_module
-
     class Response:
         status_code = 200
         text = "ERROR: too many requests"
@@ -413,16 +380,14 @@ def test_asos_raises_after_exhausting_retries(local_config, monkeypatch):
 
     monkeypatch.setattr(asos_module.requests, "get", lambda *a, **k: Response())
     monkeypatch.setattr(asos_module.time, "sleep", lambda _s: None)
-    provider = asos_module.ASOSOneMinuteProvider(config=local_config)
+    provider = ASOSOneMinuteProvider(config=local_config)
     provider.max_attempts = 2
     with pytest.raises(RuntimeError, match="2 attempts failed"):
         provider._get_text("https://example.invalid/asos")
 
 
 def test_asos_roster_cache_is_reused(local_config, monkeypatch):
-    from planetary_datasets.providers.observations import asos as asos_module
-
-    provider = asos_module.ASOSOneMinuteProvider(config=local_config)
+    provider = ASOSOneMinuteProvider(config=local_config)
     provider.roster_cache.parent.mkdir(parents=True, exist_ok=True)
     provider.roster_cache.write_text(
         json.dumps([{"id": "DSM", "latitude": 41.5, "longitude": -93.6}])
@@ -447,35 +412,22 @@ ISD_LINE = (
 )
 
 
-def test_isd_parses_a_real_record():
-    from planetary_datasets.providers.observations.isd import parse_isd_text
-
+def test_isd_parses_a_real_record_and_masks_its_sentinels():
     df = parse_isd_text(ISD_LINE)
     assert len(df) == 1
     assert df.index[0] == pd.Timestamp("2023-01-01T00:00")
     assert df["air_temperature"].iloc[0] == pytest.approx(-10.0)
     assert df["sea_level_pressure"].iloc[0] == pytest.approx(972.5)
-
-
-def test_isd_masks_the_missing_value_sentinels():
-    from planetary_datasets.providers.observations.isd import MISSING_SENTINELS, parse_isd_text
-
-    df = parse_isd_text(ISD_LINE)
     # ceiling is 99999 in this record, which is the sentinel, not a 99 km cloud base.
-    assert MISSING_SENTINELS["ceiling"] == 99999
     assert bool(pd.isna(df["ceiling"].iloc[0]))
 
 
 def test_isd_skips_unparseable_lines():
-    from planetary_datasets.providers.observations.isd import parse_isd_text
-
     df = parse_isd_text("too short\n" + ISD_LINE + "\n\n")
     assert len(df) == 1
 
 
 def test_isd_read_station_cuts_the_year_file_down_to_the_month(local_config, tmp_path):
-    from planetary_datasets.providers.observations.isd import ISDProvider
-
     path = tmp_path / "010010-99999-2023.gz"
     path.write_bytes(gzip.compress(ISD_LINE.encode()))
 
@@ -487,22 +439,12 @@ def test_isd_read_station_cuts_the_year_file_down_to_the_month(local_config, tmp
 
 
 def test_isd_history_parses_into_stations(monkeypatch):
-    from planetary_datasets.providers.observations import isd as isd_module
-
     csv = (
         "USAF,WBAN,STATION NAME,CTRY,STATE,ICAO,LAT,LON,ELEV(M),BEGIN,END\n"
         "010010,99999,JAN MAYEN,NO,,ENJA,70.939,-8.669,9.0,19310101,20260101\n"
         "010014,99999,SORSTOKKEN,NO,,ENSO,59.792,5.341,9999.0,19861120,20260101\n"
     )
-
-    class FakeHandle(io.BytesIO):
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-    monkeypatch.setattr(isd_module.fsspec, "open", lambda *a, **k: FakeHandle(csv.encode()))
+    _serve_bytes(monkeypatch, isd_module, csv.encode())
     stations = isd_module.read_isd_history()
     assert [s.id for s in stations] == ["010010-99999", "010014-99999"]
     assert stations[0].latitude == pytest.approx(70.939)
@@ -516,21 +458,11 @@ def test_isd_history_parses_into_stations(monkeypatch):
 
 
 def test_ghcn_station_list_reads_latitude_before_longitude(monkeypatch):
-    from planetary_datasets.providers.observations import ghcn as ghcn_module
-
     text = (
         "ACL000BARA9  17.5910  -61.8210    5.0 TX BARBUDA        AG\n"
         "ACM00078861  17.1167  -61.7833   10.0    COOLIDGE FIELD AG\n"
     )
-
-    class FakeHandle(io.BytesIO):
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-    monkeypatch.setattr(ghcn_module.fsspec, "open", lambda *a, **k: FakeHandle(text.encode()))
+    _serve_bytes(monkeypatch, ghcn_module, text.encode())
     df = ghcn_module.get_list_of_stations()
     assert len(df) == 2
     # The original script read column 2 as latitude and column 1 as longitude, putting
@@ -565,8 +497,6 @@ def _meteora_frames(tmp_path):
 
 
 def test_ghcn_meteora_route_reshapes_into_a_station_cube(local_config, tmp_path):
-    from planetary_datasets.providers.observations.ghcn import GHCNHourlyProvider
-
     provider = GHCNHourlyProvider(config=local_config, variables=["temperature"])
     ds = provider.process(_meteora_frames(tmp_path), pd.Timestamp("2023-01-01"))
 
@@ -579,8 +509,6 @@ def test_ghcn_meteora_route_reshapes_into_a_station_cube(local_config, tmp_path)
 
 
 def test_ghcn_meteora_route_rejects_a_station_missing_from_the_table(local_config, tmp_path):
-    from planetary_datasets.providers.observations.ghcn import GHCNHourlyProvider
-
     files = _meteora_frames(tmp_path)
     stations = pd.read_parquet(files[1]).iloc[:1]
     stations.to_parquet(files[1])
@@ -591,23 +519,17 @@ def test_ghcn_meteora_route_rejects_a_station_missing_from_the_table(local_confi
 
 
 def test_ghcn_meteora_partition_is_a_calendar_quarter(local_config):
-    from planetary_datasets.providers.observations.ghcn import GHCNHourlyProvider
-
     times = GHCNHourlyProvider(config=local_config).partition_times(pd.Timestamp("2023-01-01"))
     assert times[0] == pd.Timestamp("2023-01-01T00:00")
     assert times[-1] == pd.Timestamp("2023-03-31T23:00")
 
 
 def test_ghcn_station_provider_demands_an_explicit_station_list(local_config):
-    from planetary_datasets.providers.observations.ghcn import GHCNHourlyStationProvider
-
     with pytest.raises(ValueError, match="explicit station list"):
         GHCNHourlyStationProvider(config=local_config)
 
 
 def test_ghcn_station_provider_reads_the_parquet_date_column(local_config, tmp_path):
-    from planetary_datasets.providers.observations.ghcn import GHCNHourlyStationProvider
-
     path = tmp_path / "USW00094846-2023.parquet"
     pd.DataFrame(
         {
@@ -638,8 +560,6 @@ METEOSTAT_CSV = (
 
 
 def test_meteostat_reads_the_bulk_csv_for_the_partition_month(local_config, tmp_path):
-    from planetary_datasets.providers.observations.meteostat import MeteostatHourlyProvider
-
     path = tmp_path / "10637-2023.csv.gz"
     path.write_bytes(gzip.compress(METEOSTAT_CSV.encode()))
 
@@ -651,8 +571,6 @@ def test_meteostat_reads_the_bulk_csv_for_the_partition_month(local_config, tmp_
 
 
 def test_meteostat_inventory_window_excludes_stations_with_no_overlap(local_config):
-    from planetary_datasets.providers.observations.meteostat import MeteostatHourlyProvider
-
     provider = MeteostatHourlyProvider(config=local_config, stations=[Station(id="X")])
     provider._inventory = {"X": (pd.Timestamp("2020-01-01"), pd.Timestamp("2021-01-01"))}
     assert provider.covers(Station(id="X"), pd.Timestamp("2020-06-01")) is True
@@ -660,8 +578,6 @@ def test_meteostat_inventory_window_excludes_stations_with_no_overlap(local_conf
 
 
 def test_meteostat_roster_entry_reads_the_hourly_inventory():
-    from planetary_datasets.providers.observations.meteostat import _station_entry
-
     station, start, end = _station_entry(
         {
             "id": "00FAY",
@@ -696,8 +612,6 @@ AERONET_RESPONSE = "\n".join(
 
 
 def test_aeronet_parses_the_web_service_response():
-    from planetary_datasets.providers.observations.aeronet import parse_web_data
-
     df = parse_web_data(AERONET_RESPONSE)
     assert len(df) == 3
     assert df.index[0] == pd.Timestamp("2023-06-01T12:00:00")
@@ -705,15 +619,11 @@ def test_aeronet_parses_the_web_service_response():
 
 
 def test_aeronet_preamble_only_response_is_empty():
-    from planetary_datasets.providers.observations.aeronet import parse_web_data
-
     assert parse_web_data("AERONET Data Download\nline2\nline3\n").empty
 
 
 def test_aeronet_averages_onto_the_hourly_grid(local_config, tmp_path, monkeypatch):
-    from planetary_datasets.providers.observations import aeronet as aeronet_module
-
-    provider = aeronet_module.AeronetProvider(config=local_config, sites=["GSFC", "Tucson"])
+    provider = AeronetProvider(config=local_config, sites=["GSFC", "Tucson"])
     monkeypatch.setattr(
         provider,
         "station_list",
@@ -734,15 +644,11 @@ def test_aeronet_averages_onto_the_hourly_grid(local_config, tmp_path, monkeypat
 
 
 def test_aeronet_rejects_an_unknown_quality_level(local_config):
-    from planetary_datasets.providers.observations.aeronet import AeronetProvider
-
     with pytest.raises(ValueError, match="quality must be one of"):
         AeronetProvider(config=local_config, quality="AOD30")
 
 
 def test_aeronet_request_url_is_a_single_day(local_config):
-    from planetary_datasets.providers.observations.aeronet import AeronetProvider
-
     url = AeronetProvider(config=local_config).request_url(pd.Timestamp("2023-06-01"))
     assert "year=2023&month=6&day=1" in url
     assert "year2=2023&month2=6&day2=1" in url
@@ -755,14 +661,10 @@ def test_aeronet_request_url_is_a_single_day(local_config):
 
 
 def test_surfrad_file_url_uses_two_digit_year_and_day_of_year():
-    from planetary_datasets.providers.observations.surfrad import file_url
-
     assert file_url("bon", pd.Timestamp("2020-04-24")).endswith("bon/2020/bon20115.dat")
 
 
 def test_solrad_filename_keeps_the_upstream_name():
-    from planetary_datasets.providers.observations.solrad import SolradProvider
-
     # pvlib's reader chooses the Madison column layout by looking for "msn" in the path,
     # so the local name has to keep the station prefix.
     name = SolradProvider.station_filename(
@@ -771,15 +673,7 @@ def test_solrad_filename_keeps_the_upstream_name():
     assert name == "msn20115.dat"
 
 
-def test_solrad_roster_is_the_published_site_list(local_config):
-    from planetary_datasets.providers.observations.solrad import SITES, SolradProvider
-
-    assert [s.id for s in SolradProvider(config=local_config).all_stations()] == list(SITES)
-
-
 def test_surfrad_keeps_retired_sites_on_the_axis(local_config):
-    from planetary_datasets.providers.observations.surfrad import SurfradProvider
-
     ids = [s.id for s in SurfradProvider(config=local_config).all_stations()]
     assert {"red", "rut", "slv"}.issubset(ids)
 
@@ -807,15 +701,11 @@ def test_solrad_variables_are_the_names_pvlib_actually_returns():
 def test_midc_variables_come_from_the_pvlib_variable_map(local_config):
     from pvlib.iotools.midc import MIDC_VARIABLE_MAP
 
-    from planetary_datasets.providers.observations.midc import MIDCProvider
-
     produced = {name for site in MIDC_VARIABLE_MAP.values() for name in site.values()}
     assert set(MIDCProvider(config=local_config).variables) == produced
 
 
 def test_midc_url_points_at_nrel_not_pvlibs_misspelling(local_config):
-    from planetary_datasets.providers.observations.midc import MIDCProvider
-
     provider = MIDCProvider(config=local_config)
     url = provider.station_url(Station(id="BMS"), pd.Timestamp("2023-06-01"))
     assert url.startswith("https://midcdmz.nrel.gov/apps/data_api.pl")
@@ -823,14 +713,10 @@ def test_midc_url_points_at_nrel_not_pvlibs_misspelling(local_config):
 
 
 def test_midc_roster_matches_what_pvlib_can_map(local_config):
-    from planetary_datasets.providers.observations.midc import MIDCProvider, midc_sites
-
     assert [s.id for s in MIDCProvider(config=local_config).all_stations()] == midc_sites()
 
 
 def test_download_or_none_returns_none_on_404(tmp_path, monkeypatch):
-    from planetary_datasets.providers.observations import base as base_module
-
     class Response:
         status_code = 404
 
@@ -843,8 +729,6 @@ def test_download_or_none_returns_none_on_404(tmp_path, monkeypatch):
 
 def test_download_or_none_raises_after_retries(tmp_path, monkeypatch):
     import requests
-
-    from planetary_datasets.providers.observations import base as base_module
 
     def _boom(*_a, **_k):
         raise requests.ConnectionError("no route to host")
@@ -883,8 +767,6 @@ def _pvlive_zip(path: pathlib.Path) -> pathlib.Path:
 
 
 def test_pvlive_reads_every_station_out_of_a_month_archive(tmp_path):
-    from planetary_datasets.providers.observations.pvlive import read_month_zip
-
     frames, stations = read_month_zip(_pvlive_zip(tmp_path / "pvlive.zip"))
     assert sorted(frames) == ["tng00001", "tng00002"]
     assert list(frames["tng00001"].columns) == ["Gg_pyr", "flag_Gg_pyr", "T_pyr", "flag_T_pyr"]
@@ -893,8 +775,6 @@ def test_pvlive_reads_every_station_out_of_a_month_archive(tmp_path):
 
 
 def test_pvlive_process_builds_the_forty_station_axis(local_config, tmp_path):
-    from planetary_datasets.providers.observations.pvlive import PVLiveProvider
-
     provider = PVLiveProvider(config=local_config)
     ds = provider.process(
         [str(_pvlive_zip(tmp_path / "pvlive.zip"))], pd.Timestamp("2026-01-01")
@@ -909,8 +789,6 @@ def test_pvlive_process_builds_the_forty_station_axis(local_config, tmp_path):
 
 
 def test_pvlive_reuses_cached_metadata_when_an_archive_omits_it(local_config, tmp_path):
-    from planetary_datasets.providers.observations.pvlive import PVLiveProvider
-
     provider = PVLiveProvider(config=local_config)
 
     # First month carries the table and seeds the cache.
@@ -929,8 +807,6 @@ def test_pvlive_reuses_cached_metadata_when_an_archive_omits_it(local_config, tm
 
 
 def test_pvlive_empty_archive_raises(local_config, tmp_path):
-    from planetary_datasets.providers.observations.pvlive import PVLiveProvider
-
     path = tmp_path / "empty.zip"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("readme.txt", "nothing here")
@@ -958,12 +834,7 @@ def _long_table() -> xr.Dataset:
             "primary_station_id": ("index", ["AAAA", "AAAA", "AAAA", "BBBB"]),
             "observed_variable": (
                 "index",
-                [
-                    "total_column_water_vapour",
-                    "total_column_water_vapour",
-                    "total_column_water_vapour",
-                    "total_column_water_vapour",
-                ],
+                ["total_column_water_vapour"] * 4,
             ),
             "observation_value": ("index", [10.0, 20.0, 30.0, 5.0]),
             "latitude": ("index", [1.0, 1.0, 1.0, 2.0]),
@@ -974,10 +845,7 @@ def _long_table() -> xr.Dataset:
 
 
 def test_long_table_to_cube_bins_onto_the_time_grid():
-    from planetary_datasets.providers.observations.cds import long_table_to_cube
-
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
-    ds = long_table_to_cube(_long_table(), times, stations=["AAAA", "BBBB"])
+    ds = long_table_to_cube(_long_table(), DAY, stations=["AAAA", "BBBB"])
 
     assert ds.sizes == {"time": 24, "station": 2}
     # 00:10 and 00:40 both fall in the 00:00 bin and are averaged.
@@ -991,12 +859,9 @@ def test_long_table_to_cube_bins_onto_the_time_grid():
 
 
 def test_long_table_to_cube_writes_declared_variables_the_response_lacks():
-    from planetary_datasets.providers.observations.cds import long_table_to_cube
-
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
     ds = long_table_to_cube(
         _long_table(),
-        times,
+        DAY,
         stations=["AAAA", "BBBB"],
         variables=("total_column_water_vapour", "zenith_total_delay"),
     )
@@ -1007,12 +872,9 @@ def test_long_table_to_cube_writes_declared_variables_the_response_lacks():
 
 
 def test_long_table_to_cube_pins_the_level_axis():
-    from planetary_datasets.providers.observations.cds import long_table_to_cube
-
     ds_in = _long_table().assign(z_coordinate=("index", [100000.0] * 4))
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
     ds = long_table_to_cube(
-        ds_in, times, stations=["AAAA", "BBBB"], levels=(100000.0, 85000.0, 50000.0)
+        ds_in, DAY, stations=["AAAA", "BBBB"], levels=(100000.0, 85000.0, 50000.0)
     )
     # Only one level was reported; all three must still appear.
     assert list(ds["level"].values) == [100000.0, 85000.0, 50000.0]
@@ -1024,13 +886,10 @@ def test_a_row_with_no_usable_level_is_dropped_not_filed_at_the_surface():
     ``argmin`` of that is 0, so such rows were filed at ``levels[0]`` — 100000 Pa —
     biasing the surface level rather than being discarded.
     """
-    from planetary_datasets.providers.observations.cds import long_table_to_cube
-
     ds_in = _long_table().assign(z_coordinate=("index", [50000.0, np.nan, np.nan, np.nan]))
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
 
     ds = long_table_to_cube(
-        ds_in, times, stations=["AAAA", "BBBB"], levels=(100000.0, 85000.0, 50000.0)
+        ds_in, DAY, stations=["AAAA", "BBBB"], levels=(100000.0, 85000.0, 50000.0)
     )
 
     surface = ds["total_column_water_vapour"].sel(level=100000.0)
@@ -1041,27 +900,17 @@ def test_a_row_with_no_usable_level_is_dropped_not_filed_at_the_surface():
 
 
 def test_a_table_where_no_level_parses_is_reported():
-    from planetary_datasets.providers.observations.cds import (
-        NoStationDataError,
-        long_table_to_cube,
-    )
-
     ds_in = _long_table().assign(z_coordinate=("index", [np.nan] * 4))
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
 
     with pytest.raises(NoStationDataError, match="unusable"):
-        long_table_to_cube(ds_in, times, stations=["AAAA"], levels=(100000.0, 50000.0))
+        long_table_to_cube(ds_in, DAY, stations=["AAAA"], levels=(100000.0, 50000.0))
 
 
 def test_cds_station_axis_follows_the_store_once_one_exists(local_config):
-    from planetary_datasets.providers.observations.cds import long_table_to_cube
-    from planetary_datasets.providers.observations.gnss import GNSSProvider
-
     provider = GNSSProvider(config=local_config)
     assert provider.station_axis() is None
 
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
-    first = long_table_to_cube(_long_table(), times, variables=("total_column_water_vapour",))
+    first = long_table_to_cube(_long_table(), DAY, variables=("total_column_water_vapour",))
     assert provider.write_to_icechunk(provider.get_icechunk_repo(), first) is True
 
     # The second month must reuse the first month's axis rather than whatever reported.
@@ -1069,32 +918,12 @@ def test_cds_station_axis_follows_the_store_once_one_exists(local_config):
 
 
 def test_long_table_to_cube_names_the_columns_it_could_not_find():
-    from planetary_datasets.providers.observations.cds import long_table_to_cube
-
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
     bare = xr.Dataset({"something": ("index", [1.0])}, coords={"index": [0]})
     with pytest.raises(NoStationDataError, match="not a recognised long table"):
-        long_table_to_cube(bare, times)
-
-
-def test_long_table_to_cube_adds_a_level_axis_when_levels_are_given():
-    from planetary_datasets.providers.observations.cds import long_table_to_cube
-
-    ds_in = _long_table().assign(
-        z_coordinate=("index", [100000.0, 85000.0, 85000.0, 100000.0])
-    )
-    times = partition_time_index(pd.Timestamp("2026-01-01"), "D", "1h")
-    ds = long_table_to_cube(
-        ds_in, times, stations=["AAAA", "BBBB"], levels=(100000.0, 85000.0)
-    )
-    assert "level" in ds.dims
-    assert sorted(ds["level"].values) == [85000.0, 100000.0]
+        long_table_to_cube(bare, DAY)
 
 
 def test_cds_provider_raises_missing_credential_without_a_key(local_config, monkeypatch):
-    from planetary_datasets.config import MissingCredential
-    from planetary_datasets.providers.observations.gnss import GNSSProvider
-
     provider = GNSSProvider(config=local_config)
     # Pretend there is no ~/.cdsapirc either.
     monkeypatch.setattr(pathlib.Path, "is_file", lambda _self: False)
@@ -1103,8 +932,6 @@ def test_cds_provider_raises_missing_credential_without_a_key(local_config, monk
 
 
 def test_gnss_request_asks_for_one_month():
-    from planetary_datasets.providers.observations.gnss import GNSSProvider
-
     request = GNSSProvider().build_request(pd.Timestamp("2023-04-01"))
     assert request["year"] == "2023"
     assert request["month"] == "04"
@@ -1113,8 +940,6 @@ def test_gnss_request_asks_for_one_month():
 
 
 def test_rahm_request_carries_the_harmonisation_archive():
-    from planetary_datasets.providers.observations.rahm import ARCHIVE, RAHMProvider
-
     request = RAHMProvider().build_request(pd.Timestamp("1985-11-01"))
     assert request["archive"] == ARCHIVE
     assert request["year"] == "1985"

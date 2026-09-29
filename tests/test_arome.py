@@ -7,7 +7,6 @@ synthetic data. Nothing here touches the network or the public bucket.
 
 from __future__ import annotations
 
-import dataclasses
 import pathlib
 
 import numpy as np
@@ -15,9 +14,9 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from helpers import read_store
 from planetary_datasets.providers import arome
 from planetary_datasets.providers.arome import (
-    OVERSEAS_REGIONS,
     AromeFranceHDProvider,
     AromeFranceProvider,
     AromeOverseasProvider,
@@ -72,11 +71,29 @@ def test_france_hd_filenames_and_urls_match_the_archive():
     assert layout.step_tokens == ("00H", "01H", "02H")
 
 
-@pytest.mark.parametrize("region", sorted(OVERSEAS_REGIONS))
-def test_every_overseas_region_has_its_own_store(region):
-    provider = AromeOverseasProvider(region=region)
-    assert provider.store_prefix == f"bkr/dmi/arome_{OVERSEAS_REGIONS[region]}.icechunk"
-    assert provider.name == f"arome_{OVERSEAS_REGIONS[region]}"
+@pytest.mark.parametrize(
+    ("provider_cls", "kwargs", "name", "prefix"),
+    [
+        (AromeFranceProvider, {}, "arome_france_0025", "bkr/dmi/arome_france_0025.icechunk"),
+        (AromeFranceHDProvider, {}, "arome_france_hd", "bkr/dmi/arome_france.icechunk"),
+        *[
+            pytest.param(
+                AromeOverseasProvider, {"region": region}, f"arome_{slug}", f"bkr/dmi/arome_{slug}.icechunk", id=region
+            )
+            for region, slug in {
+                "NCALED": "new_caledonia",
+                "INDIEN": "indian_ocean",
+                "GUYANE": "french_guiana",
+                "ANTIL": "caribbean",
+                "POLYN": "polynesia",
+            }.items()
+        ],
+    ],
+)
+def test_store_prefixes_are_the_ones_already_published(provider_cls, kwargs, name, prefix):
+    provider = provider_cls(**kwargs)
+    assert provider.name == name
+    assert provider.store_prefix == prefix
 
 
 def test_unknown_overseas_region_is_rejected():
@@ -84,15 +101,9 @@ def test_unknown_overseas_region_is_rejected():
         AromeOverseasProvider(region="ATLANTIS")
 
 
-def test_store_prefixes_are_the_ones_already_published():
-    assert AromeFranceProvider().store_prefix == "bkr/dmi/arome_france_0025.icechunk"
-    assert AromeFranceHDProvider().store_prefix == "bkr/dmi/arome_france.icechunk"
-
-
-def test_download_dir_is_under_the_configured_data_dir(local_config, tmp_path):
-    config = dataclasses.replace(local_config, data_dir=tmp_path / "data")
-    provider = AromeFranceHDProvider(config=config)
-    assert provider.download_dir == tmp_path / "data" / "meteofrance_france"
+def test_download_dir_is_under_the_configured_data_dir(local_config):
+    provider = AromeFranceHDProvider(config=local_config)
+    assert provider.download_dir == local_config.data_dir / "meteofrance_france"
     assert provider.download_dir.is_dir()
 
 
@@ -217,7 +228,7 @@ def test_run_partition_writes_and_then_deletes_the_gribs(
         assert not list(path.parent.glob(path.name + "*.idx"))
 
     repo = provider.get_icechunk_repo()
-    store = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    store = read_store(repo)
     assert pd.Timestamp(store.time.values[0]) == it
 
 
@@ -246,91 +257,54 @@ def test_run_partition_keeps_the_gribs_when_the_write_is_skipped(
     assert all(path.exists() for path in files)
 
 
-def test_fetch_gives_up_when_a_required_paquet_is_unavailable(local_config, tmp_path, monkeypatch):
-    provider = AromeFranceProvider(config=dataclasses.replace(local_config, data_dir=tmp_path))
-    monkeypatch.setattr(arome, "download_one", lambda url, dest, **kwargs: None)
+def _serve(monkeypatch, missing=lambda name: False):
+    """Stand in for ``download_one``: write each file unless ``missing(name)`` says otherwise."""
 
-    assert provider.fetch(INIT_TIME) == []
-
-
-def test_fetch_returns_every_paquet_when_all_download(local_config, tmp_path, monkeypatch):
-    provider = AromeFranceProvider(config=dataclasses.replace(local_config, data_dir=tmp_path))
-
-    def _fake_download(url, dest, **kwargs):
+    def fake_download(url, dest, **kwargs):
         dest = pathlib.Path(dest)
+        if missing(dest.name):
+            return None
         dest.write_bytes(b"GRIB")
         return dest
 
-    monkeypatch.setattr(arome, "download_one", _fake_download)
+    monkeypatch.setattr(arome, "download_one", fake_download)
 
-    files = provider.fetch(INIT_TIME)
+
+def test_fetch_returns_every_paquet_when_all_download(local_config, monkeypatch):
+    _serve(monkeypatch)
+    files = AromeFranceProvider(config=local_config).fetch(INIT_TIME)
     assert [pathlib.Path(f).name for f in files] == [
         f"arome__0025__{paquet}__00H06H__2026-04-15T120000Z.grib2"
         for paquet in ("HP1", "HP2", "IP1", "IP3", "SP1", "SP2", "SP3")
     ]
 
 
-def test_overseas_fetch_tolerates_a_paquet_with_no_analysis_step(
-    local_config, tmp_path, monkeypatch
-):
-    config = dataclasses.replace(local_config, data_dir=tmp_path)
-    provider = AromeOverseasProvider(region="INDIEN", config=config)
-
-    def _fake_download(url, dest, **kwargs):
-        dest = pathlib.Path(dest)
-        if "IP4__000H" in dest.name:
-            return None
-        dest.write_bytes(b"GRIB")
-        return dest
-
-    monkeypatch.setattr(arome, "download_one", _fake_download)
-
-    files = provider.fetch(INIT_TIME)
+def test_overseas_fetch_tolerates_a_paquet_with_no_analysis_step(local_config, monkeypatch):
+    _serve(monkeypatch, missing=lambda name: "IP4__000H" in name)
+    files = AromeOverseasProvider(region="INDIEN", config=local_config).fetch(INIT_TIME)
     assert len(files) == 9 * 7 - 1
     assert len(arome._files_for(files, "IP4")) == 6
 
 
-def test_overseas_fetch_gives_up_when_a_paquet_is_missing_entirely(
-    local_config, tmp_path, monkeypatch
-):
-    config = dataclasses.replace(local_config, data_dir=tmp_path)
-    provider = AromeOverseasProvider(region="INDIEN", config=config)
-
-    def _fake_download(url, dest, **kwargs):
-        dest = pathlib.Path(dest)
-        if "HP2__" in dest.name:
-            return None
-        dest.write_bytes(b"GRIB")
-        return dest
-
-    monkeypatch.setattr(arome, "download_one", _fake_download)
-
-    assert provider.fetch(INIT_TIME) == []
-
-
-def test_overseas_fetch_gives_up_on_an_init_time_still_being_published(
-    local_config, tmp_path, monkeypatch
-):
-    """Regression: "any subset will do" accepted a half-published init time.
-
-    `process` merged it with join="outer", `_keep_hours` yielded two valid times instead of
-    seven, and `run_partition`'s "is this init time stored?" check then called the whole thing
-    done — a permanent silent hole at the later steps.
-    """
-    config = dataclasses.replace(local_config, data_dir=tmp_path)
-    provider = AromeOverseasProvider(region="INDIEN", config=config)
-
-    published = ("000H", "001H")
-
-    def _fake_download(url, dest, **kwargs):
-        dest = pathlib.Path(dest)
-        if not any(f"__{step}__" in dest.name for step in published):
-            return None
-        if "IP4__000H" in dest.name:
-            return None
-        dest.write_bytes(b"GRIB")
-        return dest
-
-    monkeypatch.setattr(arome, "download_one", _fake_download)
-
-    assert provider.fetch(INIT_TIME) == []
+@pytest.mark.parametrize(
+    ("provider_cls", "kwargs", "missing"),
+    [
+        pytest.param(AromeFranceProvider, {}, lambda name: True, id="france-nothing-published"),
+        pytest.param(
+            AromeOverseasProvider, {"region": "INDIEN"}, lambda name: "HP2__" in name, id="overseas-paquet-missing"
+        ),
+        # Regression: "any subset will do" accepted a half-published init time. `process`
+        # merged it with join="outer", `_keep_hours` yielded two valid times instead of
+        # seven, and `run_partition`'s "is this init time stored?" check then called the
+        # whole thing done — a permanent silent hole at the later steps.
+        pytest.param(
+            AromeOverseasProvider,
+            {"region": "INDIEN"},
+            lambda name: "IP4__000H" in name or not any(f"__{s}__" in name for s in ("000H", "001H")),
+            id="overseas-still-being-published",
+        ),
+    ],
+)
+def test_fetch_gives_up_on_an_incomplete_init_time(local_config, monkeypatch, provider_cls, kwargs, missing):
+    _serve(monkeypatch, missing=missing)
+    assert provider_cls(config=local_config, **kwargs).fetch(INIT_TIME) == []

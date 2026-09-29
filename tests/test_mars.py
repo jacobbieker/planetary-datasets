@@ -19,6 +19,7 @@ import pandas as pd
 import pytest
 
 from planetary_datasets.config import DEFAULT_BUCKET, MissingCredential, load_config
+from planetary_datasets.memory import MemoryLimitExceeded
 from planetary_datasets.providers import mars, mars_icechunk as mi, mars_pipeline as mp
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -62,19 +63,18 @@ def mars_config(tmp_path):
         yield cfg
 
 
+def _pipeline(config, **kwargs) -> mp.MarsPipeline:
+    return mp.MarsPipeline(
+        start=pd.Timestamp("2026-01-01"), end=pd.Timestamp("2026-01-02"), config=config, **kwargs
+    )
+
+
 # -- directories -------------------------------------------------------
 
 
 def test_source_and_staging_directories_come_from_the_config(mars_config, tmp_path):
     assert mi.default_source_dir(mars_config) == tmp_path / "data" / "mars"
     assert mi.default_staging_dir(mars_config) == tmp_path / "scratch" / "mars_staging"
-
-
-def test_the_pipeline_re_exports_the_same_directory_helpers():
-    # The pipeline and the combine must agree, or the pipeline would stage
-    # into a directory the workers do not clean up.
-    assert mp.default_source_dir is mi.default_source_dir
-    assert mp.default_staging_dir is mi.default_staging_dir
 
 
 def test_no_machine_specific_paths_or_buckets_are_hardcoded():
@@ -188,7 +188,17 @@ def test_mars_service_passes_the_configured_credentials(tmp_path, monkeypatch):
 # -- partial retrievals ------------------------------------------------
 
 
-def test_a_failed_retrieval_leaves_no_partial_file(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("MARS gave up"),
+        # The likeliest way this leaks, and not an Exception: nothing else catches it
+        # part way through a multi-hour retrieval.
+        KeyboardInterrupt(),
+    ],
+    ids=["failed", "interrupted"],
+)
+def test_a_failed_retrieval_leaves_no_partial_file(tmp_path, monkeypatch, error):
     """Regression: the .tmp orphan was invisible to every cleanup path.
 
     A few of those (up to 75GB each) filled the data array, and the free-space check then parked
@@ -198,34 +208,12 @@ def test_a_failed_retrieval_leaves_no_partial_file(tmp_path, monkeypatch):
     class FailingService:
         def execute(self, request, target):
             pathlib.Path(target).write_bytes(b"half a grib")
-            raise RuntimeError("MARS gave up")
+            raise error
 
     monkeypatch.setattr(mars, "mars_service", FailingService)
-    target = tmp_path / "output_20240101_20240103.grib"
 
-    with pytest.raises(RuntimeError, match="MARS gave up"):
-        mars.retrieve_mars({"class": "od"}, target)
-
-    assert not target.exists()
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_an_interrupted_retrieval_leaves_no_partial_file(tmp_path, monkeypatch):
-    """A KeyboardInterrupt is the likeliest way this leaks, and it is not an Exception.
-
-    Nothing else catches it part way through a multi-hour retrieval.
-    """
-
-    class InterruptedService:
-        def execute(self, request, target):
-            pathlib.Path(target).write_bytes(b"half a grib")
-            raise KeyboardInterrupt
-
-    monkeypatch.setattr(mars, "mars_service", InterruptedService)
-    target = tmp_path / "output_20240101_20240103.grib"
-
-    with pytest.raises(KeyboardInterrupt):
-        mars.retrieve_mars({"class": "od"}, target)
+    with pytest.raises(type(error)):
+        mars.retrieve_mars({"class": "od"}, tmp_path / "output_20240101_20240103.grib")
 
     assert list(tmp_path.iterdir()) == []
 
@@ -266,12 +254,7 @@ def test_planned_jobs_land_in_the_source_directory(tmp_path):
 
 
 def test_a_block_larger_than_the_budget_is_refused(monkeypatch):
-    from planetary_datasets.memory import MemoryLimitExceeded  # noqa: PLC0415
-
     monkeypatch.setenv("MEMORY_CEILING_GB", "0.001")
-    from planetary_datasets import config as config_module  # noqa: PLC0415
-
-    config_module.reset_config_cache()
     with pytest.raises(MemoryLimitExceeded, match="GRIB block"):
         mi._load_fields([], (mi.N_MODEL_LEVELS, mi.N_VALUES), "level", False, 24)
 
@@ -281,12 +264,7 @@ def test_each_ingest_worker_gets_a_share_of_the_injected_budget(mars_config):
     # config is untouched here, so this fails if the budget is resolved from
     # ambient state rather than from the Config the pipeline was handed.
     assert mars_config.memory_ceiling_gb == 48.0
-    pipeline = mp.MarsPipeline(
-        start=pd.Timestamp("2026-01-01"),
-        end=pd.Timestamp("2026-01-02"),
-        ingest_workers=3,
-        config=mars_config,
-    )
+    pipeline = _pipeline(mars_config, ingest_workers=3)
     assert pipeline.memory_ceiling_gb == pytest.approx(16.0)
     assert pipeline.cfg["memory_ceiling_gb"] == pytest.approx(16.0)
     # The worker's config carries it too, so `_worker_state` can publish it.
@@ -309,11 +287,7 @@ def test_slab_size_follows_the_injected_budget(mars_config):
 
 
 def test_the_pipeline_resolves_every_path_from_the_config(mars_config, tmp_path):
-    pipeline = mp.MarsPipeline(
-        start=pd.Timestamp("2026-01-01"),
-        end=pd.Timestamp("2026-01-02"),
-        config=mars_config,
-    )
+    pipeline = _pipeline(mars_config)
     assert pipeline.source_dir == (tmp_path / "data" / "mars").resolve()
     assert pipeline.staging_dir == tmp_path / "scratch" / "mars_staging"
     assert pipeline.native.index_path == pipeline.source_dir / "mars_grib_index.parquet"
@@ -325,12 +299,7 @@ def test_the_pipeline_resolves_every_path_from_the_config(mars_config, tmp_path)
 
 
 def test_describe_reports_the_resolved_configuration(mars_config, tmp_path):
-    pipeline = mp.MarsPipeline(
-        start=pd.Timestamp("2026-01-01"),
-        end=pd.Timestamp("2026-01-02"),
-        config=mars_config,
-    )
-    described = pipeline.describe()
+    described = _pipeline(mars_config).describe()
     assert str(tmp_path / "scratch" / "mars_staging") in described
     assert str(tmp_path / "stores" / mi.STORE_PREFIX) in described
     assert "retrievals:" in described

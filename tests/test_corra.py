@@ -12,7 +12,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from planetary_datasets.config import MissingCredential
+from helpers import read_store
+from planetary_datasets.config import MissingCredential, load_config
 from planetary_datasets.providers import corra
 
 
@@ -46,11 +47,9 @@ def test_configure_gpm_without_credentials_raises(local_config):
 
 
 def test_configure_gpm_requires_earthdata_too(tmp_path, monkeypatch):
-    from planetary_datasets import config as config_module
-
     monkeypatch.setenv("GPM_PPS_USERNAME", "pps-user")
     monkeypatch.setenv("GPM_PPS_PASSWORD", "pps-pass")
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
+    cfg = load_config(env_file=tmp_path / "nonexistent.env")
 
     with pytest.raises(MissingCredential) as excinfo:
         corra.configure_gpm(cfg)
@@ -60,8 +59,6 @@ def test_configure_gpm_requires_earthdata_too(tmp_path, monkeypatch):
 def test_configure_gpm_applies_the_config_in_process(tmp_path, monkeypatch):
     """Credentials go into the live gpm config, never into ~/.config_gpm_api.yaml."""
     gpm = pytest.importorskip("gpm")
-    from planetary_datasets import config as config_module
-
     for name, value in {
         "GPM_PPS_USERNAME": "pps-user",
         "GPM_PPS_PASSWORD": "pps-pass",
@@ -70,7 +67,7 @@ def test_configure_gpm_applies_the_config_in_process(tmp_path, monkeypatch):
         "PLANETARY_DATASETS_DATA_DIR": str(tmp_path / "data"),
     }.items():
         monkeypatch.setenv(name, value)
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
+    cfg = load_config(env_file=tmp_path / "nonexistent.env")
 
     with gpm.config.set({}):
         base_dir = corra.configure_gpm(cfg)
@@ -80,13 +77,9 @@ def test_configure_gpm_applies_the_config_in_process(tmp_path, monkeypatch):
         assert gpm.config.get("password_earthdata") == "ed-pass"
 
 
-def test_gpm_base_dir_ends_in_GPM(tmp_path, monkeypatch):
+def test_gpm_base_dir_ends_in_GPM(local_config):
     """The gpm package refuses a base directory that is not named GPM."""
-    from planetary_datasets import config as config_module
-
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "somewhere"))
-    cfg = config_module.load_config(env_file=tmp_path / "nonexistent.env")
-    assert corra.gpm_base_dir(cfg).name == "GPM"
+    assert corra.gpm_base_dir(local_config).name == "GPM"
 
 
 # --- product coverage -----------------------------------------------------------------
@@ -134,23 +127,22 @@ def stub_gpm(monkeypatch, tmp_path):
 def test_a_failed_download_with_nothing_on_disk_raises(local_config, stub_gpm):
     """Otherwise a backfill reports success on every day while writing nothing."""
     stub_gpm["download_error"] = RuntimeError("PPS said no")
-    provider = corra.GPMCorraProvider(config=local_config)
-
     with pytest.raises(RuntimeError, match="no granules are on disk"):
-        provider.fetch(pd.Timestamp("2020-01-01"))
+        corra.GPMCorraProvider(config=local_config).fetch(pd.Timestamp("2020-01-01"))
 
 
-def test_a_failed_download_still_uses_granules_already_on_disk(local_config, stub_gpm):
-    stub_gpm["download_error"] = RuntimeError("PPS said no")
-    stub_gpm["found"] = ["/archive/a.HDF5"]
-    provider = corra.GPMCorraProvider(config=local_config)
-
-    assert provider.fetch(pd.Timestamp("2020-01-01")) == ["/archive/a.HDF5"]
-
-
-def test_a_day_with_no_granules_is_an_ordinary_gap(local_config, stub_gpm):
-    provider = corra.GPMCorraProvider(config=local_config)
-    assert provider.fetch(pd.Timestamp("2020-01-01")) == []
+@pytest.mark.parametrize(
+    ("download_error", "found"),
+    [
+        (RuntimeError("PPS said no"), ["/archive/a.HDF5"]),
+        # No error and nothing found: an ordinary gap in the record.
+        (None, []),
+    ],
+    ids=["failed-download-uses-disk", "no-granules-is-a-gap"],
+)
+def test_fetch_returns_whatever_granules_are_on_disk(local_config, stub_gpm, download_error, found):
+    stub_gpm.update(download_error=download_error, found=found)
+    assert corra.GPMCorraProvider(config=local_config).fetch(pd.Timestamp("2020-01-01")) == found
 
 
 # --- swath conversion -----------------------------------------------------------------
@@ -246,9 +238,7 @@ def test_run_partition_writes_then_appends_the_next_day(local_config, two_days_o
     assert provider.run_partition(pd.Timestamp("2020-01-01")) is True
     assert provider.run_partition(pd.Timestamp("2020-01-02")) is True
 
-    stored = xr.open_zarr(
-        provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
+    stored = read_store(provider)
     times = pd.DatetimeIndex(stored.time.values)
     assert len(times) == 18
     assert times.is_monotonic_increasing

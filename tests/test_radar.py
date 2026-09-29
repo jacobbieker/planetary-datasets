@@ -12,8 +12,8 @@ import pathlib
 import numpy as np
 import pandas as pd
 import pytest
-import xarray as xr
 
+from helpers import read_store as stored
 from planetary_datasets.providers import radar as radar_module
 from planetary_datasets.providers.radar import (
     FMIRadarProvider,
@@ -170,27 +170,43 @@ def write_fmi_hour(
     return [write_fmi(root / fmi_name(hour, hours), hour, hours) for hours in accumulations]
 
 
+FMI_VARIABLES = [f"rainfall_rate_accumulation_{hours}h" for hours in (1, 12, 24)]
+
+
+
+
 # --------------------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------------------
 
 
-def test_stamp_of_parses_both_conventions():
-    assert stamp_of(uk_name(pd.Timestamp("2025-05-29 20:00"))) == pd.Timestamp("2025-05-29 20:00")
-    assert stamp_of(fmi_name(pd.Timestamp("2021-02-02 01:00"), 24)) == pd.Timestamp("2021-02-02 01:00")
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        (uk_name(pd.Timestamp("2025-05-29 20:00")), "2025-05-29 20:00"),
+        (fmi_name(pd.Timestamp("2021-02-02 01:00"), 24), "2021-02-02 01:00"),
+        # The stamp comes from the filename, not a stamped directory above it.
+        ("/archive/202102020100/202505292000_x.h5", "2025-05-29 20:00"),
+    ],
+    ids=["uk", "fmi", "ignores-the-directory"],
+)
+def test_stamp_of_parses_the_filename(name, expected):
+    assert stamp_of(name) == pd.Timestamp(expected)
 
 
-def test_stamp_of_ignores_the_directory_and_rejects_garbage():
-    assert stamp_of("/archive/202102020100/202505292000_x.h5") == pd.Timestamp("2025-05-29 20:00")
+@pytest.mark.parametrize(
+    "name",
+    [
+        "no-timestamp-here.h5",
+        # A 14-digit run is not a YYYYMMDDhhmm stamp; taking its first twelve digits would
+        # silently file the data under the wrong minute.
+        "20250529200000_composite.h5",
+    ],
+    ids=["no-digits", "longer-digit-run"],
+)
+def test_stamp_of_rejects_a_name_without_a_stamp(name):
     with pytest.raises(ValueError):
-        stamp_of("no-timestamp-here.h5")
-
-
-def test_stamp_of_does_not_match_a_longer_digit_run():
-    # A 14-digit run is not a YYYYMMDDhhmm stamp; taking its first twelve digits would
-    # silently file the data under the wrong minute.
-    with pytest.raises(ValueError):
-        stamp_of("20250529200000_composite.h5")
+        stamp_of(name)
 
 
 def test_to_naive_utc_normalises_tz_aware_timestamps():
@@ -201,44 +217,30 @@ def test_to_naive_utc_normalises_tz_aware_timestamps():
     assert to_naive_utc(naive) == naive
 
 
-def test_find_by_pattern_prefers_the_flat_layout(tmp_path):
-    when = pd.Timestamp("2025-05-29 20:00")
-    flat = tmp_path / "a.h5"
-    flat.touch()
-    nested = tmp_path / "deep" / "a.h5"
-    nested.parent.mkdir()
-    nested.touch()
-    assert find_by_pattern(tmp_path, "*.h5", when=when) == ([flat], "")
+@pytest.mark.parametrize(
+    ("files", "hint", "expected_layout"),
+    [
+        # Listed first is the file expected back.
+        (["a.h5", "deep/a.h5"], None, ""),
+        (["2025/05/29/b.h5"], None, "%Y/%m/%d"),
+        (["20250529/b.h5"], "%Y%m%d", "%Y%m%d"),
+        (["odd/layout/b.h5"], None, None),
+    ],
+    ids=["prefers-the-flat-layout", "probes-a-known-date-layout", "hinted-layout", "walk-fallback"],
+)
+def test_find_by_pattern(tmp_path, monkeypatch, files, hint, expected_layout):
+    for name in files:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).touch()
+    if expected_layout is not None:
 
+        def explode(*args, **kwargs):
+            raise AssertionError("a known date layout must not trigger a recursive walk")
 
-def test_find_by_pattern_probes_known_date_layouts_without_walking(tmp_path, monkeypatch):
-    when = pd.Timestamp("2025-05-29 20:00")
-    nested = tmp_path / "2025" / "05" / "29" / "b.h5"
-    nested.parent.mkdir(parents=True)
-    nested.touch()
+        monkeypatch.setattr(pathlib.Path, "rglob", explode)
 
-    def explode(*args, **kwargs):
-        raise AssertionError("a known date layout must not trigger a recursive walk")
-
-    monkeypatch.setattr(pathlib.Path, "rglob", explode)
-    assert find_by_pattern(tmp_path, "*.h5", when=when) == ([nested], "%Y/%m/%d")
-
-
-def test_find_by_pattern_falls_back_to_a_recursive_walk(tmp_path):
-    when = pd.Timestamp("2025-05-29 20:00")
-    nested = tmp_path / "odd" / "layout" / "b.h5"
-    nested.parent.mkdir(parents=True)
-    nested.touch()
-    assert find_by_pattern(tmp_path, "*.h5", when=when) == ([nested], None)
-
-
-def test_find_by_pattern_tries_the_hinted_layout_first(tmp_path):
-    when = pd.Timestamp("2025-05-29 20:00")
-    nested = tmp_path / "20250529" / "b.h5"
-    nested.parent.mkdir(parents=True)
-    nested.touch()
-    found, layout = find_by_pattern(tmp_path, "*.h5", when=when, hint="%Y%m%d")
-    assert (found, layout) == ([nested], "%Y%m%d")
+    found = find_by_pattern(tmp_path, "*.h5", when=pd.Timestamp("2025-05-29 20:00"), hint=hint)
+    assert found == ([tmp_path / files[0]], expected_layout)
 
 
 def test_gdal_metadata_reads_items_by_name():
@@ -288,7 +290,6 @@ def test_odim_grid_reports_missing_attributes():
 def test_open_uk_radar_shapes_and_times(tmp_path):
     when = pd.Timestamp("2025-05-29 20:05")
     ds = open_uk_radar(str(write_odim(tmp_path / uk_name(when), when)))
-    assert set(ds.dims) == {"time", "y", "x"}
     assert ds.sizes == {"time": 1, "y": NY, "x": NX}
     assert pd.Timestamp(ds["time"].values[0]) == when
     assert ds["rainfall_rate"].dtype == np.float16
@@ -306,6 +307,18 @@ def test_open_uk_radar_applies_gain_offset_and_nodata(tmp_path):
     assert rate[0, 1] == pytest.approx(1.0)
     assert rate[0, 2] == pytest.approx(6.0)
     assert rate[0, 3] == pytest.approx(11.0)
+
+
+def test_uk_reader_rejects_a_non_rate_product(tmp_path):
+    """RADARNET also ships reflectivity composites; they must not land in the mm/h store."""
+    import h5py
+
+    when = pd.Timestamp("2025-05-29 20:00")
+    path = write_odim(tmp_path / uk_name(when), when)
+    with h5py.File(path, "r+") as handle:
+        handle["/dataset1/data1/what"].attrs["quantity"] = "DBZH"
+    with pytest.raises(ValueError, match="DBZH"):
+        open_uk_radar(str(path))
 
 
 def test_open_fmi_radar_names_the_variable_from_the_metadata(tmp_path):
@@ -335,24 +348,29 @@ def test_open_fmi_radar_applies_gain_and_nodata(tmp_path):
 
 
 @pytest.fixture
-def uk_provider(tmp_path, monkeypatch, local_config):
-    monkeypatch.setenv("UK_RADAR_ARCHIVE_DIR", str(tmp_path / "uk"))
-    (tmp_path / "uk").mkdir()
-    return UKRadarProvider(config=local_config)
+def make_provider(tmp_path, monkeypatch, local_config):
+    """Build a radar provider over its own empty archive directory under ``tmp_path``."""
+
+    def make(cls, **kwargs):
+        archive = tmp_path / cls.name
+        archive.mkdir()
+        monkeypatch.setenv(cls.archive_env, str(archive))
+        return cls(config=local_config, **kwargs)
+
+    return make
 
 
 @pytest.fixture
-def fmi_provider(tmp_path, monkeypatch, local_config):
-    monkeypatch.setenv("FMI_RADAR_ARCHIVE_DIR", str(tmp_path / "fmi"))
-    (tmp_path / "fmi").mkdir()
-    return FMIRadarProvider(config=local_config)
+def uk_provider(make_provider):
+    return make_provider(UKRadarProvider)
 
 
-def test_archive_dir_defaults_under_the_data_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path / "data"))
-    from planetary_datasets import config as config_module
+@pytest.fixture
+def fmi_provider(make_provider):
+    return make_provider(FMIRadarProvider)
 
-    config_module.reset_config_cache()
+
+def test_archive_dir_defaults_under_the_data_dir(tmp_path, local_config):
     assert UKRadarProvider().archive_dir == tmp_path / "data" / "uk_radar"
     assert FMIRadarProvider().archive_dir == tmp_path / "data" / "fmi_radar"
 
@@ -368,14 +386,10 @@ def test_missing_archive_directory_is_a_configuration_error(tmp_path, monkeypatc
         UKRadarProvider(config=local_config).fetch(pd.Timestamp("2025-05-29 20:00"))
 
 
-def test_fetch_returns_empty_for_a_genuinely_absent_hour(uk_provider):
-    assert uk_provider.fetch(pd.Timestamp("2025-05-29 20:00")) == []
-
-
-def test_fetch_returns_every_frame_of_a_complete_hour(uk_provider):
+def test_a_genuinely_absent_hour_is_nothing_to_do(uk_provider):
     hour = pd.Timestamp("2025-05-29 20:00")
-    write_uk_hour(uk_provider.archive_dir, hour)
-    assert len(uk_provider.fetch(hour)) == 12
+    assert uk_provider.fetch(hour) == []
+    assert uk_provider.run_partition(hour) is False
 
 
 def test_fetch_raises_on_a_partly_filled_hour(uk_provider):
@@ -385,10 +399,8 @@ def test_fetch_raises_on_a_partly_filled_hour(uk_provider):
         uk_provider.fetch(hour)
 
 
-def test_allow_partial_writes_what_is_there(tmp_path, monkeypatch, local_config):
-    monkeypatch.setenv("UK_RADAR_ARCHIVE_DIR", str(tmp_path / "uk"))
-    (tmp_path / "uk").mkdir()
-    provider = UKRadarProvider(config=local_config, allow_partial=True)
+def test_allow_partial_fetches_what_is_there(make_provider):
+    provider = make_provider(UKRadarProvider, allow_partial=True)
     hour = pd.Timestamp("2025-05-29 20:00")
     write_uk_hour(provider.archive_dir, hour, steps=3)
     assert len(provider.fetch(hour)) == 3
@@ -415,21 +427,15 @@ def test_fmi_fetch_requires_every_accumulation_window(fmi_provider):
     with pytest.raises(IncompletePartition, match="12h"):
         fmi_provider.fetch(hour)
 
-
-def test_fmi_fetch_accepts_a_complete_hour(fmi_provider):
-    hour = pd.Timestamp("2021-02-02 01:00")
-    write_fmi_hour(fmi_provider.archive_dir, hour)
+    write_fmi_hour(fmi_provider.archive_dir, hour, accumulations=(12,))
     assert len(fmi_provider.fetch(hour)) == 3
 
 
-def test_fmi_accumulations_can_be_narrowed(tmp_path, monkeypatch, local_config):
-    monkeypatch.setenv("FMI_RADAR_ARCHIVE_DIR", str(tmp_path / "fmi"))
-    (tmp_path / "fmi").mkdir()
-    provider = FMIRadarProvider(config=local_config)
-    provider.accumulations = (1,)
+def test_fmi_accumulations_can_be_narrowed(fmi_provider):
+    fmi_provider.accumulations = (1,)
     hour = pd.Timestamp("2021-02-02 01:00")
-    write_fmi_hour(provider.archive_dir, hour, accumulations=(1,))
-    assert len(provider.fetch(hour)) == 1
+    write_fmi_hour(fmi_provider.archive_dir, hour, accumulations=(1,))
+    assert len(fmi_provider.fetch(hour)) == 1
 
 
 # --------------------------------------------------------------------------------------
@@ -445,139 +451,6 @@ def test_uk_process_concatenates_the_hour_in_time_order(uk_provider):
     times = pd.DatetimeIndex(ds["time"].values)
     assert times[0] == hour
     assert times.is_monotonic_increasing
-
-
-def test_fmi_process_merges_the_three_windows(fmi_provider):
-    hour = pd.Timestamp("2021-02-02 01:00")
-    paths = write_fmi_hour(fmi_provider.archive_dir, hour)
-    ds = fmi_provider.process([str(p) for p in paths], hour)
-    assert set(ds.data_vars) == {
-        "rainfall_rate_accumulation_1h",
-        "rainfall_rate_accumulation_12h",
-        "rainfall_rate_accumulation_24h",
-    }
-    assert ds.sizes["time"] == 1
-
-
-def test_fmi_process_rejects_products_from_different_times(fmi_provider):
-    hour = pd.Timestamp("2021-02-02 01:00")
-    good = write_fmi(fmi_provider.archive_dir / fmi_name(hour, 1), hour, hours=1)
-    later = hour + pd.Timedelta(hours=1)
-    # Same filename stamp, different observation time in the metadata.
-    odd = write_fmi(fmi_provider.archive_dir / fmi_name(hour, 24), later, hours=24)
-    with pytest.raises(ValueError, match="disagree"):
-        fmi_provider.process([str(good), str(odd)], hour)
-
-
-def test_run_partition_writes_and_is_idempotent(uk_provider):
-    hour = pd.Timestamp("2025-05-29 20:00")
-    write_uk_hour(uk_provider.archive_dir, hour)
-
-    assert uk_provider.run_partition(hour) is True
-    assert uk_provider.run_partition(hour) is False
-
-    repo = uk_provider.get_icechunk_repo()
-    stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
-    assert stored.sizes["time"] == 12
-    assert pd.Timestamp(stored["time"].values[0]) == hour
-    assert stored["rainfall_rate"].dtype == np.float16
-
-
-def test_run_partition_accepts_a_tz_aware_partition_start(uk_provider):
-    """Dagster hands over tz-aware starts; they must land as the same naive UTC time."""
-    hour = pd.Timestamp("2025-05-29 20:00")
-    write_uk_hour(uk_provider.archive_dir, hour)
-
-    assert uk_provider.run_partition(hour.tz_localize("UTC")) is True
-    # A second run under the *naive* timestamp must recognise the data as already stored.
-    assert uk_provider.run_partition(hour) is False
-
-    stored = xr.open_zarr(
-        uk_provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
-    assert stored.sizes["time"] == 12
-    assert pd.Timestamp(stored["time"].values[0]) == hour
-
-
-def test_run_partition_appends_the_next_hour(uk_provider):
-    first = pd.Timestamp("2025-05-29 20:00")
-    second = pd.Timestamp("2025-05-29 21:00")
-    write_uk_hour(uk_provider.archive_dir, first)
-    write_uk_hour(uk_provider.archive_dir, second)
-
-    assert uk_provider.run_partition(first) is True
-    assert uk_provider.run_partition(second) is True
-
-    stored = xr.open_zarr(
-        uk_provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
-    assert stored.sizes["time"] == 24
-    assert pd.DatetimeIndex(stored["time"].values).is_monotonic_increasing
-
-
-def test_run_partition_on_an_absent_hour_writes_nothing(uk_provider):
-    assert uk_provider.run_partition(pd.Timestamp("2025-05-29 20:00")) is False
-
-
-def test_fmi_run_partition_round_trips(fmi_provider):
-    hour = pd.Timestamp("2021-02-02 01:00")
-    write_fmi_hour(fmi_provider.archive_dir, hour)
-
-    assert fmi_provider.run_partition(hour.tz_localize("UTC")) is True
-
-    stored = xr.open_zarr(
-        fmi_provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
-    assert pd.Timestamp(stored["time"].values[0]) == hour
-    assert "rainfall_rate_accumulation_12h" in stored.data_vars
-
-
-def test_run_range_skips_hours_already_stored(uk_provider):
-    hours = pd.date_range("2025-05-29 20:00", periods=2, freq="1h")
-    for hour in hours:
-        write_uk_hour(uk_provider.archive_dir, hour)
-
-    assert uk_provider.run_range(hours) == 2
-    assert uk_provider.run_range(hours) == 0
-
-
-def test_run_range_normalises_tz_aware_timestamps(uk_provider):
-    hours = pd.date_range("2025-05-29 20:00", periods=1, freq="1h", tz="UTC")
-    write_uk_hour(uk_provider.archive_dir, pd.Timestamp("2025-05-29 20:00"))
-    assert uk_provider.run_range(hours) == 1
-    stored = xr.open_zarr(
-        uk_provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
-    assert pd.Timestamp(stored["time"].values[0]) == pd.Timestamp("2025-05-29 20:00")
-
-
-def test_write_rejects_a_grid_that_does_not_match_the_store(uk_provider):
-    hour = pd.Timestamp("2025-05-29 20:00")
-    write_uk_hour(uk_provider.archive_dir, hour)
-    assert uk_provider.run_partition(hour) is True
-
-    repo = uk_provider.get_icechunk_repo()
-    processed = uk_provider.process(
-        [str(p) for p in sorted(uk_provider.archive_dir.glob("*.h5"))],
-        hour,
-    )
-    shifted = processed.assign_coords(
-        time=processed["time"] + pd.Timedelta(hours=1),
-        x=processed["x"] + 500.0,
-    )
-    assert uk_provider.write_to_icechunk(repo, shifted) is False
-
-
-def test_uk_reader_rejects_a_non_rate_product(tmp_path):
-    """RADARNET also ships reflectivity composites; they must not land in the mm/h store."""
-    import h5py
-
-    when = pd.Timestamp("2025-05-29 20:00")
-    path = write_odim(tmp_path / uk_name(when), when)
-    with h5py.File(path, "r+") as handle:
-        handle["/dataset1/data1/what"].attrs["quantity"] = "DBZH"
-    with pytest.raises(ValueError, match="DBZH"):
-        open_uk_radar(str(path))
 
 
 def test_uk_process_refuses_to_outer_join_a_changed_grid(uk_provider, monkeypatch):
@@ -597,42 +470,115 @@ def test_uk_process_refuses_to_outer_join_a_changed_grid(uk_provider, monkeypatc
         uk_provider.process([str(p) for p in paths], hour)
 
 
-def test_fmi_partial_hour_still_carries_every_variable(tmp_path, monkeypatch, local_config):
+def test_fmi_process_merges_the_three_windows(fmi_provider):
+    hour = pd.Timestamp("2021-02-02 01:00")
+    paths = write_fmi_hour(fmi_provider.archive_dir, hour)
+    ds = fmi_provider.process([str(p) for p in paths], hour)
+    assert set(ds.data_vars) == set(FMI_VARIABLES)
+    assert ds.sizes["time"] == 1
+
+
+def test_fmi_process_rejects_products_from_different_times(fmi_provider):
+    hour = pd.Timestamp("2021-02-02 01:00")
+    good = write_fmi(fmi_provider.archive_dir / fmi_name(hour, 1), hour, hours=1)
+    later = hour + pd.Timedelta(hours=1)
+    # Same filename stamp, different observation time in the metadata.
+    odd = write_fmi(fmi_provider.archive_dir / fmi_name(hour, 24), later, hours=24)
+    with pytest.raises(ValueError, match="disagree"):
+        fmi_provider.process([str(good), str(odd)], hour)
+
+
+@pytest.mark.parametrize("tz", [None, "UTC"], ids=["naive", "tz-aware"])
+def test_run_partition_writes_and_is_idempotent(uk_provider, tz):
+    """Dagster hands over tz-aware starts; they must land as the same naive UTC time."""
+    hour = pd.Timestamp("2025-05-29 20:00")
+    write_uk_hour(uk_provider.archive_dir, hour)
+
+    assert uk_provider.partition_stored(hour) is False
+    assert uk_provider.run_partition(hour.tz_localize(tz)) is True
+    # A strict provider skips an hour by its start alone, under the *naive* timestamp too.
+    assert uk_provider.partition_stored(hour) is True
+    assert uk_provider.run_partition(hour) is False
+
+    ds = stored(uk_provider)
+    assert ds.sizes["time"] == 12
+    assert pd.Timestamp(ds["time"].values[0]) == hour
+    assert ds["rainfall_rate"].dtype == np.float16
+
+
+def test_run_partition_appends_the_next_hour(uk_provider):
+    first = pd.Timestamp("2025-05-29 20:00")
+    second = pd.Timestamp("2025-05-29 21:00")
+    write_uk_hour(uk_provider.archive_dir, first)
+    write_uk_hour(uk_provider.archive_dir, second)
+
+    assert uk_provider.run_partition(first) is True
+    assert uk_provider.run_partition(second) is True
+
+    ds = stored(uk_provider)
+    assert ds.sizes["time"] == 24
+    assert pd.DatetimeIndex(ds["time"].values).is_monotonic_increasing
+
+
+def test_fmi_run_partition_round_trips(fmi_provider):
+    hour = pd.Timestamp("2021-02-02 01:00")
+    write_fmi_hour(fmi_provider.archive_dir, hour)
+
+    assert fmi_provider.run_partition(hour.tz_localize("UTC")) is True
+
+    ds = stored(fmi_provider)
+    assert pd.Timestamp(ds["time"].values[0]) == hour
+    assert "rainfall_rate_accumulation_12h" in ds.data_vars
+
+
+@pytest.mark.parametrize("tz", [None, "UTC"], ids=["naive", "tz-aware"])
+def test_run_range_skips_hours_already_stored(uk_provider, tz):
+    hours = pd.date_range("2025-05-29 20:00", periods=2, freq="1h", tz=tz)
+    for hour in hours:
+        write_uk_hour(uk_provider.archive_dir, hour.tz_localize(None))
+
+    assert uk_provider.run_range(hours) == 2
+    assert uk_provider.run_range(hours) == 0
+    assert pd.Timestamp(stored(uk_provider)["time"].values[0]) == pd.Timestamp("2025-05-29 20:00")
+
+
+def test_write_rejects_a_grid_that_does_not_match_the_store(uk_provider):
+    hour = pd.Timestamp("2025-05-29 20:00")
+    paths = write_uk_hour(uk_provider.archive_dir, hour)
+    assert uk_provider.run_partition(hour) is True
+
+    processed = uk_provider.process([str(p) for p in paths], hour)
+    shifted = processed.assign_coords(
+        time=processed["time"] + pd.Timedelta(hours=1),
+        x=processed["x"] + 500.0,
+    )
+    assert uk_provider.write_to_icechunk(uk_provider.get_icechunk_repo(), shifted) is False
+
+
+def test_fmi_partial_hour_still_carries_every_variable(make_provider):
     """A partial write must not fix the store's schema to a subset of the products."""
-    monkeypatch.setenv("FMI_RADAR_ARCHIVE_DIR", str(tmp_path / "fmi"))
-    (tmp_path / "fmi").mkdir()
-    provider = FMIRadarProvider(config=local_config, allow_partial=True)
+    provider = make_provider(FMIRadarProvider, allow_partial=True)
 
     first = pd.Timestamp("2021-02-02 01:00")
     write_fmi_hour(provider.archive_dir, first, accumulations=(1, 24))
     assert provider.run_partition(first) is True
 
-    stored = xr.open_zarr(
-        provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
-    assert set(stored.data_vars) == {
-        "rainfall_rate_accumulation_1h",
-        "rainfall_rate_accumulation_12h",
-        "rainfall_rate_accumulation_24h",
-    }
-    assert bool(np.isnan(stored["rainfall_rate_accumulation_12h"].values).all())
+    ds = stored(provider)
+    assert set(ds.data_vars) == set(FMI_VARIABLES)
+    assert bool(np.isnan(ds["rainfall_rate_accumulation_12h"].values).all())
 
     # The next, complete hour must append rather than be rejected for a variable mismatch.
     second = first + pd.Timedelta(hours=1)
     write_fmi_hour(provider.archive_dir, second)
     assert provider.run_partition(second) is True
-    stored = xr.open_zarr(
-        provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
-    assert stored.sizes["time"] == 2
-    assert not bool(np.isnan(stored["rainfall_rate_accumulation_12h"].isel(time=1).values).all())
+    ds = stored(provider)
+    assert ds.sizes["time"] == 2
+    assert not bool(np.isnan(ds["rainfall_rate_accumulation_12h"].isel(time=1).values).all())
 
 
-def test_allow_partial_revisits_an_hour_that_later_fills_in(tmp_path, monkeypatch, local_config):
+def test_allow_partial_revisits_an_hour_that_later_fills_in(make_provider):
     """A short commit must not make the whole hour look done for ever."""
-    monkeypatch.setenv("UK_RADAR_ARCHIVE_DIR", str(tmp_path / "uk"))
-    (tmp_path / "uk").mkdir()
-    provider = UKRadarProvider(config=local_config, allow_partial=True)
+    provider = make_provider(UKRadarProvider, allow_partial=True)
     hour = pd.Timestamp("2025-05-29 20:00")
 
     write_uk_hour(provider.archive_dir, hour, steps=4)
@@ -642,20 +588,9 @@ def test_allow_partial_revisits_an_hour_that_later_fills_in(tmp_path, monkeypatc
     write_uk_hour(provider.archive_dir, hour)
     assert provider.run_partition(hour) is True
 
-    stored = xr.open_zarr(
-        provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
-    )
-    assert stored.sizes["time"] == 12
+    assert stored(provider).sizes["time"] == 12
     assert provider.partition_stored(hour) is True
     assert provider.run_partition(hour) is False
-
-
-def test_strict_provider_skips_an_hour_by_its_start_alone(uk_provider):
-    hour = pd.Timestamp("2025-05-29 20:00")
-    write_uk_hour(uk_provider.archive_dir, hour)
-    assert uk_provider.partition_stored(hour) is False
-    assert uk_provider.run_partition(hour) is True
-    assert uk_provider.partition_stored(hour) is True
 
 
 def test_provider_by_name():

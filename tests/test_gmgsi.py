@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from helpers import read_store
 from planetary_datasets.providers import gmgsi
 from planetary_datasets.providers.gmgsi import (
     V1_CHANNELS,
@@ -55,19 +56,19 @@ def provider(local_config):
     return GMGSIProvider(config=local_config)
 
 
-def test_store_path_resolves_through_config(provider, tmp_path):
+@pytest.fixture
+def processed(provider, v3_files):
+    """The v3 source files processed into one hour of the store."""
+    return provider.process(v3_files, TIME)
+
+
+def test_stores_resolve_locally_and_legacy_has_its_own_prefix(provider, local_config, tmp_path):
     assert provider.store_path.startswith(str(tmp_path))
-    assert "s3://" not in provider.store_path
-
-
-def test_legacy_store_is_a_different_prefix(local_config):
     assert GMGSILegacyProvider(config=local_config).store_prefix != GMGSIProvider.store_prefix
 
 
-def test_process_merges_channels_as_uint8(provider, v3_files):
-    ds = provider.process(v3_files, TIME)
-
-    assert set(ds.data_vars) == {
+def test_process_merges_channels_as_uint8(processed):
+    assert set(processed.data_vars) == {
         "vis",
         "wv",
         "lwir",
@@ -77,23 +78,20 @@ def test_process_merges_channels_as_uint8(provider, v3_files):
         "lwir_dqf",
         "swir_dqf",
     }
-    assert all(ds[var].dtype == np.uint8 for var in ds.data_vars)
-    assert "quality_information" not in ds.variables
-    assert ds["time"].values[0] == np.datetime64(TIME)
+    assert all(processed[var].dtype == np.uint8 for var in processed.data_vars)
+    assert "quality_information" not in processed.variables
+    assert processed["time"].values[0] == np.datetime64(TIME)
 
 
-def test_process_renames_lat_lon_and_keeps_them_two_dimensional(provider, v3_files):
-    ds = provider.process(v3_files, TIME)
-
-    assert "latitude" in ds.coords and "longitude" in ds.coords
-    assert "lat" not in ds.coords and "lon" not in ds.coords
-    assert ds["latitude"].dims == ("yc", "xc")
-    assert ds["latitude"].dtype == np.float32
+def test_process_renames_lat_lon_and_keeps_them_two_dimensional(processed):
+    assert "latitude" in processed.coords and "longitude" in processed.coords
+    assert "lat" not in processed.coords and "lon" not in processed.coords
+    assert processed["latitude"].dims == ("yc", "xc")
+    assert processed["latitude"].dtype == np.float32
 
 
-def test_process_fills_missing_quality_flags_with_255(provider, v3_files):
-    ds = provider.process(v3_files, TIME)
-    assert ds["vis_dqf"].values[0, 0, 0] == 255
+def test_process_fills_missing_quality_flags_with_255(processed):
+    assert processed["vis_dqf"].values[0, 0, 0] == 255
 
 
 def test_process_rejects_an_empty_input_list(provider):
@@ -137,34 +135,54 @@ def test_fetch_before_the_archive_starts_returns_nothing(provider):
     assert provider.fetch(pd.Timestamp("2020-01-01T00:00")) == []
 
 
-def test_fetch_returns_nothing_when_a_channel_is_missing(provider, monkeypatch, tmp_path):
-    class OneChannelOnly:
-        def glob(self, pattern):
-            return ["noaa-gmgsi-pds/x/GLOBCOMPVIS_v3r0_blend_s1_e1_c1.nc"] if "VIS" in pattern else []
+class FakeS3:
+    """Stands in for the anonymous S3 filesystem, recording every download.
 
-        def get(self, key, dest):
-            (tmp_path / "downloaded").write_text(key)
+    Each channel lists one key per creation stamp in ``creations``; channels whose stem
+    is not in ``stems`` (when given) list nothing, and ``broken`` makes every download
+    fail part-way through.
+    """
 
-    monkeypatch.setattr("planetary_datasets.providers.gmgsi._anon_s3", OneChannelOnly)
+    def __init__(self, creations=("c1",), stems=None, broken=False):
+        self.creations = creations
+        self.stems = stems
+        self.broken = broken
+        self.fetched: list[str] = []
+
+    def glob(self, pattern):
+        stem = pattern.split("/")[-1].split("_")[0]
+        if self.stems is not None and stem not in self.stems:
+            return []
+        return [f"bucket/{stem}_v3r0_blend_s1_e1_{c}.nc" for c in self.creations]
+
+    def get(self, key, dest):
+        self.fetched.append(key)
+        with open(dest, "wb") as handle:
+            handle.write(b"half" if self.broken else b"payload")
+        if self.broken:
+            raise OSError("connection reset")
+
+
+@pytest.fixture
+def fake_s3(monkeypatch):
+    """Install a :class:`FakeS3` built from the given options and return it."""
+
+    def install(**options):
+        fake = FakeS3(**options)
+        monkeypatch.setattr(gmgsi, "_anon_s3", lambda: fake)
+        return fake
+
+    return install
+
+
+def test_fetch_returns_nothing_when_a_channel_is_missing(provider, fake_s3, tmp_path):
+    fake_s3(stems={"GLOBCOMPVIS"})
     assert provider.fetch(TIME, temp_dir=tmp_path) == []
 
 
-def test_fetch_downloads_one_file_per_channel(provider, monkeypatch, tmp_path):
-    class FakeS3:
-        def __init__(self):
-            self.fetched: list[str] = []
-
-        def glob(self, pattern):
-            stem = pattern.split("/")[-1].split("_")[0]
-            # Two creation times for the same hour; the newest must win.
-            return [f"bucket/{stem}_v3r0_blend_s1_e1_c1.nc", f"bucket/{stem}_v3r0_blend_s1_e1_c2.nc"]
-
-        def get(self, key, dest):
-            self.fetched.append(key)
-            open(dest, "wb").write(b"payload")
-
-    fake = FakeS3()
-    monkeypatch.setattr("planetary_datasets.providers.gmgsi._anon_s3", lambda: fake)
+def test_fetch_downloads_the_newest_file_per_channel(provider, fake_s3, tmp_path):
+    # Two creation times for the same hour; the newest must win.
+    fake = fake_s3(creations=("c1", "c2"))
 
     files = provider.fetch(TIME, temp_dir=tmp_path)
 
@@ -173,37 +191,15 @@ def test_fetch_downloads_one_file_per_channel(provider, monkeypatch, tmp_path):
     assert all(path.endswith("_c2.nc") for path in files)
 
 
-def test_fetch_skips_files_already_on_disk(provider, monkeypatch, tmp_path):
-    calls: list[str] = []
-
-    class FakeS3:
-        def glob(self, pattern):
-            stem = pattern.split("/")[-1].split("_")[0]
-            return [f"bucket/{stem}_v3r0_blend_s1_e1_c1.nc"]
-
-        def get(self, key, dest):
-            calls.append(key)
-            open(dest, "wb").write(b"payload")
-
-    monkeypatch.setattr("planetary_datasets.providers.gmgsi._anon_s3", FakeS3)
-
+def test_fetch_skips_files_already_on_disk(provider, fake_s3, tmp_path):
+    fake = fake_s3()
     provider.fetch(TIME, temp_dir=tmp_path)
     provider.fetch(TIME, temp_dir=tmp_path)
+    assert len(fake.fetched) == len(V3_CHANNELS)
 
-    assert len(calls) == len(V3_CHANNELS)
 
-
-def test_fetch_does_not_leave_partial_files_behind(provider, monkeypatch, tmp_path):
-    class BrokenS3:
-        def glob(self, pattern):
-            return ["bucket/GLOBCOMPVIS_v3r0_blend_s1_e1_c1.nc"]
-
-        def get(self, key, dest):
-            open(dest, "wb").write(b"half")
-            raise OSError("connection reset")
-
-    monkeypatch.setattr("planetary_datasets.providers.gmgsi._anon_s3", BrokenS3)
-
+def test_fetch_does_not_leave_partial_files_behind(provider, fake_s3, tmp_path):
+    fake_s3(broken=True)
     assert provider.fetch(TIME, temp_dir=tmp_path) == []
     assert list(tmp_path.rglob("*.part")) == []
     assert list(tmp_path.rglob("*.nc")) == []
@@ -215,7 +211,7 @@ def test_run_partition_writes_then_skips(provider, monkeypatch, v3_files):
     assert provider.run_partition(TIME) is True
     assert provider.run_partition(TIME) is False
 
-    stored = xr.open_zarr(provider.get_icechunk_repo().readonly_session("main").store, consolidated=False)
+    stored = read_store(provider)
     assert pd.Timestamp(stored["time"].values[0]) == TIME
 
 
@@ -225,13 +221,19 @@ def test_timestamps_are_clipped_to_the_archive_start(provider):
     assert len(times) == 4
 
 
-def test_rewrite_store_copies_every_readable_timestep(tmp_path):
+def _write_source_store(tmp_path, steps=3):
+    """Write a small zarr store with one chunk per hourly timestep."""
     source = tmp_path / "source.zarr"
     ds = xr.Dataset(
-        {"vis": (("time", "x"), np.arange(6, dtype="uint8").reshape(3, 2))},
-        coords={"time": pd.date_range("2026-01-01", periods=3, freq="1h"), "x": [0, 1]},
+        {"vis": (("time", "x"), np.arange(2 * steps, dtype="uint8").reshape(steps, 2))},
+        coords={"time": pd.date_range("2026-01-01", periods=steps, freq="1h"), "x": [0, 1]},
     )
     ds.chunk({"time": 1}).to_zarr(source, consolidated=False)
+    return source, ds
+
+
+def test_rewrite_store_copies_every_readable_timestep(tmp_path):
+    source, ds = _write_source_store(tmp_path)
 
     failed = rewrite_store_skipping_bad_chunks(source, tmp_path / "destination.zarr", max_workers=1)
 
@@ -241,14 +243,7 @@ def test_rewrite_store_copies_every_readable_timestep(tmp_path):
 
 
 def test_rewrite_store_drops_unreadable_timesteps(tmp_path, monkeypatch):
-    source = tmp_path / "source.zarr"
-    times = pd.date_range("2026-01-01", periods=3, freq="1h")
-    ds = xr.Dataset(
-        {"vis": (("time", "x"), np.arange(6, dtype="uint8").reshape(3, 2))},
-        coords={"time": times, "x": [0, 1]},
-    )
-    ds.chunk({"time": 1}).to_zarr(source, consolidated=False)
-
+    source, ds = _write_source_store(tmp_path)
     real_reads = gmgsi._timestep_reads
     monkeypatch.setattr(
         gmgsi, "_timestep_reads", lambda src, i: False if i == 1 else real_reads(src, i)
@@ -259,69 +254,57 @@ def test_rewrite_store_drops_unreadable_timesteps(tmp_path, monkeypatch):
     assert failed == [1]
     copied = xr.open_zarr(tmp_path / "destination.zarr", consolidated=False)
     # The corrupt step is absent rather than present as an all-zero image.
+    times = pd.DatetimeIndex(ds["time"].values)
     assert list(pd.DatetimeIndex(copied["time"].values)) == [times[0], times[2]]
     assert np.array_equal(copied["vis"].values, ds["vis"].values[[0, 2]])
 
 
 def test_rewrite_store_refuses_a_store_it_cannot_read_at_all(tmp_path, monkeypatch):
-    source = tmp_path / "source.zarr"
-    xr.Dataset(
-        {"vis": (("time", "x"), np.zeros((2, 2), dtype="uint8"))},
-        coords={"time": pd.date_range("2026-01-01", periods=2, freq="1h"), "x": [0, 1]},
-    ).chunk({"time": 1}).to_zarr(source, consolidated=False)
-
+    source, _ = _write_source_store(tmp_path, steps=2)
     monkeypatch.setattr(gmgsi, "_timestep_reads", lambda src, i: False)
 
     with pytest.raises(ValueError, match="no readable timesteps"):
         rewrite_store_skipping_bad_chunks(source, tmp_path / "destination.zarr", max_workers=1)
 
 
-def test_hierarchical_concat_rejects_too_few_tiles():
+@pytest.mark.parametrize(
+    "tiles,kwargs,match",
+    [(10, {}, "at least"), (100, {"resolution": "020"}, "resolution")],
+    ids=["too-few-tiles", "unknown-resolution"],
+)
+def test_hierarchical_concat_rejects_bad_input(tiles, kwargs, match):
     from planetary_datasets.providers.himawari_h9_tiles import hierarchical_concat_h9
 
-    with pytest.raises(ValueError, match="at least"):
-        hierarchical_concat_h9([xr.Dataset()] * 10)
+    with pytest.raises(ValueError, match=match):
+        hierarchical_concat_h9([xr.Dataset()] * tiles, **kwargs)
 
 
-def test_hierarchical_concat_rejects_an_unknown_resolution():
-    from planetary_datasets.providers.himawari_h9_tiles import hierarchical_concat_h9
-
-    with pytest.raises(ValueError, match="resolution"):
-        hierarchical_concat_h9([xr.Dataset()] * 100, resolution="020")
-
-
-def test_asset_fails_rather_than_marking_an_empty_hour_materialised(local_config, monkeypatch):
-    """An hour with no data must go red so Dagster retries it, not green and forgotten."""
+def _asset_context(start: pd.Timestamp):
+    """The slice of a Dagster asset context that ``_materialize`` reads."""
     import logging
     from types import SimpleNamespace
 
+    return SimpleNamespace(
+        partition_time_window=SimpleNamespace(start=start), log=logging.getLogger("test")
+    )
+
+
+def test_asset_fails_rather_than_marking_an_empty_hour_materialised(provider, monkeypatch):
+    """An hour with no data must go red so Dagster retries it, not green and forgotten."""
     import dagster as dg
 
     from dags.assets import gmgsi as gmgsi_assets
 
-    provider = GMGSIProvider(config=local_config)
     monkeypatch.setattr(provider, "fetch", lambda it, temp_dir=None, **kw: [])
-    context = SimpleNamespace(
-        partition_time_window=SimpleNamespace(start=pd.Timestamp("2026-01-02T03:00", tz="UTC")),
-        log=logging.getLogger("test"),
-    )
-
     with pytest.raises(dg.Failure):
-        gmgsi_assets._materialize(context, provider)
+        gmgsi_assets._materialize(_asset_context(TIME.tz_localize("UTC")), provider)
 
 
-def test_asset_succeeds_when_the_hour_is_already_stored(local_config, monkeypatch, v3_files):
-    import logging
-    from types import SimpleNamespace
-
+def test_asset_succeeds_when_the_hour_is_already_stored(provider, monkeypatch, v3_files):
     from dags.assets import gmgsi as gmgsi_assets
 
-    provider = GMGSIProvider(config=local_config)
     monkeypatch.setattr(provider, "fetch", lambda it, temp_dir=None, **kw: v3_files)
-    context = SimpleNamespace(
-        partition_time_window=SimpleNamespace(start=TIME.tz_localize("UTC")),
-        log=logging.getLogger("test"),
-    )
+    context = _asset_context(TIME.tz_localize("UTC"))
 
     assert gmgsi_assets._materialize(context, provider).metadata["written"].value is True
     assert gmgsi_assets._materialize(context, provider).metadata["written"].value is False

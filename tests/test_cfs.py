@@ -72,35 +72,23 @@ def test_integer_variables_are_promoted_whether_or_not_padding_happens():
     assert np.isnan(padded["cover"].values[0, 3:]).all()
 
 
-def test_pad_to_steps_refuses_to_truncate():
-    ds = cfs_like_dataset("2011-01-01", steps=6)
-    with pytest.raises(ValueError, match="more than the 4"):
+@pytest.mark.parametrize(
+    ("ds", "match"),
+    [
+        (cfs_like_dataset("2011-01-01", steps=6), "more than the 4"),
+        (cfs_like_dataset("2011-01-01", steps=3).isel(step=slice(0, 0)), "empty 'step' dimension"),
+        (cfs_like_dataset("2011-01-01", steps=2).isel(step=0, drop=True), "no 'step' dimension"),
+    ],
+    ids=["would-truncate", "empty-step", "no-step"],
+)
+def test_pad_to_steps_rejects_what_it_cannot_pad(ds, match):
+    with pytest.raises(ValueError, match=match):
         cfs.pad_to_steps(ds, 4)
-
-
-def test_pad_to_steps_rejects_an_empty_step_dimension():
-    ds = cfs_like_dataset("2011-01-01", steps=3).isel(step=slice(0, 0))
-    with pytest.raises(ValueError, match="empty 'step' dimension"):
-        cfs.pad_to_steps(ds, 4)
-
-
-def test_pad_to_steps_needs_the_dimension():
-    ds = cfs_like_dataset("2011-01-01", steps=2).isel(step=0, drop=True)
-    with pytest.raises(ValueError, match="no 'step' dimension"):
-        cfs.pad_to_steps(ds, 4)
-
-
-def test_max_step_count(tmp_path):
-    paths = []
-    for steps, init in ((2, "2011-01-01"), (5, "2011-01-02")):
-        path = tmp_path / f"cfs_{pd.Timestamp(init):%Y%m%d}00.nc"
-        cfs_like_dataset(init, steps).to_netcdf(path)
-        paths.append(path)
-    assert cfs.max_step_count(paths) == 5
 
 
 @pytest.fixture
 def source_dir(tmp_path):
+    """Two initialisations on disk, a short run of 2 steps and a long one of 5."""
     directory = tmp_path / "cfs"
     directory.mkdir()
     for init, steps in (("2011-01-01", 2), ("2011-01-02", 5)):
@@ -109,16 +97,18 @@ def source_dir(tmp_path):
     return directory
 
 
-def test_discover_indexes_by_initialisation(source_dir, local_config):
-    provider = cfs.CFSSeasonalProvider(source_dir=source_dir, config=local_config)
-    index = provider.discover()
-    assert sorted(index) == [pd.Timestamp("2011-01-01"), pd.Timestamp("2011-01-02")]
+@pytest.fixture
+def provider(source_dir, local_config):
+    return cfs.CFSSeasonalProvider(source_dir=source_dir, config=local_config)
 
 
-def test_discover_ignores_files_without_a_timestamp(source_dir, local_config):
+def test_max_step_count(source_dir):
+    assert cfs.max_step_count(sorted(source_dir.glob("*.nc"))) == 5
+
+
+def test_discover_indexes_by_initialisation_and_ignores_unstamped_files(source_dir, provider):
     (source_dir / "readme.nc").write_bytes(b"")
-    provider = cfs.CFSSeasonalProvider(source_dir=source_dir, config=local_config)
-    assert len(provider.discover()) == 2
+    assert sorted(provider.discover()) == [pd.Timestamp("2011-01-01"), pd.Timestamp("2011-01-02")]
 
 
 def test_missing_source_dir_is_an_error_not_an_empty_archive(tmp_path, local_config):
@@ -127,18 +117,15 @@ def test_missing_source_dir_is_an_error_not_an_empty_archive(tmp_path, local_con
         provider.discover()
 
 
-def test_fetch_returns_empty_for_an_unknown_initialisation(source_dir, local_config):
-    provider = cfs.CFSSeasonalProvider(source_dir=source_dir, config=local_config)
+def test_fetch_returns_empty_for_an_unknown_initialisation(provider):
     assert provider.fetch(pd.Timestamp("1999-01-01")) == []
 
 
-def test_max_steps_is_measured_when_not_given(source_dir, local_config):
-    provider = cfs.CFSSeasonalProvider(source_dir=source_dir, config=local_config)
+def test_max_steps_is_measured_when_not_given(provider):
     assert provider.max_steps == 5
 
 
-def test_run_all_pads_and_appends_every_initialisation(source_dir, local_config):
-    provider = cfs.CFSSeasonalProvider(source_dir=source_dir, max_steps=5, config=local_config)
+def test_run_all_pads_and_appends_every_initialisation(provider):
     assert provider.run_all() == 2
     # A second pass finds nothing left to do.
     assert provider.run_all() == 0
@@ -172,7 +159,6 @@ def test_process_rejects_a_file_whose_time_disagrees_with_its_name(tmp_path, loc
         provider.process([str(path)], pd.Timestamp("2011-01-01"))
 
 
-def test_timezone_aware_partition_is_normalised(source_dir, local_config):
-    provider = cfs.CFSSeasonalProvider(source_dir=source_dir, max_steps=5, config=local_config)
+def test_timezone_aware_partition_is_normalised(provider):
     assert provider.run_partition(pd.Timestamp("2011-01-01", tz="UTC")) is True
     assert provider.run_partition(pd.Timestamp("2011-01-01")) is False

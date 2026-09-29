@@ -44,11 +44,6 @@ def _raw_geos_dataset(it: pd.Timestamp = STAMP) -> xr.Dataset:
     )
 
 
-@pytest.fixture(autouse=True)
-def no_checksum_env(monkeypatch):
-    """Opening a store writes this variable, so keep it from leaking between tests."""
-    monkeypatch.delenv("AWS_REQUEST_CHECKSUM_CALCULATION", raising=False)
-
 
 @pytest.fixture
 def geos_file(tmp_path):
@@ -56,6 +51,18 @@ def geos_file(tmp_path):
     path = tmp_path / "GEOS.cf.ana.20260101_0015z.R0.nc4"
     _raw_geos_dataset().to_netcdf(path)
     return path
+
+
+@pytest.fixture
+def v2(local_config):
+    """A GEOS-CF v2 provider writing to the local store."""
+    return GEOSProvider(version=2, config=local_config)
+
+
+@pytest.fixture
+def nothing_published(monkeypatch):
+    """Every download finds nothing, as for an instant the portal has not published."""
+    monkeypatch.setattr(geos_module, "download_one", lambda url, dest, **kwargs: None)
 
 
 # --- URL construction -------------------------------------------------------------------
@@ -88,30 +95,29 @@ def test_unknown_version_is_rejected():
 # --- preprocessing ----------------------------------------------------------------------
 
 
-def test_preprocess_renames_coords_and_drops_the_level_dim():
-    """lon/lat become longitude/latitude and the degenerate lev axis disappears."""
-    ds = preprocess_geos(_raw_geos_dataset())
+@pytest.mark.parametrize("passes", [1, 2], ids=["raw", "already-preprocessed"])
+def test_preprocess_renames_coords_and_drops_the_level_dim(passes):
+    """lon/lat become longitude/latitude and the degenerate lev axis disappears.
+
+    Preprocessing an already-preprocessed dataset is harmless.
+    """
+    ds = _raw_geos_dataset()
+    for _ in range(passes):
+        ds = preprocess_geos(ds)
     assert set(ds.dims) == {"time", "latitude", "longitude"}
     assert "lev" not in ds.variables
 
 
-def test_preprocess_is_idempotent_on_already_renamed_data():
-    """Preprocessing an already-preprocessed dataset is harmless."""
-    ds = preprocess_geos(preprocess_geos(_raw_geos_dataset()))
-    assert set(ds.dims) == {"time", "latitude", "longitude"}
-
-
-def test_float16_downcast_spares_sea_level_pressure():
-    """SLP needs the float32 range; the other variables do not."""
-    ds = preprocess_geos(_raw_geos_dataset(), to_float16=True)
-    assert ds["T2M"].dtype == np.float16
+@pytest.mark.parametrize(
+    "kwargs,t2m_dtype",
+    [({}, np.float32), ({"to_float16": True}, np.float16)],
+    ids=["default", "float16"],
+)
+def test_float16_downcast_is_opt_in_and_spares_sea_level_pressure(kwargs, t2m_dtype):
+    """Downcasting is opt-in, and SLP needs the float32 range even then."""
+    ds = preprocess_geos(_raw_geos_dataset(), **kwargs)
+    assert ds["T2M"].dtype == t2m_dtype
     assert ds["SLP"].dtype == np.float32
-
-
-def test_float16_downcast_is_off_by_default():
-    """Downcasting is opt-in, so callers cannot lose precision by accident."""
-    ds = preprocess_geos(_raw_geos_dataset())
-    assert ds["T2M"].dtype == np.float32
 
 
 # --- provider configuration -------------------------------------------------------------
@@ -142,23 +148,20 @@ def test_day_timestamps_covers_the_whole_day_at_quarter_hours():
     assert stamps[-1] == pd.Timestamp("2026-01-01T23:45")
 
 
-def test_checksum_env_is_not_set_at_import_time(monkeypatch):
+def test_checksum_env_is_not_set_at_import_time():
     """Importing the module must not change process-wide S3 behaviour."""
-    monkeypatch.delenv("AWS_REQUEST_CHECKSUM_CALCULATION", raising=False)
     importlib.reload(geos_module)
     assert "AWS_REQUEST_CHECKSUM_CALCULATION" not in os.environ
 
 
-def test_opening_the_store_sets_the_checksum_env(local_config, monkeypatch):
-    """The source.coop checksum workaround is applied when a store is opened."""
-    monkeypatch.delenv("AWS_REQUEST_CHECKSUM_CALCULATION", raising=False)
-    GEOSProvider(version=1, config=local_config).get_icechunk_repo()
-    assert os.environ["AWS_REQUEST_CHECKSUM_CALCULATION"] == "WHEN_REQUIRED"
+@pytest.mark.parametrize("inherited", [None, "WHEN_SUPPORTED"], ids=["unset", "inherited"])
+def test_opening_the_store_sets_the_checksum_env(local_config, monkeypatch, inherited):
+    """The source.coop checksum workaround is applied when a store is opened.
 
-
-def test_checksum_env_overrides_an_inherited_value(local_config, monkeypatch):
-    """An inherited WHEN_SUPPORTED would break every commit, so it must be overridden."""
-    monkeypatch.setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "WHEN_SUPPORTED")
+    An inherited WHEN_SUPPORTED would break every commit, so it must be overridden.
+    """
+    if inherited:
+        monkeypatch.setenv("AWS_REQUEST_CHECKSUM_CALCULATION", inherited)
     GEOSProvider(version=1, config=local_config).get_icechunk_repo()
     assert os.environ["AWS_REQUEST_CHECKSUM_CALCULATION"] == "WHEN_REQUIRED"
 
@@ -169,41 +172,37 @@ def test_checksum_env_overrides_an_inherited_value(local_config, monkeypatch):
 def test_fetch_returns_the_first_revision_that_downloads(
     local_config, tmp_path, monkeypatch, geos_file
 ):
-    """Later revisions are not requested once an earlier one succeeds."""
-    tried: list[str] = []
+    """Later revisions are not requested once an earlier one succeeds.
 
-    def fake_download(url, dest, **kwargs):
-        tried.append(url)
+    The first pass over the v2 revisions probes each with one attempt, not the retry budget.
+    """
+    budgets: list[int] = []
+
+    def fake_download(url, dest, retries=3, **kwargs):
+        budgets.append(retries)
         # Pretend only the .R1 revision was published for this instant.
         return geos_file if ".R1.nc4" in url else None
 
     monkeypatch.setattr(geos_module, "download_one", fake_download)
-    files = GEOSProvider(version=2, config=local_config).fetch(STAMP, temp_dir=tmp_path)
+    files = GEOSProvider(version=2, retries=5, config=local_config).fetch(STAMP, temp_dir=tmp_path)
 
     assert files == [str(geos_file)]
-    assert len(tried) == 2
-
-
-def test_fetch_probes_candidates_cheaply_before_spending_retries(
-    local_config, tmp_path, monkeypatch, geos_file
-):
-    """The first pass over the v2 revisions uses one attempt each, not the retry budget."""
-    budgets: list[int] = []
-
-    def fake_download(url, dest, retries=3, **kwargs):
-        budgets.append(retries)
-        return geos_file if ".R1.nc4" in url else None
-
-    monkeypatch.setattr(geos_module, "download_one", fake_download)
-    GEOSProvider(version=2, retries=5, config=local_config).fetch(STAMP, temp_dir=tmp_path)
-
     assert budgets == [1, 1]
 
 
-def test_fetch_uses_the_full_retry_budget_for_a_single_candidate(
-    local_config, tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    "version,retries,expected",
+    [
+        # v1 has nothing to probe, so its one URL gets the retries straight away.
+        (1, 5, [5]),
+        # A blip that kills the probe pass still gets the full retry budget afterwards.
+        (2, 4, [1, 1, 1, 4, 4, 4]),
+    ],
+    ids=["single-candidate", "every-probe-fails"],
+)
+def test_fetch_retry_budget_when_nothing_downloads(
+    local_config, tmp_path, monkeypatch, version, retries, expected
 ):
-    """v1 has nothing to probe, so its one URL gets the retries straight away."""
     budgets: list[int] = []
 
     def fake_download(url, dest, retries=3, **kwargs):
@@ -211,112 +210,82 @@ def test_fetch_uses_the_full_retry_budget_for_a_single_candidate(
         return None
 
     monkeypatch.setattr(geos_module, "download_one", fake_download)
-    GEOSProvider(version=1, retries=5, config=local_config).fetch(STAMP, temp_dir=tmp_path)
-
-    assert budgets == [5]
-
-
-def test_fetch_retries_properly_when_every_candidate_fails_the_cheap_pass(
-    local_config, tmp_path, monkeypatch
-):
-    """A blip that kills the probe pass still gets the full retry budget afterwards."""
-    budgets: list[int] = []
-
-    def fake_download(url, dest, retries=3, **kwargs):
-        budgets.append(retries)
-        return None
-
-    monkeypatch.setattr(geos_module, "download_one", fake_download)
-    GEOSProvider(version=2, retries=4, config=local_config).fetch(STAMP, temp_dir=tmp_path)
-
-    assert budgets == [1, 1, 1, 4, 4, 4]
-
-
-def test_fetch_returns_nothing_when_no_revision_exists(local_config, tmp_path, monkeypatch):
-    """An instant the portal has not published is nothing to do, not a failure."""
-    monkeypatch.setattr(geos_module, "download_one", lambda url, dest, **kwargs: None)
-    assert GEOSProvider(version=2, config=local_config).fetch(STAMP, temp_dir=tmp_path) == []
+    provider = GEOSProvider(version=version, retries=retries, config=local_config)
+    assert provider.fetch(STAMP, temp_dir=tmp_path) == []
+    assert budgets == expected
 
 
 # --- process and write ------------------------------------------------------------------
 
 
-def test_process_shapes_the_file_for_the_store(local_config, geos_file):
+def test_process_shapes_the_file_for_the_store(v2, geos_file):
     """Processing yields the store's dimensions and one chunk per timestep."""
-    ds = GEOSProvider(version=2, config=local_config).process([str(geos_file)], STAMP)
+    ds = v2.process([str(geos_file)], STAMP)
     assert set(ds.dims) == {"time", "latitude", "longitude"}
     assert ds.chunksizes["time"] == (1,)
     assert pd.Timestamp(ds["time"].values[0]) == STAMP
 
 
-def test_process_rejects_a_file_whose_time_is_not_the_partition(local_config, tmp_path):
+def test_process_rejects_a_file_whose_time_is_not_the_partition(v2, tmp_path):
     """A mismatched timestamp must not be written under the partition's key."""
     path = tmp_path / "wrong.nc4"
     _raw_geos_dataset(pd.Timestamp("2026-01-01T12:00")).to_netcdf(path)
     with pytest.raises(ValueError, match="reports time"):
-        GEOSProvider(version=2, config=local_config).process([str(path)], STAMP)
+        v2.process([str(path)], STAMP)
 
 
-def test_run_partition_writes_then_skips(local_config, monkeypatch, geos_file):
+def test_run_partition_writes_then_skips(v2, monkeypatch, geos_file):
     """The first run writes the instant; the second finds it already stored."""
     monkeypatch.setattr(geos_module, "download_one", lambda url, dest, **kwargs: geos_file)
-    provider = GEOSProvider(version=2, config=local_config)
 
-    assert provider.run_partition(STAMP) is True
-    assert provider.run_partition(STAMP) is False
+    assert v2.run_partition(STAMP) is True
+    assert v2.run_partition(STAMP) is False
 
-    session = provider.get_icechunk_repo().readonly_session("main")
+    session = v2.get_icechunk_repo().readonly_session("main")
     stored = xr.open_zarr(session.store, consolidated=False)
     assert pd.Timestamp(stored["time"].values[0]) == STAMP
     assert set(stored.data_vars) == {"SLP", "T2M"}
 
 
-def test_run_partition_skips_when_nothing_is_published(local_config, monkeypatch):
+def test_run_partition_skips_when_nothing_is_published(v2, nothing_published):
     """An unavailable instant returns False without writing anything."""
-    monkeypatch.setattr(geos_module, "download_one", lambda url, dest, **kwargs: None)
-    assert GEOSProvider(version=2, config=local_config).run_partition(STAMP) is False
+    assert v2.run_partition(STAMP) is False
 
 
 # --- day-level results ------------------------------------------------------------------
 
 
 def test_run_day_reports_a_wholly_unpublished_day_as_neither_written_nor_failed(
-    local_config, monkeypatch
+    v2, nothing_published
 ):
     """A day the portal has no data for must not look like an error."""
-    monkeypatch.setattr(geos_module, "download_one", lambda url, dest, **kwargs: None)
-    result = GEOSProvider(version=2, config=local_config).run_day(pd.Timestamp("2026-01-01"))
-    assert (result.attempted, result.written, result.failed) == (96, 0, 0)
-    assert result.unavailable == 96
+    result = v2.run_day(pd.Timestamp("2026-01-01"))
+    assert (result.attempted, result.written, result.failed, result.unavailable) == (96, 0, 0, 96)
 
 
-def test_run_day_distinguishes_failures_from_missing_data(local_config, monkeypatch):
+def test_run_day_distinguishes_failures_from_missing_data(v2, monkeypatch):
     """Exceptions are counted separately so a total outage is visible to the caller."""
 
     def boom(url, dest, **kwargs):
         raise OSError("the portal is down")
 
     monkeypatch.setattr(geos_module, "download_one", boom)
-    result = GEOSProvider(version=2, config=local_config).run_day(pd.Timestamp("2026-01-01"))
-    assert result.written == 0
-    assert result.failed == 96
-    assert result.unavailable == 0
+    result = v2.run_day(pd.Timestamp("2026-01-01"))
+    assert (result.written, result.failed, result.unavailable) == (0, 96, 0)
 
 
-def test_run_day_counts_the_instants_it_writes(local_config, monkeypatch, geos_file):
+def test_run_day_counts_the_instants_it_writes(v2, monkeypatch, geos_file):
     """Only the one instant our synthetic file matches is written; the rest are absent."""
+
     def only_the_one_instant(url, dest, **kwargs):
         return geos_file if "0015z" in url else None
 
     monkeypatch.setattr(geos_module, "download_one", only_the_one_instant)
-    result = GEOSProvider(version=2, config=local_config).run_day(STAMP)
+    result = v2.run_day(STAMP)
     assert (result.attempted, result.written, result.failed) == (96, 1, 0)
 
 
-def test_run_days_sums_across_days(local_config, monkeypatch):
+def test_run_days_sums_across_days(v2, nothing_published):
     """Running several days aggregates into a single result."""
-    monkeypatch.setattr(geos_module, "download_one", lambda url, dest, **kwargs: None)
-    days = pd.date_range("2026-01-01", periods=2, freq="1D")
-    result = GEOSProvider(version=2, config=local_config).run_days(days)
-    assert result.attempted == 192
-    assert result.written == 0
+    result = v2.run_days(pd.date_range("2026-01-01", periods=2, freq="1D"))
+    assert (result.attempted, result.written) == (192, 0)
