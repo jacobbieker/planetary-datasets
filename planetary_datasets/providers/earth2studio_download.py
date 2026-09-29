@@ -1217,12 +1217,39 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+@contextlib.contextmanager
+def private_cache(target: str | os.PathLike) -> Iterator[None]:
+    """Point earth2studio's cache at a directory of this run's own, removed afterwards.
+
+    Several sources use a fixed temporary directory under the cache root, so two runs
+    sharing one delete each other's files; and a cache that outlives the run only grows.
+    The directory sits on the staging volume (``mkdtemp``, so private to this user) rather
+    than in a shared temporary directory. A cache chosen by the caller is left alone.
+    """
+    if os.environ.get("EARTH2STUDIO_CACHE"):
+        yield
+        return
+    import shutil
+    import tempfile
+
+    root = pathlib.Path(target) / ".cache"
+    root.mkdir(parents=True, exist_ok=True)
+    cache = tempfile.mkdtemp(prefix="run-", dir=root)
+    os.environ["EARTH2STUDIO_CACHE"] = cache
+    try:
+        yield
+    finally:
+        del os.environ["EARTH2STUDIO_CACHE"]
+        shutil.rmtree(cache, ignore_errors=True)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point; reports through Dagster Pipes when launched by it."""
     args = _parse_args(argv)
 
     def run() -> dict[str, Any]:
-        return download(args.dataset, args.time, args.target, allow_partial=args.allow_partial)
+        with private_cache(args.target):
+            return download(args.dataset, args.time, args.target, allow_partial=args.allow_partial)
 
     if not os.environ.get("DAGSTER_PIPES_CONTEXT"):
         run()

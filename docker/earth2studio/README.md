@@ -152,7 +152,7 @@ the registry or the downloader rather than patched upstream.
 - **`async_timeout` bounds download and decode together**, so it is raised
   well above the 600 s default.
 - **Several sources share a fixed temporary cache directory**, so each
-  container gets a private `EARTH2STUDIO_CACHE`.
+  run gets a private cache directory on the staging volume, removed when it ends.
 
 ## OPERA
 

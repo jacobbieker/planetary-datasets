@@ -543,6 +543,17 @@ def test_sentinel_values_below_the_valid_minimum_become_nan():
     assert float(ds["refc"].max()) == 0.0
 
 
+def test_each_run_gets_a_private_cache_that_is_removed_afterwards(tmp_path, monkeypatch):
+    import os
+
+    monkeypatch.delenv("EARTH2STUDIO_CACHE", raising=False)
+    with dl.private_cache(tmp_path):
+        cache = pathlib.Path(os.environ["EARTH2STUDIO_CACHE"])
+        assert cache.parent == tmp_path / ".cache" and cache.is_dir()
+        assert oct(cache.stat().st_mode & 0o777) == "0o700"
+    assert not cache.exists() and "EARTH2STUDIO_CACHE" not in os.environ
+
+
 def test_pipes_accepts_the_summaries():
     from dagster_pipes import _normalize_param_metadata
 
@@ -602,7 +613,6 @@ def test_the_download_asset_runs_the_image_with_only_the_credentials_it_needs(
         "obs", "--dataset", "metop_amsua", "--time", "2026-09-01T00:00", "--target", "/data/earth2studio",
     ]  # fmt: skip
     assert call["env"]["EUMETSAT_CONSUMER_KEY"] == "key"
-    assert "EARTH2STUDIO_CACHE" in call["env"]
     root = str((local_config / "data" / "earth2studio").resolve())
     assert call["container_kwargs"]["volumes"] == {
         root: {"bind": "/data/earth2studio", "mode": "rw"}

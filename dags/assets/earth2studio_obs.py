@@ -89,13 +89,12 @@ def download_command(dataset: Dataset, it) -> list[str]:
 
 
 def container_env(dataset: Dataset) -> dict[str, str]:
-    """Environment for the container: a private cache, and only the credentials it needs.
+    """Environment for the container: only the credentials it needs.
 
-    Several earth2studio sources use a fixed temporary cache directory, so containers
-    sharing one would delete each other's files; each run gets its own inside the
-    container instead. Credential variables map onto the config field of the same name.
+    Credential variables map onto the config field of the same name. (The downloader
+    makes its own private cache directory; see ``earth2studio_download.private_cache``.)
     """
-    env = {"EARTH2STUDIO_CACHE": "/tmp/earth2studio-cache"}
+    env: dict[str, str] = {}
     if dataset.credentials:
         try:
             values = get_config().credentials.require(*(v.lower() for v in dataset.credentials))

@@ -39,7 +39,13 @@ ENV PYTHONPATH=/app \
     HOME=/tmp \
     OPERA_ARCHIVE_DIR=/data/opera \
     E2S_OBS_ARCHIVE_DIR=/data/earth2studio
-RUN mkdir -p /data/opera /data/earth2studio && chmod -R a+rwX /data /app
+# The staging roots are always bind mounts, which keep the host directory's ownership, so
+# the image directories need no write access of their own; nor does /app.
+RUN mkdir -p /data/opera /data/earth2studio
 VOLUME ["/data"]
+
+# Root only for the install above. Dagster runs the container as the host user; run by
+# hand, it falls back to the unprivileged image user rather than root.
+USER $MAMBA_USER
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/_entrypoint.sh", "/usr/local/bin/run_earth2studio"]
