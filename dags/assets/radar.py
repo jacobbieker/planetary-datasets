@@ -21,30 +21,27 @@ top-level ``dags/assets/*.py`` modules.
 """
 
 import datetime as dt
-import os
 from typing import Type
 
 import dagster as dg
 import pandas as pd
-from dagster_docker import PipesDockerClient
 
+from dags.staged import make_staged_download_asset, make_staged_publish_asset
 from planetary_datasets.providers.opera import (
     OPERAProvider,
     OPERARainfallProvider,
     OPERAReflectivityProvider,
 )
+from planetary_datasets.providers.opera_download import DEFAULT_TARGET as OPERA_CONTAINER_ARCHIVE
 from planetary_datasets.providers.radar import (
     FMIRadarProvider,
     LocalArchiveRadarProvider,
     UKRadarProvider,
-    to_naive_utc,
 )
 
 #: Both composites are indexed by the hour. The UK partition covers twelve five-minute
 #: frames; the FMI partition covers the three accumulation windows published on the hour.
-hourly_partitions = dg.HourlyPartitionsDefinition(
-    start_date=dt.datetime(2020, 1, 1), end_offset=-1
-)
+hourly_partitions = dg.HourlyPartitionsDefinition(start_date=dt.datetime(2020, 1, 1), end_offset=-1)
 
 
 def _build_asset(
@@ -105,9 +102,11 @@ fmi_radar = _build_asset(
 #: Image built by ``docker/opera-radar/build.sh``.
 OPERA_IMAGE_ENV = "OPERA_RADAR_IMAGE"
 DEFAULT_OPERA_IMAGE = "planetary-datasets/opera-radar:latest"
-#: Where the image expects the staging root to be mounted.
-OPERA_CONTAINER_ARCHIVE = "/data/opera"
 OPERA_SOURCE_URL = "https://eumetnet.github.io/openradardata-documentation/"
+#: A reflectivity hour is twelve 3800x4400 frames plus their lat/lon grid.
+OPERA_CONTAINER_MEMORY_GB = 6
+#: Publishing reads one staged hour back.
+OPERA_PUBLISH_MEMORY_GB = 4
 
 #: The partitions start where the existing stores do. Appends must be in time order, so
 #: an earlier start would only produce hours the store refuses.
@@ -131,130 +130,57 @@ def opera_download_command(provider: OPERAProvider, it: pd.Timestamp) -> list[st
     ]
 
 
-def opera_container_kwargs(archive_root) -> dict:
-    """``docker run`` options: mount the staging root, and write into it as this user."""
-    kwargs: dict = {
-        "volumes": {str(archive_root): {"bind": OPERA_CONTAINER_ARCHIVE, "mode": "rw"}},
-        # A reflectivity hour is twelve 3800x4400 frames plus their lat/lon grid.
-        "mem_limit": "6g",
-    }
-    if hasattr(os, "getuid"):
-        kwargs["user"] = f"{os.getuid()}:{os.getgid()}"
-    return kwargs
-
-
-def _build_opera_download_asset(
+def _build_opera_assets(
     provider_cls: Type[OPERAProvider],
     partitions_def: dg.PartitionsDefinition,
+    download_description: str,
     description: str,
-) -> dg.AssetsDefinition:
-    """Build the asset that stages one hour of an OPERA product."""
-
-    @dg.asset(
+) -> tuple[dg.AssetsDefinition, dg.AssetsDefinition]:
+    """The download and publish assets for one OPERA product."""
+    source = {"source": dg.MetadataValue.url(OPERA_SOURCE_URL)}
+    download = make_staged_download_asset(
         name=f"{provider_cls.name}_download",
-        description=description,
+        description=download_description,
         partitions_def=partitions_def,
-        compute_kind="docker",
-        metadata={
-            "source": dg.MetadataValue.url(OPERA_SOURCE_URL),
-            "image_env": dg.MetadataValue.text(OPERA_IMAGE_ENV),
-        },
+        publisher=provider_cls,
+        image_env=OPERA_IMAGE_ENV,
+        default_image=DEFAULT_OPERA_IMAGE,
+        container_dir=OPERA_CONTAINER_ARCHIVE,
+        command=lambda it: opera_download_command(provider_cls, it),
+        container_memory_gb=OPERA_CONTAINER_MEMORY_GB,
         # The archive can lag real time; a failed hour is retried rather than left.
         retry_policy=dg.RetryPolicy(max_retries=3, delay=1800, backoff=dg.Backoff.EXPONENTIAL),
         tags={"dagster/concurrency_key": "opera-download"},
+        metadata=source,
     )
-    def _asset(
-        context: dg.AssetExecutionContext, pipes_docker_client: PipesDockerClient
-    ) -> dg.MaterializeResult:
-        it = to_naive_utc(context.partition_time_window.start)
-        provider = provider_cls()
-        # Checked here, not only downstream, so a backfill over hours already in the
-        # store does not download them all again just to throw them away.
-        if provider.partition_stored(it):
-            return dg.MaterializeResult(
-                metadata={"skipped": dg.MetadataValue.text(f"{it} already in the store")}
-            )
-        if not provider.appendable(it):
-            context.log.warning(
-                f"{provider.name}: {it} is before the latest time in {provider.store_path}; "
-                "the store only accepts appends in time order, so it cannot be filled"
-            )
-            return dg.MaterializeResult(
-                metadata={"skipped": dg.MetadataValue.text(f"{it} predates the store's end")}
-            )
-        root = provider.archive_root.expanduser().resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        return pipes_docker_client.run(
-            image=os.environ.get(OPERA_IMAGE_ENV, DEFAULT_OPERA_IMAGE),
-            command=opera_download_command(provider, it),
-            container_kwargs=opera_container_kwargs(root),
-            context=context,
-        ).get_materialize_result()
-
-    return _asset
-
-
-def _build_opera_asset(
-    provider_cls: Type[OPERAProvider],
-    partitions_def: dg.PartitionsDefinition,
-    download: dg.AssetsDefinition,
-    description: str,
-) -> dg.AssetsDefinition:
-    """Build the asset that appends a staged OPERA hour to its store."""
-
-    @dg.asset(
+    publish = make_staged_publish_asset(
         name=provider_cls.name,
         description=description,
         partitions_def=partitions_def,
-        deps=[download],
-        compute_kind="python",
+        download=download,
+        publisher=provider_cls,
+        memory_gb=OPERA_PUBLISH_MEMORY_GB,
         metadata={
+            **source,
             "store": dg.MetadataValue.text(provider_cls.store_prefix),
             "archive_dir_env": dg.MetadataValue.text(provider_cls.archive_env),
-            "source": dg.MetadataValue.url(OPERA_SOURCE_URL),
         },
     )
-    def _asset(context) -> dg.MaterializeResult:
-        it = to_naive_utc(context.partition_time_window.start)
-        provider = provider_cls()
-        written = provider.run_partition(it)
-        removed = provider.discard_staged(it)
-        context.log.info(f"{provider.name}: {it} -> {provider.store_path} (written={written})")
-        return dg.MaterializeResult(
-            metadata={
-                "written": dg.MetadataValue.bool(written),
-                "partition": dg.MetadataValue.text(str(it)),
-                "store_path": dg.MetadataValue.path(provider.store_path),
-                "staged_files_removed": dg.MetadataValue.int(len(removed)),
-            }
-        )
-
-    return _asset
+    return download, publish
 
 
-opera_rainfall_download = _build_opera_download_asset(
+opera_rainfall_download, opera_rainfall = _build_opera_assets(
     OPERARainfallProvider,
     opera_rainfall_partitions,
     "One hour of OPERA rain rate and 1 h accumulation (15-minute frames) staged as netCDF "
     "by the docker/opera-radar image.",
-)
-opera_rainfall = _build_opera_asset(
-    OPERARainfallProvider,
-    opera_rainfall_partitions,
-    opera_rainfall_download,
     "EUMETNET OPERA pan-European rain rate and 1 h accumulation, 2 km, 15-minute frames.",
 )
-
-opera_dbz_download = _build_opera_download_asset(
+opera_dbz_download, opera_dbz = _build_opera_assets(
     OPERAReflectivityProvider,
     opera_dbz_partitions,
     "One hour of OPERA composite reflectivity (5-minute frames) staged as netCDF by the "
     "docker/opera-radar image.",
-)
-opera_dbz = _build_opera_asset(
-    OPERAReflectivityProvider,
-    opera_dbz_partitions,
-    opera_dbz_download,
     "EUMETNET OPERA pan-European composite reflectivity, 1 km, 5-minute frames.",
 )
 

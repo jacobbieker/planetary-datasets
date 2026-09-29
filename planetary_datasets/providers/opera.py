@@ -18,13 +18,12 @@ Dagster assets delete a staged hour once it is safely in the store; see
 
 The stores only accept appends in time order, and both existing ones were written out of
 order by the original scripts, so each has gaps before its latest time that can no longer
-be filled. :meth:`OPERAProvider.appendable` identifies those hours so they are neither
-downloaded nor left staged.
+be filled. :meth:`~planetary_datasets.base.BaseProvider.appendable` identifies those hours
+so they are neither downloaded nor left staged.
 """
 
 from __future__ import annotations
 
-import os
 import pathlib
 from typing import List
 
@@ -32,9 +31,9 @@ import pandas as pd
 import xarray as xr
 from loguru import logger
 
-from planetary_datasets.common.store import existing_times
+from planetary_datasets.providers._timestamps import to_naive_utc
 from planetary_datasets.providers.opera_download import PRODUCTS, Product
-from planetary_datasets.providers.radar import LocalArchiveRadarProvider, to_naive_utc
+from planetary_datasets.providers.radar import LocalArchiveRadarProvider
 
 #: Environment variable naming the staging root shared by every OPERA product.
 ARCHIVE_ENV = "OPERA_ARCHIVE_DIR"
@@ -65,10 +64,7 @@ class OPERAProvider(LocalArchiveRadarProvider):
     @property
     def archive_root(self) -> pathlib.Path:
         """The staging root the downloader image is given, shared by every product."""
-        raw = (os.environ.get(self.archive_env) or "").strip()
-        if raw:
-            return pathlib.Path(raw).expanduser()
-        return self.config.data_dir / self.archive_subdir
+        return super().archive_dir
 
     @property
     def archive_dir(self) -> pathlib.Path:
@@ -111,28 +107,25 @@ class OPERAProvider(LocalArchiveRadarProvider):
                     f"{self.name}: {pathlib.Path(path).name} is missing frames "
                     f"{[t.strftime('%H:%M') for t in absent]}"
                 )
-        return ds.sortby("time")
+        # sortby copies the whole hour even when it is already in order, which it
+        # normally is.
+        return ds if times.is_monotonic_increasing else ds.sortby("time")
 
-    def appendable(self, it: pd.Timestamp) -> bool:
-        """True when the store would accept this hour.
+    def has_staged(self, it: pd.Timestamp) -> bool:
+        """True when this hour's file has been staged."""
+        return bool(self.candidates(to_naive_utc(it)))
 
-        :func:`~planetary_datasets.common.store.write_to_icechunk` drops every step at or
-        before the latest stored time, so an hour that starts there can never be written.
-        """
-        stored = existing_times(self.get_icechunk_repo(), append_dim=self.append_dim)
-        if stored.size == 0:
-            return True
-        return self.window(it)[0] > pd.Timestamp(stored.max())
-
-    def discard_staged(self, it: pd.Timestamp) -> List[pathlib.Path]:
+    def discard_staged(self, it: pd.Timestamp, settled: bool = False) -> List[pathlib.Path]:
         """Delete this hour's staged file once it has nowhere left to go.
 
-        That is when the hour is in the store, or when the store can no longer accept it.
+        That is once the store can no longer accept it: it is stored, or the store has
+        moved past it. ``settled=True`` says the caller already knows, having just
+        written it or found the store closed to it, so the store is not read again.
         Otherwise a staged file that failed to write stays behind for inspection and the
         next attempt.
         """
         it = to_naive_utc(it)
-        if not (self.partition_stored(it) or not self.appendable(it)):
+        if not settled and self.appendable(it):
             return []
         removed = []
         for path in self.candidates(it):

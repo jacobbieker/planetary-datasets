@@ -34,7 +34,7 @@ NY, NX = 6, 5
 
 
 class FakeOPERA:
-    """Mimics ``earth2studio.data.OPERA.__call__`` for a single frame."""
+    """Mimics ``earth2studio.data.OPERA.__call__``, which fails whole if any frame does."""
 
     def __init__(self, missing: set[dt.datetime] = frozenset()):
         self.missing = set(missing)
@@ -42,15 +42,20 @@ class FakeOPERA:
 
     def __call__(self, time, variable):
         self.calls.append((list(time), list(variable)))
-        if time[0] in self.missing:
-            raise FileNotFoundError(f"no composite at {time[0]}")
-        stamp = float(time[0].minute)
+        absent = [t for t in time if t in self.missing]
+        if absent:
+            raise FileNotFoundError(f"no composite at {absent[0]}")
         data = np.stack(
-            [np.full((NY, NX), stamp + i, dtype="float32") for i in range(len(variable))]
+            [
+                np.stack(
+                    [np.full((NY, NX), t.minute + i, dtype="float32") for i in range(len(variable))]
+                )
+                for t in time
+            ]
         )
         lat, lon = np.meshgrid(np.linspace(70, 32, NY), np.linspace(-30, 62, NX), indexing="ij")
         return xr.DataArray(
-            data[None],
+            data,
             dims=["time", "variable", "y", "x"],
             coords={
                 "time": list(time),
@@ -111,12 +116,13 @@ def test_no_credentials_in_the_opera_modules():
 # --- downloader -------------------------------------------------------------------------
 
 
-def test_an_hour_is_fetched_frame_by_frame_and_named_like_the_store(tmp_path):
+def test_an_hour_is_fetched_in_one_call_and_named_like_the_store(tmp_path):
     source = FakeOPERA()
     summary = download_opera("rainfall", HOUR, tmp_path, source=source)
 
-    assert [call[0][0].minute for call in source.calls] == [0, 15, 30, 45]
-    assert all(call[1] == ["tprate", "tp01"] for call in source.calls)
+    ((times, variables),) = source.calls
+    assert [t.minute for t in times] == [0, 15, 30, 45]
+    assert variables == ["tprate", "tp01"]
     with xr.open_dataset(summary["path"]) as ds:
         assert set(ds.data_vars) == {"rainfall_rate", "accumulated_rainfall_1hour"}
         assert ds["rainfall_rate"].dims == ("time", "y", "x")
@@ -137,10 +143,10 @@ def test_a_missing_frame_fails_the_hour_unless_allowed(tmp_path):
         download_opera("rainfall", HOUR, tmp_path, source=FakeOPERA(missing={gap}))
     assert not list(tmp_path.rglob("*.nc"))
 
-    summary = download_opera(
-        "rainfall", HOUR, tmp_path, source=FakeOPERA(missing={gap}), allow_partial=True
-    )
+    source = FakeOPERA(missing={gap})
+    summary = download_opera("rainfall", HOUR, tmp_path, source=source, allow_partial=True)
     assert summary["frames"] == 3 and summary["missing_frames"] == ["06:30"]
+    assert len(source.calls) == 1 + 4, "the whole hour, then frame by frame to find the gap"
 
 
 def test_an_hour_with_no_frames_at_all_fails_even_when_partial_is_allowed(tmp_path):

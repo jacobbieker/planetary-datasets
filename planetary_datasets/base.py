@@ -23,7 +23,7 @@ import pandas as pd
 import xarray as xr
 from loguru import logger
 
-from planetary_datasets.common.store import ALIGNMENT_COORDS
+from planetary_datasets.common.store import ALIGNMENT_COORDS, latest_time
 from planetary_datasets.common.store import (
     missing_timesteps as _missing_timesteps,
 )
@@ -32,6 +32,7 @@ from planetary_datasets.common.store import (
 )
 from planetary_datasets.config import Config, get_config
 from planetary_datasets.memory import memory_guard, require_dataset_fits
+from planetary_datasets.providers._timestamps import to_naive_utc
 
 
 class BaseProvider(ABC):
@@ -103,7 +104,18 @@ class BaseProvider(ABC):
 
     def missing_timesteps(self, desired: pd.DatetimeIndex) -> List[pd.Timestamp]:
         """Return the timesteps in ``desired`` that are not yet stored."""
-        return _missing_timesteps(self.get_icechunk_repo(), list(desired), append_dim=self.append_dim)
+        return _missing_timesteps(
+            self.get_icechunk_repo(), list(desired), append_dim=self.append_dim
+        )
+
+    def appendable(self, start: pd.Timestamp) -> bool:
+        """True when the store would still accept a partition starting at ``start``.
+
+        The writer only appends after the last stored step, so a partition at or before
+        it can never be written. Staging pipelines check this before downloading one.
+        """
+        latest = latest_time(self.get_icechunk_repo(), append_dim=self.append_dim)
+        return latest is None or to_naive_utc(start) > latest
 
     def prepare_for_write(self, processed: xr.Dataset) -> xr.Dataset:
         """Last chance to reshape a dataset before it is written.

@@ -123,10 +123,11 @@ def _opera_source():
 def fetch_hour(
     product: Product, hour: dt.datetime, source: Callable | None = None
 ) -> tuple[Any, list[dt.datetime]]:
-    """Fetch every frame of one hour, one frame at a time.
+    """Fetch every frame of one hour.
 
-    Fetching frame by frame rather than in one call means a single frame missing from
-    the archive is reported by name instead of failing the whole hour anonymously.
+    The whole hour is requested in one call, which earth2studio fetches concurrently.
+    Only if that fails is it retried frame by frame, so that a single frame missing from
+    the archive is reported by name instead of failing the hour anonymously.
 
     Returns:
         The hour as an ``xarray.Dataset`` (``None`` if no frame could be fetched), and
@@ -136,26 +137,27 @@ def fetch_hour(
 
     source = source or _opera_source()
     lexicon = list(product.variables.values())
-    frames, missing = [], []
-    for when in product.frame_times(hour):
-        try:
-            array = source([when], lexicon)
-        except Exception as exc:  # noqa: BLE001 - earth2studio surfaces I/O errors as many types
-            logger.warning(f"OPERA {product.name} {when:%Y-%m-%dT%H:%M}: {exc}")
-            missing.append(when)
-            continue
-        frames.append(
-            xr.Dataset(
-                {
-                    name: array.sel(variable=code, drop=True)
-                    for name, code in product.variables.items()
-                }
-            )
-        )
-    if not frames:
-        return None, missing
+    frames = product.frame_times(hour)
+    missing: list[dt.datetime] = []
+    try:
+        array = source(frames, lexicon)
+    except Exception as exc:  # noqa: BLE001 - earth2studio surfaces I/O errors as many types
+        logger.warning(f"OPERA {product.name} {hour:%Y-%m-%dT%H}: {exc}; retrying per frame")
+        parts = []
+        for when in frames:
+            try:
+                parts.append(source([when], lexicon))
+            except Exception as frame_exc:  # noqa: BLE001 - as above
+                logger.warning(f"OPERA {product.name} {when:%Y-%m-%dT%H:%M}: {frame_exc}")
+                missing.append(when)
+        if not parts:
+            return None, missing
+        # Every frame carries the same grid; compare it once rather than per frame.
+        array = xr.concat(parts, dim="time", join="exact", coords="minimal", compat="override")
 
-    ds = xr.concat(frames, dim="time", join="exact") if len(frames) > 1 else frames[0]
+    ds = xr.Dataset(
+        {name: array.sel(variable=code, drop=True) for name, code in product.variables.items()}
+    )
     ds = ds.rename({"_lat": "latitude", "_lon": "longitude"})
     for name, units in product.units.items():
         ds[name].attrs.update(units=units, opera_variable=product.variables[name])
