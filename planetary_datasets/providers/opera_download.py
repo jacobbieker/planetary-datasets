@@ -6,9 +6,9 @@ is the processing half, and reads the files this writes.
 It runs inside the ``docker/earth2studio`` image rather than the project environment. The
 ODIM HDF5 decoding comes from NVIDIA's ``earth2studio``, which pulls in ``torch`` and pins
 ``netcdf4<1.7.3``, neither of which fits the project environment. The module therefore
-imports nothing from ``planetary_datasets`` and defers its ``earth2studio`` import to the
-point of use, so the image needs only this file and the project can still import the
-product definitions from it.
+imports nothing from ``planetary_datasets`` but its sibling downloader, which the image
+ships too, and defers its ``earth2studio`` import to the point of use, so the project can
+still import the product definitions from it.
 
 Two products, each matching an existing store:
 
@@ -41,6 +41,14 @@ import sys
 from typing import Any, Callable, Sequence
 
 from loguru import logger
+
+# The sibling downloader ships in the same image, so its helpers are shared rather than
+# copied; it too imports nothing else from planetary_datasets.
+from planetary_datasets.providers.earth2studio_download import (
+    pipes_metadata,
+    to_naive_utc,
+    write_netcdf,
+)
 
 DEFAULT_TARGET = "/data/opera"
 
@@ -105,14 +113,6 @@ def staged_path(target: str | os.PathLike, product: str, hour: dt.datetime) -> p
     )
 
 
-def to_naive_utc(value: str | dt.datetime) -> dt.datetime:
-    """Parse a time, returning naive UTC as ``earth2studio`` expects."""
-    when = value if isinstance(value, dt.datetime) else dt.datetime.fromisoformat(value)
-    if when.tzinfo is not None:
-        when = when.astimezone(dt.timezone.utc).replace(tzinfo=None)
-    return when
-
-
 def _opera_source():
     """Build the ``earth2studio`` OPERA source, which only the container has installed."""
     from earth2studio.data import OPERA
@@ -169,22 +169,6 @@ def fetch_hour(
     return ds, missing
 
 
-def write_staged(ds, path: pathlib.Path) -> pathlib.Path:
-    """Write ``ds`` to ``path`` atomically, compressed, one chunk per frame."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name(path.name + ".part")
-    encoding = {
-        name: {"zlib": True, "complevel": 4, "chunksizes": (1, *ds[name].shape[1:])}
-        for name in ds.data_vars
-    }
-    try:
-        ds.to_netcdf(partial, engine="netcdf4", format="NETCDF4", encoding=encoding)
-        os.replace(partial, path)
-    finally:
-        partial.unlink(missing_ok=True)
-    return path
-
-
 def download_opera(
     product: str,
     hour: str | dt.datetime,
@@ -225,7 +209,7 @@ def download_opera(
             + ", ".join(f"{t:%H:%M}" for t in missing)
         )
 
-    path = write_staged(ds, staged_path(target, product, hour))
+    path = write_netcdf(ds, staged_path(target, product, hour))
     summary = {
         "product": product,
         "hour": f"{hour:%Y-%m-%dT%H:%M}",
@@ -236,18 +220,6 @@ def download_opera(
     }
     logger.info(f"{label}: staged {summary}")
     return summary
-
-
-def pipes_metadata(summary: dict[str, Any]) -> dict[str, Any]:
-    """Tag container values as JSON for Dagster Pipes.
-
-    Pipes reads an untagged dict as a ``{raw_value, type}`` wrapper and rejects anything
-    else, so collections have to be tagged explicitly.
-    """
-    return {
-        key: {"raw_value": value, "type": "json"} if isinstance(value, (dict, list)) else value
-        for key, value in summary.items()
-    }
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:

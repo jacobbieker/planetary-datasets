@@ -162,6 +162,41 @@ class Config:
             return str(self.local_store_path(prefix))
         return f"s3://{self.bucket}/{self.full_prefix(prefix)}"
 
+    def _s3_addressing(self) -> dict:
+        """Endpoint and addressing options, shared by every S3 client built from here."""
+        options: dict = {}
+        if self.endpoint_url:
+            options["endpoint_url"] = self.endpoint_url
+            # A custom endpoint almost always needs path-style addressing, and a bucket
+            # name containing dots cannot be addressed virtual-host style over TLS at all.
+            options["force_path_style"] = (
+                self.force_path_style if self.force_path_style is not None else True
+            )
+            if self.allow_http:
+                options["allow_http"] = True
+        elif self.force_path_style:
+            options["force_path_style"] = True
+        return options
+
+    def fsspec_storage_options(self) -> dict:
+        """``s3fs`` options for the bucket :meth:`icechunk_storage` reaches.
+
+        Same endpoint, addressing and credentials, for data that is not an icechunk store.
+        """
+        creds = self.credentials
+        addressing = self._s3_addressing()
+        options: dict = {"client_kwargs": {"region_name": self.region}}
+        if "endpoint_url" in addressing:
+            options["endpoint_url"] = addressing["endpoint_url"]
+        if addressing.get("force_path_style"):
+            options["config_kwargs"] = {"s3": {"addressing_style": "path"}}
+        if creds.aws_profile:
+            options["profile"] = creds.aws_profile
+        elif creds.aws_access_key_id and creds.aws_secret_access_key:
+            options["key"] = creds.aws_access_key_id
+            options["secret"] = creds.aws_secret_access_key
+        return options
+
     def icechunk_storage(self, prefix: str):
         """Build an ``icechunk`` storage object for a store prefix."""
         import icechunk
@@ -176,18 +211,8 @@ class Config:
             "bucket": self.bucket,
             "prefix": self.full_prefix(prefix),
             "region": self.region,
+            **self._s3_addressing(),
         }
-        if self.endpoint_url:
-            kwargs["endpoint_url"] = self.endpoint_url
-            # A custom endpoint almost always needs path-style addressing, and a bucket
-            # name containing dots cannot be addressed virtual-host style over TLS at all.
-            kwargs["force_path_style"] = (
-                self.force_path_style if self.force_path_style is not None else True
-            )
-            if self.allow_http:
-                kwargs["allow_http"] = True
-        elif self.force_path_style:
-            kwargs["force_path_style"] = True
         if creds.aws_profile:
             # icechunk has no profile argument; the AWS SDK resolves AWS_PROFILE from the
             # environment when credentials are sourced from there. An explicit profile is

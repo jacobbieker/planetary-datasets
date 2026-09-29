@@ -41,6 +41,7 @@ Run it as::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import datetime as dt
 import json
@@ -48,7 +49,7 @@ import os
 import pathlib
 import re
 import sys
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from loguru import logger
 
@@ -162,10 +163,11 @@ class Dataset:
             it. Rows before the start are cut again afterwards.
         step: ``grid``: spacing of the frames within a partition.
         frames_per_call: ``grid``/``granules``: frames or granules per request.
-        stations: ``table``: enumerate this network's stations (``ghcnd``, ``ghcnh``,
-            ``isd``) and pass them in.
+        stations: ``table``: enumerate every station of the source's network and pass
+            them in.
         station_chunk: Stations per request, when a source holds them all in memory.
-        granules: ``granules``: how to list them (``viirs`` or ``s3aod``).
+        platform: ``grid``: restrict a Planetary Computer source to items of this
+            platform (item-id prefix), for collections that mix two.
         tiles: ``grid``: fetch each tile separately and stack them along ``tile``.
         credentials: Environment variables the source needs.
         dtype: ``grid``/``granules``: dtype data variables are stored as.
@@ -189,9 +191,9 @@ class Dataset:
     lead: str = "0s"
     step: str | None = None
     frames_per_call: int = 0
-    stations: str | None = None
+    stations: bool = False
     station_chunk: int = 0
-    granules: str | None = None
+    platform: str | None = None
     tiles: tuple[str, ...] = ()
     credentials: tuple[str, ...] = ()
     dtype: str = "float32"
@@ -199,6 +201,11 @@ class Dataset:
     end_offset: int = -1
     scheduled: bool = True
     memory_gb: float = 8.0
+
+    @property
+    def staged_variables(self) -> set[str]:
+        """Data variables a staged partition holds, after geolocation is renamed."""
+        return {GEOLOCATION_RENAMES.get(v, v) for v in self.variables}
 
     @property
     def publish(self) -> str:
@@ -390,7 +397,7 @@ _DATASETS: list[Dataset] = [
             "fg10m",
             "tcc",
         ),  # fmt: skip
-        stations="ghcnd",
+        stations=True,
         description="GHCN-Daily, every station, all twelve elements.",
         memory_gb=16.0,
     ),
@@ -402,10 +409,9 @@ _DATASETS: list[Dataset] = [
         freq="1YS",
         start="1901-01-01",
         variables=("t2m", "d2m", "ws10m", "fg10m", "tp", "u10m", "v10m", "tcc"),
-        stations="ghcnh",
+        stations=True,
         station_chunk=2000,
         kwargs={"async_workers": 48},
-        end_offset=-1,
         description="GHCN-hourly, every station, one partition per year.",
         memory_gb=32.0,
         scheduled=False,
@@ -418,7 +424,7 @@ _DATASETS: list[Dataset] = [
         freq="1YS",
         start="1901-01-01",
         variables=("ws10m", "u10m", "v10m", "tp", "t2m", "fg10m", "d2m", "tcc"),
-        stations="isd",
+        stations=True,
         # The source opens every station-year at once, with no concurrency limit.
         station_chunk=400,
         description="NOAA Integrated Surface Database, every station active in the year.",
@@ -593,7 +599,6 @@ _DATASETS: list[Dataset] = [
         variables=("sst", "ssta", "sstu", "sic"),
         # Requests must be at 00:00: from 12:00 the next day's item matches first.
         step="1D",
-        end_offset=-1,
         description="NOAA OISST v2.1 daily 0.25 degree SST and sea ice.",
     ),
     *[
@@ -607,7 +612,7 @@ _DATASETS: list[Dataset] = [
             variables=("fmask",),
             # Terra and Aqua share the collection and earth2studio takes whichever item the
             # server lists first; the platform is pinned when choosing among them.
-            kwargs={"platform": f"{platform}14A1"},
+            platform=f"{platform}14A1",
             tiles=MODIS_TILES,
             step="1D",
             dtype="uint8",
@@ -627,7 +632,6 @@ _DATASETS: list[Dataset] = [
             start={"noaa-20": "2018-01-05", "noaa-21": "2023-02-10", "snpp": "2012-01-19"}[sat],
             variables=VIIRS_I if band == "I" else VIIRS_M,
             kwargs={"satellite": sat, "product_type": band},
-            granules="viirs",
             frames_per_call=4,
             description=f"JPSS VIIRS {band}-band SDR radiances, {sat.upper()}, granule stack.",
             memory_gb=16.0,
@@ -643,7 +647,6 @@ _DATASETS: list[Dataset] = [
         freq="1D",
         start="2020-04-16",
         variables=S3_AOD,
-        granules="s3aod",
         frames_per_call=8,
         end_offset=-3,
         description="Sentinel-3 A/B SYNERGY L2 aerosol optical depth, granule stack.",
@@ -655,6 +658,17 @@ DATASETS: dict[str, Dataset] = {d.name: d for d in _DATASETS}
 
 #: Every earth2studio source these datasets cover.
 SOURCES = sorted({d.source for d in _DATASETS})
+
+
+#: How geolocation arrives from earth2studio, and what it is staged as.
+GEOLOCATION_RENAMES = {
+    "_lat": "latitude",
+    "_lon": "longitude",
+    "lat": "latitude",
+    "lon": "longitude",
+    "s3sy_lat": "latitude",
+    "s3sy_lon": "longitude",
+}
 
 
 class IncompletePartition(RuntimeError):
@@ -710,19 +724,19 @@ def _e2s_class(name: str):
 # --- stations -------------------------------------------------------------------------
 
 
-def list_stations(network: str, start: dt.datetime, end: dt.datetime) -> list[str]:
-    """Every station of ``network``, narrowed to the window where the metadata allows.
+def list_stations(source: str, start: dt.datetime, end: dt.datetime) -> list[str]:
+    """Every station of ``source``'s network, narrowed to the window where it can be.
 
     ``get_stations_bbox`` is avoided: a (-90, -180, 90, 180) box shifts longitudes to
     [0, 360) before filtering and so returns only the eastern hemisphere.
     """
     import pandas as pd
 
-    if network in ("ghcnd", "ghcnh"):
-        cls = _e2s_class("GHCNDaily" if network == "ghcnd" else "GHCNHourly")
+    cls = _e2s_class(source)
+    if source in ("GHCNDaily", "GHCNHourly"):
         return sorted(cls.get_station_metadata()["ID"].astype(str).unique())
-    if network == "isd":
-        history = _e2s_class("ISD").get_station_history()
+    if source == "ISD":
+        history = cls.get_station_history()
         cols = {c.lower(): c for c in history.columns}
         begin = pd.to_datetime(history[cols["begin"]].astype(str), format="%Y%m%d", errors="coerce")
         finish = pd.to_datetime(history[cols["end"]].astype(str), format="%Y%m%d", errors="coerce")
@@ -730,7 +744,7 @@ def list_stations(network: str, start: dt.datetime, end: dt.datetime) -> list[st
         wban = pd.to_numeric(active[cols["wban"]], errors="coerce").fillna(0).astype(int)
         usaf = active[cols["usaf"]].astype(str).str.zfill(6)
         return sorted(set(usaf + wban.map(lambda x: f"{x:05d}")))
-    raise ValueError(f"unknown station network {network!r}")
+    raise ValueError(f"no station list for {source!r}")
 
 
 def chunks(items: Sequence, size: int) -> Iterable[Sequence]:
@@ -786,7 +800,7 @@ def fetch_table(dataset: Dataset, start: dt.datetime, end: dt.datetime, factory=
     }
     station_groups: list = [None]
     if dataset.stations:
-        stations = list_stations(dataset.stations, start, end)
+        stations = list_stations(dataset.source, start, end)
         logger.info(f"{dataset.name}: {len(stations)} stations")
         station_groups = list(chunks(stations, dataset.station_chunk))
 
@@ -799,7 +813,7 @@ def fetch_table(dataset: Dataset, start: dt.datetime, end: dt.datetime, factory=
         if len(df):
             df = df[(df["time"] >= pd.Timestamp(start)) & (df["time"] < pd.Timestamp(end))]
         tables.append(to_arrow(df, cls.SCHEMA))
-    return pa.concat_tables(tables) if len(tables) > 1 else tables[0]
+    return pa.concat_tables(tables)
 
 
 # --- grids and granules -----------------------------------------------------------------
@@ -817,19 +831,7 @@ def to_dataset(array, dtype: str = "float32", valid_min: float | None = None):
     import numpy as np
 
     ds = array.to_dataset(dim="variable")
-    renames = {
-        old: new
-        for old, new in {
-            "_lat": "latitude",
-            "_lon": "longitude",
-            "lat": "latitude",
-            "lon": "longitude",
-            "s3sy_lat": "latitude",
-            "s3sy_lon": "longitude",
-        }.items()
-        if old in ds.variables
-    }
-    ds = ds.rename(renames)
+    ds = ds.rename({old: new for old, new in GEOLOCATION_RENAMES.items() if old in ds.variables})
     for name in list(ds.data_vars):
         if valid_min is not None and name not in ("latitude", "longitude"):
             ds[name] = ds[name].where(ds[name] >= valid_min)
@@ -849,20 +851,33 @@ def to_dataset(array, dtype: str = "float32", valid_min: float | None = None):
     return ds
 
 
-def write_netcdf(ds, path: pathlib.Path) -> pathlib.Path:
-    """Write ``ds`` to ``path`` atomically, compressed, one chunk per frame."""
+@contextlib.contextmanager
+def atomic(path: pathlib.Path) -> Iterator[pathlib.Path]:
+    """Yield a temporary path beside ``path``, moved onto it only if the block succeeds.
+
+    A reader, or the publishing step, then never sees a half-written file.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(path.name + ".part")
-    encoding = {
-        name: {"zlib": True, "complevel": 4, "chunksizes": (1, *ds[name].shape[1:])}
-        for name in ds.data_vars
-        if ds[name].dims and ds[name].dims[0] == "time"
-    }
     try:
-        ds.to_netcdf(partial, engine="netcdf4", format="NETCDF4", encoding=encoding)
+        yield partial
         os.replace(partial, path)
     finally:
         partial.unlink(missing_ok=True)
+
+
+def write_netcdf(ds, path: pathlib.Path) -> pathlib.Path:
+    """Write ``ds`` to ``path`` atomically, one chunk per frame.
+
+    Light compression only: staged files are read back once and deleted.
+    """
+    encoding = {
+        name: {"zlib": True, "complevel": 1, "chunksizes": (1, *ds[name].shape[1:])}
+        for name in ds.data_vars
+        if ds[name].dims and ds[name].dims[0] == "time"
+    }
+    with atomic(path) as partial:
+        ds.to_netcdf(partial, engine="netcdf4", format="NETCDF4", encoding=encoding)
     return path
 
 
@@ -912,19 +927,19 @@ class _TiledSource:
     attempts: int = 3
 
     def __init__(self, dataset: Dataset, cls, kwargs: dict):
-        self.dataset = dataset
-        platform = kwargs.pop("platform", None)
-        self.cls = _platform_source(cls, platform) if platform else cls
-        self.kwargs = kwargs
+        self.dataset, self.cls, self.kwargs = dataset, cls, kwargs
         self.missing: list[str] = []
         self.absent: list[str] = []
         self._source = None
 
     def _for_tile(self, tile: str):
-        if self._source is None or not hasattr(self._source, "_search_kwargs"):
+        if self._source is None:
             self._source = self.cls(tile=tile, **self.kwargs)
         else:
-            # Same filter the constructor builds (earth2studio planetary_computer.py).
+            # Swap in the filter the constructor builds (earth2studio planetary_computer.py)
+            # rather than build another instance.
+            if "_search_kwargs" not in vars(self._source):
+                raise AttributeError(f"{type(self._source).__name__} has no _search_kwargs")
             self._source._search_kwargs = {
                 "filter": {"op": "iLike", "args": [{"property": "id"}, f"%{tile.lower()}%"]}
             }
@@ -1020,6 +1035,13 @@ def list_s3aod_granules(
     return sorted(times)
 
 
+#: How each swath source's granules are listed for a partition.
+GRANULE_LISTERS: dict[str, Callable[[Dataset, dt.datetime, dt.datetime], list[dt.datetime]]] = {
+    "JPSS": list_viirs_granules,
+    "PlanetaryComputerSentinel3AOD": list_s3aod_granules,
+}
+
+
 def _granule_source(dataset: Dataset, cls):
     """The earth2studio class, adjusted to return exactly the granule asked for.
 
@@ -1027,7 +1049,7 @@ def _granule_source(dataset: Dataset, cls):
     it is narrowed to a few seconds and made to pick the item nearest the request. VIIRS
     already picks the nearest granule, so exact start times are enough.
     """
-    if dataset.granules != "s3aod":
+    if dataset.source != "PlanetaryComputerSentinel3AOD":
         return cls
 
     class ExactGranule(cls):
@@ -1071,9 +1093,10 @@ def fetch_frames(
         "async_timeout": GRID_TIMEOUT_S,
         **dataset.kwargs_for(start),
     }
+    if dataset.platform:
+        cls = _platform_source(cls, dataset.platform)
     if dataset.kind == "granules":
-        lister = {"viirs": list_viirs_granules, "s3aod": list_s3aod_granules}[dataset.granules]
-        wanted = lister(dataset, start, end)
+        wanted = GRANULE_LISTERS[dataset.source](dataset, start, end)
         source = _granule_source(dataset, cls)(**kwargs)
     else:
         wanted = frame_times(dataset, start, end)
@@ -1084,7 +1107,7 @@ def fetch_frames(
     for i, batch in enumerate(chunks(wanted, dataset.frames_per_call)):
         try:
             array = source(list(batch), list(dataset.variables))
-        except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             logger.warning(f"{dataset.name} {batch[0]:%Y-%m-%dT%H:%M}: {exc}")
             missing.extend(batch)
             continue
@@ -1092,19 +1115,8 @@ def fetch_frames(
         write_netcdf(to_dataset(array, dataset.dtype, dataset.valid_min), path)
         files.append(path.name)
 
-    summary = {
-        "dataset": dataset.name,
-        "start": start.isoformat(),
-        "frames": [t.isoformat() for t in wanted if t not in missing],
-        "missing_frames": [t.isoformat() for t in missing],
-        "missing_tiles": list(getattr(source, "missing", [])),
-        "absent_tiles": list(getattr(source, "absent", [])),
-        "files": files,
-    }
     missing_tiles = list(getattr(source, "missing", []))
-    if missing_tiles and not allow_partial:
-        missing = missing or wanted
-    if missing and not allow_partial:
+    if not allow_partial and (missing or missing_tiles):
         for name in files:
             (directory / name).unlink(missing_ok=True)
         raise IncompletePartition(
@@ -1112,7 +1124,15 @@ def fetch_frames(
             f"frames failed: {[t.strftime('%H:%M') for t in missing][:12]}"
             + (f"; tiles missing: {missing_tiles[:12]}" if missing_tiles else "")
         )
-    return summary
+    return {
+        "dataset": dataset.name,
+        "start": start.isoformat(),
+        "frames": [t.isoformat() for t in wanted if t not in missing],
+        "missing_frames": [t.isoformat() for t in missing],
+        "missing_tiles": missing_tiles,
+        "absent_tiles": list(getattr(source, "absent", [])),
+        "files": files,
+    }
 
 
 # --- entry point -------------------------------------------------------------------------
@@ -1121,10 +1141,8 @@ def fetch_frames(
 def write_manifest(target, dataset: Dataset, start: dt.datetime, summary: dict) -> pathlib.Path:
     """Write the manifest last, atomically: its presence means the partition is staged."""
     path = manifest_path(target, dataset, start)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name(path.name + ".part")
-    partial.write_text(json.dumps(summary, indent=1))
-    os.replace(partial, path)
+    with atomic(path) as partial:
+        partial.write_text(json.dumps(summary, indent=1))
     return path
 
 
@@ -1162,10 +1180,8 @@ def download(
     if dataset.kind == "table":
         table = fetch_table(dataset, start, end, factory)
         path = staged_dir(target, dataset, start) / f"{name}_{stamp(start)}.parquet"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        partial = path.with_name(path.name + ".part")
-        pq.write_table(table, partial, compression="zstd")
-        os.replace(partial, path)
+        with atomic(path) as partial:
+            pq.write_table(table, partial, compression="zstd")
         summary = {
             "dataset": name,
             "start": start.isoformat(),

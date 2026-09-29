@@ -23,6 +23,7 @@ from __future__ import annotations
 import io
 import os
 import pathlib
+import shutil
 from typing import List
 
 import pandas as pd
@@ -71,19 +72,9 @@ class ParquetSink:
     def _filesystem(self):
         import fsspec
 
-        cfg = self.config
-        if cfg.use_local_store:
+        if self.config.use_local_store:
             return fsspec.filesystem("file")
-        creds = cfg.credentials
-        kwargs: dict = {"client_kwargs": {"region_name": cfg.region}}
-        if cfg.endpoint_url:
-            kwargs["endpoint_url"] = cfg.endpoint_url
-        if creds.aws_profile:
-            kwargs["profile"] = creds.aws_profile
-        elif creds.aws_access_key_id and creds.aws_secret_access_key:
-            kwargs["key"] = creds.aws_access_key_id
-            kwargs["secret"] = creds.aws_secret_access_key
-        return fsspec.filesystem("s3", **kwargs)
+        return fsspec.filesystem("s3", **self.config.fsspec_storage_options())
 
     def key(self, it: pd.Timestamp) -> str:
         """Path of the partition starting at ``it``, relative to :attr:`root`."""
@@ -120,6 +111,23 @@ class ParquetSink:
         else:
             self.fs.pipe_file(path, payload)
         logger.info(f"wrote {table.num_rows} row(s) to {path}")
+        return path
+
+    def put(self, it: pd.Timestamp, local_path: str | os.PathLike) -> str:
+        """Publish an already-written Parquet file as the partition starting at ``it``.
+
+        The file goes up unchanged, as one object (locally: a copy and a rename).
+        """
+        path = self.path(it)
+        if self.config.use_local_store:
+            target = pathlib.Path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            partial = target.with_name(target.name + ".part")
+            shutil.copyfile(local_path, partial)
+            os.replace(partial, target)
+        else:
+            self.fs.put_file(str(local_path), path)
+        logger.info(f"published {pathlib.Path(local_path).name} to {path}")
         return path
 
     def partitions(self) -> List[str]:

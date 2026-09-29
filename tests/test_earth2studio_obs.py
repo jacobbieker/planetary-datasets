@@ -111,11 +111,19 @@ class FakeGrid:
 
 
 class FakeTiles(FakeGrid):
-    """A tiled source, one tile per instance, with one tile that never exists."""
+    """A tiled Planetary Computer-like source: one flaky tile, one never published."""
+
+    instances = 0
 
     def __init__(self, tile, **kwargs):
         super().__init__(**kwargs)
-        self.tile = tile
+        # The tiler swaps this filter between tiles instead of building new instances.
+        self._search_kwargs = {"filter": {"op": "iLike", "args": [{}, f"%{tile}%"]}}
+        FakeTiles.instances += 1
+
+    @property
+    def tile(self) -> str:
+        return self._search_kwargs["filter"]["args"][1].strip("%")
 
     def __call__(self, time, variable):
         if self.tile.endswith("h00v09"):
@@ -210,7 +218,7 @@ def test_dataset_definitions_are_consistent():
         if dataset.kind == "grid":
             assert dataset.step, dataset.name
         if dataset.kind == "granules":
-            assert dataset.granules in {"viirs", "s3aod"}, dataset.name
+            assert dataset.source in dl.GRANULE_LISTERS, dataset.name
         eumetsat = dataset.source.startswith(("MetOp", "Meteosat"))
         assert (dataset.credentials == dl.EUMETSAT) == eumetsat, dataset.name
 
@@ -339,6 +347,39 @@ def test_a_table_partition_is_published_once_and_its_staging_cleared(local_confi
     assert publisher.sink.partitions()[0].endswith("date=2020-01-01/part-202001010600.parquet")
 
 
+def test_a_table_partition_is_published_byte_for_byte(local_config, registered):
+    dataset = table_dataset()
+    registered(dataset)
+    dl.download(dataset.name, HOUR, staging(local_config), factory=FakeTable)
+    staged = next(staging(local_config).rglob("*.parquet")).read_bytes()
+    publisher = obs.provider_for(dataset.name)
+    assert publisher.run_partition(HOUR)
+    assert pathlib.Path(publisher.sink.path(pd.Timestamp(HOUR))).read_bytes() == staged
+
+
+def test_time_bounds_come_from_the_parquet_footer(tmp_path):
+    path = tmp_path / "x.parquet"
+    times = pd.date_range("2020-01-01", periods=5, freq="1h")
+    pq.write_table(pa.table({"time": times, "v": range(5)}), path, row_group_size=2)
+    assert obs.time_bounds(path) == (times[0], times[-1])
+    pq.write_table(pa.table({"time": pa.array([], pa.timestamp("ns"))}), path)
+    assert obs.time_bounds(path) == (None, None)
+
+
+def test_parquet_and_icechunk_share_one_s3_configuration(monkeypatch):
+    from planetary_datasets import config as config_module
+
+    monkeypatch.setenv("ICECHUNK_ENDPOINT_URL", "https://data.source.coop")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "k")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "s")
+    cfg = config_module.load_config(env_file="/nonexistent.env")
+    options = cfg.fsspec_storage_options()
+    assert options["endpoint_url"] == "https://data.source.coop"
+    # The icechunk side forces path-style for a custom endpoint; so must this.
+    assert options["config_kwargs"] == {"s3": {"addressing_style": "path"}}
+    assert (options["key"], options["secret"]) == ("k", "s")
+
+
 def test_a_staged_file_with_rows_outside_its_window_is_refused(local_config, registered):
     dataset = table_dataset()
     registered(dataset)
@@ -425,12 +466,13 @@ def test_a_missing_tile_fails_the_day_unless_partial_is_allowed(
         step="1D",
         variables=("fmask",),
         tiles=("h00v08", "h00v09", "h00v10"),
-        kwargs={"platform": "MOD14A1"},
+        platform="MOD14A1",
         dtype="uint8",
         frames_per_call=0,
     )
     registered(dataset)
     monkeypatch.setattr(dl._TiledSource, "attempts", 1)
+    monkeypatch.setattr(FakeTiles, "instances", 0)
     day = dt.datetime(2020, 1, 1)
     with pytest.raises(dl.IncompletePartition, match="h00v09"):
         dl.download(dataset.name, day, staging(local_config), factory=FakeTiles)
@@ -440,6 +482,7 @@ def test_a_missing_tile_fails_the_day_unless_partial_is_allowed(
         dataset.name, day, staging(local_config), allow_partial=True, factory=FakeTiles
     )
     assert summary["missing_tiles"] == ["h00v09"]
+    assert FakeTiles.instances == 2, "one source instance per run, not one per tile"
     assert summary["absent_tiles"] == ["h00v10"], "an unpublished tile is not a failure"
     with xr.open_dataset(next(staging(local_config).rglob("*.nc"))) as ds:
         assert ds["fmask"].dims == ("time", "tile", "y", "x")

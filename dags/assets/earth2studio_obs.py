@@ -25,24 +25,23 @@ objects on the asset functions.
 
 import datetime as dt
 import os
-from typing import Dict
+from typing import Dict, Optional
 
 import dagster as dg
-import pandas as pd
-from dagster_docker import PipesDockerClient
 
-from dags.factory import MEMORY_CLASS_TAG, MEMORY_GB_TAG, SCHEDULE_TAG, memory_class_for
+from dags.factory import SCHEDULE_TAG
+from dags.staged import make_staged_download_asset, make_staged_publish_asset
 from planetary_datasets.config import MissingCredential, get_config
-from planetary_datasets.providers.earth2studio_download import DATASETS, Dataset
-from planetary_datasets.providers.earth2studio_obs import provider_for
-from planetary_datasets.providers.radar import to_naive_utc
+from planetary_datasets.providers.earth2studio_download import DATASETS, DEFAULT_TARGET, Dataset
+from planetary_datasets.providers.earth2studio_obs import STORE_ROOT, provider_for
 
-#: Image built by ``docker/earth2studio/build.sh``, shared with OPERA.
+#: Image built by ``docker/earth2studio/build.sh``; OPERA runs it too.
 IMAGE_ENV = "EARTH2STUDIO_IMAGE"
 DEFAULT_IMAGE = "planetary-datasets/earth2studio:latest"
-#: Where the image expects the staging root to be mounted.
-CONTAINER_ARCHIVE = "/data/earth2studio"
 CATALOG_URL = "https://nvidia.github.io/earth2studio/main/userguide/about/catalog/"
+
+#: Publishing a Parquet partition uploads a file; it needs no more than this.
+PARQUET_PUBLISH_MEMORY_GB = 2
 
 #: Cron and key format for each partition length a dataset may declare.
 PARTITIONINGS: Dict[str, tuple[str, str]] = {
@@ -52,12 +51,6 @@ PARTITIONINGS: Dict[str, tuple[str, str]] = {
     "1D": ("0 0 * * *", "%Y-%m-%d"),
     "1MS": ("0 0 1 * *", "%Y-%m-%d"),
     "1YS": ("0 0 1 1 *", "%Y-%m-%d"),
-}
-
-#: Environment variables the container may need, and the config field holding each.
-CREDENTIALS = {
-    "EUMETSAT_CONSUMER_KEY": "eumetsat_consumer_key",
-    "EUMETSAT_CONSUMER_SECRET": "eumetsat_consumer_secret",
 }
 
 
@@ -74,20 +67,15 @@ def partitions_for(dataset: Dataset) -> dg.TimeWindowPartitionsDefinition:
 
 
 def asset_tags(dataset: Dataset) -> dict[str, str]:
-    """Memory class, concurrency pool and schedule opt-out for a dataset's assets."""
-    tags = {
-        MEMORY_CLASS_TAG: memory_class_for(dataset.memory_gb),
-        MEMORY_GB_TAG: str(dataset.memory_gb),
-        # One partition per source at a time: several of them rate-limit or share a
-        # single upstream account.
-        "dagster/concurrency_key": f"earth2studio-{dataset.source}",
-    }
+    """Concurrency pool and schedule opt-out for a dataset's assets."""
+    # One partition per source at a time: several rate-limit or share one upstream account.
+    tags = {"dagster/concurrency_key": f"earth2studio-{dataset.source}"}
     if not dataset.scheduled:
         tags[SCHEDULE_TAG] = "manual"
     return tags
 
 
-def download_command(dataset: Dataset, it: pd.Timestamp) -> list[str]:
+def download_command(dataset: Dataset, it) -> list[str]:
     """Arguments for the image's entrypoint, for one partition."""
     return [
         "obs",
@@ -96,7 +84,7 @@ def download_command(dataset: Dataset, it: pd.Timestamp) -> list[str]:
         "--time",
         it.strftime("%Y-%m-%dT%H:%M"),
         "--target",
-        CONTAINER_ARCHIVE,
+        DEFAULT_TARGET,
     ]
 
 
@@ -105,129 +93,79 @@ def container_env(dataset: Dataset) -> dict[str, str]:
 
     Several earth2studio sources use a fixed temporary cache directory, so containers
     sharing one would delete each other's files; each run gets its own inside the
-    container instead.
+    container instead. Credential variables map onto the config field of the same name.
     """
     env = {"EARTH2STUDIO_CACHE": "/tmp/earth2studio-cache"}
     if dataset.credentials:
-        fields = [CREDENTIALS[name] for name in dataset.credentials]
         try:
-            values = get_config().credentials.require(*fields)
+            values = get_config().credentials.require(*(v.lower() for v in dataset.credentials))
         except MissingCredential as exc:
             # A configuration error: retrying on the asset's backoff would only wait.
             raise dg.Failure(description=str(exc), allow_retries=False) from exc
-        env.update(dict(zip(dataset.credentials, values)))
+        env.update(zip(dataset.credentials, values))
     # Optional: raises Planetary Computer's anonymous rate limit.
     if os.environ.get("PC_SDK_SUBSCRIPTION_KEY"):
         env["PC_SDK_SUBSCRIPTION_KEY"] = os.environ["PC_SDK_SUBSCRIPTION_KEY"]
     return env
 
 
-def container_kwargs(dataset: Dataset, archive_root) -> dict:
-    """``docker run`` options: the staging mount, the host user and a memory cap."""
-    kwargs: dict = {
-        "volumes": {str(archive_root): {"bind": CONTAINER_ARCHIVE, "mode": "rw"}},
-        "mem_limit": f"{int(dataset.memory_gb) + 4}g",
-    }
-    if hasattr(os, "getuid"):
-        kwargs["user"] = f"{os.getuid()}:{os.getgid()}"
-    return kwargs
-
-
-def build_download_asset(dataset: Dataset) -> dg.AssetsDefinition:
+def build_download_asset(
+    dataset: Dataset, partitions_def: Optional[dg.TimeWindowPartitionsDefinition] = None
+) -> dg.AssetsDefinition:
     """The asset that stages one partition of ``dataset`` in the earth2studio image."""
-    tags = asset_tags(dataset)
-
-    @dg.asset(
+    return make_staged_download_asset(
         name=f"{dataset.name}_download",
         description=f"Stage one partition: {dataset.description}",
-        partitions_def=partitions_for(dataset),
-        compute_kind="docker",
+        partitions_def=partitions_def or partitions_for(dataset),
+        publisher=lambda: provider_for(dataset.name),
+        image_env=IMAGE_ENV,
+        default_image=DEFAULT_IMAGE,
+        container_dir=DEFAULT_TARGET,
+        command=lambda it: download_command(dataset, it),
+        # Headroom over the partition's working set for Python and the libraries.
+        container_memory_gb=dataset.memory_gb + 4,
+        env=lambda: container_env(dataset),
+        retry_policy=dg.RetryPolicy(max_retries=3, delay=1800, backoff=dg.Backoff.EXPONENTIAL),
+        tags=asset_tags(dataset),
         metadata={
             "source": dg.MetadataValue.text(f"earth2studio.data.{dataset.source}"),
             "catalog": dg.MetadataValue.url(CATALOG_URL),
-            "image_env": dg.MetadataValue.text(IMAGE_ENV),
         },
-        retry_policy=dg.RetryPolicy(max_retries=3, delay=1800, backoff=dg.Backoff.EXPONENTIAL),
-        tags=tags,
-        op_tags={MEMORY_CLASS_TAG: tags[MEMORY_CLASS_TAG]},
     )
-    def _asset(
-        context: dg.AssetExecutionContext, pipes_docker_client: PipesDockerClient
-    ) -> dg.MaterializeResult:
-        it = to_naive_utc(context.partition_time_window.start)
-        provider = provider_for(dataset.name)
-        if provider.partition_stored(it):
-            return dg.MaterializeResult(
-                metadata={"skipped": dg.MetadataValue.text(f"{it} already stored")}
-            )
-        if not provider.appendable(it):
-            context.log.warning(
-                f"{dataset.name}: {it} is before the end of {provider.store_path}; the "
-                "store only accepts appends in time order, so it cannot be filled"
-            )
-            return dg.MaterializeResult(
-                metadata={"skipped": dg.MetadataValue.text(f"{it} predates the store's end")}
-            )
-        root = provider.archive_root.expanduser().resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        return pipes_docker_client.run(
-            image=os.environ.get(IMAGE_ENV, DEFAULT_IMAGE),
-            command=download_command(dataset, it),
-            env=container_env(dataset),
-            container_kwargs=container_kwargs(dataset, root),
-            context=context,
-        ).get_materialize_result()
-
-    return _asset
 
 
-def build_publish_asset(dataset: Dataset, download: dg.AssetsDefinition) -> dg.AssetsDefinition:
+def build_publish_asset(
+    dataset: Dataset,
+    download: dg.AssetsDefinition,
+    partitions_def: Optional[dg.TimeWindowPartitionsDefinition] = None,
+) -> dg.AssetsDefinition:
     """The asset that publishes a staged partition of ``dataset`` and clears the staging."""
-    tags = asset_tags(dataset)
-    provider = provider_for(dataset.name)
-
-    @dg.asset(
+    parquet = dataset.publish == "parquet"
+    return make_staged_publish_asset(
         name=dataset.name,
         description=dataset.description,
-        partitions_def=partitions_for(dataset),
-        deps=[download],
+        partitions_def=partitions_def or partitions_for(dataset),
+        download=download,
+        publisher=lambda: provider_for(dataset.name),
+        # A Parquet partition is uploaded as-is; a grid is read back one staged file at a
+        # time, which is what the dataset declares.
+        memory_gb=PARQUET_PUBLISH_MEMORY_GB if parquet else dataset.memory_gb,
         compute_kind=dataset.publish,
+        tags=asset_tags(dataset),
         metadata={
-            "store": dg.MetadataValue.text(provider.store_prefix),
+            "store": dg.MetadataValue.text(f"{STORE_ROOT}/{dataset.name}.{dataset.publish}"),
             "format": dg.MetadataValue.text(dataset.publish),
             "source": dg.MetadataValue.text(f"earth2studio.data.{dataset.source}"),
         },
-        tags=tags,
-        op_tags={MEMORY_CLASS_TAG: tags[MEMORY_CLASS_TAG]},
     )
-    def _asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
-        it = to_naive_utc(context.partition_time_window.start)
-        publisher = provider_for(dataset.name)
-        staged = publisher.manifest(it) is not None
-        written = publisher.run_partition(it)
-        if not written and not staged and publisher.appendable(it):
-            if not publisher.partition_stored(it):
-                raise dg.Failure(
-                    description=f"{dataset.name}: nothing staged for {it}; run the download first"
-                )
-        removed = publisher.discard_staged(it)
-        return dg.MaterializeResult(
-            metadata={
-                "written": dg.MetadataValue.bool(bool(written)),
-                "partition": dg.MetadataValue.text(str(it)),
-                "store_path": dg.MetadataValue.text(publisher.store_path),
-                "staged_files_removed": dg.MetadataValue.int(len(removed)),
-            }
-        )
-
-    return _asset
 
 
 def _build_all() -> list[dg.AssetsDefinition]:
     built = []
     for dataset in DATASETS.values():
-        download = build_download_asset(dataset)
-        built += [download, build_publish_asset(dataset, download)]
+        partitions_def = partitions_for(dataset)
+        download = build_download_asset(dataset, partitions_def)
+        built += [download, build_publish_asset(dataset, download, partitions_def)]
     return built
 
 

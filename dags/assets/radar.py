@@ -26,6 +26,8 @@ from typing import Type
 import dagster as dg
 import pandas as pd
 
+from dags.assets.earth2studio_obs import DEFAULT_IMAGE as DEFAULT_OPERA_IMAGE
+from dags.assets.earth2studio_obs import IMAGE_ENV as OPERA_IMAGE_ENV
 from dags.staged import make_staged_download_asset, make_staged_publish_asset
 from planetary_datasets.providers.opera import (
     OPERAProvider,
@@ -99,9 +101,6 @@ fmi_radar = _build_asset(
 # EUMETNET OPERA, staged by the docker/earth2studio image.
 # --------------------------------------------------------------------------------------
 
-#: Image built by ``docker/earth2studio/build.sh``, shared with the observation sources.
-OPERA_IMAGE_ENV = "EARTH2STUDIO_IMAGE"
-DEFAULT_OPERA_IMAGE = "planetary-datasets/earth2studio:latest"
 OPERA_SOURCE_URL = "https://eumetnet.github.io/openradardata-documentation/"
 #: A reflectivity hour is twelve 3800x4400 frames plus their lat/lon grid.
 OPERA_CONTAINER_MEMORY_GB = 6

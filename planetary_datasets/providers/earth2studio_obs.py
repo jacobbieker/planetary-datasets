@@ -14,7 +14,8 @@ publish what it staged and then delete it:
     ``grid`` and ``granules`` datasets, appended to ``bkr/obs/<name>.icechunk``
     one staged file at a time, so a full-disk hour never has to be in memory at once.
 
-:func:`provider_for` builds the right one for a dataset name.
+:func:`provider_for` builds the right one for a dataset name. Both satisfy
+:class:`dags.staged.StagedPublisher`.
 """
 
 from __future__ import annotations
@@ -24,7 +25,6 @@ import os
 import pathlib
 from typing import Any, List
 
-import icechunk
 import pandas as pd
 import pyarrow.parquet as pq
 import xarray as xr
@@ -32,9 +32,10 @@ from loguru import logger
 
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common.parquet import ParquetSink
-from planetary_datasets.common.store import ALIGNMENT_COORDS, existing_times, has_committed_data
+from planetary_datasets.common.store import ALIGNMENT_COORDS, existing_times
 from planetary_datasets.config import Config, get_config
 from planetary_datasets.memory import memory_guard, require_dataset_fits
+from planetary_datasets.providers._timestamps import to_naive_utc
 from planetary_datasets.providers.earth2studio_download import (
     DATASETS,
     Dataset,
@@ -42,7 +43,6 @@ from planetary_datasets.providers.earth2studio_download import (
     partition_window,
     staged_dir,
 )
-from planetary_datasets.providers.radar import to_naive_utc
 
 ARCHIVE_ENV = "E2S_OBS_ARCHIVE_DIR"
 ARCHIVE_SUBDIR = "earth2studio"
@@ -59,9 +59,22 @@ class StagedPartitionError(RuntimeError):
 
 
 class _StagedMixin:
-    """Locating, reading and discarding one dataset's staged partitions."""
+    """What both publishers share: identity, the staging directory, and its cleanup.
+
+    Subclasses provide ``appendable``: whether the store would take the partition now.
+    """
 
     dataset: Dataset
+
+    @property
+    def name(self) -> str:
+        """Store and asset name."""
+        return self.dataset.name
+
+    @property
+    def store_prefix(self) -> str:
+        """Location of the store relative to the configured bucket."""
+        return f"{STORE_ROOT}/{self.dataset.name}.{self.dataset.publish}"
 
     @property
     def archive_root(self) -> pathlib.Path:
@@ -76,38 +89,46 @@ class _StagedMixin:
         start, end = partition_window(self.dataset, to_naive_utc(it).to_pydatetime())
         return pd.Timestamp(start), pd.Timestamp(end)
 
+    def _manifest_path(self, it) -> pathlib.Path:
+        return manifest_path(self.archive_root, self.dataset, self.window(it)[0].to_pydatetime())
+
     def manifest(self, it) -> dict[str, Any] | None:
         """The staged partition's manifest, or None when it is not (fully) staged."""
-        start, _ = self.window(it)
-        path = manifest_path(self.archive_root, self.dataset, start.to_pydatetime())
-        if not path.is_file():
-            return None
-        return json.loads(path.read_text())
+        path = self._manifest_path(it)
+        return json.loads(path.read_text()) if path.is_file() else None
+
+    def has_staged(self, it) -> bool:
+        """True when the partition is fully staged: its manifest is written last."""
+        return self._manifest_path(it).is_file()
 
     def staged_files(self, it) -> List[pathlib.Path]:
         """The files a staged partition's manifest lists, in order."""
         manifest = self.manifest(it)
         if manifest is None:
             return []
-        start, _ = self.window(it)
-        directory = staged_dir(self.archive_root, self.dataset, start.to_pydatetime())
+        directory = staged_dir(self.archive_root, self.dataset, self.window(it)[0].to_pydatetime())
         files = [directory / name for name in manifest["files"]]
         absent = [f.name for f in files if not f.is_file()]
         if absent:
-            raise StagedPartitionError(f"{self.dataset.name}: manifest lists missing {absent}")
+            raise StagedPartitionError(f"{self.name}: manifest lists missing {absent}")
         return files
 
-    def _remove_staged(self, it) -> List[pathlib.Path]:
-        start, _ = self.window(it)
-        manifest = manifest_path(self.archive_root, self.dataset, start.to_pydatetime())
-        removed = []
-        if manifest.is_file():
-            for path in self.staged_files(it):
-                path.unlink(missing_ok=True)
-                removed.append(path)
-            manifest.unlink()
-            removed.append(manifest)
-        return removed
+    def discard_staged(self, it, settled: bool = False) -> List[pathlib.Path]:
+        """Delete the staged partition once the store can no longer take it.
+
+        ``settled=True`` says the caller already knows, having just published it or found
+        the store closed to it, so the store is not read again.
+        """
+        if not settled and self.appendable(it):
+            return []
+        manifest = self._manifest_path(it)
+        if not manifest.is_file():
+            return []
+        removed = self.staged_files(it)
+        for path in removed:
+            path.unlink(missing_ok=True)
+        manifest.unlink()
+        return [*removed, manifest]
 
 
 class ParquetObsProvider(_StagedMixin):
@@ -120,10 +141,6 @@ class ParquetObsProvider(_StagedMixin):
     def __init__(self, name: str, config: Config | None = None):
         """Build the publisher for ``table`` dataset ``name``."""
         self.dataset = DATASETS[name]
-        if self.dataset.publish != "parquet":
-            raise ValueError(f"{name} is published to {self.dataset.publish}, not parquet")
-        self.name = name
-        self.store_prefix = f"{STORE_ROOT}/{name}.parquet"
         self._config = config
         self.sink = ParquetSink(self.store_prefix, config)
 
@@ -142,13 +159,17 @@ class ParquetObsProvider(_StagedMixin):
         return self.sink.exists(self.window(it)[0])
 
     def appendable(self, it) -> bool:
-        """A Parquet dataset accepts partitions in any order."""
-        return True
+        """Partitions may arrive in any order; only one already published is refused."""
+        return not self.partition_stored(it)
 
-    def run_partition(self, it) -> bool:
-        """Publish one staged partition. Returns True if it was written."""
+    def run_partition(self, it, check_present: bool = True) -> bool:
+        """Publish one staged partition as-is. Returns True if it was written.
+
+        The staged file is already the final Parquet, so it is checked from its footer
+        statistics and uploaded unchanged rather than decoded and encoded again.
+        """
         start, end = self.window(it)
-        if self.partition_stored(start):
+        if check_present and self.partition_stored(start):
             logger.debug(f"{self.name}: {start} already published")
             return False
         files = self.staged_files(start)
@@ -156,25 +177,34 @@ class ParquetObsProvider(_StagedMixin):
             logger.debug(f"{self.name}: nothing staged for {start}")
             return False
         (path,) = files
-        table = pq.read_table(path)
-        if table.num_rows:
-            times = pd.DatetimeIndex(table.column("time").to_pandas())
-            if times.min() < start or times.max() >= end:
-                raise StagedPartitionError(
-                    f"{self.name}: {path.name} has rows outside [{start}, {end})"
-                )
-        self.sink.write(start, table)
+        low, high = time_bounds(path)
+        if low is not None and (low < start or high >= end):
+            raise StagedPartitionError(
+                f"{self.name}: {path.name} has rows outside [{start}, {end})"
+            )
+        self.sink.put(start, path)
         return True
 
-    def discard_staged(self, it) -> List[pathlib.Path]:
-        """Delete the staged partition once it has been published."""
-        if not self.partition_stored(it):
-            return []
-        return self._remove_staged(it)
+
+def time_bounds(path: pathlib.Path) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    """The earliest and latest ``time`` in a Parquet file, from its row-group statistics."""
+    metadata = pq.ParquetFile(path).metadata
+    column = metadata.schema.to_arrow_schema().get_field_index("time")
+    lows, highs = [], []
+    for i in range(metadata.num_row_groups):
+        stats = metadata.row_group(i).column(column).statistics
+        if stats is not None and stats.has_min_max:
+            lows.append(pd.Timestamp(stats.min))
+            highs.append(pd.Timestamp(stats.max))
+    return (min(lows), max(highs)) if lows else (None, None)
 
 
 class GridObsProvider(_StagedMixin, BaseProvider):
-    """Appends a ``grid`` or ``granules`` dataset's staged partitions to icechunk."""
+    """Appends a ``grid`` or ``granules`` dataset's staged partitions to icechunk.
+
+    Whether the store would take a partition is
+    :meth:`~planetary_datasets.base.BaseProvider.appendable`: only after its last step.
+    """
 
     append_dim = "time"
     alignment_coords = (*ALIGNMENT_COORDS, "x", "y", "tile")
@@ -183,76 +213,43 @@ class GridObsProvider(_StagedMixin, BaseProvider):
         """Build the publisher for ``grid`` or ``granules`` dataset ``name``."""
         super().__init__(config)
         self.dataset = DATASETS[name]
-        if self.dataset.publish != "icechunk":
-            raise ValueError(f"{name} is published to {self.dataset.publish}, not icechunk")
-        self.name = name
-        self.store_prefix = f"{STORE_ROOT}/{name}.icechunk"
-
-    def _stored_times(self) -> pd.DatetimeIndex:
-        return pd.DatetimeIndex(existing_times(self.get_icechunk_repo(), self.append_dim))
 
     def partition_stored(self, it) -> bool:
         """True when any of the partition's frames is in the store.
 
         Frames are committed in time order, so one present means the partition was
-        written; a partial one cannot be completed anyway (see :meth:`appendable`).
+        written; a partial one cannot be completed anyway.
         """
         start, end = self.window(it)
-        stored = self._stored_times()
+        stored = pd.DatetimeIndex(existing_times(self.get_icechunk_repo(), self.append_dim))
         return bool(((stored >= start) & (stored < end)).any())
-
-    def appendable(self, it) -> bool:
-        """True when the store would accept this partition: it starts after the end."""
-        stored = self._stored_times()
-        return stored.empty or self.window(it)[0] > stored.max()
 
     def fetch(self, it, temp_dir=None, **kwargs) -> List[str]:
         """The staged files of this partition; empty when none is staged."""
         return [str(p) for p in self.staged_files(it)]
 
     def process(self, input_files, it, temp_dir=None, **kwargs) -> xr.Dataset:
-        """Read staged files and check they belong to this partition."""
+        """Read one staged file and check it belongs to this partition."""
+        (path,) = input_files
         start, end = self.window(it)
-        parts = []
-        for path in input_files:
-            with xr.open_dataset(path, engine="h5netcdf") as staged:
-                parts.append(staged.load().drop_encoding())
-        ds = xr.concat(parts, dim="time", join="exact") if len(parts) > 1 else parts[0]
-        # Geolocation requested as a variable (Sentinel-3) is staged as latitude/longitude.
-        missing = set(self.dataset.variables) - {"s3sy_lat", "s3sy_lon"} - set(ds.data_vars)
+        with xr.open_dataset(path, engine="h5netcdf") as staged:
+            ds = staged.load().drop_encoding()
+        missing = self.dataset.staged_variables - set(ds.data_vars)
         if missing:
             raise StagedPartitionError(f"{self.name}: staged partition lacks {sorted(missing)}")
         times = pd.DatetimeIndex(ds["time"].values)
         if (times < start).any() or (times >= end).any():
             raise StagedPartitionError(f"{self.name}: staged frames fall outside [{start}, {end})")
-        return ds.sortby("time")
+        # sortby copies everything even when already in order, which it normally is.
+        return ds if times.is_monotonic_increasing else ds.sortby("time")
 
     def prepare_for_write(self, processed: xr.Dataset) -> xr.Dataset:
         """Chunk one frame per chunk in time and ``SPATIAL_CHUNK`` in space."""
-        chunks = {}
-        for dim, size in processed.sizes.items():
-            if dim == self.append_dim or dim == "tile":
-                chunks[dim] = 1
-            else:
-                chunks[dim] = min(size, SPATIAL_CHUNK)
+        chunks = {
+            dim: 1 if dim in (self.append_dim, "tile") else min(size, SPATIAL_CHUNK)
+            for dim, size in processed.sizes.items()
+        }
         return processed.chunk(chunks)
-
-    def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
-        """Write, leaving out static 2-D geolocation once the store has it.
-
-        Full-disk latitude/longitude are hundreds of MB and never change; xarray would
-        otherwise rewrite them on every append. The 1-D ``x``/``y`` axes still guard the
-        grid, because :func:`~planetary_datasets.common.dataset.coords_match` compares
-        every alignment coordinate present on both sides.
-        """
-        if has_committed_data(repo):
-            static = [
-                name
-                for name in processed.coords
-                if processed[name].ndim > 1 and self.append_dim not in processed[name].dims
-            ]
-            processed = processed.drop_vars(static)
-        return super().write_to_icechunk(repo, processed)
 
     def run_partition(self, it, check_present: bool = True) -> bool:
         """Append the partition one staged file at a time. True if anything was written."""
@@ -273,19 +270,13 @@ class GridObsProvider(_StagedMixin, BaseProvider):
             written = self.write_to_icechunk(repo, ds) or written
         return written
 
-    def discard_staged(self, it) -> List[pathlib.Path]:
-        """Delete the staged partition once it is stored or can no longer be."""
-        if not (self.partition_stored(it) or not self.appendable(it)):
-            return []
-        return self._remove_staged(it)
+
+PUBLISHERS = {"parquet": ParquetObsProvider, "icechunk": GridObsProvider}
 
 
 def provider_for(name: str, config: Config | None = None):
     """The publishing provider for dataset ``name``."""
-    dataset = DATASETS[name]
-    if dataset.publish == "parquet":
-        return ParquetObsProvider(name, config)
-    return GridObsProvider(name, config)
+    return PUBLISHERS[DATASETS[name].publish](name, config)
 
 
 __all__ = [
@@ -295,4 +286,5 @@ __all__ = [
     "STORE_ROOT",
     "StagedPartitionError",
     "provider_for",
+    "time_bounds",
 ]
