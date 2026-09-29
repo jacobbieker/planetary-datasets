@@ -97,7 +97,12 @@ def ingest_band(args: argparse.Namespace, band: str) -> list[str | None]:
                     repo_factory=repo_factory,
                     end_date=end,
                     start_date=start,
-                    first_store_suffix=end.isoformat(),
+                    # The window that reaches the anchor is the live one, and
+                    # its store carries no era suffix: its name would otherwise
+                    # move as the archive grows, so a rerun would mint a new
+                    # store beside the old rather than resume it. Earlier
+                    # windows are closed, so they keep the date they end on.
+                    first_store_suffix="" if end == args.end_date else end.isoformat(),
                     branch=args.branch,
                     group="",
                     batch_size=args.batch_size,

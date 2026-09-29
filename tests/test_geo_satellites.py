@@ -400,3 +400,51 @@ def test_himawari8_partitions_cover_the_overlap_with_himawari9():
     assert "2022-12-01" in keys
     assert "2022-12-13" in keys
     assert "2022-12-14" not in keys
+
+
+@pytest.mark.parametrize(
+    ("cli_name", "provider", "extra_args"),
+    [
+        ("ingest_gk2a_fd", gk2a_ami_fd, []),
+        ("ingest_himawari_isatss", himawari_isatss, ["--satellite", "himawari9"]),
+    ],
+)
+def test_by_year_run_leaves_the_live_store_unsuffixed(
+    monkeypatch, cli_name, provider, extra_args
+):
+    """Only closed year windows carry an era suffix; the live one carries none.
+
+    Both CLIs walk a year at a time, newest first, and named every window's
+    store after the day it ends -- including the window that reaches the
+    anchor. That store is still being appended to, so naming it for the anchor
+    minted a fresh store beside the live one on every run instead of resuming
+    it, which is exactly what happened to GK-2A and Himawari-9 in production.
+    """
+    import importlib
+
+    cli = importlib.import_module(
+        f"planetary_datasets.providers.virtualized.{cli_name}"
+    )
+    anchor = dt.date(2026, 9, 27)
+    seen: list[tuple[dt.date, str]] = []
+
+    def fake_ingest_backwards(*args, **kwargs):
+        seen.append((kwargs["end_date"], kwargs["first_store_suffix"]))
+        return []
+
+    monkeypatch.setattr(provider, "ingest_backwards", fake_ingest_backwards)
+    cli.main(
+        [*extra_args, "--band", "ir105" if provider is gk2a_ami_fd else "C13",
+         "--by-year", "--end-date", anchor.isoformat(),
+         "--start-date", "2024-06-01"]
+    )
+
+    assert seen, "the CLI ingested no windows"
+    # The window reaching the anchor is live, so its store has no era suffix.
+    live = [suffix for end, suffix in seen if end == anchor]
+    assert live == [""]
+    # Every earlier window is closed and keeps the date it ends on.
+    closed = [(end, suffix) for end, suffix in seen if end != anchor]
+    assert closed, "expected at least one closed year window"
+    for end, suffix in closed:
+        assert suffix == end.isoformat()
