@@ -55,7 +55,9 @@ class FakeRequest:
 class FakeResponse:
     def __init__(self, body: bytes, sha256: str | None):
         self._body = body
-        self.headers = {} if sha256 is None else {"X-Amz-Meta-Sha256": sha256}
+        self.headers = {"Content-Length": str(len(body))}
+        if sha256 is not None:
+            self.headers["X-Amz-Meta-Sha256"] = sha256
 
     def raise_for_status(self) -> None:
         pass
@@ -209,7 +211,7 @@ def test_unpublished_variables_are_reported_missing(tmp_path):
     report = download_kenda(REF_TIME, tmp_path, ogd_api=api)
 
     assert not report.complete
-    assert report.missing[0] == []
+    assert 0 not in report.missing, "a complete step records nothing"
     assert set(report.missing[1]) == set(FORECAST_VARIABLES) - {"TOT_PREC"}
 
 
@@ -315,17 +317,15 @@ def test_the_download_asset_mounts_the_archive_and_passes_the_hour(tmp_path, mon
     from planetary_datasets import config as config_module
 
     monkeypatch.setenv("PLANETARY_DATASETS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
     monkeypatch.setenv(regional_lam.KENDA_IMAGE_ENV, "example/kenda:test")
     config_module.reset_config_cache()
     client = FakeDockerClient()
-    try:
-        result = dg.materialize(
-            [regional_lam.kenda_download_asset],
-            partition_key="2026-09-29-06:00",
-            resources={"pipes_docker_client": client},
-        )
-    finally:
-        config_module.reset_config_cache()
+    result = dg.materialize(
+        [regional_lam.kenda_download_asset],
+        partition_key="2026-09-29-06:00",
+        resources={"pipes_docker_client": client},
+    )
 
     assert result.success
     (call,) = client.calls
@@ -338,6 +338,23 @@ def test_the_download_asset_mounts_the_archive_and_passes_the_hour(tmp_path, mon
         archive: {"bind": regional_lam.KENDA_CONTAINER_ARCHIVE, "mode": "rw"}
     }
     assert (tmp_path / "meteoswiss").is_dir()
+
+
+def test_the_download_asset_skips_an_hour_both_stores_already_hold(tmp_path, monkeypatch):
+    from dags.assets.nwp import regional_lam
+    from planetary_datasets import config as config_module
+
+    monkeypatch.setenv("ICECHUNK_LOCAL_PATH", str(tmp_path / "stores"))
+    config_module.reset_config_cache()
+    monkeypatch.setattr(kenda.KENDAProviderBase, "missing_timesteps", lambda self, desired: [])
+    client = FakeDockerClient()
+    result = dg.materialize(
+        [regional_lam.kenda_download_asset],
+        partition_key="2026-09-29-06:00",
+        resources={"pipes_docker_client": client},
+    )
+    assert result.success
+    assert client.calls == []
 
 
 def test_the_kenda_stores_depend_on_the_download_after_key_prefixing():

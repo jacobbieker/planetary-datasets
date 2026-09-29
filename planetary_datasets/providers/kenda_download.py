@@ -38,6 +38,7 @@ import hashlib
 import os
 import pathlib
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable, Sequence
 from urllib.parse import urlparse
 
@@ -108,6 +109,9 @@ CONSTANTS: tuple[str, ...] = (
 
 DEFAULT_TARGET = "/data/meteoswiss"
 
+#: Variables fetched concurrently.
+DOWNLOAD_WORKERS = 4
+
 _CHUNK_BYTES = 1 << 20
 
 
@@ -127,15 +131,15 @@ class DownloadReport:
     @property
     def complete(self) -> bool:
         """True when every requested variable is on disk."""
-        return not any(self.missing.values())
+        return not self.missing
 
     def summary(self) -> dict[str, Any]:
         """A JSON-serialisable summary, for logs and Dagster metadata."""
         return {
-            "ref_time": self.ref_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "ref_time": _zulu(self.ref_time),
             "downloaded": len(self.downloaded),
             "already_present": len(self.present),
-            "missing": {str(step): names for step, names in self.missing.items() if names},
+            "missing": {str(step): names for step, names in self.missing.items()},
         }
 
 
@@ -200,8 +204,14 @@ def download_file(
     response.raise_for_status()
     expected = response.headers.get("X-Amz-Meta-Sha256")
 
-    if reuse and expected is not None and is_complete(path):
-        if sidecar_path(path).read_text().strip() == expected:
+    sidecar = sidecar_path(path)
+    if reuse and expected is not None and path.is_file() and sidecar.is_file():
+        # Compare against what the server reports before touching the file: hashing the
+        # ~200 MB vertical constants every hour just to find them unchanged is the
+        # common case. A local copy of the right length with the published checksum
+        # recorded is trusted.
+        size = response.headers.get("Content-Length")
+        if sidecar.read_text().strip() == expected and str(path.stat().st_size) == size:
             response.close()
             return path, False
         logger.info(f"{path.name} has been republished; downloading it again")
@@ -270,19 +280,24 @@ def download_kenda(
     report = DownloadReport(ref_time=ref_time)
     api = ogd_api
 
+    jobs = []
     for step in steps:
         if step not in VARIABLES_BY_STEP:
             raise ValueError(f"KENDA publishes steps {sorted(VARIABLES_BY_STEP)}, not {step}")
-        missing = report.missing.setdefault(step, [])
         for variable in VARIABLES_BY_STEP[step]:
             if wanted is not None and variable not in wanted:
                 continue
             path = target / data_filename(ref_time, step, variable)
             if is_complete(path):
                 report.present.append(path.name)
-                continue
+            else:
+                jobs.append((step, variable))
 
-            api = api or _ogd_api()
+    if jobs:
+        api = api or _ogd_api()
+
+        def fetch(job: tuple[int, str]) -> list[str] | None:
+            step, variable = job
             request = api.Request(
                 collection=COLLECTION,
                 variable=variable,
@@ -292,18 +307,25 @@ def download_kenda(
             )
             try:
                 urls = api.get_asset_urls(request)
-                for url in urls:
-                    path, _ = download_file(url, target, api.session)
-                    report.downloaded.append(path.name)
+                names = [download_file(url, target, api.session)[0].name for url in urls]
             except (OSError, ValueError) as exc:
                 # requests' exceptions are OSErrors; ValueError is what get_asset_urls
                 # raises for an asset URL it cannot parse.
                 logger.warning(f"KENDA {variable} step {step} at {_zulu(ref_time)}: {exc}")
-                missing.append(variable)
-                continue
-            if not urls:
+                return None
+            if not names:
                 logger.info(f"KENDA {variable} step {step} at {_zulu(ref_time)}: not published")
-                missing.append(variable)
+                return None
+            return names
+
+        # Each variable is a STAC search plus a download; a few in flight cut an hour's
+        # 38 round trips without leaning hard on a public API.
+        with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as pool:
+            for (step, variable), names in zip(jobs, pool.map(fetch, jobs)):
+                if names is None:
+                    report.missing.setdefault(step, []).append(variable)
+                else:
+                    report.downloaded.extend(names)
 
     if report.downloaded or report.present:
         api = api or _ogd_api()

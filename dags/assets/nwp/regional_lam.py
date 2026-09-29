@@ -35,6 +35,8 @@ import pandas as pd
 from dagster import AssetExecutionContext
 from dagster_docker import PipesDockerClient
 
+from dags.factory import MEMORY_CLASS_TAG, MEMORY_GB_TAG, memory_class_for
+
 # Note: no ``from __future__ import annotations`` here. Dagster validates the ``context``
 # parameter against the real class object, which PEP 563 would turn into a string.
 from planetary_datasets.base import BaseProvider
@@ -45,6 +47,7 @@ from planetary_datasets.providers.dmi_harmonie import (
 from planetary_datasets.providers.hawaii_nam import HawaiiNAMProvider
 from planetary_datasets.providers.hrrr_alaska import AlaskaHRRRProvider
 from planetary_datasets.providers.kenda import KENDAAnalysisProvider, KENDAForecastProvider
+from planetary_datasets.providers.kenda_download import DEFAULT_TARGET as KENDA_CONTAINER_ARCHIVE
 
 PARTITION_FORMAT = "%Y-%m-%d-%H:%M"
 
@@ -154,8 +157,8 @@ hawaii_nam_asset = build_lam_asset(
 #: Image built by ``docker/meteoswiss-kenda/build.sh``.
 KENDA_IMAGE_ENV = "METEOSWISS_KENDA_IMAGE"
 DEFAULT_KENDA_IMAGE = "planetary-datasets/meteoswiss-kenda:latest"
-#: Where the image expects the archive to be mounted.
-KENDA_CONTAINER_ARCHIVE = "/data/meteoswiss"
+#: Memory the downloader container is capped at; it streams to disk.
+KENDA_DOWNLOAD_MEMORY_GB = 2
 
 
 def kenda_download_command(it: pd.Timestamp) -> list[str]:
@@ -176,7 +179,7 @@ def kenda_container_kwargs(archive_path) -> dict:
     """
     kwargs: dict = {
         "volumes": {str(archive_path): {"bind": KENDA_CONTAINER_ARCHIVE, "mode": "rw"}},
-        "mem_limit": "2g",
+        "mem_limit": f"{KENDA_DOWNLOAD_MEMORY_GB}g",
     }
     if hasattr(os, "getuid"):
         kwargs["user"] = f"{os.getuid()}:{os.getgid()}"
@@ -200,15 +203,29 @@ def kenda_container_kwargs(archive_path) -> dict:
     # incomplete fails rather than staging half of it. Retrying covers the lag without
     # holding every partition back by the worst case.
     retry_policy=dg.RetryPolicy(max_retries=4, delay=900, backoff=dg.Backoff.EXPONENTIAL),
-    tags={"dagster/concurrency_key": "meteoswiss-ogd"},
+    tags={
+        "dagster/concurrency_key": "meteoswiss-ogd",
+        MEMORY_CLASS_TAG: memory_class_for(KENDA_DOWNLOAD_MEMORY_GB),
+        MEMORY_GB_TAG: str(KENDA_DOWNLOAD_MEMORY_GB),
+    },
 )
 def kenda_download_asset(
     context: AssetExecutionContext,
     pipes_docker_client: PipesDockerClient,
 ) -> dg.MaterializeResult:
-    """Stage one KENDA hour in the archive the KENDA providers read."""
+    """Stage one KENDA hour in the archive the KENDA providers read.
+
+    Skipped without starting a container when both stores already hold the hour: the
+    API only keeps about a day, so re-running an older hour could otherwise only fail.
+    """
     it = partition_timestamp(context)
-    archive = KENDAAnalysisProvider().archive_path.expanduser().resolve()
+    wanted = pd.DatetimeIndex([it])
+    analysis, forecast = KENDAAnalysisProvider(), KENDAForecastProvider()
+    if not analysis.missing_timesteps(wanted) and not forecast.missing_timesteps(wanted):
+        return dg.MaterializeResult(
+            metadata={"skipped": dg.MetadataValue.text(f"{it} already in both KENDA stores")}
+        )
+    archive = analysis.archive_path.expanduser().resolve()
     archive.mkdir(parents=True, exist_ok=True)
     return pipes_docker_client.run(
         image=os.environ.get(KENDA_IMAGE_ENV, DEFAULT_KENDA_IMAGE),
