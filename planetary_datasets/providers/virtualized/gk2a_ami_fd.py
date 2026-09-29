@@ -106,8 +106,10 @@ BANDS: tuple[str, ...] = tuple(BAND_RESOLUTION)
 HIGH_RES_BAND = "vi006"
 
 #: Logical store name, before the band and era discriminators are appended.
-#: Resolved against the configured bucket, or ``ICECHUNK_LOCAL_PATH``.
-DEFAULT_STORE_BASE = "bkr/geo/gk2a_ami_fd"
+#: Resolved against the configured bucket, or ``ICECHUNK_LOCAL_PATH``. Sits
+#: under ``bkr/geo/virtualized`` with the other virtualized geostationary
+#: stores, rather than loose in ``bkr/geo`` beside the materialised ones.
+DEFAULT_STORE_BASE = "bkr/geo/virtualized/gk2a_ami_fd"
 
 #: AMI full disk runs a ten-minute cadence, so one day is 144 slots. Used as
 #: the manifest split size so a split matches a day-sized commit batch.

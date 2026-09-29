@@ -48,16 +48,20 @@ def test_published_store_prefixes():
             virtual_repo.store_prefix("bkr/geo/gk2a.icechunk", "ir087"),
             "bkr/geo/gk2a_ir087.icechunk",
         ),
-        # The band is lowercased for GK-2A...
-        (gk2a_ami_fd.store_prefix_for("IR087"), "bkr/geo/gk2a_ami_fd_ir087.icechunk"),
-        # ...and the Himawari satellites get stores of their own.
+        # The band is lowercased for GK-2A, and the store sits under
+        # bkr/geo/virtualized with the other virtualized geostationary stores...
+        (
+            gk2a_ami_fd.store_prefix_for("IR087"),
+            "bkr/geo/virtualized/gk2a_ami_fd_ir087.icechunk",
+        ),
+        # ...and the Himawari satellites get stores of their own, there too.
         (
             himawari_isatss.store_prefix_for("himawari8", "c13"),
-            "bkr/geo/himawari_isatss_himawari8_C13.icechunk",
+            "bkr/geo/virtualized/himawari_isatss_himawari8_C13.icechunk",
         ),
         (
             himawari_isatss.store_prefix_for("himawari9", "c13"),
-            "bkr/geo/himawari_isatss_himawari9_C13.icechunk",
+            "bkr/geo/virtualized/himawari_isatss_himawari9_C13.icechunk",
         ),
     ]
     for prefix, expected in cases:

@@ -11,7 +11,7 @@ platforms = ["linux-64", "osx-arm64"]
 test = "pytest tests/ -q"
 lint = "ruff check ."
 [dependencies]
-python = ">=3.13.9,<3.14"
+python = ">=3.14.6,<3.15"
 fsspec = ">=2025.10.0,<2026"
 pandas = ">=2.3.3,<3"
 requests = ">=2.32.5,<3"
@@ -54,6 +54,13 @@ satpy = ">=0.59.0,<0.60"
 ruff = ">=0.14.5,<0.15"
 harp = ">=1.28.1,<2"
 eccodes = ">=2.44.0,<3"
+
+# MIR, reached through Metview, transforms the MARS spherical harmonics onto
+# the gridpoint octahedral grid. Every model level field goes through it, so
+# without these the MARS ingest fails on its first timestep with
+# "ModuleNotFoundError: No module named 'metview'".
+metview-python = ">=1.16.2,<2"
+metview = ">=5.26.2,<6"
 
 pytest = ">=8.0,<9"
 python-dotenv = ">=1.0,<2"
