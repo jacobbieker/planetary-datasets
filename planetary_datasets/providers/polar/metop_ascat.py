@@ -25,6 +25,7 @@ class MetopAscatProvider(EumdacProvider):
     append_dim = "time"
     store_prefix = "bkr/polar/metop_ascat.icechunk"
     collection_id = "EO:EUM:DAT:METOP:ASCSZF1B"
+    obs_store = True
     epct_product = "ASCATL1SZR"
     window = pd.Timedelta("1D")
 

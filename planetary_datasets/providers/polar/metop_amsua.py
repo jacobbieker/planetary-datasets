@@ -32,6 +32,7 @@ class MetopAmsuaProvider(EumdacProvider):
     append_dim = "time"
     store_prefix = "bkr/polar/metop_amsua.icechunk"
     collection_id = "EO:EUM:DAT:METOP:AMSUL1"
+    obs_store = True
     epct_product = "AMSAL1"
     window = pd.Timedelta("1D")
     along_track_length = ALONG_TRACK_LENGTH

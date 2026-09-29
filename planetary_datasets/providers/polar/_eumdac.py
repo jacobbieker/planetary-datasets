@@ -38,6 +38,9 @@ class EumdacProvider(StagedFilesMixin, GranuleProvider):
 
     collection_id: str
     epct_product: str | None = None
+    product_suffix: str = ".nat"
+    #: Also write ``bkr/obs/<name>.icechunk``.
+    obs_store: bool = False
     download_retries: int = 3
 
     def __init__(self, config=None, product_limit: int | None = None):
@@ -132,8 +135,8 @@ class EumdacProvider(StagedFilesMixin, GranuleProvider):
 
     @property
     def obs_store_prefix(self) -> str | None:
-        """Second store the tailored instruments write, beside the other observation stores."""
-        return f"bkr/obs/{self.name}.icechunk" if self.epct_product is not None else None
+        """Second store beside the other observation stores, when :attr:`obs_store` is set."""
+        return f"bkr/obs/{self.name}.icechunk" if self.obs_store else None
 
     def write_to_icechunk(self, repo, processed) -> bool:
         """Write the obs store first, so the primary store only ever holds what it does too."""
@@ -158,10 +161,12 @@ class EumdacProvider(StagedFilesMixin, GranuleProvider):
     # ------------------------------------------------------------------ unpacking
 
     @staticmethod
-    def extract_native(archive: str | os.PathLike, dest: str | os.PathLike) -> str | None:
-        """Unpack an EPS native product from a downloaded zip.
+    def extract_native(
+        archive: str | os.PathLike, dest: str | os.PathLike, suffix: str = ".nat"
+    ) -> str | None:
+        """Unpack a product (``suffix``: ``.nat`` for EPS, ``.nc`` for EPS-SG) from a zip.
 
-        Returns the path of the ``.nat`` member, or None when the archive is unreadable or
+        Returns the path of the product member, or None when the archive is unreadable or
         holds no native product. A corrupt download is a normal occurrence in these
         archives and must not abort the whole partition.
         """
@@ -169,7 +174,7 @@ class EumdacProvider(StagedFilesMixin, GranuleProvider):
         dest = pathlib.Path(dest)
         dest.mkdir(parents=True, exist_ok=True)
 
-        if archive.suffix.lower() == ".nat":
+        if archive.suffix.lower() == suffix:
             return str(archive)
         try:
             with zipfile.ZipFile(archive, "r") as zf:
@@ -178,12 +183,12 @@ class EumdacProvider(StagedFilesMixin, GranuleProvider):
             logger.warning(f"could not unzip {archive.name}: {exc}")
             return None
 
-        natives = sorted(dest.rglob("*.nat"))
+        natives = sorted(dest.rglob(f"*{suffix}"))
         if not natives:
-            logger.warning(f"{archive.name} contains no .nat product")
+            logger.warning(f"{archive.name} contains no {suffix} product")
             return None
         # Prefer the member matching the archive name when several are unpacked here.
-        expected = archive.name.replace(".zip", ".nat")
+        expected = archive.name.replace(".zip", suffix)
         for native in natives:
             if native.name == expected:
                 return str(native)
@@ -200,6 +205,6 @@ class EumdacProvider(StagedFilesMixin, GranuleProvider):
             # otherwise be able to return a product left behind by an earlier run.
             target = base / pathlib.Path(archive).stem
             shutil.rmtree(target, ignore_errors=True)
-            native = self.extract_native(archive, target)
+            native = self.extract_native(archive, target, self.product_suffix)
             if native is not None:
                 yield native
