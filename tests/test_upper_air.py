@@ -521,7 +521,7 @@ def test_amdar_publishes_staged_netcdf_without_pb2nc_and_discards_it(
 
 def test_amdar_config_for_the_container_uses_its_tmp(local_config, tmp_path):
     text = AMDARProvider(config=local_config, bufr_dir=tmp_path).pb2nc_config_text()
-    assert 'tmp_dir = "/tmp";' in text
+    assert 'tmp_dir = "@WORK_DIR@";' in text
 
 
 # --- IGRA -------------------------------------------------------------------------------

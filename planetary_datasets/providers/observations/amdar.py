@@ -158,19 +158,21 @@ GDEX_PREPBUFR_URL = (
 GDAS_CYCLES = (0, 6, 12, 18)
 
 #: Run in the MET image (``dtcenter/met``) as ``bash -c STAGE_SCRIPT amdar <out_dir> <url>...``
-#: with the pb2nc configuration in ``$PB2NC_CONFIG``. Only finished NetCDF is left behind.
+#: with the pb2nc configuration in ``$PB2NC_CONFIG``, whose ``@WORK_DIR@`` becomes a private
+#: scratch directory. Only finished NetCDF is left behind.
 STAGE_SCRIPT = """\
 set -euo pipefail
 out=$1; shift
 mkdir -p "$out"
-printf '%s' "$PB2NC_CONFIG" > /tmp/pb2nc.cfg
+work=$(mktemp -d)
+printf '%s' "$PB2NC_CONFIG" | sed "s|@WORK_DIR@|$work|" > "$work/pb2nc.cfg"
 for url in "$@"; do
-  raw="/tmp/$(basename "$url")"
+  raw="$work/$(basename "$url")"
   nc="$out/$(basename "$url").nc"
   [ -s "$nc" ] && continue
   wget -q --no-hsts --tries=5 -O "$raw" "$url"
-  pb2nc "$raw" /tmp/out.nc /tmp/pb2nc.cfg
-  mv /tmp/out.nc "$nc"
+  pb2nc "$raw" "$work/out.nc" "$work/pb2nc.cfg"
+  mv "$work/out.nc" "$nc"
   rm -f "$raw"
 done
 """
@@ -591,7 +593,7 @@ class AMDARProvider(StagedFilesMixin, PointObservationProvider):
         """The pb2nc configuration to hand the MET image."""
         if self._pb2nc_config is not None or os.environ.get("AMDAR_PB2NC_CONFIG"):
             return self.pb2nc_config_path().read_text()
-        return render_pb2nc_config("/tmp")
+        return render_pb2nc_config("@WORK_DIR@")
 
     def pb2nc_config_path(self, temp_dir: pathlib.Path | None = None) -> pathlib.Path:
         """Return the MET configuration file to use, writing the built-in one if needed."""
