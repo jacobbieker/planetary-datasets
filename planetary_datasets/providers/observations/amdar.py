@@ -16,8 +16,9 @@ pool). Three behaviours of the originals were deliberately changed:
   a *subset*, so every header after the first read another header's observations. It is
   now a vectorised gather through the header-index array.
 
-The raw PREPBUFR files are not downloaded here — they arrive from an operational feed or
-an archive pull — so the provider reads them from a local directory.
+The ``amdar_download`` asset fetches GDAS PREPBUFR from NCAR GDEX and runs ``pb2nc`` in
+the MET Docker image (:data:`STAGE_SCRIPT`), staging NetCDF under ``<bufr_dir>/<YYYYMMDD>``.
+Raw PREPBUFR files already in ``bufr_dir`` are still converted with a local ``pb2nc``.
 
 Environment:
     ``AMDAR_BUFR_DIR``      Directory holding the raw PREPBUFR files. Defaults to
@@ -42,6 +43,7 @@ import pandas as pd
 import xarray as xr
 from loguru import logger
 
+from planetary_datasets.common.staged import StagedFilesMixin
 from planetary_datasets.config import Config
 from planetary_datasets.providers.observations.upper_air_common import (
     PointObservationProvider,
@@ -148,6 +150,41 @@ version = "{version}";
 #: MET config files carry the version of the tool that reads them.
 PB2NC_CONFIG_VERSION = "V12.2.0"
 
+#: NCAR GDEX ds337.0 GDAS PREPBUFR, published about 48 hours after the cycle.
+GDEX_PREPBUFR_URL = (
+    "https://osdf-director.osg-htc.org/ncar/gdex/d337000/prep48h/"
+    "{day:%Y}/prepbufr.gdas.{day:%Y%m%d}.t{hour:02d}z.nr.48h"
+)
+GDAS_CYCLES = (0, 6, 12, 18)
+
+#: Run in the MET image (``dtcenter/met``) as ``bash -c STAGE_SCRIPT amdar <out_dir> <url>...``
+#: with the pb2nc configuration in ``$PB2NC_CONFIG``. Only finished NetCDF is left behind.
+STAGE_SCRIPT = """\
+set -euo pipefail
+out=$1; shift
+mkdir -p "$out"
+printf '%s' "$PB2NC_CONFIG" > /tmp/pb2nc.cfg
+for url in "$@"; do
+  raw="/tmp/$(basename "$url")"
+  nc="$out/$(basename "$url").nc"
+  [ -s "$nc" ] && continue
+  wget -q --no-hsts --tries=5 -O "$raw" "$url"
+  pb2nc "$raw" /tmp/out.nc /tmp/pb2nc.cfg
+  mv /tmp/out.nc "$nc"
+  rm -f "$raw"
+done
+"""
+
+
+def prepbufr_urls(day: pd.Timestamp) -> List[str]:
+    """The GDAS PREPBUFR files covering one UTC day.
+
+    Each cycle holds a +-3 h window, so the next day's 00z carries this day's last three hours.
+    """
+    day = pd.Timestamp(day).normalize()
+    cycles = [(day, h) for h in GDAS_CYCLES] + [(day + pd.Timedelta(days=1), 0)]
+    return [GDEX_PREPBUFR_URL.format(day=d, hour=h) for d, h in cycles]
+
 #: Observation types whose "unit" makes them a code rather than a measurement. The
 #: original dropped these and so do we: mixing a code table into a float column of
 #: physical values produces nonsense on averaging.
@@ -252,15 +289,22 @@ def write_pb2nc_config(
     """Write the built-in aircraft pb2nc configuration and return its path."""
     dest = pathlib.Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(
-        PB2NC_CONFIG_TEMPLATE.format(
-            obs_window_beg=int(obs_window[0]),
-            obs_window_end=int(obs_window[1]),
-            tmp_dir=str(tmp_dir),
-            version=version,
-        )
-    )
+    dest.write_text(render_pb2nc_config(tmp_dir, obs_window, version))
     return dest
+
+
+def render_pb2nc_config(
+    tmp_dir: str | os.PathLike,
+    obs_window: tuple[int, int] = (-21600, 21600),
+    version: str = PB2NC_CONFIG_VERSION,
+) -> str:
+    """The built-in aircraft pb2nc configuration as text."""
+    return PB2NC_CONFIG_TEMPLATE.format(
+        obs_window_beg=int(obs_window[0]),
+        obs_window_end=int(obs_window[1]),
+        tmp_dir=str(tmp_dir),
+        version=version,
+    )
 
 
 def run_pb2nc(
@@ -489,7 +533,7 @@ def read_pb2nc_files(paths: Sequence[str | os.PathLike]) -> pd.DataFrame:
     return concat_tables(tables)
 
 
-class AMDARProvider(PointObservationProvider):
+class AMDARProvider(StagedFilesMixin, PointObservationProvider):
     """Daily AMDAR aircraft observations decoded from local PREPBUFR files.
 
     Args:
@@ -534,6 +578,21 @@ class AMDARProvider(PointObservationProvider):
             return pathlib.Path(configured).expanduser()
         return self.config.data_dir / "amdar"
 
+    @property
+    def archive_root(self) -> pathlib.Path:
+        """Host directory mounted into the MET image."""
+        return self.bufr_dir
+
+    def staged_dir(self, it: pd.Timestamp) -> pathlib.Path:
+        """Where the MET image leaves a day's converted NetCDF."""
+        return self.bufr_dir / pd.Timestamp(it).strftime("%Y%m%d")
+
+    def pb2nc_config_text(self) -> str:
+        """The pb2nc configuration to hand the MET image."""
+        if self._pb2nc_config is not None or os.environ.get("AMDAR_PB2NC_CONFIG"):
+            return self.pb2nc_config_path().read_text()
+        return render_pb2nc_config("/tmp")
+
     def pb2nc_config_path(self, temp_dir: pathlib.Path | None = None) -> pathlib.Path:
         """Return the MET configuration file to use, writing the built-in one if needed."""
         if self._pb2nc_config is not None:
@@ -548,7 +607,7 @@ class AMDARProvider(PointObservationProvider):
         return write_pb2nc_config(target_dir / "pb2nc_amdar.cfg", tmp_dir=target_dir)
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
-        """Return the raw PREPBUFR files whose name carries the partition's date."""
+        """Return the day's staged NetCDF, else the raw PREPBUFR files carrying its date."""
         directory = self.bufr_dir
         if not directory.is_dir():
             # Misconfiguration, not absent data: returning [] here would mark every
@@ -557,6 +616,9 @@ class AMDARProvider(PointObservationProvider):
                 f"AMDAR PREPBUFR directory {directory} does not exist. Set AMDAR_BUFR_DIR "
                 "or pass bufr_dir="
             )
+        staged = self.staged_files(it)
+        if staged:
+            return [str(p) for p in staged]
         pattern = self.file_pattern.format(date=pd.Timestamp(it))
         matches = sorted(p for p in directory.glob(pattern) if p.is_file())
         if not matches:
@@ -571,11 +633,14 @@ class AMDARProvider(PointObservationProvider):
         **kwargs,
     ) -> xr.Dataset:
         """Convert the PREPBUFR files and flatten them into one day of observations."""
-        work_dir = pathlib.Path(temp_dir) if temp_dir else self.config.scratch_dir
-        config_path = self.pb2nc_config_path(work_dir)
-        converted = convert_many(
-            input_files, work_dir / "amdar_nc", config_path, workers=self.workers
-        )
+        converted = [pathlib.Path(p) for p in input_files if p.endswith(".nc")]
+        raw = [p for p in input_files if not p.endswith(".nc")]
+        if raw:
+            work_dir = pathlib.Path(temp_dir) if temp_dir else self.config.scratch_dir
+            config_path = self.pb2nc_config_path(work_dir)
+            converted += convert_many(
+                raw, work_dir / "amdar_nc", config_path, workers=self.workers
+            )
         if not converted:
             raise RuntimeError(f"pb2nc produced no output for any of {len(input_files)} file(s)")
 

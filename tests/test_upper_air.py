@@ -20,12 +20,14 @@ from planetary_datasets.providers.observations import igra as igra_module
 from planetary_datasets.providers.observations import sondehub as sondehub_module
 from planetary_datasets.providers.observations.amdar import (
     AMDAR_SCHEMA,
+    STAGE_SCRIPT,
     AMDARProvider,
     MissingToolError,
     convert_many,
     find_pb2nc,
     pb2nc_available,
     pb2nc_to_table,
+    prepbufr_urls,
     rename_by_long_name,
     run_pb2nc,
     slugify,
@@ -484,6 +486,42 @@ def test_amdar_pb2nc_config_env_must_exist(local_config, tmp_path, monkeypatch):
     monkeypatch.setenv("AMDAR_PB2NC_CONFIG", str(tmp_path / "absent.cfg"))
     with pytest.raises(FileNotFoundError, match="AMDAR_PB2NC_CONFIG"):
         AMDARProvider(config=local_config).pb2nc_config_path(tmp_path)
+
+
+def test_prepbufr_urls_cover_the_day_and_the_next_00z():
+    urls = prepbufr_urls(pd.Timestamp("2026-12-31"))
+    assert [u.rsplit("/", 1)[1] for u in urls] == [
+        "prepbufr.gdas.20261231.t00z.nr.48h",
+        "prepbufr.gdas.20261231.t06z.nr.48h",
+        "prepbufr.gdas.20261231.t12z.nr.48h",
+        "prepbufr.gdas.20261231.t18z.nr.48h",
+        "prepbufr.gdas.20270101.t00z.nr.48h",
+    ]
+    assert "/prep48h/2027/" in urls[-1]
+
+
+def test_amdar_publishes_staged_netcdf_without_pb2nc_and_discards_it(
+    local_config, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PB2NC_BINARY", str(tmp_path / "absent"))
+    raw = tmp_path / "amdar"
+    staged = raw / "20260304"
+    staged.mkdir(parents=True)
+    _met_point_dataset().to_netcdf(staged / "prepbufr.gdas.20260304.t00z.nr.48h.nc")
+    provider = AMDARProvider(config=local_config, bufr_dir=raw)
+    it = pd.Timestamp("2026-03-04")
+
+    assert provider.has_staged(it)
+    assert provider.discard_staged(it) == []
+    assert provider.run_partition(it) is True
+    assert provider.partition_stored(it)
+    assert len(provider.discard_staged(it)) == 1
+    assert not provider.has_staged(it)
+
+
+def test_amdar_config_for_the_container_uses_its_tmp(local_config, tmp_path):
+    text = AMDARProvider(config=local_config, bufr_dir=tmp_path).pb2nc_config_text()
+    assert 'tmp_dir = "/tmp";' in text
 
 
 # --- IGRA -------------------------------------------------------------------------------
@@ -1182,6 +1220,7 @@ def test_the_asset_module_defines_the_expected_assets():
     import dags.assets.upper_air as upper_air
 
     assets = [
+        upper_air.amdar_download,
         upper_air.amdar_observations,
         upper_air.igra_cds_raw,
         upper_air.igra_cds_observations,
@@ -1194,6 +1233,7 @@ def test_the_asset_module_defines_the_expected_assets():
 
     keys = {key.to_user_string() for asset in assets for key in asset.keys}
     assert keys == {
+        "amdar_download",
         "amdar_observations",
         "igra_cds_raw",
         "igra_cds_observations",
@@ -1208,3 +1248,29 @@ def test_the_icechunk_stage_depends_on_the_download_stage():
     dependencies = upper_air.igra_cds_observations.asset_deps
     depends_on = {key.to_user_string() for keys in dependencies.values() for key in keys}
     assert "igra_cds_raw" in depends_on
+
+
+def test_the_amdar_download_runs_pb2nc_in_the_met_image(local_config, monkeypatch, tmp_path):
+    import dagster as dg
+
+    import dags.assets.upper_air as upper_air
+
+    monkeypatch.setenv("AMDAR_BUFR_DIR", str(tmp_path / "amdar"))
+    calls = []
+
+    class Client:
+        def run(self, **kwargs):
+            calls.append(kwargs)
+            return type("R", (), {"get_materialize_result": lambda _: dg.MaterializeResult()})()
+
+    result = dg.materialize(
+        [upper_air.amdar_download],
+        partition_key="2026-03-04",
+        resources={"pipes_docker_client": Client()},
+    )
+    assert result.success
+    (call,) = calls
+    assert call["image"] == "dtcenter/met:12.2.2"
+    assert call["command"][:5] == ["bash", "-c", STAGE_SCRIPT, "amdar", "/data/amdar/20260304"]
+    assert len(call["command"]) == 10
+    assert "AIRCAR" in call["env"]["PB2NC_CONFIG"]
