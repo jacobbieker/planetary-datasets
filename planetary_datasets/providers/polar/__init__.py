@@ -10,6 +10,9 @@ One provider per instrument, all writing into ``bkr/polar/*.icechunk``:
 :class:`MetopGomeProvider`    GOME-2 spectrometer, MetOp
 :class:`MetopIasiProvider`    IASI infrared sounder, MetOp
 :class:`MetopMhsProvider`     MHS microwave humidity sounder, MetOp
+:class:`MetopSgMwsProvider`   MWS microwave sounder, MetOp-SG
+:class:`MetopSgMetimageProvider`  METimage imager, MetOp-SG
+:class:`MetopSgRoProvider`    GRAS-2 radio occultation, MetOp-SG
 ============================  =======================================================
 
 ATMS comes from the public NOAA open data buckets and needs no credentials. The MetOp
@@ -34,6 +37,11 @@ from planetary_datasets.providers.polar.metop_avhrr import MetopAvhrrProvider
 from planetary_datasets.providers.polar.metop_gome import MetopGomeProvider
 from planetary_datasets.providers.polar.metop_iasi import MetopIasiProvider
 from planetary_datasets.providers.polar.metop_mhs import MetopMhsProvider
+from planetary_datasets.providers.polar.metop_sg import (
+    MetopSgMetimageProvider,
+    MetopSgMwsProvider,
+    MetopSgRoProvider,
+)
 
 __all__ = [
     "EumdacProvider",
@@ -45,6 +53,9 @@ __all__ = [
     "MetopGomeProvider",
     "MetopIasiProvider",
     "MetopMhsProvider",
+    "MetopSgMetimageProvider",
+    "MetopSgMwsProvider",
+    "MetopSgRoProvider",
     "mid_time",
     "pad_dim",
     "process_eps_netcdf",

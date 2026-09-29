@@ -21,6 +21,9 @@ from planetary_datasets.providers.polar import (
     MetopAvhrrProvider,
     MetopGomeProvider,
     MetopIasiProvider,
+    MetopSgMetimageProvider,
+    MetopSgMwsProvider,
+    MetopSgRoProvider,
     mid_time,
     pad_dim,
     process_eps_netcdf,
@@ -653,6 +656,9 @@ def test_dagster_assets_load():
         "metop-iasi",
         "metop-mhs",
         "metop-mhs-download",
+        "metop-sg-metimage",
+        "metop-sg-mws",
+        "metop-sg-ro",
     }
 
 
@@ -672,3 +678,72 @@ def test_dagster_partition_widths_match_the_providers():
         )
         window = partitions.time_window_for_partition_key(keys[-1])
         assert pd.Timestamp(window.end) - pd.Timestamp(window.start) == provider_cls.window
+
+
+# --------------------------------------------------------------------- MetOp-SG
+
+
+def test_metop_sg_partition_widths_match_the_providers():
+    from dags.assets import polar_sounders
+
+    pairs = [
+        (polar_sounders.metop_sg_mws_partitions, MetopSgMwsProvider),
+        (polar_sounders.metop_sg_metimage_partitions, MetopSgMetimageProvider),
+        (polar_sounders.metop_sg_ro_partitions, MetopSgRoProvider),
+    ]
+    for partitions, provider_cls in pairs:
+        keys = partitions.get_partition_keys(
+            current_time=dt.datetime(2026, 10, 1, tzinfo=dt.timezone.utc)
+        )
+        window = partitions.time_window_for_partition_key(keys[-1])
+        assert pd.Timestamp(window.end) - pd.Timestamp(window.start) == provider_cls.window
+
+
+def mws_product(tmp_path, start: str, scans: int) -> str:
+    """A zipped EPS-SG MWS product with the grouped layout of the real files."""
+    import zipfile
+
+    begin = pd.Timestamp(start)
+    stem = f"SGA1-MWS-1B-RAD_{begin:%Y%m%d%H%M%S}"
+    nc = tmp_path / f"{stem}.nc"
+    xr.Dataset(
+        attrs={
+            "spacecraft": "SGA1",
+            "sensing_start_time_utc": str(begin),
+            "sensing_end_time_utc": str(begin + pd.Timedelta("3min")),
+        }
+    ).to_netcdf(nc, engine="h5netcdf")
+    grid = ("n_scans", "n_fovs")
+    names = MetopSgMwsProvider.groups["data/navigation"]
+    nav = {name: (grid, np.zeros((scans, 3))) for name in names}
+    nav["mws_scantime_utc"] = ("n_scans", pd.date_range(begin, periods=scans, freq="2s"))
+    xr.Dataset(nav).to_netcdf(nc, group="data/navigation", mode="a", engine="h5netcdf")
+    bt = np.full((scans, 3, 2), 250.0)
+    xr.Dataset({"mws_toa_brightness_temperature": ((*grid, "n_channels"), bt)}).to_netcdf(
+        nc, group="data/calibration", mode="a", engine="h5netcdf"
+    )
+    xr.Dataset({"L1B_quality_flag": ((), np.uint16(0))}).to_netcdf(
+        nc, group="quality", mode="a", engine="h5netcdf"
+    )
+    archive = tmp_path / f"{stem}.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.write(nc, nc.name)
+    return str(archive)
+
+
+def test_metop_sg_mws_granules_are_padded_and_written_to_both_stores(local_config, tmp_path):
+    provider = MetopSgMwsProvider(config=local_config)
+    archives = [
+        mws_product(tmp_path, "2026-09-27T12:00", scans=80),
+        mws_product(tmp_path, "2026-09-27T12:03", scans=78),
+    ]
+    ds = provider.process(archives, pd.Timestamp("2026-09-27"), temp_dir=tmp_path / "work")
+    assert dict(ds.sizes) == {"time": 2, "y": 80, "x": 3, "channel": 2}
+    assert ds["mws_toa_brightness_temperature"].dtype == np.float32
+    assert list(ds["channel"].values) == [1, 2]
+    assert list(ds["platform_name"].values) == ["SGA1", "SGA1"]
+
+    assert provider.write_to_icechunk(provider.get_icechunk_repo(), ds) is True
+    assert provider.partition_stored(pd.Timestamp("2026-09-27"))
+    obs = local_config.icechunk_repo("bkr/obs/metop_sg_mws.icechunk")
+    assert xr.open_zarr(obs.readonly_session("main").store, consolidated=False).sizes["time"] == 2

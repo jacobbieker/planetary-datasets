@@ -32,6 +32,9 @@ from planetary_datasets.providers.polar import (
     MetopGomeProvider,
     MetopIasiProvider,
     MetopMhsProvider,
+    MetopSgMetimageProvider,
+    MetopSgMwsProvider,
+    MetopSgRoProvider,
 )
 
 #: ATMS on Suomi-NPP and NOAA-20 in the NOAA open data buckets starts here.
@@ -61,6 +64,15 @@ metop_gome_partitions = dg.HourlyPartitionsDefinition(
 metop_iasi_partitions = _multi_hour_partitions(METOP_START, 2)
 metop_avhrr_partitions = _multi_hour_partitions(METOP_START, 4)
 metop_daily_partitions = dg.DailyPartitionsDefinition(start_date=METOP_START, end_offset=-1)
+# MetOp-SG-A1 L1b first appears in the Data Store on these dates.
+metop_sg_mws_partitions = dg.DailyPartitionsDefinition(start_date="2026-06-11", end_offset=-1)
+metop_sg_ro_partitions = dg.HourlyPartitionsDefinition(start_date="2026-02-26-00:00", end_offset=-1)
+metop_sg_metimage_partitions = dg.TimeWindowPartitionsDefinition(
+    start=dt.datetime(2026, 8, 27),
+    cron_schedule="*/10 * * * *",
+    fmt=_HOURLY_FMT,
+    end_offset=-1,
+)
 
 
 def _run(context: dg.AssetExecutionContext, provider: BaseProvider) -> dg.MaterializeResult:
@@ -190,6 +202,34 @@ def metop_iasi_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     return _run(context, MetopIasiProvider())
 
 
+def _sg_asset(name: str, provider_cls, partitions_def, description: str):
+    @dg.asset(
+        name=name,
+        description=description,
+        partitions_def=partitions_def,
+        tags=_TAGS,
+        retry_policy=_RETRY,
+    )
+    def _asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+        return _run(context, provider_cls())
+
+    return _asset
+
+
+metop_sg_mws_asset = _sg_asset(
+    "metop-sg-mws", MetopSgMwsProvider, metop_sg_mws_partitions,
+    "MetOp-SG MWS microwave sounder brightness temperatures from the EUMETSAT Data Store.",
+)  # fmt: skip
+metop_sg_metimage_asset = _sg_asset(
+    "metop-sg-metimage", MetopSgMetimageProvider, metop_sg_metimage_partitions,
+    "MetOp-SG METimage level 1b radiances from the EUMETSAT Data Store.",
+)  # fmt: skip
+metop_sg_ro_asset = _sg_asset(
+    "metop-sg-ro", MetopSgRoProvider, metop_sg_ro_partitions,
+    "MetOp-SG GRAS-2 radio occultation bending angles from the EUMETSAT Data Store.",
+)  # fmt: skip
+
+
 #: Every asset in this module, for the code location to load.
 polar_sounder_assets = [
     jpss_atms_asset,
@@ -202,4 +242,7 @@ polar_sounder_assets = [
     metop_avhrr_asset,
     metop_gome_asset,
     metop_iasi_asset,
+    metop_sg_mws_asset,
+    metop_sg_metimage_asset,
+    metop_sg_ro_asset,
 ]
