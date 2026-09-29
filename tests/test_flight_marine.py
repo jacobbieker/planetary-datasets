@@ -603,6 +603,20 @@ def test_osmc_provider_process_clips_to_the_month(osmc_provider, tmp_path):
     assert pd.Timestamp(ds.time.values[-1]) < pd.Timestamp("2012-02-01")
 
 
+def test_osmc_float32_provider_writes_the_compact_layout(local_config, tmp_path):
+    provider = osmc.OSMCFloat32Provider("drifters", config=local_config)
+    assert provider.store_prefix == "bkr/aoml/aoml_drifters_2.icechunk"
+    raw = make_erddap_dataset()
+    raw["sst"].attrs["long_name"] = "Sea Surface Temperature"
+    path = tmp_path / "osmc.nc"
+    raw.to_netcdf(path)
+
+    ds = provider.process([str(path)], pd.Timestamp("2012-01-01"))
+    assert set(ds.data_vars) == {"platform_id", "latitude", "longitude", "sea_surface_temperature"}
+    assert {ds[v].dtype for v in ds.data_vars} == {np.dtype("float32")}
+    assert provider.write_to_icechunk(provider.get_icechunk_repo(), ds) is True
+
+
 def test_reorganise_by_platform_id():
     flat = osmc.rows_to_time_dim(make_erddap_dataset())
     out = osmc.reorganise_by_platform_id(flat)
@@ -711,8 +725,8 @@ def test_dagster_assets_build_a_definitions_object():
     defs = dg.Definitions(assets=assets)
     keys = {key.to_user_string() for key in defs.resolve_asset_graph().get_all_asset_keys()}
     assert "opensky_states" in keys
-    assert "osmc_drifters" in keys
-    assert len(keys) == 1 + len(osmc.PLATFORM_TYPES)
+    assert {"osmc_drifters", "osmc_drifters_2"} <= keys
+    assert len(keys) == 1 + 2 * len(osmc.PLATFORM_TYPES)
 
 
 def test_opensky_partitions_cover_the_sample_set_and_stop_there():
