@@ -1,7 +1,8 @@
 r"""Download EPS products from the EUMETSAT Data Store and convert them with the Data Tailor.
 
-Runs in the ``docker/epct`` image: ``epct`` is only published for Python 3.9 on the
-``eumetsat`` conda channel, so this imports nothing from ``planetary_datasets``. The
+Runs in the ``docker/epct`` image, since ``epct`` is only published on the ``eumetsat``
+conda channel with pins the project environment cannot meet, so this imports nothing
+from ``planetary_datasets``. The
 tailored netCDF lands in ``<target>/<product>/<YYYYmmddTHHMM>/``, which the
 :class:`~planetary_datasets.providers.polar._eumdac.EumdacProvider` publishes::
 
@@ -53,7 +54,8 @@ def main(argv=None) -> int:
     part = out.with_name(out.name + ".part")
     shutil.rmtree(part, ignore_errors=True)
     raw = part / "raw"
-    raw.mkdir(parents=True)
+    for scratch in ("raw", "workspace", "log"):
+        (part / scratch).mkdir(parents=True)
     archives = []
     for product in products:
         try:
@@ -65,12 +67,18 @@ def main(argv=None) -> int:
     if products and not archives:
         raise RuntimeError(f"none of {len(products)} product(s) downloaded")
     if archives:
-        api.run_chain(
+        # run_chain logs a failed customisation rather than raising it.
+        outputs = api.run_chain(
             product_paths=archives,
             chain_config={"product": args.product, "format": "netcdf4_satellite"},
             target_dir=str(part),
+            workspace_dir=str(part / "workspace"),
+            log_dir=str(part / "log"),
         )
-    shutil.rmtree(raw)
+        if not outputs:
+            raise RuntimeError(f"the Data Tailor produced nothing from {len(archives)} product(s)")
+    for scratch in ("raw", "workspace", "log"):
+        shutil.rmtree(part / scratch, ignore_errors=True)
     part.rename(out)
     return 0
 

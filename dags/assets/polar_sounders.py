@@ -31,6 +31,7 @@ from planetary_datasets.providers.polar import (
     MetopAvhrrProvider,
     MetopGomeProvider,
     MetopIasiProvider,
+    MetopMhsProvider,
 )
 
 #: ATMS on Suomi-NPP and NOAA-20 in the NOAA open data buckets starts here.
@@ -148,6 +149,9 @@ metop_amsua_download, metop_amsua_asset = _epct_assets(
 metop_ascat_download, metop_ascat_asset = _epct_assets(
     "metop-ascat", MetopAscatProvider, "MetOp ASCAT scatterometer orbits"
 )
+metop_mhs_download, metop_mhs_asset = _epct_assets(
+    "metop-mhs", MetopMhsProvider, "MetOp MHS microwave humidity sounder orbits"
+)
 
 
 @dg.asset(
@@ -193,6 +197,8 @@ polar_sounder_assets = [
     metop_amsua_asset,
     metop_ascat_download,
     metop_ascat_asset,
+    metop_mhs_download,
+    metop_mhs_asset,
     metop_avhrr_asset,
     metop_gome_asset,
     metop_iasi_asset,

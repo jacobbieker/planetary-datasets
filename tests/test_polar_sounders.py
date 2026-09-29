@@ -641,6 +641,8 @@ def test_dagster_assets_load():
         "metop-avhrr",
         "metop-gome",
         "metop-iasi",
+        "metop-mhs",
+        "metop-mhs-download",
     }
 
 

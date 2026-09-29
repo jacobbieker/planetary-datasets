@@ -9,11 +9,12 @@ One provider per instrument, all writing into ``bkr/polar/*.icechunk``:
 :class:`MetopAvhrrProvider`   AVHRR imager, MetOp
 :class:`MetopGomeProvider`    GOME-2 spectrometer, MetOp
 :class:`MetopIasiProvider`    IASI infrared sounder, MetOp
+:class:`MetopMhsProvider`     MHS microwave humidity sounder, MetOp
 ============================  =======================================================
 
 ATMS comes from the public NOAA open data buckets and needs no credentials. The MetOp
 instruments come from the EUMETSAT Data Store and need ``EUMETSAT_CONSUMER_KEY`` and
-``EUMETSAT_CONSUMER_SECRET``; AMSU-A and ASCAT are downloaded and converted to netCDF by
+``EUMETSAT_CONSUMER_SECRET``; AMSU-A, ASCAT and MHS are downloaded and converted to netCDF by
 the EUMETSAT Data Tailor in the ``docker/epct`` image.
 """
 
@@ -32,6 +33,7 @@ from planetary_datasets.providers.polar.metop_ascat import MetopAscatProvider
 from planetary_datasets.providers.polar.metop_avhrr import MetopAvhrrProvider
 from planetary_datasets.providers.polar.metop_gome import MetopGomeProvider
 from planetary_datasets.providers.polar.metop_iasi import MetopIasiProvider
+from planetary_datasets.providers.polar.metop_mhs import MetopMhsProvider
 
 __all__ = [
     "EumdacProvider",
@@ -42,6 +44,7 @@ __all__ = [
     "MetopAvhrrProvider",
     "MetopGomeProvider",
     "MetopIasiProvider",
+    "MetopMhsProvider",
     "mid_time",
     "pad_dim",
     "process_eps_netcdf",
