@@ -8,10 +8,10 @@ publish what it staged and then delete it:
 
 :class:`ParquetObsProvider`
     ``table`` datasets. The staged Parquet file becomes one partition of a Parquet dataset
-    at ``bkr/earth2studio/<name>.parquet``; see
+    at ``bkr/obs/<name>.parquet``; see
     :class:`~planetary_datasets.common.parquet.ParquetSink`.
 :class:`GridObsProvider`
-    ``grid`` and ``granules`` datasets, appended to ``bkr/earth2studio/<name>.icechunk``
+    ``grid`` and ``granules`` datasets, appended to ``bkr/obs/<name>.icechunk``
     one staged file at a time, so a full-disk hour never has to be in memory at once.
 
 :func:`provider_for` builds the right one for a dataset name.
@@ -46,7 +46,8 @@ from planetary_datasets.providers.radar import to_naive_utc
 
 ARCHIVE_ENV = "E2S_OBS_ARCHIVE_DIR"
 ARCHIVE_SUBDIR = "earth2studio"
-STORE_ROOT = "bkr/earth2studio"
+#: Both kinds of store go with the project's other observation datasets.
+STORE_ROOT = "bkr/obs"
 
 #: Spatial chunk edge for gridded stores. A GOES full-disk frame is 5424 square, and one
 #: chunk per frame would make every read fetch 118 MB per band.

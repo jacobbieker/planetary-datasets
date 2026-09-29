@@ -41,7 +41,7 @@ class ParquetSink:
 
     Args:
         prefix: Location of the dataset relative to the configured bucket, e.g.
-            ``bkr/obs/earth2studio/ghcn_daily.parquet``.
+            ``bkr/obs/ghcn_daily.parquet``.
         config: Configuration override, defaulting to the process-wide config.
     """
 

@@ -224,6 +224,27 @@ def test_the_modis_tile_list_is_the_published_one():
     assert not {"h17v15", "h23v16"} & set(tiles)
 
 
+def test_every_store_goes_under_obs_without_clashing_with_an_existing_one():
+    assert obs.provider_for("iem_asos").store_prefix == "bkr/obs/iem_asos.parquet"
+    assert obs.provider_for("mrms_conus").store_prefix == "bkr/obs/mrms_conus.icechunk"
+
+    # bkr/obs already holds the native observation stores; no prefix may be reused.
+    import re
+
+    source = "\n".join(
+        path.read_text()
+        for path in (REPO_ROOT / "planetary_datasets").rglob("*.py")
+        if path.name not in {"earth2studio_obs.py", "parquet.py"}
+    )
+    existing = set(re.findall(r"[\"'](bkr/[\w./-]+\.(?:icechunk|parquet|zarr))[\"']", source))
+    ours = {obs.provider_for(name).store_prefix for name in dl.DATASETS}
+    assert len(ours) == len(dl.DATASETS)
+    assert not ours & existing
+    stem = lambda prefix: prefix.rsplit("/", 1)[-1].split(".")[0]  # noqa: E731
+    obs_stems = {stem(p) for p in existing if p.startswith("bkr/obs/")}
+    assert not {stem(p) for p in ours} & obs_stems, "a name shared with a native store misleads"
+
+
 def test_satellite_changeovers_apply_from_their_date():
     east = dl.DATASETS["goes_east_conus"]
     assert east.kwargs_for(dt.datetime(2025, 4, 6, 23))["satellite"] == "goes16"
@@ -489,7 +510,7 @@ def test_pipes_accepts_the_summaries():
 
 
 def test_the_parquet_sink_layout(local_config):
-    sink = ParquetSink("bkr/earth2studio/x.parquet")
+    sink = ParquetSink("bkr/obs/x.parquet")
     it = pd.Timestamp("2026-09-29T06:00")
     assert sink.key(it) == "date=2026-09-29/part-202609290600.parquet"
     assert not sink.exists(it)

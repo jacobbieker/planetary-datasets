@@ -36,10 +36,10 @@ earth2studio_obs/<name>_download   (this image, via PipesDockerClient)
 ```
 
 - **DataFrame sources** are cast to the source's own `SCHEMA` and published as a
-  partitioned Parquet dataset, `bkr/earth2studio/<name>.parquet/date=YYYY-MM-DD/part-<stamp>.parquet`.
+  partitioned Parquet dataset, `bkr/obs/<name>.parquet/date=YYYY-MM-DD/part-<stamp>.parquet`.
   Empty partitions are still written, so a quiet hour is not fetched again.
 - **Gridded sources** are staged in batches of frames and appended to
-  `bkr/earth2studio/<name>.icechunk` one batch at a time. Static 2-D
+  `bkr/obs/<name>.icechunk` one batch at a time. Static 2-D
   latitude/longitude is written once, not on every append.
 - **Swaths** (VIIRS, Sentinel-3 SYNERGY) are listed first, requested granule by
   granule, and stacked along `time` with per-granule latitude/longitude.
@@ -66,7 +66,7 @@ be backfilled deliberately.
 | `ufs_sat` | `UFSObsSat` | Parquet | 1D | 1980-01-01 | manual |
 | `ghcn_daily` | `GHCNDaily` | Parquet | 1MS | 1750-01-01 | yes |
 | `ghcn_hourly` | `GHCNHourly` | Parquet | 1YS | 1901-01-01 | manual |
-| `isd` | `ISD` | Parquet | 1YS | 1901-01-01 | manual |
+| `isd_earth2studio` | `ISD` | Parquet | 1YS | 1901-01-01 | manual |
 | `iem_asos` | `IEM_ASOS` | Parquet | 1D | 1928-01-01 | yes |
 | `ibtracs` | `IBTrACS` | Parquet | 1YS | 1842-01-01 | yes |
 | `goes_glm_east_event` | `GOESGLM` | Parquet | 1h | 2018-02-13 | yes |

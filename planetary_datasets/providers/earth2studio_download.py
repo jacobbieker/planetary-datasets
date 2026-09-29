@@ -411,7 +411,8 @@ _DATASETS: list[Dataset] = [
         scheduled=False,
     ),
     Dataset(
-        name="isd",
+        # Not "isd": the native ISD provider already writes bkr/obs/isd.icechunk.
+        name="isd_earth2studio",
         source="ISD",
         kind="table",
         freq="1YS",
