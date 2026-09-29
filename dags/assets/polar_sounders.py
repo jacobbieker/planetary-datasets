@@ -21,7 +21,9 @@ import datetime as dt
 import dagster as dg
 import pandas as pd
 
+from dags.staged import make_staged_download_asset, make_staged_publish_asset
 from planetary_datasets.base import BaseProvider
+from planetary_datasets.config import get_config
 from planetary_datasets.providers.polar import (
     JpssAtmsProvider,
     MetopAmsuaProvider,
@@ -94,28 +96,58 @@ def jpss_atms_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     return _run(context, JpssAtmsProvider())
 
 
-@dg.asset(
-    name="metop-amsua",
-    description="MetOp AMSU-A microwave sounder orbits from the EUMETSAT Data Store.",
-    partitions_def=metop_daily_partitions,
-    tags=_TAGS,
-    retry_policy=_RETRY,
-)
-def metop_amsua_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
-    """Ingest one day of MetOp AMSU-A orbits."""
-    return _run(context, MetopAmsuaProvider())
+def _epct_assets(name: str, provider_cls, description: str):
+    """Download/tailor in the ``docker/epct`` image, then publish on the host."""
+    provider = provider_cls()
+
+    def command(it: pd.Timestamp) -> list[str]:
+        start, end = provider.partition_window(it)
+        return [
+            "--collection", provider.collection_id,
+            "--product", provider.epct_product,
+            "--start", start.isoformat(),
+            "--end", end.isoformat(),
+            "--target", EPCT_CONTAINER_DIR,
+        ]  # fmt: skip
+
+    def env() -> dict[str, str]:
+        keys = ("eumetsat_consumer_key", "eumetsat_consumer_secret")
+        return dict(zip((k.upper() for k in keys), get_config().credentials.require(*keys)))
+
+    download = make_staged_download_asset(
+        name=f"{name}-download",
+        description=f"Stage one day of {description}, tailored to netCDF by the Data Tailor.",
+        partitions_def=metop_daily_partitions,
+        publisher=provider_cls,
+        image_env="EPCT_IMAGE",
+        default_image="planetary-datasets/epct:latest",
+        container_dir=EPCT_CONTAINER_DIR,
+        command=command,
+        container_memory_gb=8,
+        env=env,
+        retry_policy=_RETRY,
+        tags=_TAGS,
+    )
+    publish = make_staged_publish_asset(
+        name=name,
+        description=description,
+        partitions_def=metop_daily_partitions,
+        download=download,
+        publisher=provider_cls,
+        memory_gb=8,
+        tags=_TAGS,
+    )
+    return download, publish
 
 
-@dg.asset(
-    name="metop-ascat",
-    description="MetOp ASCAT scatterometer orbits from the EUMETSAT Data Store.",
-    partitions_def=metop_daily_partitions,
-    tags=_TAGS,
-    retry_policy=_RETRY,
+EPCT_CONTAINER_DIR = "/data/epct"
+
+metop_amsua_download, metop_amsua_asset = _epct_assets(
+    "metop-amsua", MetopAmsuaProvider, "MetOp AMSU-A microwave sounder orbits"
 )
-def metop_ascat_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
-    """Ingest one day of MetOp ASCAT orbits."""
-    return _run(context, MetopAscatProvider())
+metop_ascat_download, metop_ascat_asset = _epct_assets(
+    "metop-ascat", MetopAscatProvider, "MetOp ASCAT scatterometer orbits"
+)
 
 
 @dg.asset(
@@ -157,7 +189,9 @@ def metop_iasi_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 #: Every asset in this module, for the code location to load.
 polar_sounder_assets = [
     jpss_atms_asset,
+    metop_amsua_download,
     metop_amsua_asset,
+    metop_ascat_download,
     metop_ascat_asset,
     metop_avhrr_asset,
     metop_gome_asset,

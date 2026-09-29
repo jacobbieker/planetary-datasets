@@ -358,8 +358,7 @@ def test_ascat_pads_differing_orbits_so_they_concatenate(local_config, tmp_path,
         orbit.to_netcdf(path)
         paths.append(str(path))
 
-    monkeypatch.setattr(provider, "tailor_to_netcdf", lambda *a, **k: paths)
-    ds = provider.process([], pd.Timestamp("2025-07-18T00:00"))
+    ds = provider.process(paths, pd.Timestamp("2025-07-18T00:00"))
     assert ds.sizes == {"time": 2, "y": 14, "x": 4}
 
 
@@ -557,11 +556,60 @@ def test_extract_native_finds_the_member_matching_the_archive(tmp_path):
     assert found.endswith("product.nat")
 
 
-def test_tailor_requires_a_configured_product(local_config, monkeypatch):
+def test_epct_providers_publish_what_the_image_staged(local_config, tmp_path, monkeypatch):
+    monkeypatch.setenv("EPCT_ARCHIVE_DIR", str(tmp_path / "epct"))
     provider = MetopAscatProvider(config=local_config)
-    monkeypatch.setattr(type(provider), "epct_product", None)
-    with pytest.raises((ValueError, RuntimeError)):
-        provider.tailor_to_netcdf([], temp_dir=None)
+    it = pd.Timestamp("2025-07-18")
+    assert not provider.has_staged(it)
+    staged = tmp_path / "epct" / "ASCATL1SZR" / "20250718T0000"
+    staged.mkdir(parents=True)
+    assert provider.has_staged(it) and provider.fetch(it) == []
+    (staged / "orbit.nc").write_bytes(b"")
+    assert provider.fetch(it) == [str(staged / "orbit.nc")]
+    assert provider.discard_staged(it, settled=True) == [staged / "orbit.nc"]
+    assert not staged.exists()
+
+
+def test_epct_download_asset_runs_the_image(local_config, monkeypatch):
+    import dagster as dg
+
+    from dags.assets import polar_sounders
+    from planetary_datasets import config as config_module
+
+    monkeypatch.setenv("EUMETSAT_CONSUMER_KEY", "k")
+    monkeypatch.setenv("EUMETSAT_CONSUMER_SECRET", "s")
+    config_module.reset_config_cache()
+    calls = []
+
+    class Client:
+        def run(self, **kwargs):
+            calls.append(kwargs)
+            return type("R", (), {"get_materialize_result": lambda _: dg.MaterializeResult()})()
+
+    result = dg.materialize(
+        [polar_sounders.metop_amsua_download],
+        partition_key="2025-07-18",
+        resources={"pipes_docker_client": Client()},
+    )
+    assert result.success
+    (call,) = calls
+    assert call["command"] == [
+        "--collection", "EO:EUM:DAT:METOP:AMSUL1",
+        "--product", "AMSAL1",
+        "--start", "2025-07-18T00:00:00",
+        "--end", "2025-07-19T00:00:00",
+        "--target", "/data/epct",
+    ]  # fmt: skip
+    assert call["env"] == {"EUMETSAT_CONSUMER_KEY": "k", "EUMETSAT_CONSUMER_SECRET": "s"}
+
+
+def test_epct_download_skips_a_staged_partition(tmp_path):
+    from planetary_datasets.providers.polar import epct_download
+
+    (tmp_path / "AMSAL1" / "20250718T0000").mkdir(parents=True)
+    argv = ["--collection", "c", "--product", "AMSAL1", "--start", "2025-07-18T00:00",
+            "--end", "2025-07-19T00:00", "--target", str(tmp_path)]  # fmt: skip
+    assert epct_download.main(argv) == 0
 
 
 def test_concat_granules_sorts_by_time(local_config):
@@ -587,15 +635,21 @@ def test_empty_partition_is_not_written(local_config):
 
 def test_dagster_assets_load():
     import dagster as dg
+    from dagster_docker import PipesDockerClient
 
     from dags.assets import polar_sounders
 
-    defs = dg.Definitions(assets=polar_sounders.polar_sounder_assets)
+    defs = dg.Definitions(
+        assets=polar_sounders.polar_sounder_assets,
+        resources={"pipes_docker_client": PipesDockerClient()},
+    )
     keys = {spec.key.to_user_string() for spec in defs.resolve_all_asset_specs()}
     assert keys == {
         "jpss-atms",
         "metop-amsua",
+        "metop-amsua-download",
         "metop-ascat",
+        "metop-ascat-download",
         "metop-avhrr",
         "metop-gome",
         "metop-iasi",

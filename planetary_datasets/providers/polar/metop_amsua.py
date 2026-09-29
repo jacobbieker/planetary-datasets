@@ -66,10 +66,9 @@ class MetopAmsuaProvider(EumdacProvider):
         temp_dir: pathlib.Path | None = None,
         **kwargs,
     ) -> xr.Dataset:
-        """Tailor the downloaded EPS products to netCDF and concatenate them on time."""
-        tailored = self.tailor_to_netcdf(input_files, temp_dir=temp_dir)
+        """Concatenate the staged, tailored orbits on time."""
         datasets = []
-        for path in tailored:
+        for path in input_files:
             try:
                 orbit = self.open_tailored(path)
             except Exception as exc:  # noqa: BLE001 - one bad orbit must not lose the day

@@ -13,8 +13,8 @@ One provider per instrument, all writing into ``bkr/polar/*.icechunk``:
 
 ATMS comes from the public NOAA open data buckets and needs no credentials. The MetOp
 instruments come from the EUMETSAT Data Store and need ``EUMETSAT_CONSUMER_KEY`` and
-``EUMETSAT_CONSUMER_SECRET``; AMSU-A and ASCAT additionally need the EUMETSAT Data Tailor
-(``epct``) to convert the EPS native products to netCDF.
+``EUMETSAT_CONSUMER_SECRET``; AMSU-A and ASCAT are downloaded and converted to netCDF by
+the EUMETSAT Data Tailor in the ``docker/epct`` image.
 """
 
 from planetary_datasets.providers.polar._eumdac import EumdacProvider

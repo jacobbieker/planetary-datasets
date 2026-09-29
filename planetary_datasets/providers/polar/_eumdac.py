@@ -19,16 +19,20 @@ from typing import Any, Iterator, List
 import pandas as pd
 from loguru import logger
 
+from planetary_datasets.common.staged import StagedFilesMixin
 from planetary_datasets.providers.polar._granule import GranuleProvider
+from planetary_datasets.providers.polar.epct_download import stage_dir
 
 
-class EumdacProvider(GranuleProvider):
+class EumdacProvider(StagedFilesMixin, GranuleProvider):
     """Base class for providers backed by a EUMETSAT Data Store collection.
 
     Attributes:
         collection_id: Data Store collection, e.g. ``EO:EUM:DAT:METOP:IASIL1C-ALL``.
         epct_product: Data Tailor product name, for instruments whose native format has no
-            reader and has to be converted to netCDF first. ``None`` when unused.
+            reader. Those are downloaded and tailored to netCDF by the ``docker/epct`` image,
+            staged under ``EPCT_ARCHIVE_DIR`` (default ``<data_dir>/epct``), and ``fetch``
+            returns the staged files. ``None`` when unused.
         download_retries: Attempts per product before it is skipped.
     """
 
@@ -110,8 +114,26 @@ class EumdacProvider(GranuleProvider):
                 )
         return None
 
+    @property
+    def archive_root(self) -> pathlib.Path:
+        """Host directory mounted into the Data Tailor image."""
+        configured = os.environ.get("EPCT_ARCHIVE_DIR")
+        if configured:
+            return pathlib.Path(configured).expanduser()
+        return self.config.data_dir / "epct"
+
+    def staged_dir(self, it: pd.Timestamp) -> pathlib.Path:
+        """Where the Data Tailor image stages this partition."""
+        return stage_dir(self.archive_root, self.epct_product, pd.Timestamp(it).to_pydatetime())
+
+    def has_staged(self, it: pd.Timestamp) -> bool:
+        """True once the image has run; a partition with no products stages an empty dir."""
+        return self.staged_dir(it).is_dir()
+
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
-        """Download every product for the partition. Returns the local archive paths."""
+        """Download every product for the partition, or list the tailored files staged for it."""
+        if self.epct_product is not None:
+            return [str(p) for p in self.staged_files(it)]
         dest = self.workdir(temp_dir)
 
         paths: List[str] = []
@@ -169,31 +191,3 @@ class EumdacProvider(GranuleProvider):
             native = self.extract_native(archive, target)
             if native is not None:
                 yield native
-
-    def tailor_to_netcdf(
-        self, archives: List[str], temp_dir: pathlib.Path | None = None
-    ) -> List[str]:
-        """Convert EPS native products to netCDF with the EUMETSAT Data Tailor.
-
-        AMSU-A and ASCAT have no direct reader in this stack, so they go through the Data
-        Tailor exactly as the original one-off scripts did.
-        """
-        try:
-            from epct import api
-        except ImportError as exc:  # pragma: no cover - epct is an optional extra
-            raise RuntimeError(
-                f"{self.name} needs the EUMETSAT Data Tailor (epct), which is not installed. "
-                "Install it from the EUMETSAT package index to run this provider."
-            ) from exc
-
-        if self.epct_product is None:
-            raise ValueError(f"{self.name} has no epct_product configured")
-
-        target = self.workdir(temp_dir) / "tailored"
-        target.mkdir(parents=True, exist_ok=True)
-        outputs = api.run_chain(
-            product_paths=[str(a) for a in archives],
-            chain_config={"product": self.epct_product, "format": "netcdf4_satellite"},
-            target_dir=str(target),
-        )
-        return [str(o) for o in outputs]

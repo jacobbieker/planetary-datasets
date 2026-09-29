@@ -1,0 +1,12 @@
+# The EUMETSAT Data Tailor only ships for Python 3.9 on the eumetsat channel.
+name: epct
+channels:
+  - conda-forge
+  - eumetsat
+dependencies:
+  - python=3.9
+  - epct=3.5.3
+  - epct_plugin_gis=3.4.2
+  - epct_plugin_netcdf_generator=3.2.1
+  - msg-gdal-driver=0.4.0
+  - eumdac
