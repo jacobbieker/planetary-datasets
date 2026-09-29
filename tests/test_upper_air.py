@@ -918,6 +918,261 @@ def test_max_sondes_limits_the_day(local_config, monkeypatch):
     assert provider.fetch(pd.Timestamp("2018-10-01")) == ["a", "b"]
 
 
+# --- multi-receiver frame merging ---------------------------------------------------------
+
+#: One timestamp uploaded by three receivers that each decoded a different subset of the
+#: optional fields, plus a second timestamp heard by only one.
+MULTI_RECEIVER_FRAMES = [
+    {
+        "datetime": "2018-10-01T20:54:00Z",
+        "lat": "50.09",
+        "alt": "517",
+        "serial": "DFM09-17027735",
+        "uploader_callsign": "RX-1",
+    },
+    {
+        "datetime": "2018-10-01T20:54:00Z",
+        "lat": "50.09",
+        "alt": "517",
+        "serial": "DFM09-17027735",
+        "pressure": "950.2",
+        "uploader_callsign": "RX-2",
+    },
+    {
+        "datetime": "2018-10-01T20:54:00Z",
+        "lat": "50.09",
+        "alt": "517",
+        "serial": "DFM09-17027735",
+        "humidity": "61.5",
+        "uploader_callsign": "RX-3",
+    },
+    {
+        "datetime": "2018-10-01T20:55:00Z",
+        "lat": "50.10",
+        "alt": "780",
+        "serial": "DFM09-17027735",
+        "uploader_callsign": "RX-1",
+    },
+]
+
+
+def test_duplicate_uploads_collapse_to_one_row_per_timestamp():
+    """Raw frame counts run 2-20x the number of distinct observations."""
+    assert len(frames_to_table(MULTI_RECEIVER_FRAMES)) == 2
+
+
+def test_merging_recovers_fields_a_first_wins_dedupe_would_lose():
+    """Receivers disagree about which optional fields they decode.
+
+    RX-1 uploaded first and decoded neither pressure nor humidity, so a first-wins dedupe
+    would keep its frame and silently drop both readings.
+    """
+    first = frames_to_table(MULTI_RECEIVER_FRAMES).iloc[0]
+    assert first["pressure"] == "950.2"
+    assert first["humidity"] == "61.5"
+
+
+def test_receiver_fields_do_not_survive_the_merge():
+    """They describe the receiver, not the sonde, so merging them would be meaningless."""
+    records, uploads = sondehub_module.merge_frames(MULTI_RECEIVER_FRAMES)
+    assert all("uploader_callsign" not in record for record in records)
+    assert len(records) == 2
+    # The raw upload count is kept: it is the one thing worth knowing about them.
+    assert sum(uploads.values()) == 4
+
+
+def test_merging_can_be_turned_off_to_count_receiver_coverage():
+    assert len(frames_to_table(MULTI_RECEIVER_FRAMES, merge=False)) == 4
+
+
+def test_undated_frames_are_still_dropped_when_merging():
+    assert len(frames_to_table(SAMPLE_FRAMES)) == 2
+
+
+# --- serial listing -----------------------------------------------------------------------
+
+
+def test_serials_are_listed_through_the_date_index(monkeypatch):
+    """Regression: ``serial/`` no longer grants ListBucket and returns Access Denied.
+
+    The objects are still public, so a direct read works; only the enumeration had to move
+    to the ``date/`` index, which is listable.
+    """
+    monkeypatch.setattr(
+        sondehub_module,
+        "list_day_keys",
+        lambda *a, **k: [
+            "sondehub-history/date/2018/10/01/DFM09-17027735.json",
+            "sondehub-history/date/2018/10/01/P1440495.json",
+        ],
+    )
+    assert sondehub_module.list_serials("2018-10-01") == ["DFM09-17027735", "P1440495"]
+
+
+def test_a_day_the_archive_does_not_cover_lists_no_serials(monkeypatch):
+    monkeypatch.setattr(sondehub_module, "list_day_keys", lambda *a, **k: [])
+    assert sondehub_module.list_serials("1990-01-01") == []
+
+
+# --- per-flight ragged store --------------------------------------------------------------
+
+
+def _fake_flight(serial: str, n: int, start: str) -> xr.Dataset:
+    """A flight of ``n`` one-second samples, in the shape the writer takes."""
+    times = pd.date_range(start, periods=n, freq="1s")
+    return xr.Dataset(
+        {
+            name: ("time", np.arange(n, dtype="float64"))
+            for name in ("latitude", "longitude", "altitude", "pressure")
+        },
+        coords={"time": times},
+        attrs={
+            "serial": serial,
+            "n_frames": n,
+            "max_altitude": float(n),
+            "launch_site": "06458",
+            "start_time": str(times[0]),
+            "end_time": str(times[-1]),
+        },
+    )
+
+
+def _write_flights(repo, flights, target_chunk_points=50):
+    writer = sondehub_module.FlightWriter(repo, target_chunk_points=target_chunk_points)
+    for index, (serial, samples) in enumerate(flights):
+        writer.add(_fake_flight(serial, samples, f"2026-01-{index + 1:02d}"))
+    writer.commit("test")
+    return writer
+
+
+@pytest.fixture
+def flight_store(local_config):
+    """An empty per-flight store under tmp_path."""
+    return SondehubProvider(config=local_config).flight_repo()
+
+
+THREE_FLIGHTS = [("AAA", 30), ("BBB", 70), ("CCC", 25)]
+
+
+def test_flights_round_trip_through_the_ragged_store(local_config, flight_store):
+    _write_flights(flight_store, THREE_FLIGHTS)
+
+    flight = SondehubProvider(config=local_config).select_serial("BBB", repo=flight_store)
+
+    assert flight.sizes["time"] == 70
+    assert flight.attrs["serial"] == "BBB"
+    assert flight.attrs["launch_site"] == "06458"
+
+
+def test_no_flight_is_ever_split_across_a_chunk_boundary(local_config, flight_store):
+    """The whole point of the rectilinear grid: reading one serial touches one chunk.
+
+    Flights run from ~1k to ~450k samples, so a regular chunk either scatters the big ones
+    over hundreds of chunks or crams dozens of small ones into each.
+    """
+    _write_flights(flight_store, THREE_FLIGHTS)
+
+    reader = sondehub_module.SondeFlights(flight_store)
+    chunk_bounds = {int(b) for b in np.cumsum([0, *reader.group["time"].read_chunk_sizes[0]])}
+    index = reader.flights()
+    ends = index["obs_start"].values + index["obs_count"].values
+    flight_bounds = {int(v) for v in index["obs_start"].values} | {int(ends[-1])}
+
+    assert chunk_bounds <= flight_bounds
+
+
+def test_the_ragged_index_places_every_flight_end_to_end(local_config, flight_store):
+    _write_flights(flight_store, THREE_FLIGHTS)
+
+    flights = sondehub_module.SondeFlights(flight_store).flights()
+
+    assert list(flights["obs_start"].values) == [0, 30, 100]
+    assert list(flights["obs_count"].values) == [30, 70, 25]
+
+
+def test_a_serial_already_stored_is_not_written_twice(local_config, flight_store):
+    """Re-running an interrupted day must not duplicate what already landed."""
+    _write_flights(flight_store, [("AAA", 30)])
+
+    resumed = sondehub_module.FlightWriter(flight_store, target_chunk_points=50)
+    assert "AAA" in resumed
+    assert resumed.add(_fake_flight("AAA", 30, "2026-01-01")) is False
+    assert resumed.add(_fake_flight("BBB", 10, "2026-01-02")) is True
+    resumed.commit("second")
+
+    assert len(sondehub_module.SondeFlights(flight_store)) == 2
+
+
+def test_an_unknown_serial_is_reported_not_guessed(local_config, flight_store):
+    _write_flights(flight_store, [("AAA", 30)])
+
+    with pytest.raises(KeyError, match="not in the store"):
+        sondehub_module.SondeFlights(flight_store).sel("NOPE")
+
+
+def test_a_flight_with_no_samples_is_refused(local_config, flight_store):
+    writer = sondehub_module.FlightWriter(flight_store)
+    empty = xr.Dataset(coords={"time": pd.DatetimeIndex([])}, attrs={"serial": "EMPTY"})
+    assert writer.add(empty) is False
+
+
+def test_a_variable_the_sonde_never_reported_is_filled_not_omitted(local_config, flight_store):
+    """Every flight must contribute the same columns or the obs arrays fall out of step."""
+    _write_flights(flight_store, [("AAA", 10)])  # _fake_flight reports no temperature
+
+    flight = sondehub_module.SondeFlights(flight_store).sel("AAA")
+
+    assert "temperature" in flight.data_vars
+    assert bool(np.isnan(flight["temperature"].values).all())
+
+
+def test_the_flight_store_is_separate_from_the_day_partitioned_cube(local_config):
+    provider = SondehubProvider(config=local_config)
+    assert provider.flight_store_prefix == "bkr/obs/sondehub_flights.icechunk"
+    assert provider.flight_store_prefix != provider.store_prefix
+    assert provider.flight_store_path.endswith("bkr/obs/sondehub_flights.icechunk")
+
+
+def test_write_flights_skips_a_day_the_archive_has_no_serials_for(local_config, monkeypatch):
+    monkeypatch.setattr(sondehub_module, "list_day_keys", lambda *a, **k: [])
+    assert SondehubProvider(config=local_config).write_flights("1990-01-01") == 0
+
+
+def test_write_flights_ingests_a_day_and_is_resumable(local_config, monkeypatch, flight_store):
+    monkeypatch.setattr(
+        sondehub_module,
+        "list_day_keys",
+        lambda *a, **k: [f"x/date/2026/01/01/{s}.json" for s in ("AAA", "BBB")],
+    )
+    provider = SondehubProvider(config=local_config)
+    monkeypatch.setattr(
+        provider, "flight_dataset", lambda serial: _fake_flight(serial, 12, "2026-01-01")
+    )
+
+    assert provider.write_flights("2026-01-01", repo=flight_store) == 2
+    # Everything is already stored, so a re-run writes nothing rather than duplicating.
+    assert provider.write_flights("2026-01-01", repo=flight_store) == 0
+    assert len(sondehub_module.SondeFlights(flight_store)) == 2
+
+
+def test_write_flights_survives_one_unreadable_sonde(local_config, monkeypatch, flight_store):
+    monkeypatch.setattr(
+        sondehub_module,
+        "list_day_keys",
+        lambda *a, **k: [f"x/date/2026/01/01/{s}.json" for s in ("AAA", "BAD", "BBB")],
+    )
+    provider = SondehubProvider(config=local_config)
+
+    def one(serial):
+        if serial == "BAD":
+            raise OSError("archive read failed")
+        return _fake_flight(serial, 12, "2026-01-01")
+
+    monkeypatch.setattr(provider, "flight_dataset", one)
+
+    assert provider.write_flights("2026-01-01", repo=flight_store) == 2
+
+
 # --- Dagster assets ----------------------------------------------------------------------
 
 
