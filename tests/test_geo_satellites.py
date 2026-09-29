@@ -54,14 +54,21 @@ def test_published_store_prefixes():
             gk2a_ami_fd.store_prefix_for("IR087"),
             "bkr/geo/virtualized/gk2a_ami_fd_ir087.icechunk",
         ),
-        # ...and the Himawari satellites get stores of their own, there too.
+        # ...and the Himawari satellites get stores of their own, there too,
+        # each named for its own spacecraft rather than sharing one base.
         (
             himawari_isatss.store_prefix_for("himawari8", "c13"),
-            "bkr/geo/virtualized/himawari_isatss_himawari8_C13.icechunk",
+            "bkr/geo/virtualized/himawari8_isatss_C13.icechunk",
         ),
         (
             himawari_isatss.store_prefix_for("himawari9", "c13"),
-            "bkr/geo/virtualized/himawari_isatss_himawari9_C13.icechunk",
+            "bkr/geo/virtualized/himawari9_isatss_C13.icechunk",
+        ),
+        # An explicit base is used as given, so a redirected run does not get
+        # the satellite spliced into the middle of the name.
+        (
+            himawari_isatss.store_prefix_for("himawari9", "c13", "2025-12-31", "tmp/ahi"),
+            "tmp/ahi_C13_2025-12-31.icechunk",
         ),
     ]
     for prefix, expected in cases:
