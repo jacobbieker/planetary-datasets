@@ -55,6 +55,17 @@ DATETIME_NS = np.dtype("datetime64[ns]")
 
 MAX_CONSECUTIVE_FAILED_DAYS = 14
 
+#: Separate, far higher bound for days whose *source files* are unreadable.
+#:
+#: The 14-day threshold exists to stop a runaway failure — a bug, or a codec
+#: change that needs a new store. A permanently corrupt file in the provider's
+#: bucket is neither: it will never succeed, but the good days beyond it still
+#: should. GK-2A ir105 hit a run of truncated files in the NOAA bucket and
+#: abandoned the rest of two year-windows because of it. These days are skipped
+#: without counting toward the stop threshold, but are still bounded so a
+#: wholly unreadable archive terminates instead of walking all of it.
+MAX_CONSECUTIVE_UNREADABLE_DAYS = 90
+
 #: Reopen the icechunk Repository every N batches.
 #:
 #: Repeatedly appending into a growing store leaks memory in proportion to the
@@ -528,6 +539,31 @@ def _is_codec_error(exc: Exception) -> bool:
     return isinstance(exc, ValueError) and "codec" in str(exc).lower()
 
 
+def _is_unreadable_source_error(exc: Exception) -> bool:
+    """True if a batch failed because its source files cannot be read at all.
+
+    Distinguishes provider-side corruption (a truncated HDF5, a bad signature) from our
+    own failures, which is what lets the two be bounded separately: see
+    :data:`MAX_CONSECUTIVE_UNREADABLE_DAYS`. Matched on message text because h5py surfaces
+    all of these as a plain ``OSError`` with nothing else to key on.
+    """
+    if isinstance(exc, RadFValidationError):
+        exc = exc.original
+    if not isinstance(exc, OSError):
+        return False
+    msg = str(exc).lower()
+    return any(
+        marker in msg
+        for marker in (
+            "truncated file",
+            "unable to synchronously open file",
+            "unable to open file",
+            "file signature not found",
+            "bad object header",
+        )
+    )
+
+
 def _source_of(ds: xr.Dataset) -> str:
     return (
         ds.encoding.get("source")
@@ -774,6 +810,93 @@ def iter_days(
             yield current
 
 
+#: Data variables every usable RadF file must actually contain.
+REQUIRED_DATA_VARS = frozenset({"Rad", "DQF"})
+
+
+def drop_files_missing_required_vars(
+    urls: list[str],
+    *,
+    registry,
+    parser,
+    loadable_variables: Iterable[str] = (),
+    required: frozenset[str] = REQUIRED_DATA_VARS,
+    max_workers: int = 16,
+) -> list[str]:
+    """Keep only files that actually carry every required data variable.
+
+    NOAA publishes occasional RadF files that are missing imagery. Some have neither
+    ``Rad`` nor ``DQF`` and are tiny, so :func:`_drop_metadata_only_files` catches them
+    from the listing alone. Others are *full size* and simply lack one variable — an
+    observed case had ``Rad`` with normal shape, dtype and codecs but no ``DQF``, at 119%
+    of the day's median size. Size cannot separate those, so this opens the files.
+
+    It matters because a member missing a variable makes ``xr.concat`` *fill* it across
+    every other member, which indexes positionally into a ManifestArray and raises
+    "Unsupported indexer ... fancy indexing", costing the whole channel-day.
+
+    Passed as ``batch_repair_fn``, so it only runs for a batch that has already failed;
+    the normal path never pays for these opens.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    lv = list(loadable_variables)
+
+    def complete(url: str) -> bool:
+        try:
+            ds = vz.open_virtual_dataset(
+                url, registry=registry, parser=parser, loadable_variables=lv
+            )
+            try:
+                return required.issubset(set(ds.data_vars))
+            finally:
+                ds.close()
+        except Exception:  # noqa: BLE001 - unreadable here means unusable in the combine
+            return False
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        ok = list(pool.map(complete, urls))
+    return [u for u, keep in zip(urls, ok) if keep]
+
+
+#: A file smaller than this fraction of the day's median is metadata-only.
+#:
+#: NOAA occasionally publishes a RadF file containing every ancillary variable but no
+#: ``Rad``/``DQF`` at all. Combining a day that contains one makes xarray fill the missing
+#: variable across the other members, which indexes positionally into a ManifestArray and
+#: raises "Unsupported indexer ... fancy indexing" — losing the whole channel-day. They are
+#: trivially separable by size: a real 2km RadF file is 6.9-14.8MB while the observed
+#: metadata-only file was 81KB, 1.2% of the day's median, with no good file within 2x of
+#: it. Size comes from the listing, so this costs no extra requests. Relative to the median
+#: rather than absolute, because file size scales with the channel's grid and with the
+#: compression era.
+_METADATA_ONLY_SIZE_FRACTION = 0.25
+
+
+def _drop_metadata_only_files(
+    urls: list[str], sizes: dict[str, int], channel: int
+) -> list[str]:
+    """Drop files far smaller than the day's median — they carry no imagery."""
+    if len(urls) < 3:
+        return urls
+    ordered = sorted(sizes[u] for u in urls if u in sizes)
+    if not ordered:
+        return urls
+    median = ordered[len(ordered) // 2]
+    cutoff = int(median * _METADATA_ONLY_SIZE_FRACTION)
+    kept = [u for u in urls if sizes.get(u, median) >= cutoff]
+    dropped = len(urls) - len(kept)
+    if dropped:
+        names = [u.rsplit("/", 1)[-1] for u in urls if sizes.get(u, median) < cutoff]
+        print(
+            f"    {_ch(channel)}: skipping {dropped} metadata-only file(s) "
+            f"(< {cutoff / 1e6:.1f}MB, median {median / 1e6:.1f}MB): "
+            f"{names[:3]}{'...' if dropped > 3 else ''}",
+            flush=True,
+        )
+    return kept
+
+
 def list_day_files(
     store,
     bucket: str,
@@ -789,12 +912,13 @@ def list_day_files(
 ) -> list[str]:
     """Every .nc file URL for a specific channel in a single day.
 
-    Filters out aborted scans and non-matching channels. Returns URLs
-    in chronological scan-time order.
+    Filters out aborted scans, non-matching channels and the metadata-only files NOAA
+    occasionally publishes. Returns URLs in chronological scan-time order.
     """
     effective_product = product_reproc if (reproc and product_reproc) else product
     day_prefix = f"{effective_product}{year}/{doy:03d}/"
     urls: list[str] = []
+    sizes: dict[str, int] = {}
     for page in obs.list(store, prefix=day_prefix):
         for obj in page:
             path = obj["path"]
@@ -807,7 +931,10 @@ def list_day_files(
                 continue
             if _channel_from_filename(path) != channel:
                 continue
-            urls.append(f"{bucket}/{path}")
+            url = f"{bucket}/{path}"
+            urls.append(url)
+            sizes[url] = obj["size"]
+    urls = _drop_metadata_only_files(urls, sizes, channel)
     urls.sort(key=_scan_start_token)
 
     # Deduplicate by scan-start token
@@ -1164,6 +1291,9 @@ def ingest_all_days(
     files_ingested = 0
     batches_failed = 0
     consecutive_failed_days = 0
+    # Counted apart from the above: a corrupt source file is the provider's, not ours, and
+    # is bounded by MAX_CONSECUTIVE_UNREADABLE_DAYS instead.
+    consecutive_unreadable_days = 0
     all_consecutive_are_codec = True
     codec_change_date: datetime.date | None = None
     # First batch of the current run of failures, so that a codec change can
@@ -1291,20 +1421,42 @@ def ingest_all_days(
                 try:
                     vds = _open_batch(urls_for_this_batch)
                 except NotImplementedError as e:
-                    # A handful of files carry a different codec pipeline from
-                    # the rest of their day — a single uncompressed file is
-                    # enough to make the whole day unconcatenatable. Where the
-                    # caller knows how to spot them, drop the outliers and
-                    # retry rather than losing every timestep for that day.
-                    if batch_repair_fn is None or "codec" not in str(e).lower():
+                    # A single file that is unlike the rest of its day is enough to make
+                    # the whole day unconcatenatable: a different codec pipeline, or a
+                    # missing data variable that xarray then fills across every other
+                    # member. Drop the odd ones out and retry rather than losing every
+                    # timestep for that day.
+                    if batch_repair_fn is not None:
+                        if "codec" not in str(e).lower():
+                            raise
+                        repair = batch_repair_fn
+                    elif open_batch_fn is not None:
+                        # Tile-based missions (Himawari): one URL is not one dataset, so
+                        # the per-file content check below cannot apply.
                         raise
-                    kept = batch_repair_fn(urls_for_this_batch)
+                    else:
+                        # GOES. Deliberately *not* gated on the message text: the
+                        # exception can arrive with its message stripped (observed: a bare
+                        # NotImplementedError), which made an earlier text-matching gate
+                        # silently never fire. Attempting it unconditionally is safe
+                        # because it only proceeds when it actually drops a file — a
+                        # genuine codec-era boundary leaves every file complete, drops
+                        # nothing, and re-raises, so the era still splits.
+                        def repair(u: list[str]) -> list[str]:
+                            return drop_files_missing_required_vars(
+                                u,
+                                registry=registry,
+                                parser=parser,
+                                loadable_variables=loadable_variables,
+                            )
+
+                    kept = repair(urls_for_this_batch)
                     dropped = len(urls_for_this_batch) - len(kept)
                     if not kept or dropped <= 0:
                         raise
                     msg = (
-                        f"mixed codecs in batch; dropped {dropped} outlier "
-                        f"file(s) of {len(urls_for_this_batch)} and retried"
+                        f"unusable file(s) in batch ({type(e).__name__}); dropped "
+                        f"{dropped} of {len(urls_for_this_batch)} and retried"
                     )
                     print(f"    {msg}", flush=True)
                     if log_dir is not None:
@@ -1395,6 +1547,7 @@ def ingest_all_days(
 
             files_ingested += len(urls_for_this_batch)
             consecutive_failed_days = 0
+            consecutive_unreadable_days = 0
             all_consecutive_are_codec = True
             codec_change_date = None
             first_failed_batch_ind = None
@@ -1413,7 +1566,13 @@ def ingest_all_days(
             if os.environ.get("INGEST_DEBUG_TRACEBACKS"):
                 traceback.print_exc()
             batches_failed += 1
-            consecutive_failed_days += len(batch)
+            if _is_unreadable_source_error(e):
+                # Corrupt upstream files are permanent; skip past them rather than
+                # abandoning every good day that follows. Bounded separately below.
+                consecutive_unreadable_days += len(batch)
+            else:
+                consecutive_unreadable_days = 0
+                consecutive_failed_days += len(batch)
             if first_failed_batch_ind is None:
                 first_failed_batch_ind = batch_ind
 
@@ -1428,6 +1587,21 @@ def ingest_all_days(
                     log_dir, satellite, channel_label, date_range,
                     "ERROR", f"{type(e).__name__}: {e}",
                 )
+            if consecutive_unreadable_days >= MAX_CONSECUTIVE_UNREADABLE_DAYS:
+                msg = (
+                    f"Stopping {channel_label}: {consecutive_unreadable_days} "
+                    f"consecutive day(s) of unreadable source files "
+                    f"(threshold: {MAX_CONSECUTIVE_UNREADABLE_DAYS})."
+                )
+                print(f"\n{msg}", flush=True)
+                if log_dir is not None:
+                    log_event(
+                        log_dir, satellite, channel_label,
+                        first_date.isoformat(),
+                        "STOPPED", msg,
+                    )
+                return
+
             if consecutive_failed_days >= MAX_CONSECUTIVE_FAILED_DAYS:
                 # If all consecutive failures are codec-related, handle
                 # by creating a new Icechunk store for the new codec era.
@@ -1482,6 +1656,7 @@ def ingest_all_days(
                                 flush=True,
                             )
                     consecutive_failed_days = 0
+                    consecutive_unreadable_days = 0
                     all_consecutive_are_codec = True
                     codec_change_date = None
                     first_failed_batch_ind = None
@@ -2316,6 +2491,9 @@ def bind(satellite: str) -> dict[str, Any]:
         "RADF_CHUNK_SIZE": RADF_CHUNK_SIZE,
         "DATETIME_NS": DATETIME_NS,
         "MAX_CONSECUTIVE_FAILED_DAYS": MAX_CONSECUTIVE_FAILED_DAYS,
+        "MAX_CONSECUTIVE_UNREADABLE_DAYS": MAX_CONSECUTIVE_UNREADABLE_DAYS,
+        "REQUIRED_DATA_VARS": REQUIRED_DATA_VARS,
+        "drop_files_missing_required_vars": drop_files_missing_required_vars,
         "_KEEP_DATA_VARS": _KEEP_DATA_VARS,
         "RadFValidationError": RadFValidationError,
         "parse_scan_start_to_datetime": parse_scan_start_to_datetime,
