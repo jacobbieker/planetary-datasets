@@ -630,7 +630,12 @@ def _to_gridpoint_parallel(
                 child.wait()
             try:
                 os.killpg(child.pid, signal.SIGKILL)  # the child's leftover Metview server
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
+                # The group is the child's own, since it was started with
+                # start_new_session, but only until the child is reaped and the
+                # id is reused. Signalling a group that has since become someone
+                # else's raises PermissionError rather than ProcessLookupError,
+                # and there is nothing of ours left in it to kill either way.
                 pass
             log.unlink(missing_ok=True)
     if failures:
