@@ -20,8 +20,13 @@ it. :data:`upper_air_assets` is exported for exactly that, so the wiring is one 
 import dagster as dg
 import pandas as pd
 
+from dags.staged import make_staged_download_asset, make_staged_publish_asset
 from planetary_datasets.config import get_config
-from planetary_datasets.providers.observations.amdar import AMDARProvider, pb2nc_available
+from planetary_datasets.providers.observations.amdar import (
+    STAGE_SCRIPT,
+    AMDARProvider,
+    prepbufr_urls,
+)
 from planetary_datasets.providers.observations.igra import (
     IGRACDSProvider,
     IGRAStationArchive,
@@ -29,13 +34,14 @@ from planetary_datasets.providers.observations.igra import (
 )
 from planetary_datasets.providers.observations.sondehub import SondehubProvider
 
-# Sondehub's archive opens in July 2018; AMDAR is a local feed so its start is arbitrary.
+# Sondehub's archive opens in July 2018.
 SONDEHUB_START = "2018-07-01"
 AMDAR_START = "2020-01-01"
 IGRA_START = "1979-01-01"
 
 daily_partitions = dg.DailyPartitionsDefinition(start_date=SONDEHUB_START)
-amdar_partitions = dg.DailyPartitionsDefinition(start_date=AMDAR_START)
+# GDEX publishes a day's PREPBUFR about 48 hours after it ends.
+amdar_partitions = dg.DailyPartitionsDefinition(start_date=AMDAR_START, end_offset=-2)
 monthly_partitions = dg.MonthlyPartitionsDefinition(start_date=IGRA_START)
 
 
@@ -44,30 +50,36 @@ def _partition_timestamp(context) -> pd.Timestamp:
     return pd.Timestamp(context.partition_key)
 
 
-@dg.asset(
-    name="amdar_observations",
+#: Container path of the host's ``AMDAR_BUFR_DIR``.
+AMDAR_CONTAINER_DIR = "/data/amdar"
+
+amdar_download = make_staged_download_asset(
+    name="amdar_download",
+    description="One day of GDAS PREPBUFR from NCAR GDEX, converted by MET pb2nc in Docker.",
     partitions_def=amdar_partitions,
-    description="AMDAR aircraft reports decoded from local PREPBUFR files with MET pb2nc.",
+    publisher=AMDARProvider,
+    image_env="MET_IMAGE",
+    default_image="dtcenter/met:12.2.2",
+    container_dir=AMDAR_CONTAINER_DIR,
+    command=lambda it: [
+        "bash", "-c", STAGE_SCRIPT, "amdar", f"{AMDAR_CONTAINER_DIR}/{it:%Y%m%d}",
+        *prepbufr_urls(it),
+    ],  # fmt: skip
+    container_memory_gb=4,
+    env=lambda: {"PB2NC_CONFIG": AMDARProvider().pb2nc_config_text()},
+    retry_policy=dg.RetryPolicy(max_retries=3, delay=1800, backoff=dg.Backoff.EXPONENTIAL),
+    tags={"dagster/concurrency_key": "amdar-download"},
+)
+
+amdar_observations = make_staged_publish_asset(
+    name="amdar_observations",
+    description="AMDAR aircraft reports from GDAS PREPBUFR, flattened to timed observations.",
+    partitions_def=amdar_partitions,
+    download=amdar_download,
+    publisher=AMDARProvider,
+    memory_gb=4,
     compute_kind="icechunk",
 )
-def amdar_observations(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
-    """Decode and store one day of AMDAR aircraft reports."""
-    provider = AMDARProvider()
-    if not pb2nc_available():
-        # Fail loudly and name the tool rather than writing an empty partition that the
-        # window check would then treat as permanently done.
-        raise RuntimeError(
-            "MET's pb2nc is not installed, so AMDAR PREPBUFR files cannot be decoded. "
-            "Install the MET toolkit or set PB2NC_BINARY."
-        )
-    written = provider.run_partition(_partition_timestamp(context))
-    return dg.MaterializeResult(
-        metadata={
-            "written": written,
-            "store": provider.store_path,
-            "bufr_dir": str(provider.bufr_dir),
-        }
-    )
 
 
 @dg.asset(
@@ -135,6 +147,7 @@ def sondehub_observations(context: dg.AssetExecutionContext) -> dg.MaterializeRe
 
 #: Every asset in this module, for ``dags/definitions.py`` to register.
 upper_air_assets = [
+    amdar_download,
     amdar_observations,
     igra_cds_raw,
     igra_cds_observations,
