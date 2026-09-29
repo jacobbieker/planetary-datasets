@@ -305,6 +305,46 @@ def test_describe_reports_the_resolved_configuration(mars_config, tmp_path):
     assert "retrievals:" in described
 
 
+def test_the_short_cutoff_streams_apply_only_before_they_were_retired():
+    """06/18 UTC forecasts moved from scda/scwv into oper/wave at cycle 50r1.
+
+    A request for a retired stream matches nothing and MARS fails it with
+    "Expected <n>, got 0", so the wrong side of this boundary means no data
+    at all for a quarter of the forecast initialisations.
+    """
+    before = pd.Timestamp("2026-04-01")
+    after = pd.Timestamp("2026-08-07")
+
+    assert mp.forecast_stream("06:00:00", "oper", before) == "scda"
+    assert mp.forecast_stream("18:00:00", "wave", before) == "scwv"
+    assert mp.forecast_stream("06:00:00", "oper", after) == "oper"
+    assert mp.forecast_stream("18:00:00", "wave", after) == "wave"
+
+    # 00 and 12 UTC were never short cut-off, on either side.
+    for date in (before, after):
+        assert mp.forecast_stream("00:00:00", "oper", date) == "oper"
+        assert mp.forecast_stream("12:00:00", "wave", date) == "wave"
+
+    # The boundary is the 06 UTC run of 12 May 2026, not midnight.
+    assert mp.forecast_stream("18:00:00", "wave", pd.Timestamp("2026-05-11")) == "scwv"
+    assert mp.forecast_stream("06:00:00", "oper", pd.Timestamp("2026-05-12")) == "oper"
+
+
+def test_no_retired_stream_is_planned_after_the_cutover(tmp_path):
+    jobs = mp.plan_jobs(pd.Timestamp("2026-08-01"), pd.Timestamp("2026-08-12"), tmp_path)
+    assert jobs
+    assert not [j.target.name for j in jobs if j.request["stream"] in ("scda", "scwv")]
+
+    older = mp.plan_jobs(pd.Timestamp("2026-04-01"), pd.Timestamp("2026-04-06"), tmp_path)
+    assert {j.request["stream"] for j in older} >= {"scda", "scwv"}
+
+
+def test_a_request_straddling_the_stream_change_is_refused(tmp_path):
+    """Its days would need two streams at once; better to fail than guess."""
+    with pytest.raises(ValueError, match="straddles"):
+        mp.plan_jobs(pd.Timestamp("2026-05-11"), pd.Timestamp("2026-05-13"), tmp_path)
+
+
 def test_a_range_is_required_when_there_is_no_grib_on_disk(mars_config):
     with pytest.raises(ValueError, match="no output_..grib files"):
         mp.MarsPipeline(config=mars_config)

@@ -128,12 +128,21 @@ FORECAST_ML_PARAMS = "75/76/77/130/131/132/133/135/138/152/155/246/247/248/26029
 #: Steps 1-5 from each analysis time fill the gaps to the next analysis
 FORECAST_STEPS = "1/2/3/4/5"
 
-#: Only the 00 and 12 UTC forecasts are archived in the "oper"/"wave" streams.
-#: The 06 and 18 UTC runs are short cut-off forecasts, archived in "scda"
-#: (atmosphere) and "scwv" (ocean wave). Asking for a 06/18 forecast from
-#: oper/wave matches nothing, and MARS then fails the request with
-#: "ERROR 89 (MARS_EXPECTED_FIELDS): Expected <n>, got 0".
+#: Up to IFS cycle 50r1, only the 00 and 12 UTC forecasts were archived in the
+#: "oper"/"wave" streams; the 06 and 18 UTC runs were short cut-off forecasts,
+#: archived in "scda" (atmosphere) and "scwv" (ocean wave).
 SHORT_CUTOFF_STREAMS = {"oper": "scda", "wave": "scwv"}
+
+#: IFS cycle 50r1 went operational with the 06 UTC run on 12 May 2026 and
+#: retired both short cut-off streams: the 06 and 18 UTC forecasts moved into
+#: "oper" and "wave" alongside 00 and 12. From this initialisation onwards a
+#: request for "scda"/"scwv" matches nothing, and MARS fails it with
+#: "ERROR 89 (MARS_EXPECTED_FIELDS): Expected <n>, got 0". Before it, the
+#: reverse holds, so the stream depends on the initialisation time rather than
+#: being fixed. Confirmed against the archive catalogue, which lists scwv as a
+#: discontinued dataset with no month past May 2026, and by retrieving 06 and
+#: 18 UTC model levels and 2D spectra from oper/wave for August 2026.
+SHORT_CUTOFF_RETIRED = pd.Timestamp("2026-05-12 06:00")
 
 #: Ocean wave analysis parameters (GRIB codes, table 140)
 WAVE_PARAMS = (
@@ -207,11 +216,22 @@ def dates_on_disk(source_dir: str | pathlib.Path) -> tuple[pd.Timestamp, pd.Time
     return (min(dates), max(dates)) if dates else None
 
 
-def forecast_stream(time: str, stream: str = "oper") -> str:
-    """The MARS stream holding the forecast initialised at `time` ("HH:MM:SS")."""
-    if time.startswith(("06", "18")):
-        return SHORT_CUTOFF_STREAMS[stream]
-    return stream
+def forecast_stream(time: str, stream: str = "oper", date: pd.Timestamp | None = None) -> str:
+    """The MARS stream holding the forecast initialised at `time` ("HH:MM:SS") on `date`.
+
+    00 and 12 UTC are always in the base stream. 06 and 18 UTC were in the
+    short cut-off stream until `SHORT_CUTOFF_RETIRED` and in the base stream
+    from then on; `date` decides which. With no `date`, the short cut-off
+    stream is returned, which is the answer for the whole archive before
+    May 2026.
+    """
+    if not time.startswith(("06", "18")):
+        return stream
+    if date is not None:
+        init = pd.Timestamp(date).normalize() + pd.Timedelta(int(time[:2]), unit="h")
+        if init >= SHORT_CUTOFF_RETIRED:
+            return stream
+    return SHORT_CUTOFF_STREAMS[stream]
 
 
 def build_mars_date(start: pd.Timestamp, end: pd.Timestamp | None = None) -> str:
@@ -292,12 +312,31 @@ def _chunked(
     group: str,
     init_hours: Sequence[int],
     steps: Sequence[int],
+    init_time: str | None = None,
+    base_stream: str | None = None,
     **request_kwargs,
 ) -> List[MarsJob]:
-    """Split `days` into requests the way `mars.retrieve_mars_chunked` does."""
+    """Split `days` into requests the way `mars.retrieve_mars_chunked` does.
+
+    With `init_time` and `base_stream` given, each request's stream is resolved
+    from its own dates by `forecast_stream`, since which stream holds a 06/18
+    UTC forecast changed at `SHORT_CUTOFF_RETIRED`. A request whose days
+    straddle that change would need two streams at once and is rejected rather
+    than silently retrieved from the wrong one.
+    """
     jobs = []
     for i in range(0, len(days), days_per_request):
         chunk = days[i : i + days_per_request]
+        if init_time is not None:
+            first = forecast_stream(init_time, base_stream, chunk[0])
+            last = forecast_stream(init_time, base_stream, chunk[-1])
+            if first != last:
+                raise ValueError(
+                    f"a request covering {chunk[0]:%Y-%m-%d} to {chunk[-1]:%Y-%m-%d} at "
+                    f"{init_time} straddles the {SHORT_CUTOFF_RETIRED} stream change "
+                    f"({first} before, {last} after); split the range at that date"
+                )
+            request_kwargs = {**request_kwargs, "stream": first}
         target = source_dir / template.format(
             start=chunk[0].strftime("%Y%m%d"), end=chunk[-1].strftime("%Y%m%d")
         )
@@ -360,7 +399,8 @@ def plan_jobs(
             jobs += _chunked(
                 group, forecast_days_per_request, f"output_fc_{t[:2]}z_{{start}}_{{end}}.grib",
                 source_dir, mi.GROUP_ML, [int(t[:2])], steps,
-                type_="fc", stream=forecast_stream(t), param=FORECAST_ML_PARAMS, time=t,
+                init_time=t, base_stream="oper",
+                type_="fc", param=FORECAST_ML_PARAMS, time=t,
                 step=FORECAST_STEPS,
             )  # fmt: skip
         jobs += _chunked(
@@ -376,7 +416,8 @@ def plan_jobs(
                 group, spectra_forecast_days_per_request,
                 f"output_spectra_fc_{t[:2]}z_{{start}}_{{end}}.grib", source_dir,
                 mi.GROUP_SPECTRA, [int(t[:2])], steps,
-                **{**spectra, "stream": forecast_stream(t, "wave")}, type_="fc", time=t,
+                init_time=t, base_stream="wave",
+                **{k: v for k, v in spectra.items() if k != "stream"}, type_="fc", time=t,
                 step=FORECAST_STEPS,
             )  # fmt: skip
     return jobs
