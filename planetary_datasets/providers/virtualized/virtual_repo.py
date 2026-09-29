@@ -76,6 +76,22 @@ def store_prefix(
     return f"{base}{tail}{suffix}"
 
 
+def live_store_suffix(window_end: datetime.date, anchor: datetime.date) -> str:
+    """Era suffix for one window of a by-year walk.
+
+    The window that reaches the anchor is the live one, and its store carries
+    no era suffix: its name would otherwise move as the archive grew, so a
+    rerun would mint a new store beside the old rather than resume it. Every
+    earlier window is closed, so it keeps the date it ends on — without that
+    distinction all the windows would collapse into a single store.
+
+    Args:
+        window_end: Last day of the window being ingested.
+        anchor: The run's end date, which the newest window reaches.
+    """
+    return "" if window_end == anchor else window_end.isoformat()
+
+
 def open_virtual_repo(
     prefix: str,
     *,

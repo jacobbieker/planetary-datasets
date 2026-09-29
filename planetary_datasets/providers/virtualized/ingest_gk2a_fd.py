@@ -97,7 +97,9 @@ def ingest_band(args: argparse.Namespace, band: str) -> list[str | None]:
                     repo_factory=repo_factory,
                     end_date=end,
                     start_date=start,
-                    first_store_suffix=end.isoformat(),
+                    first_store_suffix=virtual_repo.live_store_suffix(
+                        end, args.end_date
+                    ),
                     branch=args.branch,
                     group="",
                     batch_size=args.batch_size,
