@@ -1,0 +1,17 @@
+# Environment for the EUMETNET OPERA radar downloader.
+#
+# Kept apart from the project's pixi environment because earth2studio depends on torch
+# and pins netcdf4<1.7.3. The earth2studio commit is the one the original scripts ran.
+name: opera-radar
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pyproj
+  - h5py
+  - netcdf4>=1.6.4,<1.7.3
+  - h5netcdf
+  - eccodes
+  - git
+  - loguru
+  - pip

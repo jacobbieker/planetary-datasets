@@ -7,10 +7,12 @@ encoding-dict builder that appeared in seventy-one. The append-or-create decisio
 
 from __future__ import annotations
 
+import itertools
 from typing import Iterable, Sequence
 
 import icechunk
 import numpy as np
+import pandas as pd
 import xarray as xr
 import zarr.codecs
 from icechunk.xarray import to_icechunk
@@ -41,7 +43,9 @@ def has_committed_data(repo: icechunk.Repository, branch: str = "main") -> bool:
     emptiness check: a failed read must never be mistaken for an empty store, or the
     create-fresh path would overwrite an existing archive.
     """
-    return sum(1 for _ in repo.ancestry(branch=branch)) > 1
+    # Stop at the second snapshot: this runs before every write, and counting a long
+    # store's whole history each time grows with every commit made.
+    return next(itertools.islice(repo.ancestry(branch=branch), 1, None), None) is not None
 
 
 def build_encoding(
@@ -85,6 +89,16 @@ def existing_times(repo: icechunk.Repository, append_dim: str = "time") -> np.nd
     if append_dim not in ds.coords:
         return np.array([])
     return ds.coords[append_dim].values
+
+
+def latest_time(repo: icechunk.Repository, append_dim: str = "time") -> pd.Timestamp | None:
+    """The last value stored along ``append_dim``, or None for an empty store.
+
+    :func:`write_to_icechunk` only appends after this, so it is also the answer to
+    "would the store still accept a step at t?": only if ``t`` is later.
+    """
+    present = existing_times(repo, append_dim)
+    return pd.Timestamp(present.max()) if present.size else None
 
 
 def has_timestep(repo: icechunk.Repository, timestep, append_dim: str = "time") -> bool:
@@ -243,7 +257,10 @@ def write_to_icechunk(
         logger.error(f"coordinate {bad!r} does not match the store, skipping write")
         return False
 
-    to_icechunk(ds, session, append_dim=append_dim)
+    # "a-" appends only the variables that have append_dim. Everything else - static
+    # 2-D latitude/longitude, say - was written with the store and was just checked
+    # against it; plain "a" would rewrite it on every append.
+    to_icechunk(ds, session, append_dim=append_dim, mode="a-")
     session.commit(
         message or f"Append {append_dim} {incoming[0]}",
         rebase_with=icechunk.ConflictDetector(),
