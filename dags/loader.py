@@ -63,6 +63,7 @@ from dags.factory import (  # noqa: E402
     DAILY_CRON_MINUTE,
     DEFAULT_MEMORY_GB,
     MEMORY_CLASS_TAG,
+    SCHEDULE_TAG,
     executor_tag_concurrency_limits,
     memory_class_for,
 )
@@ -423,7 +424,7 @@ def build_memory_class_jobs(
 
     Assets carrying their own ``AutomationCondition`` are left out. They have opted into
     declarative automation and scheduling them here as well would launch each partition
-    twice.
+    twice. So are assets tagged ``SCHEDULE_TAG: "manual"``, which are backfilled by hand.
     """
     by_group: dict[tuple[str, str], list[dg.AssetKey]] = defaultdict(list)
     partitions_by_key: dict[str, dg.PartitionsDefinition] = {}
@@ -438,6 +439,8 @@ def build_memory_class_jobs(
         partitions_by_key.setdefault(partitions_key, partitions_def)
         for spec in asset.specs:
             if spec.automation_condition is not None:
+                continue
+            if (spec.tags or {}).get(SCHEDULE_TAG) == "manual":
                 continue
             by_group[(partitions_key, asset_memory_class(asset, spec))].append(spec.key)
 

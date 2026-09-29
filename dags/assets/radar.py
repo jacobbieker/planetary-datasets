@@ -11,7 +11,7 @@ always defined and fail with a clear message when the directory is not configure
 
 OPERA is fetched rather than staged by hand. Its decoder cannot be installed alongside this
 project, so each OPERA product has a ``*_download`` asset that runs the
-``docker/opera-radar`` image to stage one hour as netCDF, and a processing asset that
+``docker/earth2studio`` image to stage one hour as netCDF, and a processing asset that
 depends on it, appends that hour to the store and then deletes the staged file.
 
 Registration is deliberately left to ``dags/definitions.py``, which is owned separately:
@@ -96,12 +96,12 @@ fmi_radar = _build_asset(
 )
 
 # --------------------------------------------------------------------------------------
-# EUMETNET OPERA, staged by the docker/opera-radar image.
+# EUMETNET OPERA, staged by the docker/earth2studio image.
 # --------------------------------------------------------------------------------------
 
-#: Image built by ``docker/opera-radar/build.sh``.
-OPERA_IMAGE_ENV = "OPERA_RADAR_IMAGE"
-DEFAULT_OPERA_IMAGE = "planetary-datasets/opera-radar:latest"
+#: Image built by ``docker/earth2studio/build.sh``, shared with the observation sources.
+OPERA_IMAGE_ENV = "EARTH2STUDIO_IMAGE"
+DEFAULT_OPERA_IMAGE = "planetary-datasets/earth2studio:latest"
 OPERA_SOURCE_URL = "https://eumetnet.github.io/openradardata-documentation/"
 #: A reflectivity hour is twelve 3800x4400 frames plus their lat/lon grid.
 OPERA_CONTAINER_MEMORY_GB = 6
@@ -121,6 +121,7 @@ opera_dbz_partitions = dg.HourlyPartitionsDefinition(
 def opera_download_command(provider: OPERAProvider, it: pd.Timestamp) -> list[str]:
     """Arguments for the downloader image's entrypoint, for one hour."""
     return [
+        "opera",
         "--product",
         provider.product,
         "--time",
@@ -173,14 +174,14 @@ opera_rainfall_download, opera_rainfall = _build_opera_assets(
     OPERARainfallProvider,
     opera_rainfall_partitions,
     "One hour of OPERA rain rate and 1 h accumulation (15-minute frames) staged as netCDF "
-    "by the docker/opera-radar image.",
+    "by the docker/earth2studio image.",
     "EUMETNET OPERA pan-European rain rate and 1 h accumulation, 2 km, 15-minute frames.",
 )
 opera_dbz_download, opera_dbz = _build_opera_assets(
     OPERAReflectivityProvider,
     opera_dbz_partitions,
     "One hour of OPERA composite reflectivity (5-minute frames) staged as netCDF by the "
-    "docker/opera-radar image.",
+    "docker/earth2studio image.",
     "EUMETNET OPERA pan-European composite reflectivity, 1 km, 5-minute frames.",
 )
 

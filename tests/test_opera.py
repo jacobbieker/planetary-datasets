@@ -300,7 +300,7 @@ def test_the_download_asset_runs_the_image_for_a_missing_hour(local_config, monk
     (call,) = client.calls
     assert call["image"] == "example/opera:test"
     assert call["command"] == [
-        "--product", "dbz", "--time", "2026-09-29T06:00", "--target", "/data/opera",
+        "opera", "--product", "dbz", "--time", "2026-09-29T06:00", "--target", "/data/opera",
     ]  # fmt: skip
     root = str((local_config / "data" / "opera").resolve())
     assert call["container_kwargs"]["volumes"] == {root: {"bind": "/data/opera", "mode": "rw"}}

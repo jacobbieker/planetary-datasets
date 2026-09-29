@@ -1,0 +1,8 @@
+# Installed after environment.yml. torch comes from the CPU-only index (see Dockerfile):
+# no data source here touches a GPU, and the CUDA wheels would add several GB.
+torch>=2.5
+# The [data] extra carries what the observation sources import: eumdac (MetOp, MTG),
+# pybufrkit (BUFR/PREPBUFR), pystac-client and rasterio (Planetary Computer), scipy.
+earth2studio[data] @ git+https://github.com/NVIDIA/earth2studio.git@89be5bcbc9f9e5ea616d5f5747fde71f07de53a3
+# Reports each staged partition back to the launching Dagster asset.
+dagster-pipes>=1.12,<2

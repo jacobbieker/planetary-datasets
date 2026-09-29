@@ -1,0 +1,21 @@
+# Environment for the earth2studio-backed downloaders (OPERA radar and the direct
+# observation sources).
+#
+# Kept apart from the project's pixi environment because earth2studio depends on torch
+# and pins netcdf4<1.7.3.
+#
+# Pinned to the versions the OPERA image solved to. Left loose (with pyarrow added)
+# the solve ran for hours without finishing; pyarrow comes from pip with earth2studio.
+name: earth2studio
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13.15
+  - pyproj=3.8.0
+  - h5py=3.16.0
+  - netcdf4=1.7.2
+  - h5netcdf=1.8.1
+  - eccodes=2.46.0
+  - git
+  - loguru=0.7.3
+  - pip

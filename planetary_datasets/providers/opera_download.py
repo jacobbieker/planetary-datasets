@@ -3,7 +3,7 @@ r"""Fetch one hour of EUMETNET OPERA radar composites and stage it as netCDF.
 This is the download half of the OPERA pipeline; :mod:`planetary_datasets.providers.opera`
 is the processing half, and reads the files this writes.
 
-It runs inside the ``docker/opera-radar`` image rather than the project environment. The
+It runs inside the ``docker/earth2studio`` image rather than the project environment. The
 ODIM HDF5 decoding comes from NVIDIA's ``earth2studio``, which pulls in ``torch`` and pins
 ``netcdf4<1.7.3``, neither of which fits the project environment. The module therefore
 imports nothing from ``planetary_datasets`` and defers its ``earth2studio`` import to the
