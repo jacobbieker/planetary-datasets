@@ -18,6 +18,7 @@ from dags.factory import (
     DEFAULT_MEMORY_GB,
     MEMORY_CLASS_TAG,
     MEMORY_GB_TAG,
+    SCHEDULE_TAG,
     concurrency_limit_for,
     daily_partitions,
     executor_tag_concurrency_limits,
@@ -505,6 +506,82 @@ def test_a_schedule_tick_carries_a_partition_key():
 
     assert run_requests, "the schedule produced no run request"
     assert all(request.partition_key for request in run_requests)
+
+
+def test_an_asset_is_scheduled_with_what_it_depends_on():
+    """Regression: a staged download and its publish were split across two jobs.
+
+    They declare different footprints — the download sizes itself by the container it
+    runs, the publish by one staged file read back — so grouping on the declared class
+    alone put them on two schedules with no ordering. The publish job fired on its own,
+    found the staging empty, and raised "nothing staged for ...; run the download" every
+    tick; OPERA failed the same way as ``RadarArchiveNotConfigured``.
+    """
+
+    @dg.asset(
+        name="thing_download",
+        partitions_def=daily_partitions,
+        tags={MEMORY_CLASS_TAG: "large"},
+    )
+    def thing_download(context):
+        return 1
+
+    @dg.asset(
+        name="thing",
+        partitions_def=daily_partitions,
+        deps=[thing_download],
+        tags={MEMORY_CLASS_TAG: "small"},
+    )
+    def thing(context):
+        return 1
+
+    jobs, _ = loader_module.build_memory_class_jobs([thing_download, thing])
+
+    assert len(jobs) == 1, "the pair must run in one job, in dependency order"
+    # Rounded up, not down: the queue admits the pair under its heaviest member's limit.
+    assert jobs[0].tags[MEMORY_CLASS_TAG] == "large"
+
+
+def test_an_unrelated_asset_keeps_its_own_memory_class():
+    """Only *dependencies* are pulled up; sharing a partitioning is not enough."""
+
+    @dg.asset(name="heavy", partitions_def=daily_partitions, tags={MEMORY_CLASS_TAG: "large"})
+    def heavy(context):
+        return 1
+
+    @dg.asset(name="light", partitions_def=daily_partitions, tags={MEMORY_CLASS_TAG: "small"})
+    def light(context):
+        return 1
+
+    jobs, _ = loader_module.build_memory_class_jobs([heavy, light])
+
+    assert {j.tags[MEMORY_CLASS_TAG] for j in jobs} == {"large", "small"}
+
+
+def test_a_dependency_that_is_not_scheduled_does_not_move_its_downstream():
+    """A manual upstream is not ours to place, and its absence is not a job's to fix."""
+
+    @dg.asset(
+        name="manual_upstream",
+        partitions_def=daily_partitions,
+        tags={MEMORY_CLASS_TAG: "xlarge", SCHEDULE_TAG: "manual"},
+    )
+    def manual_upstream(context):
+        return 1
+
+    @dg.asset(
+        name="downstream",
+        partitions_def=daily_partitions,
+        deps=[manual_upstream],
+        tags={MEMORY_CLASS_TAG: "small"},
+    )
+    def downstream(context):
+        return 1
+
+    jobs, _ = loader_module.build_memory_class_jobs([manual_upstream, downstream])
+
+    assert len(jobs) == 1
+    assert jobs[0].tags[MEMORY_CLASS_TAG] == "small"
 
 
 def test_an_asset_with_its_own_automation_condition_is_not_also_scheduled():

@@ -37,7 +37,7 @@ concurrency:
     granularity: op
     default_limit: 1
   runs:
-    max_concurrent_runs: 4
+    max_concurrent_runs: 10
     tag_concurrency_limits:
       # The 06:00 priority batch (dags/priority.py). `applyLimitPerUniqueValue` makes this
       # a cap *per source* — four SILAM runs may be in flight together, and four HARMONIE

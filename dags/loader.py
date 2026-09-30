@@ -25,7 +25,9 @@ Concurrency is sized from the host's memory. A factory-built asset declares what
 (see :mod:`dags.factory`); an asset that declares nothing is assumed to need
 ``DEFAULT_MEMORY_GB``. Assets are grouped into one scheduled job per (partitioning,
 memory class), which puts the class on every run's tags, and the run queue in
-``dags/dagster.yaml`` limits how many runs of each class are dequeued.
+``dags/dagster.yaml`` limits how many runs of each class are dequeued. Assets that depend
+on one another take the heaviest class among them so that they stay in one job; see
+:func:`_linked_groups` for why splitting them broke the staged sources.
 
 The executor's per-class limit, which bounds steps *within* a run, matches on **op** tags
 rather than asset tags, and Dagster offers no way to attach those after the fact. It
@@ -75,6 +77,7 @@ from dags.factory import (  # noqa: E402
     DAILY_CRON_MINUTE,
     DEFAULT_MEMORY_GB,
     MEMORY_CLASS_TAG,
+    MEMORY_CLASSES,
     SCHEDULE_TAG,
     executor_tag_concurrency_limits,
     memory_class_for,
@@ -658,6 +661,60 @@ def asset_memory_class(asset: dg.AssetsDefinition, spec: dg.AssetSpec) -> str:
     return declared or memory_class_for(DEFAULT_MEMORY_GB)
 
 
+def _memory_class_rank(memory_class: str) -> int:
+    """Where a class sits in :data:`~dags.factory.MEMORY_CLASSES`, smallest first."""
+    for index, (name, _) in enumerate(MEMORY_CLASSES):
+        if name == memory_class:
+            return index
+    return len(MEMORY_CLASSES) - 1
+
+
+def _linked_groups(
+    memory_classes: dict[dg.AssetKey, str], upstreams: dict[dg.AssetKey, set[dg.AssetKey]]
+) -> dict[dg.AssetKey, str]:
+    """Give every asset the memory class of the heaviest asset it is connected to.
+
+    Jobs are keyed by memory class, so two assets in different classes are two jobs on two
+    schedules with no ordering between them. For assets that merely share a partitioning
+    that is what we want. For an asset and its *dependency* it is a bug: the staged sources
+    in :mod:`dags.staged` are a ``<name>_download`` that fills a staging directory and a
+    ``<name>`` that publishes it, and their declared footprints differ — a download sizes
+    itself by the container it runs, the publish by one staged file read back. That put
+    ``goes_glm_east_event`` (2 GB, small) on a different schedule from
+    ``goes_glm_east_event_download`` (20 GB, large), so the publish job fired on its own,
+    found the staging empty and raised "nothing staged for ...; run the download" every
+    tick. OPERA failed the same way, as ``RadarArchiveNotConfigured``.
+
+    So the connected components of the dependency graph are resolved first and the whole
+    component takes the heaviest class in it. Rounding *up* is the safe direction: the
+    queue then admits the group under the limit of its most demanding member.
+
+    Only edges between assets given here are followed, which means edges to an asset that
+    is not scheduled (one with its own automation condition, or tagged manual) are ignored
+    — it is not ours to place, and its absence is not something a job can fix.
+    """
+    parent: dict[dg.AssetKey, dg.AssetKey] = {key: key for key in memory_classes}
+
+    def find(key: dg.AssetKey) -> dg.AssetKey:
+        while parent[key] != key:
+            parent[key] = parent[parent[key]]
+            key = parent[key]
+        return key
+
+    for key, deps in upstreams.items():
+        for dep in deps:
+            if dep in parent:
+                parent[find(key)] = find(dep)
+
+    heaviest: dict[dg.AssetKey, str] = {}
+    for key, memory_class in memory_classes.items():
+        root = find(key)
+        current = heaviest.get(root)
+        if current is None or _memory_class_rank(memory_class) > _memory_class_rank(current):
+            heaviest[root] = memory_class
+    return {key: heaviest[find(key)] for key in memory_classes}
+
+
 def build_memory_class_jobs(
     assets: list[dg.AssetsDefinition],
 ) -> tuple[list[dg.JobDefinition], list[dg.ScheduleDefinition]]:
@@ -665,7 +722,9 @@ def build_memory_class_jobs(
 
     Grouping by memory class is what lets the run queue apply a different limit to a
     32 GB reanalysis ingest than to a 2 GB station download: the class is carried on the
-    job's run tags, which is what ``tag_concurrency_limits`` matches on.
+    job's run tags, which is what ``tag_concurrency_limits`` matches on. The class used is
+    the one :func:`_linked_groups` settles on rather than the asset's own, so that an asset
+    is never scheduled apart from something it depends on.
 
     Grouping by partitioning as well is not a refinement but a requirement — Dagster
     refuses a partitioned asset job whose assets do not share one ``partitions_def`` —
@@ -682,6 +741,10 @@ def build_memory_class_jobs(
     """
     by_group: dict[tuple[str, str], list[dg.AssetKey]] = defaultdict(list)
     partitions_by_key: dict[str, dg.PartitionsDefinition] = {}
+    # Per partitioning, because a job may only hold one: the classes are settled within a
+    # partitioning and a dependency that crosses partitionings cannot be co-scheduled here.
+    classes_by_partitioning: dict[str, dict[dg.AssetKey, str]] = defaultdict(dict)
+    upstreams_by_partitioning: dict[str, dict[dg.AssetKey, set[dg.AssetKey]]] = defaultdict(dict)
 
     for asset in assets:
         partitions_def = getattr(asset, "partitions_def", None)
@@ -696,7 +759,15 @@ def build_memory_class_jobs(
                 continue
             if (spec.tags or {}).get(SCHEDULE_TAG) == "manual":
                 continue
-            by_group[(partitions_key, asset_memory_class(asset, spec))].append(spec.key)
+            classes_by_partitioning[partitions_key][spec.key] = asset_memory_class(asset, spec)
+            upstreams_by_partitioning[partitions_key][spec.key] = {
+                dep.asset_key for dep in (spec.deps or ())
+            }
+
+    for partitions_key, memory_classes in classes_by_partitioning.items():
+        linked = _linked_groups(memory_classes, upstreams_by_partitioning[partitions_key])
+        for key, memory_class in linked.items():
+            by_group[(partitions_key, memory_class)].append(key)
 
     jobs: list[dg.JobDefinition] = []
     schedules: list[dg.ScheduleDefinition] = []
