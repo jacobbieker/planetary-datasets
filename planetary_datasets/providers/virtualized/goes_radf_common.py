@@ -2059,13 +2059,43 @@ def iter_eras_backwards(
         # use a far cheaper opener than the ingest. Himawari uses this to test
         # one tile per day instead of two 88-tile scenes.
         opener = probe_open_fn or open_batch_fn or open_virtual_batch
-        try:
-            vds = opener(
-                select(urls, probe_files_per_day),
+
+        def _open_probe(probe_urls: list[str]) -> xr.Dataset:
+            return opener(
+                probe_urls,
                 registry=registry,
                 parser=parser,
                 preprocess_fn=preprocess_fn,
                 loadable_variables=loadable_variables,
+            )
+
+        def _note_probe_retry(attempt: int, delay: float, exc: Exception) -> None:
+            # Logged, not silent: a retry that leaves no trace cannot be told
+            # apart from one that never fired, which is how the first version
+            # of this fix looked like it was doing nothing.
+            msg = (
+                f"source files unreadable while probing "
+                f"({type(exc).__name__}); attempt {attempt}/"
+                f"{UNREADABLE_RETRY_ATTEMPTS}, retrying in {delay:.0f}s"
+            )
+            print(f"  {_date_from_doy(year, doy).isoformat()}: {msg}", flush=True)
+            if log_dir is not None and satellite is not None:
+                log_event(
+                    log_dir, satellite, channel_label,
+                    _date_from_doy(year, doy).isoformat(),
+                    "UNREADABLE_RETRY", msg,
+                )
+
+        try:
+            # Retried for the same reason the ingest open is, but the stakes
+            # here are higher: a failed probe does not merely skip the day, it
+            # reads as "does not combine" and closes the era. A short read
+            # would then split an era spuriously, stranding the days beyond it
+            # in a separate store for no reason.
+            vds = open_with_unreadable_retry(
+                _open_probe,
+                select(urls, probe_files_per_day),
+                on_retry=_note_probe_retry,
             )
         except Exception as e:
             return urls, None, f"{type(e).__name__}: {e}"

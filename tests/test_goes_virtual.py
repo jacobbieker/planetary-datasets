@@ -813,3 +813,29 @@ def test_a_codec_boundary_is_not_retried():
             codec_error, ["a.nc"], sleep=lambda _: None
         )
     assert len(attempts) == 1
+
+
+def test_a_short_read_during_probing_does_not_split_an_era():
+    """The probe must retry too, or a transient read closes an era by mistake.
+
+    A failed probe open is not a skipped day: it reads as "does not combine",
+    which is how era boundaries are found. A short read there strands every day
+    beyond it in a separate store. This is what GK-2A ir105 was doing -- its
+    losses were logged as PROBE_MISMATCH, not as ingest failures.
+    """
+    calls = []
+
+    def flaky_probe(urls):
+        calls.append(urls)
+        if len(calls) == 1:
+            raise _truncated_oserror()
+        return "probe-dataset"
+
+    result = common.open_with_unreadable_retry(
+        flaky_probe, ["a.nc", "b.nc"], sleep=lambda _: None
+    )
+
+    # Second attempt succeeded, so the caller sees a combinable day and the era
+    # stays open rather than being split at a file that was never really bad.
+    assert result == "probe-dataset"
+    assert len(calls) == 2
