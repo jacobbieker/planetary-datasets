@@ -44,6 +44,7 @@ had ``pool = None`` and nothing was serialised at all.
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import hashlib
 import importlib
 import os
@@ -79,6 +80,7 @@ from dags.factory import (  # noqa: E402
     memory_class_for,
     pool_name,
 )
+from dags.priority import build_priority_jobs  # noqa: E402
 from dags.resources import MemoryResource, PlanetaryConfigResource  # noqa: E402
 from planetary_datasets.memory import memory_budget_gb  # noqa: E402
 
@@ -100,6 +102,18 @@ IMPORT_TIMEOUT_SECONDS = float(os.environ.get("DAGSTER_ASSET_IMPORT_TIMEOUT", "1
 #: iris, dagster's own plugins — which is far slower than anything after it. Giving it
 #: its own grace period is what makes the short per-module deadline above safe.
 FIRST_IMPORT_TIMEOUT_SECONDS = float(os.environ.get("DAGSTER_ASSET_FIRST_IMPORT_TIMEOUT", "60"))
+
+#: No schedule in this code location may fire more often than this, however fine the
+#: partitioning behind it. ``build_schedule_from_partitioned_job`` takes its cron from the
+#: partitioning, which gave 107 assets an hourly tick and 8 a ten-minute one; a tick that
+#: often mostly launches runs that find their partition already stored and skip, and it
+#: keeps the queue full of them. A partitioning finer than this keeps its granularity and
+#: is scheduled by :func:`_catch_up_schedule` instead, which asks for every partition of
+#: the interval just gone.
+MIN_SCHEDULE_INTERVAL = dt.timedelta(hours=6)
+
+#: The cron :func:`_catch_up_schedule` fires on, matching :data:`MIN_SCHEDULE_INTERVAL`.
+MIN_SCHEDULE_CRON = f"{DAILY_CRON_MINUTE} 0,6,12,18 * * *"
 
 #: Total seconds discovery may spend importing modules. Per-module deadlines alone do
 #: not bound a cold start: a handful of slow modules can still add minutes and push the
@@ -512,6 +526,105 @@ def _time_partitions_def(partitions_def: dg.PartitionsDefinition):
     return None
 
 
+def partition_period(partitions_def: dg.PartitionsDefinition) -> dt.timedelta | None:
+    """How long one partition of ``partitions_def`` covers, or None if it has no cadence.
+
+    Measured from two consecutive windows rather than parsed out of the cron, so an
+    irregular cadence (``0 0,3,6,9,12,15,18,21 * * *``) is answered by its actual spacing.
+    """
+    inner = _time_partitions_def(partitions_def)
+    if inner is None:
+        return None
+    with contextlib.suppress(Exception):
+        last = inner.get_last_partition_key()
+        if last is not None:
+            window = inner.time_window_for_partition_key(last)
+            return window.end - window.start
+    return None
+
+
+def schedules_too_often(partitions_def: dg.PartitionsDefinition) -> bool:
+    """Whether scheduling on this partitioning's own cadence would breach the floor.
+
+    ``build_schedule_from_partitioned_job`` takes its cron straight from the partitioning,
+    so an hourly ingest gets an hourly schedule and a ten-minute one gets a tick every ten
+    minutes. :data:`MIN_SCHEDULE_INTERVAL` is the floor those are held to.
+    """
+    period = partition_period(partitions_def)
+    return period is not None and period < MIN_SCHEDULE_INTERVAL
+
+
+def _catch_up_schedule(
+    job: dg.JobDefinition,
+    name: str,
+    partitions_def: dg.PartitionsDefinition,
+) -> dg.ScheduleDefinition:
+    """A :data:`MIN_SCHEDULE_INTERVAL` schedule for a partitioning finer than the floor.
+
+    Fires on :data:`MIN_SCHEDULE_CRON` and asks for every partition whose window fell in
+    the interval just gone, oldest first, so nothing is dropped by slowing the tick down:
+    an hourly ingest gets one tick with six partitions instead of six ticks with one.
+    """
+
+    @dg.schedule(
+        name=name,
+        cron_schedule=MIN_SCHEDULE_CRON,
+        job=job,
+        default_status=dg.DefaultScheduleStatus.RUNNING,
+        execution_timezone="UTC",
+    )
+    def _schedule(context: dg.ScheduleEvaluationContext):
+        fired = context.scheduled_execution_time
+        inner = _time_partitions_def(partitions_def)
+        try:
+            last = inner.get_last_partition_key()
+            if last is None:
+                return dg.SkipReason(f"{name}: no partitions yet")
+            end = inner.time_window_for_partition_key(last).end
+            window = dg.TimeWindow(start=end - MIN_SCHEDULE_INTERVAL, end=end)
+            times = sorted(inner.get_partition_keys_in_time_window(window))
+            if last not in times:
+                times.append(last)
+            keys = _partition_keys_for_times(partitions_def, times)
+        except Exception as exc:  # noqa: BLE001 - a partitioning that cannot answer skips
+            return dg.SkipReason(f"{name}: {type(exc).__name__}: {exc}")
+        if not keys:
+            return dg.SkipReason(f"{name}: nothing since the last tick")
+        stamp = fired.strftime("%Y-%m-%dT%H")
+        return [
+            dg.RunRequest(run_key=f"{name}-{stamp}-{key}", partition_key=key) for key in keys
+        ]
+
+    return _schedule
+
+
+def _partition_keys_for_times(
+    partitions_def: dg.PartitionsDefinition, times: list[str]
+) -> list:
+    """Turn time-dimension keys into keys of ``partitions_def``.
+
+    For a plain time-window partitioning that is the identity. For a
+    ``MultiPartitionsDefinition`` — ``mrms_region`` is date-by-region — each time key has
+    to be paired with every value of the other dimensions, because a run request on a
+    multi-partitioned job needs a whole :class:`dagster.MultiPartitionKey`, not the time
+    half of one.
+    """
+    if not isinstance(partitions_def, dg.MultiPartitionsDefinition):
+        return list(times)
+
+    time_dimension = partitions_def.time_window_dimension.name
+    others = [
+        (dimension.name, list(dimension.partitions_def.get_partition_keys()))
+        for dimension in partitions_def.partitions_defs
+        if dimension.name != time_dimension
+    ]
+
+    keys = [{time_dimension: time} for time in times]
+    for dimension_name, values in others:
+        keys = [{**key, dimension_name: value} for key in keys for value in values]
+    return [dg.MultiPartitionKey(key) for key in keys]
+
+
 def _schedule_offsets(partitions_def: dg.PartitionsDefinition) -> dict[str, int]:
     """The ``hour_of_day``/``minute_of_hour`` that this partitioning will accept.
 
@@ -611,6 +724,17 @@ def build_memory_class_jobs(
             logger.debug(f"dagster: {name} has no time partitioning, leaving it unscheduled")
             continue
 
+        if schedules_too_often(partitions_def):
+            # Finer than MIN_SCHEDULE_INTERVAL. The partitioning keeps its granularity;
+            # only the tick is slowed, and the schedule asks for the whole interval's
+            # worth of partitions so nothing is dropped by firing less often.
+            logger.debug(
+                f"dagster: {name} is partitioned every "
+                f"{partition_period(partitions_def)}, scheduling it on {MIN_SCHEDULE_CRON}"
+            )
+            schedules.append(_catch_up_schedule(job, f"{name}_schedule", partitions_def))
+            continue
+
         schedules.append(
             dg.build_schedule_from_partitioned_job(
                 job,
@@ -686,9 +810,17 @@ def build_definitions() -> dg.Definitions:
 
     jobs, schedules = build_memory_class_jobs(assets)
 
+    # The 06:00 priority run, on top of the cadence each asset already keeps. Built after
+    # the memory-class jobs and kept separate from them: these carry a run priority, and
+    # a job may only hold assets that share one partitioning.
+    priority_jobs, priority_schedules = build_priority_jobs(assets)
+    jobs = [*jobs, *priority_jobs]
+    schedules = [*schedules, *priority_schedules]
+
     logger.info(
         f"dagster: loaded {len(assets)} asset definition(s) from {len(modules)} module(s); "
-        f"{len(failures)} module(s) skipped; {len(jobs)} scheduled job(s)"
+        f"{len(failures)} module(s) skipped; {len(jobs)} scheduled job(s) "
+        f"({len(priority_jobs)} priority)"
     )
 
     return dg.Definitions(

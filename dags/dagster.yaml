@@ -39,6 +39,16 @@ concurrency:
   runs:
     max_concurrent_runs: 4
     tag_concurrency_limits:
+      # The 06:00 priority batch (dags/priority.py). `applyLimitPerUniqueValue` makes this
+      # a cap *per source* — four SILAM runs may be in flight together, and four HARMONIE
+      # ones — rather than a cap on the batch as a whole. The queue still takes the
+      # sources in order, because `dagster/priority` descends through PRIORITY_ORDER; this
+      # only stops one source from filling the queue and stalling the rest behind it.
+      # Write safety does not depend on this: one writer per store is the pools' job.
+      - key: planetary/priority_source
+        limit: 4
+        value:
+          applyLimitPerUniqueValue: true
       # >48 GB: nothing else large may run alongside it.
       - key: planetary/memory_class
         value: xlarge

@@ -11,8 +11,8 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-
 from helpers import read_store
+
 from dags import loader as loader_module
 from dags.factory import (
     DEFAULT_MEMORY_GB,
@@ -480,7 +480,9 @@ def test_assets_with_different_partitionings_get_their_own_job_and_cadence():
     assert len(jobs) == 2
     crons = sorted(s.cron_schedule for s in _resolved([daily_one, hourly_one], jobs, schedules))
     # Not two daily ticks: the hourly asset would only ever get one partition a day.
-    assert crons == ["0 * * * *", "0 6 * * *"]
+    # The hourly partitioning keeps hourly partitions, but its schedule is held to the
+    # six-hour floor (MIN_SCHEDULE_INTERVAL); the daily one is already compliant.
+    assert crons == ["0 0,6,12,18 * * *", "0 6 * * *"]
 
 
 def test_a_schedule_tick_carries_a_partition_key():
@@ -628,9 +630,12 @@ def test_dagster_yaml_is_valid_instance_config(tmp_path, monkeypatch):
         concurrency = instance.get_concurrency_config()
         run_queue = concurrency.run_queue_config
         assert run_queue is not None
+        # A limit's `value` is either a tag value to match or, for a per-unique-value cap
+        # like the priority batch's, a dict of options. Only the former is keyed here.
         limits = {
             (entry["key"], entry.get("value")): entry["limit"]
             for entry in run_queue.tag_concurrency_limits
+            if not isinstance(entry.get("value"), dict)
         }
         # Larger memory classes must never be allowed more concurrency than smaller ones.
         ordered = [
@@ -800,3 +805,250 @@ def test_unrelated_sources_are_not_merged_into_one_pool():
     imerg = {p for k, p in by_key.items() if k.startswith("imerg/")}
     assert silam and imerg
     assert not (silam & imerg), f"silam and imerg share pool(s) {silam & imerg}"
+
+
+# --- the 06:00 priority batch -------------------------------------------------------------
+
+
+def _priority_jobs():
+    from dags.loader import build_definitions
+
+    return {j.name: j for j in build_definitions().jobs if j.name.startswith("priority_")}
+
+
+def test_the_priority_batch_covers_exactly_the_four_named_sources():
+    from dags.loader import build_definitions
+    from dags.priority import PRIORITY_ORDER, is_priority_asset
+
+    covered = sorted(
+        k.to_user_string()
+        for a in build_definitions().assets
+        for k in getattr(a, "keys", ()) or ()
+        if is_priority_asset(k)
+    )
+    assert "silam/silam_dust" in covered
+    assert "silam/silam_aerosol" not in covered, "only the dust store is in the morning batch"
+    assert "nwp/dmi_harmonie" in covered and "nwp/dmi_harmonie_model_level" in covered
+    assert "meps/meps_det" in covered, "the MEPS model-level asset"
+    assert [c for c in covered if c.startswith("arome/")], "every AROME region"
+    # No MEPS asset other than the model-level one.
+    assert [c for c in covered if c.startswith("meps/")] == ["meps/meps_det"]
+    assert len(PRIORITY_ORDER) == 4
+
+
+def test_priority_jobs_are_ordered_silam_then_harmonie_then_meps_then_arome():
+    """The queue dequeues by `dagster/priority`, highest first."""
+    jobs = _priority_jobs()
+    priority_of = {n: int(j.tags["dagster/priority"]) for n, j in jobs.items()}
+    assert priority_of["priority_silam_dust"] > priority_of["priority_dmi_harmonie"]
+    assert priority_of["priority_dmi_harmonie"] > priority_of["priority_meps_det"]
+    assert priority_of["priority_meps_det"] > priority_of["priority_arome"]
+    # And every one of them outranks the untagged rest of the queue, which counts as 0.
+    assert min(priority_of.values()) > 0
+
+
+def test_priority_runs_are_capped_per_source_not_across_the_batch():
+    """Each source runs its own partitions in parallel; the queue still takes them in order.
+
+    A flat cap on the batch made it one long chain, so a slow source held up everything
+    behind it. Write safety does not rest on this: one writer per store is the pools' job.
+    """
+    import yaml
+
+    from dags.priority import PRIORITY_ORDER, PRIORITY_SOURCE_TAG, SOURCE_CONCURRENCY
+
+    labels = {source.label for source in PRIORITY_ORDER}
+    for name, job in _priority_jobs().items():
+        assert job.tags.get(PRIORITY_SOURCE_TAG) in labels, f"{name} names no source"
+
+    instance_config = yaml.safe_load((pathlib.Path("dags") / "dagster.yaml").read_text())
+    limits = instance_config["concurrency"]["runs"]["tag_concurrency_limits"]
+    assert {
+        "key": PRIORITY_SOURCE_TAG,
+        "limit": SOURCE_CONCURRENCY,
+        # Dagster nests the per-value flag under `value`, not at the top level; the
+        # instance-config test is what catches getting this wrong.
+        "value": {"applyLimitPerUniqueValue": True},
+    } in limits
+
+
+def test_the_two_arome_jobs_share_one_source_tag():
+    """A source split across two partitionings is still one source to the queue."""
+    from dags.priority import PRIORITY_SOURCE_TAG
+
+    arome = {
+        job.tags[PRIORITY_SOURCE_TAG]
+        for name, job in _priority_jobs().items()
+        if name.startswith("priority_arome")
+    }
+    assert arome == {"arome"}
+
+
+def test_every_priority_job_is_scheduled_at_0600():
+    from dags.loader import build_definitions
+    from dags.priority import PRIORITY_CRON
+
+    schedules = {s.name: s for s in build_definitions().schedules}
+    for name in _priority_jobs():
+        schedule = schedules.get(f"{name}_schedule")
+        assert schedule is not None, f"{name} has no schedule"
+        assert schedule.cron_schedule == PRIORITY_CRON
+
+
+def test_a_partitioning_held_back_by_end_offset_still_yields_partitions():
+    """Regression: anchoring on 'yesterday' skipped SILAM entirely.
+
+    `silam_dust` is daily with `end_offset=-1`, so its newest partition is two days back
+    and a request for yesterday's key matched nothing.
+    """
+    import datetime as dt
+
+    import dagster as dg
+
+    from dags.priority import recent_partition_keys
+
+    now = dt.datetime(2026, 9, 30, 6, 0, tzinfo=dt.timezone.utc)
+    held_back = dg.DailyPartitionsDefinition(start_date="2024-11-14", end_offset=-1)
+    keys = recent_partition_keys(held_back, now)
+    assert keys, "a partitioning held a period back must still yield its newest partitions"
+    assert keys[-1] == "2026-09-28", "anchored on the newest available, not on the calendar"
+
+
+def test_the_lookback_covers_the_last_four_days_and_the_newest():
+    """Every source reaches back the same window, ending at its own newest partition."""
+    import datetime as dt
+
+    import dagster as dg
+
+    from dags.priority import LOOKBACK_DAYS, recent_partition_keys
+
+    assert LOOKBACK_DAYS == 5, "the last four days plus the newest"
+    now = dt.datetime(2026, 9, 30, 6, 0, tzinfo=dt.timezone.utc)
+
+    daily = dg.DailyPartitionsDefinition(start_date="2024-11-14", end_offset=-1)
+    assert recent_partition_keys(daily, now) == [
+        "2026-09-24",
+        "2026-09-25",
+        "2026-09-26",
+        "2026-09-27",
+        "2026-09-28",
+    ]
+
+    # A three-hourly source covers the same span: eight cycles a day over five days.
+    three_hourly = dg.TimeWindowPartitionsDefinition(
+        start=dt.datetime(2024, 1, 1), cron_schedule="0 0/3 * * *", fmt="%Y-%m-%d-%H:%M"
+    )
+    keys = recent_partition_keys(three_hourly, now)
+    assert len(keys) == 8 * LOOKBACK_DAYS
+    # The window ends at the newest partition's end, not at midnight, so it straddles six
+    # calendar dates while still spanning five days: 40 cycles three hours apart.
+    first = dt.datetime.strptime(keys[0], "%Y-%m-%d-%H:%M")
+    last = dt.datetime.strptime(keys[-1], "%Y-%m-%d-%H:%M")
+    assert last - first == dt.timedelta(days=LOOKBACK_DAYS) - dt.timedelta(hours=3)
+
+
+def test_partition_keys_are_requested_oldest_first():
+    import datetime as dt
+
+    import dagster as dg
+
+    from dags.priority import recent_partition_keys
+
+    keys = recent_partition_keys(
+        dg.TimeWindowPartitionsDefinition(
+            start=dt.datetime(2024, 1, 1), cron_schedule="0 0/3 * * *", fmt="%Y-%m-%d-%H:%M"
+        ),
+        dt.datetime(2026, 9, 30, 6, 0, tzinfo=dt.timezone.utc),
+    )
+    assert keys == sorted(keys)
+
+
+# --- the six-hour schedule floor ----------------------------------------------------------
+
+
+def _resolved_schedules():
+    from dags.loader import build_definitions
+
+    return build_definitions().get_repository_def().schedule_defs
+
+
+def _shortest_interval(cron: str):
+    """The smallest gap between consecutive firings of ``cron``."""
+    import datetime as dt
+
+    from dagster._utils.schedules import cron_string_iterator
+
+    start = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+    fires = []
+    for fire in cron_string_iterator(start.timestamp(), cron, "UTC"):
+        fires.append(fire)
+        if len(fires) == 12:
+            break
+    return min(b - a for a, b in zip(fires, fires[1:]))
+
+
+def test_no_schedule_fires_more_often_than_every_six_hours():
+    """The floor, checked against the crons Dagster actually resolves.
+
+    Schedules built by `build_schedule_from_partitioned_job` take their cron from the
+    partitioning, so before the floor 107 hourly assets had an hourly tick and 8 had one
+    every ten minutes.
+    """
+    from dags.loader import MIN_SCHEDULE_INTERVAL
+
+    too_often = {
+        schedule.name: schedule.cron_schedule
+        for schedule in _resolved_schedules()
+        if _shortest_interval(schedule.cron_schedule) < MIN_SCHEDULE_INTERVAL
+    }
+    assert too_often == {}
+
+
+def test_the_floor_slows_the_tick_without_coarsening_the_partitions():
+    """An hourly ingest keeps hourly partitions; only its schedule is held back."""
+    import datetime as dt
+
+    import dagster as dg
+
+    from dags.loader import (
+        MIN_SCHEDULE_INTERVAL,
+        _partition_keys_for_times,
+        partition_period,
+        schedules_too_often,
+    )
+
+    hourly = dg.HourlyPartitionsDefinition(start_date="2024-01-01-00:00", end_offset=0)
+    assert schedules_too_often(hourly)
+    assert partition_period(hourly) == dt.timedelta(hours=1)
+
+    # And a six-hourly one is already compliant, so it keeps its own schedule.
+    six_hourly = dg.TimeWindowPartitionsDefinition(
+        start=dt.datetime(2024, 1, 1), cron_schedule="0 0/6 * * *", fmt="%Y-%m-%d-%H:%M"
+    )
+    assert not schedules_too_often(six_hourly)
+    assert partition_period(six_hourly) == MIN_SCHEDULE_INTERVAL
+
+    # The identity for a plain partitioning.
+    assert _partition_keys_for_times(hourly, ["2026-01-01-00:00"]) == ["2026-01-01-00:00"]
+
+
+def test_a_multi_partitioned_catch_up_asks_for_whole_multi_partition_keys():
+    """`mrms_region` is date-by-region; a bare time key would not name one of its partitions."""
+    import dagster as dg
+
+    from dags.loader import _partition_keys_for_times
+
+    multi = dg.MultiPartitionsDefinition(
+        {
+            "date": dg.HourlyPartitionsDefinition(start_date="2024-01-01-00:00"),
+            "region": dg.StaticPartitionsDefinition(["alaska", "hawaii"]),
+        }
+    )
+    keys = _partition_keys_for_times(multi, ["2026-01-01-00:00", "2026-01-01-01:00"])
+    assert len(keys) == 4, "every time key paired with every region"
+    assert all(isinstance(key, dg.MultiPartitionKey) for key in keys)
+    assert {key.keys_by_dimension["region"] for key in keys} == {"alaska", "hawaii"}
+    assert {key.keys_by_dimension["date"] for key in keys} == {
+        "2026-01-01-00:00",
+        "2026-01-01-01:00",
+    }
