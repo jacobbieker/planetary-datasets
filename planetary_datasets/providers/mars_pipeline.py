@@ -92,6 +92,7 @@ import pathlib
 import queue
 import re
 import shutil
+import socket
 import sys
 import threading
 import time
@@ -144,6 +145,12 @@ SHORT_CUTOFF_STREAMS = {"oper": "scda", "wave": "scwv"}
 #: discontinued dataset with no month past May 2026, and by retrieving 06 and
 #: 18 UTC model levels and 2D spectra from oper/wave for August 2026.
 SHORT_CUTOFF_RETIRED = pd.Timestamp("2026-05-12 06:00")
+
+#: Seconds a single socket read in a MARS child may block for. Bounds the
+#: hang described in `_mars_execute`; must stay well under `retrieve`'s
+#: ``stall_seconds`` so the child gives up before the parent kills it, and
+#: well over the time any one chunk read takes.
+MARS_SOCKET_TIMEOUT = 600
 
 #: Ocean wave analysis parameters (GRIB codes, table 140)
 WAVE_PARAMS = (
@@ -431,20 +438,29 @@ def _mars_execute(request: dict[str, str], target: str) -> None:
     ``spawn`` child: it re-imports the module and re-reads the configuration,
     and an ``ECMWFService`` would not survive being pickled across.
 
-    Exits through ``os._exit`` rather than returning, because returning does
-    not reliably end the process: after ecmwfapi reports "Done" the client
-    leaves something behind that interpreter shutdown waits on, and the child
-    sits there with the target file complete and closed. `retrieve` watches
-    the file rather than the client, so a child that never exits looks exactly
-    like a dead transfer, and `stall_seconds` later the request is killed and
-    a finished retrieval deleted -- measured at seven whole files, each of
-    them killed 30 minutes to the second after its "Done". Nothing here needs
-    interpreter cleanup: ecmwfapi has already written and closed the target,
-    and the buffers that do matter are flushed first.
+    Sets a socket timeout first, because ecmwfapi builds none of its HTTP
+    calls with one. Once a transfer finishes, ``execute`` ends by asking the
+    server to drop the request, and that call has been seen to block on an SSL
+    read that never returns: the target is complete and closed, but the child
+    sits in ``read(2)`` forever. `retrieve` watches the file rather than the
+    client, so such a child is indistinguishable from a dead transfer, and
+    `stall_seconds` later the request is killed and a finished retrieval
+    deleted -- measured at eleven whole files, each killed 30 minutes to the
+    second after its "Done". The timeout is far longer than any single chunk
+    read (transfers measured 19-71 MB/s against 1MB chunks) and shorter than
+    `stall_seconds`, so it only ever fires on a hang. ecmwfapi already
+    discards whatever that last call raises, so timing it out simply skips
+    the tidy-up and lets the retrieval finish.
+
+    Exits through ``os._exit`` rather than returning, so that a client which
+    leaves a thread behind cannot hang interpreter shutdown either. Nothing
+    here needs that cleanup: ecmwfapi has written and closed the target
+    already, and the buffers that do matter are flushed first.
     """
     # Deferred so importing this module does not need ecmwfapi at all.
     from planetary_datasets.providers.mars import mars_service  # noqa: PLC0415
 
+    socket.setdefaulttimeout(MARS_SOCKET_TIMEOUT)
     code = 0
     try:
         mars_service().execute(request, target)
