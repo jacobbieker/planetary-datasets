@@ -740,3 +740,63 @@ def test_the_reorder_asset_is_never_scheduled():
         except Exception:  # noqa: BLE001 - jobs whose selection needs a repository context
             continue
     assert not [key for key in scheduled if "reorder" in key]
+
+
+# --- one writer per store ----------------------------------------------------------------
+
+
+def _executable_ops():
+    """Every asset op in the code location, with the concurrency key it would claim."""
+    import dagster as dg
+    from dagster._core.storage.tags import GLOBAL_CONCURRENCY_TAG
+
+    from dags.loader import _node_def, build_definitions
+
+    found = []
+    for asset in build_definitions().assets:
+        node_def = _node_def(asset)
+        if not isinstance(node_def, dg.OpDefinition):
+            continue
+        keys = sorted(k.to_user_string() for k in getattr(asset, "keys", ()) or ())
+        # How Dagster resolves it at run time: dagster/_core/execution/plan/active.py.
+        concurrency_key = node_def.pool or node_def.tags.get(GLOBAL_CONCURRENCY_TAG)
+        found.append((keys, concurrency_key))
+    return found
+
+
+def test_every_asset_op_claims_a_concurrency_pool():
+    """Without one, `default_limit: 1` binds nothing and writers race on the store.
+
+    Regression: `@dg.asset(tags={"dagster/concurrency_key": ...})` sets an *asset* tag,
+    which Dagster never reads for concurrency, so every op had `pool = None` and four
+    GEOS-CF writers ran against one store at once.
+    """
+    unlimited = [keys for keys, key in _executable_ops() if not key]
+    assert unlimited == [], f"{len(unlimited)} asset op(s) with no concurrency limit"
+
+
+def test_assets_sharing_a_store_share_a_pool():
+    """The assets that write one store must serialise against each other, not just themselves."""
+    by_key = {}
+    for keys, concurrency_key in _executable_ops():
+        for key in keys:
+            by_key[key] = concurrency_key
+
+    # All three MRMS assets write into the bkr/mrms family; GEOS-CF v1 and v2 are one source.
+    mrms = {by_key[k] for k in by_key if k.startswith("mrms/mrms_")}
+    assert len(mrms) == 1, f"MRMS assets landed in {mrms}"
+    geos = {by_key[k] for k in by_key if "geos_cf_v" in k}
+    assert len(geos) == 1, f"GEOS-CF assets landed in {geos}"
+
+
+def test_unrelated_sources_are_not_merged_into_one_pool():
+    """A generic concurrency key must not serialise modules that share no store.
+
+    `silam.py` and `imerg.py` both declare `download`; pooling on that word alone would
+    have made two unrelated ingests wait on each other.
+    """
+    by_key = {key: pool for keys, pool in _executable_ops() for key in keys}
+    silam = {p for k, p in by_key.items() if k.startswith("silam/")}
+    imerg = {p for k, p in by_key.items() if k.startswith("imerg/")}
+    assert silam and imerg
+    assert not (silam & imerg), f"silam and imerg share pool(s) {silam & imerg}"

@@ -24,8 +24,16 @@ run_launcher:
 
 concurrency:
   pools:
-    # One in-flight step per provider pool. The factory gives each asset its own pool,
-    # so different providers still overlap; a provider never races itself.
+    # One in-flight step per pool, counted across *every* run, which is what stops two
+    # writers landing on one icechunk store at once. `dags.loader.pool_name_for` puts
+    # every asset in a pool named for the module and source it writes, so assets sharing
+    # a store share a pool and different sources still overlap freely.
+    #
+    # `granularity: op` rather than `run` on purpose. A scheduled job here holds many
+    # assets from many pools; with run granularity a run would have to acquire every one
+    # of those pools before it could start, which serialises the whole job and risks
+    # deadlock. At op granularity the run starts and its steps take slots as they free
+    # up — the store still only ever has one writer.
     granularity: op
     default_limit: 1
   runs:

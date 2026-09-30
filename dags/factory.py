@@ -151,7 +151,7 @@ def _asset_name(value: str) -> str:
     return cleaned.strip("-_.") or "asset"
 
 
-def _pool_name(value: str) -> str:
+def pool_name(value: str) -> str:
     """Make a string usable as a Dagster concurrency pool name.
 
     Pool names are validated against ``^[A-Za-z0-9_]+$`` — hyphens are rejected, unlike
@@ -287,7 +287,7 @@ def make_provider_asset(
         partitions_def=partitions_def or daily_partitions,
         tags=asset_tags,
         op_tags=op_tags,
-        pool=_pool_name(pool or asset_name),
+        pool=pool_name(pool or asset_name),
         metadata=dict(metadata or {}),
         kinds=set(kinds) if kinds else None,
         deps=list(deps) if deps else None,
@@ -425,5 +425,6 @@ __all__ = [
     "make_provider_asset",
     "make_provider_assets",
     "memory_class_ceiling",
+    "pool_name",
     "memory_class_for",
 ]

@@ -32,6 +32,13 @@ rather than asset tags, and Dagster offers no way to attach those after the fact
 therefore only binds for assets built by :func:`~dags.factory.make_provider_asset`, which
 sets them. A hand-rolled ``@dg.asset`` needs ``op_tags={MEMORY_CLASS_TAG: ...}`` of its
 own to take part in that layer; it is covered by the run-queue layer either way.
+
+Separately from memory, **every asset is put in a concurrency pool** so that only one
+writer touches an icechunk store at a time; see :func:`pool_name_for`. Two writers on one
+store race, and the loser rebases or loses its timestep. This has to happen here because
+a hand-rolled ``@dg.asset(tags={"dagster/concurrency_key": ...})`` sets an *asset* tag,
+which Dagster never reads for concurrency — before this, every op in the code location
+had ``pool = None`` and nothing was serialised at all.
 """
 
 from __future__ import annotations
@@ -59,6 +66,8 @@ if str(_REPO_ROOT) not in sys.path:
     # Lets `dagster dev -f dags/definitions.py` work as well as `-m dags.definitions`.
     sys.path.insert(0, str(_REPO_ROOT))
 
+from dagster._core.storage.tags import GLOBAL_CONCURRENCY_TAG  # noqa: E402
+
 from dags import assets as assets_package  # noqa: E402
 from dags.factory import (  # noqa: E402
     DAILY_CRON_HOUR,
@@ -68,6 +77,7 @@ from dags.factory import (  # noqa: E402
     SCHEDULE_TAG,
     executor_tag_concurrency_limits,
     memory_class_for,
+    pool_name,
 )
 from dags.resources import MemoryResource, PlanetaryConfigResource  # noqa: E402
 from planetary_datasets.memory import memory_budget_gb  # noqa: E402
@@ -279,6 +289,88 @@ def _qualify_op_name(asset: dg.AssetsDefinition, family: str) -> dg.AssetsDefini
     return dg.AssetsDefinition.dagster_internal_init(**attributes)
 
 
+def pool_name_for(asset: dg.AssetsDefinition, family: str) -> str | None:
+    """The concurrency pool an asset's op belongs to, or None to leave it alone.
+
+    Every asset that writes to an icechunk store must share a pool with everything else
+    writing to the *same* store: two writers on one store race, and the loser spends its
+    time rebasing or loses its timestep outright. With ``default_limit: 1`` in
+    ``dags/dagster.yaml`` a pool means exactly one in-flight step, across every run, so
+    one pool per source is one writer per source.
+
+    Nothing is assigned when the op already says how it wants to be limited — it has a
+    ``pool`` of its own (:func:`dags.factory.make_provider_asset` sets one), or it carries
+    the legacy ``dagster/concurrency_key`` **op** tag, which Dagster still honours:
+    ``active.py`` resolves a step's key as ``step.pool or step.tags.get(...)``, and the
+    ``default_limit`` in ``dags/dagster.yaml`` applies to either spelling. Overriding one
+    would be rejected anyway; a pool must equal the op tag when both are set, and the
+    declared keys contain hyphens, which pool names may not.
+
+    Otherwise the pool is ``<family>_<declared key>`` when the asset declares
+    ``dagster/concurrency_key`` in its **asset** tags, and ``<family>_<asset name>`` when
+    it declares nothing. Both are qualified by the module the asset comes from, because a
+    store is written from one module: that groups everything writing to one store — all
+    three MRMS assets, both GEOS-CF assets — without merging modules that merely picked
+    the same generic word (``silam.py`` and ``imerg.py`` both say ``download``, and they
+    share no store).
+
+    An asset tag is the spelling that does *nothing* today: Dagster reads concurrency from
+    the op, and ``@dg.asset(tags=...)`` sets neither a pool nor an op tag. That is the bug
+    this repairs — every GEOS-CF op had ``pool = None``, so four writers ran at once on one
+    store and spent their time rebasing.
+    """
+    node_def = _node_def(asset)
+    if not isinstance(node_def, dg.OpDefinition):
+        return None
+    if node_def.pool or node_def.tags.get(GLOBAL_CONCURRENCY_TAG):
+        return None
+
+    declared = ""
+    for spec in getattr(asset, "specs", ()) or ():
+        declared = (spec.tags or {}).get(GLOBAL_CONCURRENCY_TAG, "")
+        if declared:
+            break
+
+    if declared:
+        return pool_name(f"{family}_{declared}")
+    keys = sorted(getattr(asset, "keys", ()) or (), key=lambda k: k.to_user_string())
+    if not keys:
+        return None
+    return pool_name(f"{family}_{keys[0].path[-1]}")
+
+
+def _with_pool(asset: dg.AssetsDefinition, family: str) -> dg.AssetsDefinition:
+    """Return ``asset`` with its op bound to the pool :func:`pool_name_for` picks.
+
+    Rebuilt through ``dagster_internal_init`` because ``OpDefinition.with_replaced_properties``
+    carries the existing pool over rather than taking a new one.
+    """
+    pool = pool_name_for(asset, family)
+    if pool is None:
+        return asset
+
+    node_def = _node_def(asset)
+    attributes = asset.get_attributes_dict()
+    attributes["node_def"] = dg.OpDefinition.dagster_internal_init(
+        compute_fn=node_def.compute_fn,
+        name=node_def.name,
+        ins={input_def.name: dg.In.from_definition(input_def) for input_def in node_def.input_defs},
+        outs={
+            output_def.name: dg.Out.from_definition(output_def)
+            for output_def in node_def.output_defs
+        },
+        description=node_def.description,
+        config_schema=node_def.config_schema,
+        required_resource_keys=node_def.required_resource_keys,
+        tags=node_def.tags,
+        version=None,  # code_version replaces version
+        retry_policy=node_def.retry_policy,
+        code_version=node_def.version,
+        pool=pool,
+    )
+    return dg.AssetsDefinition.dagster_internal_init(**attributes)
+
+
 def _load_grouped(
     module: ModuleType, family: str, key_prefix: str | None
 ) -> list[dg.AssetsDefinition]:
@@ -371,10 +463,10 @@ def load_assets(
                 continue
             seen_keys |= keys
             try:
-                loaded.append(_qualify_op_name(asset, family))
+                loaded.append(_with_pool(_qualify_op_name(asset, family), family))
             except Exception as exc:  # noqa: BLE001 - an unrenamed op beats a lost module
                 logger.warning(
-                    f"dagster: could not namespace the op behind "
+                    f"dagster: could not namespace or pool the op behind "
                     f"{sorted(k.to_user_string() for k in keys)}: {exc}"
                 )
                 loaded.append(asset)
