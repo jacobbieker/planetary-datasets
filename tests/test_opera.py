@@ -248,8 +248,13 @@ def test_hours_append_to_the_store_and_staging_is_cleared(stage, opera_root):
     assert stored["latitude"].dims == ("y", "x")
 
 
-def test_hours_before_the_store_end_are_not_appendable_and_are_discarded(stage):
-    """The existing stores have gaps before their latest time that cannot be filled."""
+def test_hours_before_the_store_end_are_filled_out_of_order(stage):
+    """The gaps these stores were left with by out-of-order writes can now be filled.
+
+    Both existing OPERA stores have holes before their latest time. The writer used to
+    drop anything behind the end, so those hours were unreachable and the staged files
+    were thrown away; it now appends them out of order and the axis is sorted afterwards.
+    """
     provider = opera.OPERARainfallProvider()
     early, late = pd.Timestamp(HOUR), pd.Timestamp(HOUR) + pd.Timedelta(2, "h")
     assert provider.appendable(early), "an empty store accepts anything"
@@ -258,10 +263,21 @@ def test_hours_before_the_store_end_are_not_appendable_and_are_discarded(stage):
     assert provider.run_partition(late)
     stage("rainfall", early.to_pydatetime())
 
-    assert not provider.appendable(early)
+    assert provider.appendable(early), "a hole behind the end is fillable"
     assert provider.appendable(late + pd.Timedelta(1, "h"))
-    assert not provider.run_partition(early), "the writer drops it"
-    assert len(provider.discard_staged(early)) == 1, "so it must not stay staged"
+    assert provider.run_partition(early), "and the writer keeps it"
+    assert not provider.appendable(early), "once stored it is refused"
+
+    assert not provider.axis_sorted(), "out of order until the reorder asset runs"
+    assert provider.sort_axis() is True
+
+    # Four 15-minute frames per hour, both hours present and now in order.
+    stored = read_store(provider)
+    times = pd.DatetimeIndex(stored["time"].values)
+    assert times.is_monotonic_increasing
+    assert list(times) == list(pd.date_range(early, periods=4, freq="15min")) + list(
+        pd.date_range(late, periods=4, freq="15min")
+    )
 
 
 # --- Dagster assets ---------------------------------------------------------------------
@@ -284,19 +300,24 @@ def test_the_download_asset_runs_the_image_for_a_missing_hour(
     assert call["container_kwargs"]["volumes"] == {root: {"bind": "/data/opera", "mode": "rw"}}
 
 
-@pytest.mark.parametrize(
-    "stored_hour",
-    [HOUR, HOUR + dt.timedelta(hours=3)],
-    ids=["already-in-the-store", "before-the-store-end"],
-)
-def test_the_download_asset_skips_an_hour_the_store_will_not_take(
-    stage, fake_docker_client, stored_hour
-):
-    stage("dbz", stored_hour)
-    assert opera.OPERAReflectivityProvider().run_partition(pd.Timestamp(stored_hour))
+def test_the_download_asset_skips_an_hour_already_in_the_store(stage, fake_docker_client):
+    stage("dbz", HOUR)
+    assert opera.OPERAReflectivityProvider().run_partition(pd.Timestamp(HOUR))
 
     assert materialize_dbz_download(fake_docker_client).success
     assert fake_docker_client.calls == []
+
+
+def test_the_download_asset_still_runs_for_an_hour_behind_the_store_end(
+    stage, fake_docker_client
+):
+    """The asset used to skip these, so a gap behind the end was never even downloaded."""
+    later = HOUR + dt.timedelta(hours=3)
+    stage("dbz", later)
+    assert opera.OPERAReflectivityProvider().run_partition(pd.Timestamp(later))
+
+    assert materialize_dbz_download(fake_docker_client).success
+    assert len(fake_docker_client.calls) == 1
 
 
 def test_the_processing_asset_writes_and_clears_the_staged_hour(stage):

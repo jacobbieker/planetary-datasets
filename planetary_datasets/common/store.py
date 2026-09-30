@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import contextlib
 import itertools
+import random
+import time
 import warnings
 from typing import Iterable, Sequence
 
@@ -16,6 +18,7 @@ import icechunk
 import numpy as np
 import pandas as pd
 import xarray as xr
+import zarr
 import zarr.codecs
 from icechunk.xarray import to_icechunk
 from loguru import logger
@@ -27,6 +30,14 @@ ALIGNMENT_COORDS = ("latitude", "longitude", "level", "isobaricInhPa", "height")
 
 # Errors that mean "this store has nothing in it yet" when the repository is also empty.
 STORE_READ_ERRORS = (ValueError, KeyError, FileNotFoundError, icechunk.IcechunkError)
+
+#: Raised when a commit races another writer. ``RebaseFailedError`` is the one that
+#: actually surfaces when two writers touched the same chunk; catching only
+#: ``ConflictError`` leaves that case unhandled.
+RACE_ERRORS = (icechunk.ConflictError, icechunk.RebaseFailedError)
+
+#: How many times a racing commit is retried before giving up.
+COMMIT_ATTEMPTS = 5
 
 #: Start of the FutureWarning xarray raises when it decodes a timedelta variable - a
 #: forecast ``step`` axis, here - from its ``units`` attribute alone.
@@ -182,6 +193,185 @@ def missing_periods(
     return [t for t, present in zip(desired, np.isin(wanted, stored)) if not present]
 
 
+def _backoff(attempt: int) -> None:
+    """Sleep a jittered exponential interval before retrying a raced commit."""
+    time.sleep(min(2**attempt, 30) * (0.5 + random.random()))
+
+
+def _axis_arrays(group: zarr.Group, append_dim: str) -> list[tuple[str, zarr.Array, int]]:
+    """Every array in ``group`` that spans ``append_dim``, with the axis it spans it on.
+
+    Arrays without the dimension - a static 2-D ``latitude``, the model level
+    coefficients - are left alone: growing the append axis does not move them.
+    """
+    found = []
+    for path, array in group.arrays():
+        dims = tuple(array.metadata.dimension_names or ())
+        if append_dim in dims:
+            found.append((path, array, dims.index(append_dim)))
+    return found
+
+
+def unreorderable_reason(
+    repo: icechunk.Repository, append_dim: str = "time"
+) -> str | None:
+    """Why this store's append axis cannot be reordered, or None when it can be.
+
+    Reordering remaps chunks through :meth:`icechunk.Session.reindex_array`, which moves
+    whole chunks. An array holding several steps per chunk along ``append_dim`` would need
+    its chunks split to put one step somewhere else, which a manifest rewrite cannot do.
+    Every store this project writes a timestep at a time is chunked one step per chunk, so
+    this is a guard against the exception, not the common case.
+    """
+    session = repo.readonly_session("main")
+    try:
+        group = zarr.open_group(session.store, mode="r", zarr_format=3)
+    except STORE_READ_ERRORS as exc:
+        return f"store could not be opened ({type(exc).__name__}: {exc})"
+    for path, array, axis in _axis_arrays(group, append_dim):
+        if path == append_dim:
+            continue
+        if array.chunks[axis] != 1:
+            return (
+                f"{path} is chunked {array.chunks[axis]} steps per chunk along "
+                f"{append_dim}; reordering needs one step per chunk"
+            )
+    return None
+
+
+def _encode_axis(array: zarr.Array, values: np.ndarray) -> np.ndarray:
+    """Encode append-axis values the way the stored coordinate array holds them.
+
+    A datetime axis is written CF-encoded (``seconds since 1970-01-01`` by
+    :func:`build_encoding`), so the raw integers have to be rebuilt from the array's own
+    ``units``/``calendar``. Anything else - a station id, an integer member number - is
+    stored as-is.
+    """
+    if not np.issubdtype(np.asarray(values).dtype, np.datetime64):
+        return np.asarray(values).astype(array.dtype)
+    encoded, _, _ = xr.coding.times.encode_cf_datetime(
+        values,
+        units=array.attrs["units"],
+        calendar=array.attrs.get("calendar", "standard"),
+    )
+    return encoded.astype(array.dtype)
+
+
+def _reorder_axis(
+    session: icechunk.Session,
+    append_dim: str,
+    old: pd.Index,
+    new: pd.Index,
+) -> None:
+    """Move the append axis from ``old`` to ``new``, taking existing chunks with it.
+
+    ``new`` must contain every value in ``old``. Arrays are resized along ``append_dim``
+    and their chunks remapped with :meth:`icechunk.Session.reindex_array`: a manifest
+    rewrite, so no chunk is read or copied however much data the store holds. Positions no
+    existing chunk maps onto are left empty and read back as fill values.
+
+    Nothing is committed here, and nothing else may be writing to the store while it runs;
+    see :func:`sort_append_axis`, its only caller.
+    """
+    forward_map = new.get_indexer(old)
+    backward_map = {int(dst): src for src, dst in enumerate(forward_map)}
+    # A pure append leaves every existing chunk exactly where it is.
+    moved = not np.array_equal(forward_map, np.arange(len(old)))
+
+    group = zarr.open_group(session.store, mode="r+", zarr_format=3)
+    for path, array, axis in _axis_arrays(group, append_dim):
+        shape = list(array.shape)
+        shape[axis] = len(new)
+        if path == append_dim:
+            array.resize(tuple(shape))
+            array[:] = _encode_axis(array, new.values)
+            continue
+        array.resize(tuple(shape))
+        if not moved:
+            continue
+
+        def forward(coord, axis=axis):
+            coord = list(coord)
+            coord[axis] = int(forward_map[coord[axis]])
+            return coord
+
+        def backward(coord, axis=axis):
+            coord = list(coord)
+            source = backward_map.get(coord[axis])
+            if source is None:
+                return None
+            coord[axis] = source
+            return coord
+
+        session.reindex_array(f"/{path}", forward, backward)
+
+
+def axis_is_sorted(repo: icechunk.Repository, append_dim: str = "time") -> bool:
+    """True when the store's append axis is in order, so it needs no reordering."""
+    return pd.Index(existing_times(repo, append_dim=append_dim)).is_monotonic_increasing
+
+
+def sort_append_axis(
+    repo: icechunk.Repository,
+    append_dim: str = "time",
+    attempts: int = COMMIT_ATTEMPTS,
+) -> bool:
+    """Sort a store's append axis in place, moving existing chunks to match.
+
+    Out-of-order writes leave ``append_dim`` unsorted: the values are all correct and
+    paired with the right data, but they do not ascend, so ``.sel(time=slice(...))`` on
+    the store is unreliable. This puts them back in order by resizing nothing and moving
+    nothing: the chunks are remapped onto their sorted indices through
+    :meth:`icechunk.Session.reindex_array`, which rewrites the manifest only. No chunk is
+    read or copied, however large the store is.
+
+    **This must not run while anything else is writing to the store.** It moves chunks, so
+    a writer that looked up a position before the move would write it to the wrong index.
+    Run it as its own step, with the store's ingest quiet; ``dags/factory.py`` builds the
+    reorder asset into the same Dagster pool as the ingest it belongs to, which is what
+    keeps the two from overlapping.
+
+    Returns True when the axis was changed, False when it was already sorted.
+    """
+    for attempt in range(attempts):
+        session = repo.writable_session("main")
+        old = pd.Index(
+            xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
+            .coords[append_dim]
+            .values
+        )
+        if old.is_monotonic_increasing:
+            logger.info(f"{append_dim} is already sorted over {len(old)} step(s), nothing to do")
+            return False
+        if not old.is_unique:
+            duplicated = old[old.duplicated()].unique()
+            raise ValueError(
+                f"{append_dim} holds {len(duplicated)} duplicated value(s), e.g. "
+                f"{duplicated[0]}; sorting would leave two chunks claiming one position. "
+                "Resolve the duplicates before reordering."
+            )
+        blocked = unreorderable_reason(repo, append_dim)
+        if blocked is not None:
+            raise ValueError(f"cannot reorder {append_dim}: {blocked}")
+
+        _reorder_axis(session, append_dim, old, old.sort_values())
+        try:
+            session.commit(f"Sort {append_dim} over {len(old)} step(s)")
+        except RACE_ERRORS:
+            # Something else is writing. Retrying is only safe because the sort is
+            # recomputed from the new snapshot; it is still a sign the store was not quiet.
+            if attempt == attempts - 1:
+                raise
+            logger.warning(
+                f"reorder raced a writer; the store is not quiet (attempt {attempt + 1})"
+            )
+            _backoff(attempt)
+            continue
+        logger.info(f"sorted {append_dim} over {len(old)} step(s)")
+        return True
+    raise RuntimeError("unreachable")
+
+
 def write_to_icechunk(
     repo: icechunk.Repository,
     ds: xr.Dataset,
@@ -189,29 +379,78 @@ def write_to_icechunk(
     message: str | None = None,
     check_vars: bool = True,
     alignment_coords: Iterable[str] = ALIGNMENT_COORDS,
-    require_monotonic: bool = True,
+    require_monotonic: bool = False,
+    attempts: int = COMMIT_ATTEMPTS,
 ) -> bool:
-    """Write ``ds`` to ``repo``, creating the store or appending along ``append_dim``.
+    """Write ``ds`` to ``repo``, creating the store or adding to it along ``append_dim``.
 
     Returns True if data was committed, False if the write was skipped. Skipping is normal
     and not an error: it means the timestep is already stored, or the dataset does not line
     up with what is there.
 
+    Steps may arrive in any order. A step that sorts before the end of the store is still
+    appended onto the end — this only ever appends — which leaves ``append_dim`` unsorted
+    until someone reorders it. That is the trade deliberately taken: a backfill can run its
+    partitions in whatever order Dagster schedules them and lose nothing, where refusing
+    out-of-order steps lost every one of them permanently.
+
+    An unsorted axis is *correct but not ordered*: every value is paired with the right
+    data, so ``.sel(time=t)`` and ``missing_timesteps`` are exact, but ``.sel`` over a
+    *slice* is unreliable until the store is put back in order. Sorting is
+    :func:`sort_append_axis`, run on its own with nothing else writing — never from here,
+    because it moves chunks out from under any concurrent writer. In Dagster it is the
+    separate ``<name>-reorder`` asset, which a human materialises.
+
     Args:
         repo: Target repository.
         ds: Dataset to write. Must have ``append_dim`` as a coordinate.
-        append_dim: Dimension to append along.
+        append_dim: Dimension to add along.
         message: Commit message. A default naming the timestep is used when omitted.
-        check_vars: Refuse to append when the variable set differs from the store's.
-        alignment_coords: Coordinates that must match the store exactly before appending.
-        require_monotonic: Drop incoming steps that fall at or before the last stored one.
-            Icechunk only appends, so writing a late-arriving earlier timestep would leave
-            ``append_dim`` unsorted and every later ``.sel(time=slice(...))`` silently
-            wrong. The gap stays a gap, but it stays a *visible* gap.
+        check_vars: Refuse to write when the variable set differs from the store's.
+        alignment_coords: Coordinates that must match the store exactly before writing.
+        require_monotonic: Drop incoming steps that fall at or before the last stored one
+            instead of appending them out of order. The old behaviour, and lossy: the
+            dropped steps are not written anywhere. For stores that must stay sorted at
+            every instant and would rather keep a visible gap.
+        attempts: How many times to retry a commit that races another writer.
     """
     if append_dim not in ds.coords:
         raise ValueError(f"dataset has no {append_dim!r} coordinate to append along")
 
+    for attempt in range(attempts):
+        try:
+            return _write_once(
+                repo,
+                ds,
+                append_dim=append_dim,
+                message=message,
+                check_vars=check_vars,
+                alignment_coords=alignment_coords,
+                require_monotonic=require_monotonic,
+            )
+        except RACE_ERRORS as exc:
+            # Another writer committed under us. Everything the decision rested on - what
+            # is already stored, where each step belongs on the axis - was read from that
+            # stale snapshot, so the whole write is redone against the new one rather than
+            # the commit simply being retried.
+            if attempt == attempts - 1:
+                logger.error(f"write raced another writer {attempts} times, giving up: {exc}")
+                raise
+            logger.warning(f"write raced another writer ({type(exc).__name__}), retrying")
+            _backoff(attempt)
+    raise RuntimeError("unreachable")
+
+
+def _write_once(
+    repo: icechunk.Repository,
+    ds: xr.Dataset,
+    append_dim: str,
+    message: str | None,
+    check_vars: bool,
+    alignment_coords: Iterable[str],
+    require_monotonic: bool,
+) -> bool:
+    """One attempt at :func:`write_to_icechunk`; raises on a raced commit."""
     session = repo.writable_session("main")
     try:
         existing = xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
@@ -245,33 +484,15 @@ def write_to_icechunk(
         return False
 
     if already.any():
-        # Partial overlap: appending the whole batch would duplicate the steps that are
-        # already stored. Append only the new ones.
+        # Partial overlap: writing the whole batch would duplicate the steps that are
+        # already stored. Write only the new ones.
         keep = np.flatnonzero(~already)
         logger.info(
-            f"{int(already.sum())} of {incoming.size} steps already stored, appending the remaining {keep.size}"
+            f"{int(already.sum())} of {incoming.size} steps already stored, "
+            f"writing the remaining {keep.size}"
         )
         ds = ds.isel({append_dim: keep})
         incoming = incoming[~already]
-
-    if require_monotonic and present.size:
-        # Icechunk appends; it cannot insert. A provider that revisits a partial hour (MRMS
-        # and the UK radar composite both do, deliberately, while the upstream archive is
-        # still filling in) can hand us a timestep that sorts before what is already there.
-        # Appending it anyway leaves the coordinate unsorted, which no consumer checks for
-        # and which breaks slicing over the whole store, not just the affected hour.
-        stale = incoming <= present.max()
-        if stale.any():
-            logger.error(
-                f"{int(stale.sum())} of {incoming.size} step(s) are at or before the last "
-                f"stored {append_dim} ({present.max()}); dropping them rather than writing "
-                f"an unsorted {append_dim}. First dropped: {incoming[stale][0]}"
-            )
-            keep = np.flatnonzero(~stale)
-            if keep.size == 0:
-                return False
-            ds = ds.isel({append_dim: keep})
-            incoming = incoming[~stale]
 
     if check_vars and set(ds.data_vars) != set(existing.data_vars):
         only_new = set(ds.data_vars) - set(existing.data_vars)
@@ -286,6 +507,32 @@ def write_to_icechunk(
     if not ok:
         logger.error(f"coordinate {bad!r} does not match the store, skipping write")
         return False
+
+    # Steps that sort before the end of the store. A provider that revisits a partial hour
+    # (MRMS and the UK radar composite both do, deliberately, while the upstream archive is
+    # still filling in) and any backfill whose partitions do not run in time order produce
+    # these. They are appended onto the end like anything else, leaving the axis unsorted
+    # until the store's reorder asset is run.
+    if present.size:
+        stale = incoming < present.max()
+        if stale.any() and require_monotonic:
+            logger.error(
+                f"{int(stale.sum())} of {incoming.size} step(s) are before the last stored "
+                f"{append_dim} ({present.max()}) and require_monotonic is set; dropping "
+                f"them rather than writing an unsorted {append_dim}. They are not written "
+                f"anywhere. First dropped: {incoming[stale][0]}"
+            )
+            keep = np.flatnonzero(~stale)
+            if keep.size == 0:
+                return False
+            ds = ds.isel({append_dim: keep})
+            incoming = incoming[~stale]
+        elif stale.any():
+            logger.info(
+                f"{int(stale.sum())} of {incoming.size} step(s) sort before the stored "
+                f"{present.max()}; appending them out of order. {append_dim} will need "
+                f"sorting (sort_append_axis). First: {incoming[stale][0]}"
+            )
 
     # "a-" appends only the variables that have append_dim. Everything else - static
     # 2-D latitude/longitude, say - was written with the store and was just checked

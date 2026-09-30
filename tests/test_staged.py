@@ -63,14 +63,32 @@ class Tiny(BaseProvider):
         return frame(str(it), 1.0)
 
 
-def test_a_provider_is_appendable_only_after_its_last_stored_step(local_config):
+def test_only_a_partition_already_stored_is_refused(local_config):
+    """Partitions may arrive in any order, so being behind the store's end is fine.
+
+    A staged pipeline asks this before downloading; when it also refused anything before
+    the store's last step, a backfill partition that ran late was never even fetched.
+    """
     provider = Tiny(config=local_config)
     first = pd.Timestamp("2020-01-02")
     assert provider.appendable(first), "an empty store accepts anything"
     assert provider.run_partition(first)
-    assert not provider.appendable(first)
-    assert not provider.appendable(pd.Timestamp("2020-01-01"))
+    assert not provider.appendable(first), "but not one it already holds"
+    assert provider.appendable(pd.Timestamp("2020-01-01")), "a day behind the end is fillable"
     assert provider.appendable(pd.Timestamp("2020-01-03", tz="UTC")), "tz-aware is normalised"
+
+
+def test_a_provider_reports_and_repairs_an_out_of_order_axis(local_config):
+    provider = Tiny(config=local_config)
+    assert provider.run_partition(pd.Timestamp("2020-01-02"))
+    assert provider.axis_sorted()
+
+    assert provider.run_partition(pd.Timestamp("2020-01-01")), "the earlier day is kept"
+    assert not provider.axis_sorted()
+
+    assert provider.sort_axis() is True
+    assert provider.axis_sorted()
+    assert provider.sort_axis() is False, "and is a no-op once ordered"
 
 
 class NothingStaged:

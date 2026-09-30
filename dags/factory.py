@@ -78,6 +78,10 @@ MEMORY_GB_TAG = "planetary/memory_gb"
 #: enough that running the newest one on a timer is not wanted by default.
 SCHEDULE_TAG = "planetary/schedule"
 
+#: Group and key prefix the reorder assets are collected under, so the ops tooling for
+#: every store sits together in the UI rather than scattered through the data groups.
+MAINTENANCE_GROUP = "maintenance"
+
 #: Memory classes, as (name, inclusive upper bound in GB). Concurrency limits in
 #: ``dags/dagster.yaml`` and in the executor are derived from these bounds.
 MEMORY_CLASSES: tuple[tuple[str, float], ...] = (
@@ -345,12 +349,29 @@ def make_provider_asset(
                 f"First failure: {failures[0]}"
             )
 
+        # Cheap (it reads one coordinate) and the only place the state is visible: an
+        # out-of-order write is otherwise silent, and the store stays unsorted until
+        # someone notices. Surfaced as metadata so the day that caused it is the day that
+        # says so.
+        try:
+            axis_sorted = provider.axis_sorted()
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not fail the partition
+            context.log.warning(f"{asset_name}: could not check axis order: {exc}")
+            axis_sorted = None
+        if axis_sorted is False:
+            context.log.warning(
+                f"{asset_name}: {provider.append_dim} is out of order in "
+                f"{provider.store_path}; slice selections are unreliable until the "
+                f"{asset_name}-reorder asset is materialised"
+            )
+
         return dg.MaterializeResult(
             metadata={
                 "init_times": len(init_times),
                 "written": written,
                 "skipped": skipped,
                 "failed": len(failures),
+                "axis_sorted": axis_sorted if axis_sorted is not None else "unknown",
                 "peak_memory_gb": round(usage.peak_gb, 2),
                 "memory_growth_gb": round(usage.growth_gb, 2),
                 "declared_memory_gb": memory_gb,
@@ -394,6 +415,7 @@ __all__ = [
     "DAILY_CRON_MINUTE",
     "DEFAULT_MEMORY_GB",
     "DEFAULT_START_DATE",
+    "MAINTENANCE_GROUP",
     "MEMORY_CLASSES",
     "MEMORY_CLASS_TAG",
     "MEMORY_GB_TAG",

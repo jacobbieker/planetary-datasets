@@ -338,19 +338,24 @@ class TestStoreRoundTrip:
         assert store_helpers.write_to_icechunk(written, _at(sample_dataset, "2026-01-01T01:00")) is True
         assert store_helpers.existing_times(written).size == 2
 
-    def test_a_step_older_than_the_store_is_not_appended(self, written, sample_dataset):
-        """Regression: a late-arriving earlier timestep was appended after the later ones.
+    def test_a_step_older_than_the_store_is_appended_out_of_order(self, written, sample_dataset):
+        """A late-arriving earlier timestep is kept, on the end, leaving `time` unsorted.
 
-        Icechunk only appends, so the result was an unsorted `time` and every
-        `.sel(time=slice(...))` over the whole store silently wrong.
+        This is the trade: refusing it lost the step for good, which is how a backfill
+        running its partitions out of order lost most of them. `sort_append_axis` puts the
+        axis back in order afterwards.
         """
         store_helpers.write_to_icechunk(written, _at(sample_dataset, "2026-01-01T02:00"))
-        assert store_helpers.write_to_icechunk(written, _at(sample_dataset, "2026-01-01T01:00")) is False
+        assert store_helpers.write_to_icechunk(written, _at(sample_dataset, "2026-01-01T01:00")) is True
 
         times = pd.DatetimeIndex(store_helpers.existing_times(written))
-        assert list(times) == list(pd.DatetimeIndex(["2026-01-01T00:00", "2026-01-01T02:00"]))
+        assert list(times) == list(
+            pd.DatetimeIndex(["2026-01-01T00:00", "2026-01-01T02:00", "2026-01-01T01:00"])
+        )
+        assert not times.is_monotonic_increasing
+        assert store_helpers.axis_is_sorted(written) is False
 
-    def test_a_batch_straddling_the_store_end_keeps_only_the_new_steps(self, written, sample_dataset):
+    def test_a_batch_straddling_the_store_end_keeps_every_new_step(self, written, sample_dataset):
         store_helpers.write_to_icechunk(written, _at(sample_dataset, "2026-01-01T03:00"))
         batch = xr.concat(
             [_at(sample_dataset, "2026-01-01T02:00"), _at(sample_dataset, "2026-01-01T04:00")], dim="time"
@@ -358,15 +363,44 @@ class TestStoreRoundTrip:
         assert store_helpers.write_to_icechunk(written, batch) is True
 
         times = pd.DatetimeIndex(store_helpers.existing_times(written))
-        assert times.is_monotonic_increasing
-        assert pd.Timestamp("2026-01-01T02:00") not in times
+        assert pd.Timestamp("2026-01-01T02:00") in times
         assert pd.Timestamp("2026-01-01T04:00") in times
 
-    def test_require_monotonic_can_be_turned_off(self, written, sample_dataset):
+    def test_require_monotonic_still_drops_earlier_steps(self, written, sample_dataset):
+        """The old, lossy behaviour is still reachable for a store that must stay sorted."""
         store_helpers.write_to_icechunk(written, _at(sample_dataset, "2026-01-01T02:00"))
         stale = _at(sample_dataset, "2026-01-01T01:00")
-        assert store_helpers.write_to_icechunk(written, stale, require_monotonic=False) is True
-        assert store_helpers.existing_times(written).size == 3
+        assert store_helpers.write_to_icechunk(written, stale, require_monotonic=True) is False
+        assert store_helpers.existing_times(written).size == 2
+        assert store_helpers.axis_is_sorted(written) is True
+
+    def test_sorting_puts_an_out_of_order_axis_back_in_order(self, written, sample_dataset):
+        """The whole point: the data stays paired with its timestamp through the remap."""
+        for hour, value in (("02:00", 2.0), ("01:00", 1.0), ("03:00", 3.0)):
+            step = _at(sample_dataset, f"2026-01-01T{hour}")
+            step["temperature"] = step["temperature"] * 0 + value
+            store_helpers.write_to_icechunk(written, step)
+
+        before = xr.open_zarr(
+            written.readonly_session("main").store, consolidated=False, decode_timedelta=True
+        ).load()
+        assert not pd.DatetimeIndex(before.time.values).is_monotonic_increasing
+
+        assert store_helpers.sort_append_axis(written) is True
+        assert store_helpers.axis_is_sorted(written) is True
+
+        after = xr.open_zarr(
+            written.readonly_session("main").store, consolidated=False, decode_timedelta=True
+        ).load()
+        assert list(pd.DatetimeIndex(after.time.values)) == sorted(
+            pd.DatetimeIndex(before.time.values)
+        )
+        # Every step still carries the values it was written with, at its new index.
+        xr.testing.assert_identical(after, before.sortby("time"))
+
+    def test_sorting_an_ordered_axis_does_nothing(self, written, sample_dataset):
+        store_helpers.write_to_icechunk(written, _at(sample_dataset, "2026-01-01T01:00"))
+        assert store_helpers.sort_append_axis(written) is False
 
     def test_mismatched_variables_are_refused(self, written, sample_dataset):
         different = _at(sample_dataset.drop_vars("pressure"), "2026-01-01T01:00")
@@ -418,6 +452,33 @@ def _forecast(stamp: str) -> xr.Dataset:
             "step": pd.to_timedelta(np.arange(1, 4), unit="h"),
         },
     )
+
+
+def test_reordering_a_forecast_store_on_a_non_default_append_dim(local_config):
+    """A store with a second dimension, reordered along ``init_time`` rather than ``time``.
+
+    Exercises the parts a single-dimension store does not: finding the append axis by name
+    rather than assuming axis 0, and leaving ``step`` — which spans no append axis —
+    untouched.
+    """
+    repo = local_config.icechunk_repo("test/reorder_forecast.icechunk")
+    for stamp, value in (("2026-01-01", 0.0), ("2026-01-03", 3.0), ("2026-01-02", 2.0)):
+        run = _forecast(stamp)
+        run["x"] = run["x"] + value
+        assert store_helpers.write_to_icechunk(repo, run, append_dim="init_time") is True
+
+    assert store_helpers.axis_is_sorted(repo, append_dim="init_time") is False
+    assert store_helpers.sort_append_axis(repo, append_dim="init_time") is True
+
+    stored = xr.open_zarr(
+        repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+    ).load()
+    assert list(pd.DatetimeIndex(stored.init_time.values)) == list(
+        pd.DatetimeIndex(["2026-01-01", "2026-01-02", "2026-01-03"])
+    )
+    # Each run kept its own values, and the step axis came through unchanged.
+    assert list(stored.x[:, 0].values) == [0.0, 2.0, 3.0]
+    assert list(stored.step.values) == list(pd.to_timedelta(np.arange(1, 4), unit="h"))
 
 
 class TestLegacyStepStores:

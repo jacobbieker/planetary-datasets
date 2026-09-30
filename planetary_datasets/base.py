@@ -23,9 +23,12 @@ import pandas as pd
 import xarray as xr
 from loguru import logger
 
-from planetary_datasets.common.store import ALIGNMENT_COORDS, latest_time
+from planetary_datasets.common.store import ALIGNMENT_COORDS, axis_is_sorted
 from planetary_datasets.common.store import (
     missing_timesteps as _missing_timesteps,
+)
+from planetary_datasets.common.store import (
+    sort_append_axis as _sort_append_axis,
 )
 from planetary_datasets.common.store import (
     write_to_icechunk as _write_to_icechunk,
@@ -111,11 +114,38 @@ class BaseProvider(ABC):
     def appendable(self, start: pd.Timestamp) -> bool:
         """True when the store would still accept a partition starting at ``start``.
 
-        The writer only appends after the last stored step, so a partition at or before
-        it can never be written. Staging pipelines check this before downloading one.
+        Partitions may arrive in any order, so the only one refused is one already stored.
+        This used to also refuse anything at or before the store's last step, because the
+        writer could only append in time order; it now appends out of order and the axis
+        is sorted afterwards by the store's reorder asset, so an hour behind the end is
+        ordinary work rather than a permanent gap. Staging pipelines check this before
+        downloading a partition.
         """
-        latest = latest_time(self.get_icechunk_repo(), append_dim=self.append_dim)
-        return latest is None or to_naive_utc(start) > latest
+        return bool(self.missing_timesteps(pd.DatetimeIndex([to_naive_utc(start)])))
+
+    def axis_sorted(self) -> bool:
+        """True when the store's append axis is in order.
+
+        False after an out-of-order write — a backfill partition that ran behind one
+        already stored, or a provider revisiting an hour the upstream archive was still
+        filling in. The data is correct either way; until :meth:`sort_axis` runs, a
+        ``.sel`` over a *slice* of the store is unreliable.
+        """
+        return axis_is_sorted(self.get_icechunk_repo(), append_dim=self.append_dim)
+
+    def sort_axis(self) -> bool:
+        """Put the store's append axis back in order. Returns True if it changed.
+
+        Remaps chunks onto their sorted positions by rewriting the manifest, so it costs
+        the same whether the store holds a day or a decade.
+
+        **Nothing else may be writing to the store while this runs.** It moves chunks, so
+        a concurrent writer that had already looked up a position would write to the wrong
+        one. It is deliberately not called from :meth:`run_partition`: in Dagster it is the
+        separate ``<name>-reorder`` asset, which shares the ingest's concurrency pool so
+        the two cannot overlap, and which a human materialises when a backfill is done.
+        """
+        return _sort_append_axis(self.get_icechunk_repo(), append_dim=self.append_dim)
 
     def prepare_for_write(self, processed: xr.Dataset) -> xr.Dataset:
         """Last chance to reshape a dataset before it is written.

@@ -16,10 +16,12 @@ Staged files live under ``OPERA_ARCHIVE_DIR`` (default ``<data_dir>/opera``), in
 Dagster assets delete a staged hour once it is safely in the store; see
 :meth:`OPERAProvider.discard_staged`.
 
-The stores only accept appends in time order, and both existing ones were written out of
-order by the original scripts, so each has gaps before its latest time that can no longer
-be filled. :meth:`~planetary_datasets.base.BaseProvider.appendable` identifies those hours
-so they are neither downloaded nor left staged.
+Both existing stores were written out of order by the original scripts, so each has gaps
+before its latest time. Those hours are fillable: the writer appends out of order, so an
+hour behind the store's end is downloaded and written like any other, and the axis is put
+back in order afterwards by the store's ``-reorder`` asset.
+:meth:`~planetary_datasets.base.BaseProvider.appendable` now only refuses an hour already
+stored.
 """
 
 from __future__ import annotations

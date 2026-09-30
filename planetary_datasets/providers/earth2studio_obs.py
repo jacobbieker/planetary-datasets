@@ -203,7 +203,8 @@ class GridObsProvider(_StagedMixin, BaseProvider):
     """Appends a ``grid`` or ``granules`` dataset's staged partitions to icechunk.
 
     Whether the store would take a partition is
-    :meth:`~planetary_datasets.base.BaseProvider.appendable`: only after its last step.
+    :meth:`~planetary_datasets.base.BaseProvider.appendable`: anything it does not already
+    hold, in any order.
     """
 
     append_dim = "time"

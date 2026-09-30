@@ -639,3 +639,104 @@ def test_dagster_yaml_is_valid_instance_config(tmp_path, monkeypatch):
         ]
         assert ordered == sorted(ordered, reverse=True)
         assert instance.run_launcher is not None
+
+
+# --- maintenance: reordering a store written out of order --------------------------------
+
+
+def _store_frame(stamp: str, value: float):
+    """A one-step dataset shaped like the gridded stores."""
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+
+    return xr.Dataset(
+        {"t2m": (("time", "latitude"), np.full((1, 3), value, dtype="float32"))},
+        coords={"time": pd.DatetimeIndex([stamp]), "latitude": [0.0, 1.0, 2.0]},
+    ).chunk({"time": 1})
+
+
+def _reorder_result(prefix: str, **config):
+    """Materialise the reorder asset against ``prefix`` and return its metadata."""
+    import dagster as dg
+
+    from dags.assets.maintenance import reorder_store
+
+    result = dg.materialize(
+        [reorder_store],
+        run_config=dg.RunConfig(
+            ops={"reorder_store": {"config": {"store_prefix": prefix, **config}}}
+        ),
+    )
+    assert result.success
+    return {
+        key: entry.value
+        for key, entry in result.asset_materializations_for_node("reorder_store")[0]
+        .metadata.items()
+    }
+
+
+def test_reorder_store_sorts_an_axis_written_out_of_order(local_config):
+    from planetary_datasets.common.store import write_to_icechunk
+
+    prefix = "test/reorder.icechunk"
+    repo = local_config.icechunk_repo(prefix)
+    for stamp, value in (("2026-01-01T00", 0.0), ("2026-01-01T02", 2.0), ("2026-01-01T01", 1.0)):
+        assert write_to_icechunk(repo, _store_frame(stamp, value)) is True
+
+    metadata = _reorder_result(prefix)
+    assert metadata["was_sorted"] is False
+    assert metadata["changed"] is True
+    assert metadata["steps"] == 3
+
+    import pandas as pd
+    import xarray as xr
+
+    stored = xr.open_zarr(
+        local_config.icechunk_repo(prefix).readonly_session("main").store,
+        consolidated=False,
+        decode_timedelta=True,
+    ).load()
+    assert pd.DatetimeIndex(stored.time.values).is_monotonic_increasing
+    # The remap moves data with its timestamp, so each step keeps the value it was written with.
+    assert list(stored.t2m[:, 0].values) == [0.0, 1.0, 2.0]
+
+
+def test_reorder_store_is_a_no_op_on_a_sorted_axis(local_config):
+    from planetary_datasets.common.store import write_to_icechunk
+
+    prefix = "test/sorted.icechunk"
+    repo = local_config.icechunk_repo(prefix)
+    for stamp, value in (("2026-01-01T00", 0.0), ("2026-01-01T01", 1.0)):
+        write_to_icechunk(repo, _store_frame(stamp, value))
+
+    metadata = _reorder_result(prefix)
+    assert metadata["was_sorted"] is True
+    assert metadata["changed"] is False
+
+
+def test_reorder_store_dry_run_reports_without_writing(local_config):
+    from planetary_datasets.common.store import axis_is_sorted, write_to_icechunk
+
+    prefix = "test/dryrun.icechunk"
+    repo = local_config.icechunk_repo(prefix)
+    for stamp, value in (("2026-01-01T00", 0.0), ("2026-01-01T02", 2.0), ("2026-01-01T01", 1.0)):
+        write_to_icechunk(repo, _store_frame(stamp, value))
+
+    metadata = _reorder_result(prefix, dry_run=True)
+    assert metadata["changed"] is False
+    assert axis_is_sorted(local_config.icechunk_repo(prefix)) is False, "still unsorted"
+
+
+def test_the_reorder_asset_is_never_scheduled():
+    """Reordering moves chunks; a timer must never decide to do it."""
+    from dags.loader import build_definitions
+
+    defs = build_definitions()
+    scheduled = set()
+    for job in defs.jobs:
+        try:
+            scheduled |= {key.to_user_string() for key in job.selection.resolve(defs.assets)}
+        except Exception:  # noqa: BLE001 - jobs whose selection needs a repository context
+            continue
+    assert not [key for key in scheduled if "reorder" in key]

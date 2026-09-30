@@ -37,7 +37,10 @@ class StagedPublisher(Protocol):
     archive_root: pathlib.Path
 
     def appendable(self, start: pd.Timestamp) -> bool:
-        """True when the store would accept the partition starting at ``start`` now."""
+        """True when the store would accept the partition starting at ``start``.
+
+        Partitions may arrive in any order, so this is False only for one already stored.
+        """
 
     def partition_stored(self, start: pd.Timestamp) -> bool:
         """True when the partition is in the store."""
@@ -120,15 +123,11 @@ def make_staged_download_asset(
         provider = publisher()
         # Checked here, not only downstream, so a backfill over partitions the store
         # holds or has moved past does not download them just to throw them away.
+        # The only partition refused is one already stored: writes append out of order, so
+        # one behind the store's end is ordinary work rather than a gap that can never be
+        # filled. The axis is put back in order afterwards by the store's reorder asset.
         if not provider.appendable(it):
-            if provider.partition_stored(it):
-                reason = f"{it} already stored"
-            else:
-                reason = f"{it} predates the store's end"
-                context.log.warning(
-                    f"{name}: {it} is before the end of {provider.store_path}; the store "
-                    "only accepts appends in time order, so it cannot be filled"
-                )
+            reason = f"{it} already stored"
             return dg.MaterializeResult(metadata={"skipped": dg.MetadataValue.text(reason)})
 
         root = provider.archive_root.expanduser().resolve()

@@ -16,13 +16,16 @@ from planetary_datasets.common.dataset import (
 )
 from planetary_datasets.common.download import download_many, download_one
 from planetary_datasets.common.store import (
+    axis_is_sorted,
     build_encoding,
     existing_times,
     has_timestep,
+    sort_append_axis,
     write_to_icechunk,
 )
 
 __all__ = [
+    "axis_is_sorted",
     "build_encoding",
     "download_many",
     "download_one",
@@ -32,5 +35,6 @@ __all__ = [
     "make_lat_lon_coords_consistent",
     "make_spatial_coords_increasing",
     "reduce_precision",
+    "sort_append_axis",
     "write_to_icechunk",
 ]
