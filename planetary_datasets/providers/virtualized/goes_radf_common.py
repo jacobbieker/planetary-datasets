@@ -658,6 +658,7 @@ def open_with_unreadable_retry(
     attempts: int = UNREADABLE_RETRY_ATTEMPTS,
     backoff_s: float = UNREADABLE_RETRY_BACKOFF_S,
     on_retry: Callable[[int, float, Exception], None] | None = None,
+    is_retryable: Callable[[Exception], bool] = _is_unreadable_source_error,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Any:
     """Open a batch, retrying when its files merely *look* unreadable.
@@ -669,16 +670,19 @@ def open_with_unreadable_retry(
     short read succeeds and the day is kept instead of being lost forever to an
     append-only store.
 
-    Only unreadable-source errors are retried. Anything else — a codec
-    boundary, a missing variable, a bug — is raised on the first attempt, since
-    repeating it would just be slower.
+    Only unreadable-source errors are retried by default. Anything else — a
+    codec boundary, a missing variable, a bug — is raised on the first attempt,
+    since repeating it would just be slower. ``is_retryable`` widens that for
+    instruments with their own transient failure: Himawari raises
+    ``IncompleteBatch`` when a scene will not stitch, whose usual cause is a
+    slot still uploading when the day was listed.
     """
     last: Exception
     for attempt in range(1, attempts + 1):
         try:
             return open_fn(urls)
         except Exception as exc:  # noqa: BLE001 - re-raised below unless retryable
-            if attempt >= attempts or not _is_unreadable_source_error(exc):
+            if attempt >= attempts or not is_retryable(exc):
                 raise
             last = exc
             delay = backoff_s * attempt
@@ -1337,6 +1341,7 @@ def ingest_all_days(
     channel_label: str | None = None,
     grid_size: int | None = None,
     batch_repair_fn: Callable[[list[str]], list[str]] | None = None,
+    retryable_error_fn: Callable[[Exception], bool] | None = None,
     open_batch_fn: Callable[..., xr.Dataset] | None = None,
     day_urls_fn: Callable[[tuple[int, int]], list[str]] | None = None,
     repo_reopen_fn: Callable[[], "icechunk.Repository"] | None = None,
@@ -1547,6 +1552,11 @@ def ingest_all_days(
                     **_COMBINE_KWARGS,
                 )
 
+            def _retryable(exc: Exception) -> bool:
+                return _is_unreadable_source_error(exc) or (
+                    retryable_error_fn is not None and retryable_error_fn(exc)
+                )
+
             def _note_retry(attempt: int, delay: float, exc: Exception) -> None:
                 msg = (
                     f"source files unreadable ({type(exc).__name__}); "
@@ -1562,25 +1572,38 @@ def ingest_all_days(
 
             def _open_batch_resilient(urls: list[str]) -> xr.Dataset:
                 return open_with_unreadable_retry(
-                    _open_batch, urls, on_retry=_note_retry
+                    _open_batch, urls,
+                    on_retry=_note_retry,
+                    is_retryable=_retryable,
                 )
 
             with timer("Creating the virtual dataset"):
                 try:
                     vds = _open_batch_resilient(urls_for_this_batch)
-                except NotImplementedError as e:
+                except (NotImplementedError, OSError) as e:
                     # A single file that is unlike the rest of its day is enough to make
                     # the whole day unconcatenatable: a different codec pipeline, or a
                     # missing data variable that xarray then fills across every other
                     # member. Drop the odd ones out and retry rather than losing every
                     # timestep for that day.
                     if batch_repair_fn is not None:
-                        if "codec" not in str(e).lower():
+                        # A mission with its own repair (GK-2A drops codec
+                        # outliers) also needs it for a file that will not open
+                        # at all: one truncated file in NOAA's bucket otherwise
+                        # costs the whole band-day, permanently, since the store
+                        # only appends along `t`. Its repair already drops files
+                        # it cannot read, so it just has to be allowed to run.
+                        if not (
+                            "codec" in str(e).lower()
+                            or _is_unreadable_source_error(e)
+                        ):
                             raise
                         repair = batch_repair_fn
                     elif open_batch_fn is not None:
                         # Tile-based missions (Himawari): one URL is not one dataset, so
-                        # the per-file content check below cannot apply.
+                        # the per-file content check below cannot apply. Their transient
+                        # case is handled by the retry above instead — see
+                        # `retryable_error_fn` and build_batch's own docstring.
                         raise
                     else:
                         # GOES. Deliberately *not* gated on the message text: the
@@ -2059,13 +2082,43 @@ def iter_eras_backwards(
         # use a far cheaper opener than the ingest. Himawari uses this to test
         # one tile per day instead of two 88-tile scenes.
         opener = probe_open_fn or open_batch_fn or open_virtual_batch
-        try:
-            vds = opener(
-                select(urls, probe_files_per_day),
+
+        def _open_probe(probe_urls: list[str]) -> xr.Dataset:
+            return opener(
+                probe_urls,
                 registry=registry,
                 parser=parser,
                 preprocess_fn=preprocess_fn,
                 loadable_variables=loadable_variables,
+            )
+
+        def _note_probe_retry(attempt: int, delay: float, exc: Exception) -> None:
+            # Logged, not silent: a retry that leaves no trace cannot be told
+            # apart from one that never fired, which is how the first version
+            # of this fix looked like it was doing nothing.
+            msg = (
+                f"source files unreadable while probing "
+                f"({type(exc).__name__}); attempt {attempt}/"
+                f"{UNREADABLE_RETRY_ATTEMPTS}, retrying in {delay:.0f}s"
+            )
+            print(f"  {_date_from_doy(year, doy).isoformat()}: {msg}", flush=True)
+            if log_dir is not None and satellite is not None:
+                log_event(
+                    log_dir, satellite, channel_label,
+                    _date_from_doy(year, doy).isoformat(),
+                    "UNREADABLE_RETRY", msg,
+                )
+
+        try:
+            # Retried for the same reason the ingest open is, but the stakes
+            # here are higher: a failed probe does not merely skip the day, it
+            # reads as "does not combine" and closes the era. A short read
+            # would then split an era spuriously, stranding the days beyond it
+            # in a separate store for no reason.
+            vds = open_with_unreadable_retry(
+                _open_probe,
+                select(urls, probe_files_per_day),
+                on_retry=_note_probe_retry,
             )
         except Exception as e:
             return urls, None, f"{type(e).__name__}: {e}"
@@ -2234,6 +2287,7 @@ def ingest_backwards(
     list_day_files_fn: Callable[..., list[str]] | None = None,
     era_preprocess_fn: Callable[[xr.Dataset], xr.Dataset] | None = None,
     batch_repair_fn: Callable[[list[str]], list[str]] | None = None,
+    retryable_error_fn: Callable[[Exception], bool] | None = None,
     open_batch_fn: Callable[..., xr.Dataset] | None = None,
     probe_select_fn: Callable[[list[str], int], list[str]] | None = None,
     probe_open_fn: Callable[..., xr.Dataset] | None = None,
@@ -2344,6 +2398,7 @@ def ingest_backwards(
             channel_label=channel_label,
             grid_size=grid_size,
             batch_repair_fn=batch_repair_fn,
+            retryable_error_fn=retryable_error_fn,
             open_batch_fn=open_batch_fn,
             day_urls_fn=day_urls_fn,
             scan_start_fn=scan_start_fn,
