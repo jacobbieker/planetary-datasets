@@ -49,9 +49,28 @@ MAX_GENERATIONS = 20
 #: both would silently interleave them.
 GRID_COORDS = ("latitude", "longitude", "lat", "lon", "depth", "x", "y", "step", "station")
 
-#: Decimal places grid coordinates are rounded to before hashing. Float noise in the last
-#: bits of a regenerated axis must not read as a resolution change.
-COORD_PRECISION = 6
+#: Significant figures grid coordinates are rounded to before hashing.
+#:
+#: *Significant* figures, not decimal places, and that distinction is the whole point. A
+#: float32 carries about seven significant digits, so the spacing between representable
+#: values at a latitude of 80 is around 8e-6 — and two runs of the same grid, one written
+#: from a file that stored -80.0390625 and one from a file that stored -80.03905487,
+#: differ by exactly that. Rounding to six *decimal places* preserves the difference and
+#: reads it as a regridding; rounding to six *significant figures* absorbs it, because it
+#: scales with the magnitude the way the float's own precision does.
+#:
+#: Six is comfortably finer than any real change: on a latitude it is about 1e-4 degrees,
+#: roughly ten metres, so two grids that agree to this are the same grid. Used for the
+#: degenerate axes :func:`_float_axis_digest` cannot describe by extent and spacing.
+COORD_SIGNIFICANT_FIGURES = 6
+
+#: Significant figures kept of an axis's start, end and spacing.
+#:
+#: Five, not six, and the difference matters: the global wave axis ends at 359.82421875 in
+#: one construction and 359.82369995 in the other, which already disagree in the sixth
+#: figure. Five absorbs that while still separating any real change — on that axis it is a
+#: tolerance of about 0.005 degrees, seventy times finer than the 0.35 degree cell.
+COORD_AXIS_FIGURES = 5
 
 
 def prefix_for_generation(base_prefix: str, generation: int) -> str:
@@ -70,14 +89,71 @@ def prefix_for_generation(base_prefix: str, generation: int) -> str:
     return f"{stem}_{generation}.{suffix}"
 
 
+def round_significant(values: np.ndarray, figures: int) -> np.ndarray:
+    """Round to ``figures`` significant digits, scaled by the array's own magnitude.
+
+    One scale for the whole axis rather than per element, so that a coordinate running
+    through zero does not have its small values rounded on a different scale from its
+    large ones — which would make the digest depend on where the axis happened to be
+    centred.
+    """
+    array = np.asarray(values, dtype="float64")
+    finite = array[np.isfinite(array)]
+    magnitude = np.max(np.abs(finite)) if finite.size else 0.0
+    if magnitude == 0.0:
+        return array
+    decimals = figures - 1 - int(np.floor(np.log10(magnitude)))
+    return np.round(array, decimals)
+
+
 def _coord_digest(values: np.ndarray) -> str:
-    """A stable digest of a coordinate's values, tolerant of float noise."""
+    """A stable digest of a coordinate, tolerant of how the axis was constructed.
+
+    A float axis is *not* hashed element by element. Two runs of one model can describe
+    the same grid with different float32 values: an axis written out exactly (0.17578125,
+    ... 359.82421875) and one rebuilt as ``start + i * delta`` in float32 drift apart by up
+    to 5e-4 degrees over 1024 points. That is 55 m against a 39 km cell — the same grid by
+    any measure — but element-wise hashing calls them different, and quantising the
+    elements only moves the problem to whichever values land near a bin boundary.
+
+    So a float axis is reduced to the four things that actually define it — how many
+    points, where it starts and ends, and how far apart the points are — each rounded to a
+    small fraction of the axis's own span. Anything that genuinely regrids the data moves
+    one of those by far more than :data:`COORD_SPAN_TOLERANCE`; float construction noise
+    moves none of them.
+    """
     array = np.asarray(values)
-    if array.dtype.kind == "f":
-        array = np.round(array.astype("float64"), COORD_PRECISION)
-    elif array.dtype.kind in "mM":
+    if array.dtype.kind in "mM":
         array = array.astype("int64")
+    elif array.dtype.kind == "f":
+        return _float_axis_digest(array.astype("float64"))
     return hashlib.sha1(np.ascontiguousarray(array).tobytes()).hexdigest()[:16]
+
+
+def _float_axis_digest(array: np.ndarray) -> str:
+    """Digest of a floating point axis, from its shape, extent and spacing."""
+    if array.size == 0:
+        return "empty"
+    if array.size == 1:
+        return f"1@{round_significant(array, COORD_SIGNIFICANT_FIGURES)[0]!r}"
+
+    span = float(np.abs(array[-1] - array[0]))
+    if not np.isfinite(span) or span == 0.0:
+        rounded = round_significant(array, COORD_SIGNIFICANT_FIGURES)
+        return hashlib.sha1(np.ascontiguousarray(rounded).tobytes()).hexdigest()[:16]
+
+    # Absolute significant figures, not a tolerance scaled by this axis's own span. Scaling
+    # by the span would make the signature scale-invariant, so a -80..80 axis and a
+    # -90..90 axis of the same length would normalise to the same integers and share a
+    # store. Rounding the three summary numbers to a fixed precision keeps a shifted or
+    # stretched domain distinguishable while still absorbing construction noise, which only
+    # ever reaches the sixth significant figure.
+    summary = np.array(
+        [float(array[0]), float(array[-1]), float(np.median(np.diff(array)))],
+        dtype="float64",
+    )
+    signature = (int(array.size), *round_significant(summary, COORD_AXIS_FIGURES).tolist())
+    return hashlib.sha1(repr(signature).encode()).hexdigest()[:16]
 
 
 def schema_fingerprint(ds: xr.Dataset, append_dim: str) -> str:

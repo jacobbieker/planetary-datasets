@@ -673,3 +673,56 @@ def test_an_exempt_variable_is_stored_bit_for_bit():
 def test_the_exempt_patterns_are_documented_substrings():
     assert "pressure" in KEEPBITS_EXACT
     assert {"eastward_wind", "northward_wind"} <= set(KEEPBITS_EXACT)
+
+
+def test_float32_axis_noise_does_not_split_a_store(local_config, tmp_path):
+    """Regression: two float32 descriptions of one grid forked a generation.
+
+    The Met Office global wave store holds longitudes written out exactly
+    (0.17578125 ... 359.82421875); today's files rebuild the same axis as
+    ``start + i * delta`` in float32, which drifts up to 5e-4 degrees over 1024 points.
+    That is 55 m against a 39 km cell — the same grid — but an element-wise digest called
+    them different and started a needless generation 3 on a store with 14418 steps in it.
+    """
+    from planetary_datasets.common.generations import schema_fingerprint
+
+    exact = np.linspace(0.17578125, 359.82421875, 1024, dtype="float64")
+    # The measured drift between the two axes grows along the axis and reaches 5.2e-4,
+    # which is what float32 accumulation looks like; reproduce that magnitude directly
+    # rather than a particular float path that a numpy version might optimise away.
+    drifted = exact - np.linspace(0.0, 5.2e-4, 1024)
+    assert np.abs(exact - drifted).max() > 5e-4, "fixture no longer reproduces the drift"
+
+    def grid(longitude):
+        return xr.Dataset(
+            {"hs": (("time", "longitude"), np.zeros((1, 1024), dtype="float32"))},
+            coords={"time": pd.DatetimeIndex([DAY]), "longitude": longitude},
+        )
+
+    assert schema_fingerprint(grid(exact), "time") == schema_fingerprint(grid(drifted), "time")
+
+
+def test_a_genuine_regrid_still_splits_a_store():
+    """The tolerance must not be so loose that a real resolution change slips through."""
+    from planetary_datasets.common.generations import schema_fingerprint
+
+    def grid(n):
+        return xr.Dataset(
+            {"hs": (("time", "longitude"), np.zeros((1, n), dtype="float32"))},
+            coords={"time": pd.DatetimeIndex([DAY]), "longitude": np.linspace(0, 360, n)},
+        )
+
+    assert schema_fingerprint(grid(1024), "time") != schema_fingerprint(grid(2048), "time")
+
+
+def test_a_shifted_domain_of_the_same_size_still_splits_a_store():
+    """Same point count, different extent: a different grid, and the digest must see it."""
+    from planetary_datasets.common.generations import schema_fingerprint
+
+    def grid(start, stop):
+        return xr.Dataset(
+            {"hs": (("time", "latitude"), np.zeros((1, 684), dtype="float32"))},
+            coords={"time": pd.DatetimeIndex([DAY]), "latitude": np.linspace(start, stop, 684)},
+        )
+
+    assert schema_fingerprint(grid(-80, 80), "time") != schema_fingerprint(grid(-90, 90), "time")
