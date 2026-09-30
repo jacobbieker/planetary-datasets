@@ -95,6 +95,7 @@ import shutil
 import sys
 import threading
 import time
+import traceback
 from typing import Iterable, List, Sequence
 
 import pandas as pd
@@ -429,11 +430,31 @@ def _mars_execute(request: dict[str, str], target: str) -> None:
     The service is built here rather than in the parent because it is a
     ``spawn`` child: it re-imports the module and re-reads the configuration,
     and an ``ECMWFService`` would not survive being pickled across.
+
+    Exits through ``os._exit`` rather than returning, because returning does
+    not reliably end the process: after ecmwfapi reports "Done" the client
+    leaves something behind that interpreter shutdown waits on, and the child
+    sits there with the target file complete and closed. `retrieve` watches
+    the file rather than the client, so a child that never exits looks exactly
+    like a dead transfer, and `stall_seconds` later the request is killed and
+    a finished retrieval deleted -- measured at seven whole files, each of
+    them killed 30 minutes to the second after its "Done". Nothing here needs
+    interpreter cleanup: ecmwfapi has already written and closed the target,
+    and the buffers that do matter are flushed first.
     """
     # Deferred so importing this module does not need ecmwfapi at all.
     from planetary_datasets.providers.mars import mars_service  # noqa: PLC0415
 
-    mars_service().execute(request, target)
+    code = 0
+    try:
+        mars_service().execute(request, target)
+    except BaseException:
+        traceback.print_exc()
+        code = 1
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(code)
 
 
 def retrieve(
