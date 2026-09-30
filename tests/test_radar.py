@@ -104,11 +104,17 @@ def uk_name(when: pd.Timestamp) -> str:
     return f"{when:%Y%m%d%H%M}_ODIM_ng_radar_rainrate_composite_1km_UK.h5"
 
 
-def write_uk_hour(root: pathlib.Path, hour: pd.Timestamp, steps: int = 12) -> list[pathlib.Path]:
-    """Write ``steps`` five-minute frames of a synthetic UK hour."""
+#: Frames per hour in the Met Office bucket, at :00, :15, :30 and :45.
+UK_STEPS_PER_HOUR = 4
+
+
+def write_uk_hour(
+    root: pathlib.Path, hour: pd.Timestamp, steps: int = UK_STEPS_PER_HOUR
+) -> list[pathlib.Path]:
+    """Write ``steps`` fifteen-minute frames of a synthetic UK hour."""
     written = []
     for index in range(steps):
-        when = hour + pd.Timedelta(5 * index, "min")
+        when = hour + pd.Timedelta(15 * index, "min")
         written.append(write_odim(root / uk_name(when), when))
     return written
 
@@ -394,8 +400,8 @@ def test_a_genuinely_absent_hour_is_nothing_to_do(uk_provider):
 
 def test_fetch_raises_on_a_partly_filled_hour(uk_provider):
     hour = pd.Timestamp("2025-05-29 20:00")
-    write_uk_hour(uk_provider.archive_dir, hour, steps=11)
-    with pytest.raises(IncompletePartition, match="20:55"):
+    write_uk_hour(uk_provider.archive_dir, hour, steps=3)
+    with pytest.raises(IncompletePartition, match="20:45"):
         uk_provider.fetch(hour)
 
 
@@ -411,14 +417,14 @@ def test_fetch_ignores_frames_from_a_neighbouring_hour(uk_provider):
     write_uk_hour(uk_provider.archive_dir, hour)
     write_uk_hour(uk_provider.archive_dir, hour + pd.Timedelta(1, "h"), steps=2)
     found = uk_provider.fetch(hour)
-    assert len(found) == 12
+    assert len(found) == UK_STEPS_PER_HOUR
     assert all(stamp_of(p).hour == 20 for p in found)
 
 
 def test_fetch_finds_a_date_nested_archive(uk_provider):
     hour = pd.Timestamp("2025-05-29 20:00")
     write_uk_hour(uk_provider.archive_dir / "2025" / "05" / "29", hour)
-    assert len(uk_provider.fetch(hour)) == 12
+    assert len(uk_provider.fetch(hour)) == UK_STEPS_PER_HOUR
 
 
 def test_fmi_fetch_requires_every_accumulation_window(fmi_provider):
@@ -447,7 +453,7 @@ def test_uk_process_concatenates_the_hour_in_time_order(uk_provider):
     hour = pd.Timestamp("2025-05-29 20:00")
     paths = write_uk_hour(uk_provider.archive_dir, hour)
     ds = uk_provider.process([str(p) for p in reversed(paths)], hour)
-    assert ds.sizes["time"] == 12
+    assert ds.sizes["time"] == UK_STEPS_PER_HOUR
     times = pd.DatetimeIndex(ds["time"].values)
     assert times[0] == hour
     assert times.is_monotonic_increasing
@@ -461,7 +467,7 @@ def test_uk_process_refuses_to_outer_join_a_changed_grid(uk_provider, monkeypatc
 
     def shifted(path):
         ds = real(path)
-        if path.endswith(uk_name(hour + pd.Timedelta(5, "min"))):
+        if path.endswith(uk_name(hour + pd.Timedelta(15, "min"))):
             ds = ds.assign_coords(x=ds["x"] + 500.0)
         return ds
 
@@ -501,7 +507,7 @@ def test_run_partition_writes_and_is_idempotent(uk_provider, tz):
     assert uk_provider.run_partition(hour) is False
 
     ds = stored(uk_provider)
-    assert ds.sizes["time"] == 12
+    assert ds.sizes["time"] == UK_STEPS_PER_HOUR
     assert pd.Timestamp(ds["time"].values[0]) == hour
     assert ds["rainfall_rate"].dtype == np.float16
 
@@ -516,7 +522,7 @@ def test_run_partition_appends_the_next_hour(uk_provider):
     assert uk_provider.run_partition(second) is True
 
     ds = stored(uk_provider)
-    assert ds.sizes["time"] == 24
+    assert ds.sizes["time"] == 2 * UK_STEPS_PER_HOUR
     assert pd.DatetimeIndex(ds["time"].values).is_monotonic_increasing
 
 
@@ -581,14 +587,14 @@ def test_allow_partial_revisits_an_hour_that_later_fills_in(make_provider):
     provider = make_provider(UKRadarProvider, allow_partial=True)
     hour = pd.Timestamp("2025-05-29 20:00")
 
-    write_uk_hour(provider.archive_dir, hour, steps=4)
+    write_uk_hour(provider.archive_dir, hour, steps=2)
     assert provider.run_partition(hour) is True
     assert provider.partition_stored(hour) is False
 
     write_uk_hour(provider.archive_dir, hour)
     assert provider.run_partition(hour) is True
 
-    assert stored(provider).sizes["time"] == 12
+    assert stored(provider).sizes["time"] == UK_STEPS_PER_HOUR
     assert provider.partition_stored(hour) is True
     assert provider.run_partition(hour) is False
 
@@ -602,6 +608,135 @@ def test_provider_by_name():
 
 def test_store_prefixes_are_distinct():
     assert UKRadarProvider.store_prefix != FMIRadarProvider.store_prefix
+
+
+# --------------------------------------------------------------------------------------
+# The Met Office bucket behind the UK composite
+# --------------------------------------------------------------------------------------
+
+
+class FakeS3:
+    """Enough of an ``s3fs.S3FileSystem`` for the fetch path, backed by ``tmp_path``."""
+
+    def __init__(self, root: pathlib.Path, present: set[str]):
+        self.root = root
+        self.present = present
+        self.downloaded: list[str] = []
+
+    def exists(self, remote: str) -> bool:
+        return remote in self.present
+
+    def get(self, remote: str, local: str) -> None:
+        if remote not in self.present:
+            raise FileNotFoundError(remote)
+        self.downloaded.append(remote)
+        when = stamp_of(remote)
+        write_odim(pathlib.Path(local), when)
+
+
+@pytest.fixture
+def bucket_provider(tmp_path, monkeypatch, local_config):
+    """A UK provider with no local archive configured, reading a fake bucket."""
+
+    def make(present: set[str], **kwargs):
+        monkeypatch.delenv("UK_RADAR_ARCHIVE_DIR", raising=False)
+        provider = UKRadarProvider(config=local_config, **kwargs)
+        fake = FakeS3(tmp_path, present)
+        monkeypatch.setattr(provider, "_filesystem", lambda: fake)
+        return provider, fake
+
+    return make
+
+
+def uk_key(when: pd.Timestamp) -> str:
+    return f"{UKRadarProvider.s3_bucket}/radar/{when:%Y/%m/%d}/{uk_name(when)}"
+
+
+def test_s3_keys_name_every_frame_of_the_hour(local_config, monkeypatch):
+    monkeypatch.delenv("UK_RADAR_ARCHIVE_DIR", raising=False)
+    hour = pd.Timestamp("2026-09-22 03:00")
+    keys = UKRadarProvider(config=local_config).s3_keys(hour)
+
+    assert len(keys) == UK_STEPS_PER_HOUR
+    assert keys[hour] == "radar/2026/09/22/202609220300_ODIM_ng_radar_rainrate_composite_1km_UK.h5"
+    assert list(keys) == list(pd.date_range(hour, periods=4, freq="15min"))
+
+
+def test_a_configured_archive_wins_over_the_bucket(uk_provider, monkeypatch):
+    """The escape hatch must not touch the network at all."""
+
+    def explode():
+        raise AssertionError("the bucket was consulted despite UK_RADAR_ARCHIVE_DIR being set")
+
+    monkeypatch.setattr(uk_provider, "_filesystem", explode)
+    hour = pd.Timestamp("2025-05-29 20:00")
+    write_uk_hour(uk_provider.archive_dir, hour)
+
+    assert uk_provider.use_local_archive is True
+    assert len(uk_provider.fetch(hour)) == UK_STEPS_PER_HOUR
+
+
+def test_fetch_downloads_the_hour_from_the_bucket(bucket_provider, tmp_path):
+    hour = pd.Timestamp("2026-09-22 03:00")
+    keys = {uk_key(hour + pd.Timedelta(15 * i, "min")) for i in range(UK_STEPS_PER_HOUR)}
+    provider, fake = bucket_provider(keys)
+
+    found = provider.fetch(hour, temp_dir=tmp_path / "scratch")
+
+    assert len(found) == UK_STEPS_PER_HOUR
+    assert sorted(fake.downloaded) == sorted(keys)
+    assert [stamp_of(p) for p in found] == list(pd.date_range(hour, periods=4, freq="15min"))
+
+
+def test_an_hour_the_bucket_never_published_is_nothing_to_do(bucket_provider):
+    provider, _ = bucket_provider(set())
+    assert provider.fetch(pd.Timestamp("2026-09-22 03:00")) == []
+
+
+def test_a_half_published_hour_is_retried_rather_than_committed_short(bucket_provider, tmp_path):
+    """The publisher fills an hour over fifteen minutes; committing at :15 loses the rest."""
+    hour = pd.Timestamp("2026-09-22 03:00")
+    provider, _ = bucket_provider({uk_key(hour), uk_key(hour + pd.Timedelta(15, "min"))})
+
+    with pytest.raises(IncompletePartition, match="03:30"):
+        provider.fetch(hour, temp_dir=tmp_path / "scratch")
+
+
+def test_allow_partial_takes_what_the_bucket_has(bucket_provider, tmp_path):
+    hour = pd.Timestamp("2026-09-22 03:00")
+    provider, _ = bucket_provider({uk_key(hour)}, allow_partial=True)
+
+    assert len(provider.fetch(hour, temp_dir=tmp_path / "scratch")) == 1
+
+
+def test_a_frame_that_vanishes_mid_fetch_is_treated_as_absent(bucket_provider, tmp_path):
+    """exists() and get() are two calls; the publisher can prune between them."""
+    hour = pd.Timestamp("2026-09-22 03:00")
+    keys = {uk_key(hour + pd.Timedelta(15 * i, "min")) for i in range(UK_STEPS_PER_HOUR)}
+    provider, fake = bucket_provider(keys, allow_partial=True)
+    fake.present = keys  # exists() says yes ...
+    real_get = fake.get
+
+    def flaky(remote, local):
+        if remote == uk_key(hour):
+            raise FileNotFoundError(remote)  # ... and get() says no.
+        return real_get(remote, local)
+
+    fake.get = flaky
+    assert len(provider.fetch(hour, temp_dir=tmp_path / "scratch")) == UK_STEPS_PER_HOUR - 1
+
+
+def test_the_bucket_round_trips_into_the_store(bucket_provider, tmp_path):
+    hour = pd.Timestamp("2026-09-22 03:00")
+    keys = {uk_key(hour + pd.Timedelta(15 * i, "min")) for i in range(UK_STEPS_PER_HOUR)}
+    provider, _ = bucket_provider(keys)
+
+    assert provider.run_partition(hour) is True
+    ds = stored(provider)
+    assert ds.sizes["time"] == UK_STEPS_PER_HOUR
+    assert pd.Timestamp(ds["time"].values[0]) == hour
+    # Second time round the hour is already stored and nothing is downloaded.
+    assert provider.run_partition(hour) is False
 
 
 # --------------------------------------------------------------------------------------

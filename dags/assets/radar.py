@@ -5,9 +5,11 @@ materialises a single hourly partition by handing the partition start to the pro
 which locates that hour's files in the local archive, processes them and appends them to
 the icechunk store.
 
-Both sources are read from a staging directory rather than downloaded; see the provider
-module docstring for ``UK_RADAR_ARCHIVE_DIR`` and ``FMI_RADAR_ARCHIVE_DIR``. The assets are
-always defined and fail with a clear message when the directory is not configured.
+UK radar is downloaded from the Met Office's public bucket,
+``s3://met-office-radar-obs-data``, which holds the 1 km rain-rate composite every fifteen
+minutes from 2024-11-21. Finland is read from a staging directory rather than downloaded;
+see the provider module docstring for ``FMI_RADAR_ARCHIVE_DIR``, and for
+``UK_RADAR_ARCHIVE_DIR``, which overrides the bucket with a locally staged archive.
 
 OPERA is fetched rather than staged by hand. Its decoder cannot be installed alongside this
 project, so each OPERA product has a ``*_download`` asset that runs the
@@ -28,7 +30,7 @@ import pandas as pd
 
 from dags.assets.earth2studio_obs import DEFAULT_IMAGE as DEFAULT_OPERA_IMAGE
 from dags.assets.earth2studio_obs import IMAGE_ENV as OPERA_IMAGE_ENV
-from dags.staged import make_staged_download_asset, make_staged_publish_asset
+from dags.staged import make_staged_download_asset, make_staged_publish_asset, memory_tags
 from planetary_datasets.providers.opera import (
     OPERAProvider,
     OPERARainfallProvider,
@@ -41,23 +43,38 @@ from planetary_datasets.providers.radar import (
     UKRadarProvider,
 )
 
-#: Both composites are indexed by the hour. The UK partition covers twelve five-minute
-#: frames; the FMI partition covers the three accumulation windows published on the hour.
+#: Both composites are indexed by the hour. The FMI partition covers the three accumulation
+#: windows published on the hour.
 hourly_partitions = dg.HourlyPartitionsDefinition(start_date=dt.datetime(2020, 1, 1), end_offset=-1)
+
+#: UK radar starts where the Met Office bucket does. Earlier partitions would find nothing
+#: published and skip, which is harmless but is four listings an hour for four years of
+#: hours that can never hold anything.
+uk_radar_partitions = dg.HourlyPartitionsDefinition(
+    start_date=dt.datetime(2024, 11, 21), end_offset=-1
+)
+
+#: Four 2175x1725 float16 frames, decoded and concatenated: ~30 MB, plus the HDF5 reader.
+UK_RADAR_MEMORY_GB = 4
 
 
 def _build_asset(
     provider_cls: Type[LocalArchiveRadarProvider],
     description: str,
     source_url: str,
+    partitions_def: dg.PartitionsDefinition | None = None,
+    memory_gb: float | None = None,
 ) -> dg.AssetsDefinition:
     """Build the single-partition asset for one radar provider."""
+    tags = memory_tags(memory_gb) if memory_gb is not None else {}
 
     @dg.asset(
         name=provider_cls.name,
         description=description,
-        partitions_def=hourly_partitions,
+        partitions_def=partitions_def or hourly_partitions,
         compute_kind="python",
+        tags=tags or None,
+        op_tags=tags or None,
         metadata={
             "store": dg.MetadataValue.text(provider_cls.store_prefix),
             "archive_dir_env": dg.MetadataValue.text(provider_cls.archive_env),
@@ -87,8 +104,11 @@ def _build_asset(
 
 uk_radar = _build_asset(
     UKRadarProvider,
-    "Met Office RADARNET 1 km rain-rate composite, twelve five-minute ODIM frames per hour.",
-    "https://catalogue.ceda.ac.uk/uuid/82adec1f896af6169112d09cc1174499",
+    "Met Office 1 km rain-rate composite for the UK and Ireland, four fifteen-minute ODIM "
+    "frames per hour, from s3://met-office-radar-obs-data.",
+    "https://www.metoffice.gov.uk/services/data/external-data-channels",
+    partitions_def=uk_radar_partitions,
+    memory_gb=UK_RADAR_MEMORY_GB,
 )
 
 fmi_radar = _build_asset(
@@ -202,4 +222,5 @@ __all__ = [
     "opera_rainfall_download",
     "radar_assets",
     "uk_radar",
+    "uk_radar_partitions",
 ]

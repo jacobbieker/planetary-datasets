@@ -30,6 +30,7 @@ from planetary_datasets.providers.observations.pvlive import PVLiveProvider
 from planetary_datasets.providers.observations.rahm import RAHMProvider
 from planetary_datasets.providers.observations.solrad import SolradProvider
 from planetary_datasets.providers.observations.surfrad import SurfradProvider
+from planetary_datasets.providers.observations.uk_marine import UKMarineObservationsProvider
 
 DAILY_ASOS = dg.DailyPartitionsDefinition(start_date="2000-01-01", end_offset=-1)
 DAILY_AERONET = dg.DailyPartitionsDefinition(start_date="1993-01-01", end_offset=-1)
@@ -51,10 +52,16 @@ QUARTERLY_GHCN = dg.TimeWindowPartitionsDefinition(
     end_offset=-1,
 )
 
+# The Met Office bucket is a rolling window of roughly ten days, so an hour that is not
+# ingested within that window is lost; end_offset=-1 keeps the in-progress hour out and
+# nothing more.
+HOURLY_UK_MARINE = dg.HourlyPartitionsDefinition(start_date="2026-09-21-00:00", end_offset=-1)
+
 # The CDS applies a per-user queue; keeping both CDS assets on one key stops a backfill
 # of one starving the other.
 CDS_TAGS = {"dagster/concurrency_key": "copernicus-cds", "dagster/priority": "1"}
 HTTP_TAGS = {"dagster/concurrency_key": "observation-http"}
+S3_TAGS = {"dagster/concurrency_key": "observation-s3"}
 
 
 def _run(provider, context: dg.AssetExecutionContext) -> dg.Output[bool]:
@@ -247,3 +254,23 @@ def gnss_water_vapour(context: dg.AssetExecutionContext) -> dg.Output[bool]:
 )
 def rahm_radiosonde(context: dg.AssetExecutionContext) -> dg.Output[bool]:
     return _run(RAHMProvider(), context)
+
+
+@dg.asset(
+    name="uk_marine",
+    description=(
+        "Met Office UK marine surface observations: 58 buoys, light vessels and ship-borne "
+        "weather stations, one hour per partition, from "
+        "s3://met-office-marine-observations-data. Position is a data variable rather than "
+        "a station coordinate because most of the network is under way. Includes the "
+        "quality flags and the buoys' 32-band directional wave spectra."
+    ),
+    key_prefix=["observation"],
+    compute_kind="python",
+    partitions_def=HOURLY_UK_MARINE,
+    op_tags=S3_TAGS,
+    metadata=_metadata("met-office-marine-observations-data", "uk_marine"),
+    automation_condition=dg.AutomationCondition.on_cron(HOURLY_UK_MARINE.get_cron_schedule()),
+)
+def uk_marine(context: dg.AssetExecutionContext) -> dg.Output[bool]:
+    return _run(UKMarineObservationsProvider(), context)

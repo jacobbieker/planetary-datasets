@@ -971,5 +971,6 @@ def test_every_network_is_exposed_as_a_dagster_asset():
         "rahm_radiosonde",
         "solrad",
         "surfrad",
+        "uk_marine",
     }
     dg.Definitions(assets=assets)

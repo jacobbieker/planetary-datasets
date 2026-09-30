@@ -6,18 +6,22 @@ API, and previously had one throwaway script each:
 ``UKRadarProvider``
     The Met Office RADARNET/Nimrod 1 km rain-rate composite for the UK and Ireland,
     distributed as ODIM HDF5 (``*_ODIM_ng_radar_rainrate_composite_1km_UK.h5``) at a
-    five-minute cadence. One partition is one hour, so twelve frames.
+    fifteen-minute cadence. One partition is one hour, so four frames. Downloaded from the
+    Met Office's public bucket; see below.
 ``FMIRadarProvider``
     The Finnish Meteorological Institute 1 km precipitation *accumulation* rasters
     (``*_FIN-ACRR<n>H-3067-1KM.tif``), one GeoTIFF per accumulation window. One partition is
     one hour and merges the 1 h, 12 h and 24 h products into a single timestep.
 
-Neither source is downloaded here. Both are published through bulk channels (CEDA for the
-Met Office archive, the FMI open-data S3 mirror for Finland) and were already staged on
-local disk by the original scripts. Point the providers at that staging area with:
+The UK composite is fetched from ``s3://met-office-radar-obs-data`` (anonymous, keyed
+``radar/YYYY/MM/DD/YYYYMMDDhhmm_ODIM_ng_radar_rainrate_composite_1km_UK.h5``, archived from
+2024-11-21). Finland is not downloaded here: it is published through a bulk channel and was
+already staged on local disk by the original script. Point either provider at a staging
+area instead with:
 
 ``UK_RADAR_ARCHIVE_DIR``
-    Directory holding the ODIM HDF5 files. Defaults to ``<data_dir>/uk_radar``.
+    Directory holding the ODIM HDF5 files. Unset by default, which is what selects the
+    bucket; set it to read a locally staged archive (a CEDA RADARNET pull, say) instead.
 ``FMI_RADAR_ARCHIVE_DIR``
     Directory holding the FMI GeoTIFFs. Defaults to ``<data_dir>/fmi_radar``.
 
@@ -315,6 +319,97 @@ class LocalArchiveRadarProvider(BaseProvider):
         return ds.chunk(chunks)
 
 
+class S3ArchiveRadarProvider(LocalArchiveRadarProvider):
+    """A radar archive published in a public S3 bucket rather than staged on disk.
+
+    One object per frame, at a key that is a pure function of the frame's timestamp, so a
+    partition's objects are named rather than listed — a listing per partition would be an
+    extra round trip for every hour of a multi-year backfill, and the key layout is fixed.
+    Objects that are absent are simply not returned, which is what lets the inherited
+    :meth:`~LocalArchiveRadarProvider.fetch` tell an absent hour from a half-published one.
+
+    The local archive is still honoured: set :attr:`archive_env` and the files are read
+    from disk exactly as before, without touching the network. That is the escape hatch for
+    anyone holding a bulk pull of the same product (CEDA, for the UK), and it is why
+    :attr:`archive_subdir` remains meaningful.
+    """
+
+    #: Bucket holding the frames, read anonymously.
+    s3_bucket: str
+    #: ``strftime`` template for one frame's key within the bucket.
+    s3_key_format: str
+
+    @property
+    def archive_dir(self) -> pathlib.Path:
+        """Directory the raw files are read from, when one is configured.
+
+        Unlike the local-archive base this does *not* fall back to ``<data_dir>/<subdir>``:
+        that fallback is what made an unset variable indistinguishable from "use the
+        default staging directory", and the resulting ``RadarArchiveNotConfigured`` was
+        raised on every partition of a source that has a perfectly good bucket behind it.
+        """
+        raw = (os.environ.get(self.archive_env) or "").strip()
+        return pathlib.Path(raw).expanduser() if raw else self.config.data_dir / self.archive_subdir
+
+    @property
+    def use_local_archive(self) -> bool:
+        """True when a staged directory is configured and should be read instead of S3."""
+        return bool((os.environ.get(self.archive_env) or "").strip())
+
+    def s3_keys(self, it: pd.Timestamp) -> Dict[pd.Timestamp, str]:
+        """Object key for every frame the partition starting at ``it`` should contain."""
+        return {when: when.strftime(self.s3_key_format) for when in self.expected_times(it)}
+
+    def _filesystem(self):
+        import s3fs
+
+        return s3fs.S3FileSystem(anon=True)
+
+    def candidates(self, it: pd.Timestamp) -> List[pathlib.Path]:
+        """Delegate to the local archive; only reached when one is configured."""
+        return super().candidates(it)
+
+    def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
+        """Download this partition's frames from the bucket, skipping any not published.
+
+        Falls through to the local archive when one is configured. Otherwise the same
+        completeness rules apply as on disk: nothing published is an absent partition, some
+        of it published raises so the hour is retried once the rest lands.
+        """
+        if self.use_local_archive:
+            return super().fetch(it, temp_dir=temp_dir, **kwargs)
+
+        directory = pathlib.Path(temp_dir) if temp_dir is not None else self.config.scratch_dir
+        directory.mkdir(parents=True, exist_ok=True)
+        filesystem = self._filesystem()
+
+        found: List[pathlib.Path] = []
+        for when, key in sorted(self.s3_keys(it).items()):
+            remote = f"{self.s3_bucket}/{key}"
+            local = directory / pathlib.PurePosixPath(key).name
+            try:
+                if not filesystem.exists(remote):
+                    logger.debug(f"{self.name}: {when} not published at s3://{remote}")
+                    continue
+                filesystem.get(remote, str(local))
+            except FileNotFoundError:
+                # Raced with the publisher between exists() and get(); treat as absent.
+                logger.debug(f"{self.name}: {when} vanished from s3://{remote} mid-fetch")
+                continue
+            found.append(local)
+
+        if not found:
+            logger.debug(f"{self.name}: nothing in s3://{self.s3_bucket} for {to_naive_utc(it)}")
+            return []
+
+        missing = self.incomplete(it, found)
+        if missing is not None:
+            message = f"{self.name}: {to_naive_utc(it)} is incomplete, missing {missing}"
+            if not self.allow_partial:
+                raise IncompletePartition(message)
+            logger.warning(f"{message}; writing the {len(found)} frame(s) that are present")
+        return [str(p) for p in found]
+
 
 def odim_grid(where: dict) -> Dict[str, np.ndarray]:
     """Build projected ``x``/``y`` cell-centre coordinates from an ODIM ``/where`` group.
@@ -473,8 +568,8 @@ def open_fmi_radar(filename: str) -> xr.Dataset:
     return ds
 
 
-class UKRadarProvider(LocalArchiveRadarProvider):
-    """Met Office RADARNET 1 km rain-rate composite, one hour of five-minute frames."""
+class UKRadarProvider(S3ArchiveRadarProvider):
+    """Met Office 1 km rain-rate composite, one hour of fifteen-minute frames."""
 
     name = "uk_radar"
     store_prefix = "bkr/precipradar/uk_radar.icechunk"
@@ -482,11 +577,16 @@ class UKRadarProvider(LocalArchiveRadarProvider):
     archive_subdir = "uk_radar"
     file_pattern = "{hour}*.h5"
 
-    #: Cadence of the composite. Twelve frames make up one hourly partition.
-    step_freq: str = "5min"
+    s3_bucket = "met-office-radar-obs-data"
+    s3_key_format = "radar/%Y/%m/%d/%Y%m%d%H%M_ODIM_ng_radar_rainrate_composite_1km_UK.h5"
+
+    #: Cadence of the composite as published in the bucket. Four frames make up one hourly
+    #: partition. The CEDA RADARNET archive of the same product is five-minute, so override
+    #: this on an instance when pointing ``UK_RADAR_ARCHIVE_DIR`` at one of those.
+    step_freq: str = "15min"
 
     def expected_times(self, it: pd.Timestamp) -> pd.DatetimeIndex:
-        """The twelve five-minute frames that make up one hourly partition."""
+        """The four fifteen-minute frames that make up one hourly partition."""
         start, end = self.window(it)
         return pd.date_range(start, end, freq=self.step_freq, inclusive="left")
 
@@ -597,6 +697,7 @@ __all__ = [
     "LocalArchiveRadarProvider",
     "PROVIDERS",
     "RadarArchiveNotConfigured",
+    "S3ArchiveRadarProvider",
     "UKRadarProvider",
     "find_by_pattern",
     "gdal_metadata",
