@@ -25,6 +25,9 @@ from loguru import logger
 
 from planetary_datasets.common.store import ALIGNMENT_COORDS, axis_is_sorted
 from planetary_datasets.common.store import (
+    bitround_dataset as _bitround_dataset,
+)
+from planetary_datasets.common.store import (
     missing_timesteps as _missing_timesteps,
 )
 from planetary_datasets.common.store import (
@@ -147,13 +150,39 @@ class BaseProvider(ABC):
         """
         return _sort_append_axis(self.get_icechunk_repo(), append_dim=self.append_dim)
 
+    #: Mantissa bits to keep in floating point fields, or None to store them exactly. See
+    #: :func:`~planetary_datasets.common.store.bitround`. Declared per provider because
+    #: what is negligible depends on the quantity: 12 bits is a part in 4096, which is
+    #: below model precision for most geophysical fields and a large saving on disk.
+    keepbits: int | None = None
+
+    #: Substrings of variable names that are never rounded, whatever :attr:`keepbits` says.
+    #: For quantities where the loss is not negligible however small it looks: a wind
+    #: component is differenced with its partner to get a direction, so an error that is
+    #: tiny next to the wind speed is not tiny next to the difference, and a pressure sits
+    #: on a large offset where a *relative* precision of one in 4096 is tens of pascals.
+    keepbits_exact: tuple[str, ...] = ()
+
+    #: Explicit per-variable overrides, by exact name. Consulted before :attr:`keepbits`.
+    keepbits_by_variable: dict[str, int | None] = {}
+
+    def keepbits_for(self, variable: str) -> int | None:
+        """Mantissa bits to keep for one variable, or None to store it exactly."""
+        if variable in self.keepbits_by_variable:
+            return self.keepbits_by_variable[variable]
+        if any(pattern in variable for pattern in self.keepbits_exact):
+            return None
+        return self.keepbits
+
     def prepare_for_write(self, processed: xr.Dataset) -> xr.Dataset:
         """Last chance to reshape a dataset before it is written.
 
-        Override to rechunk or reorder. Returning the input unchanged is fine; this exists
-        so a provider that only needs to rechunk does not have to reimplement
-        :meth:`write_to_icechunk` around it.
+        Applies :meth:`keepbits_for` per variable when rounding is configured. Override to
+        rechunk or reorder; call ``super().prepare_for_write(...)`` from the override to
+        keep the rounding.
         """
+        if self.keepbits is not None or self.keepbits_by_variable:
+            processed = _bitround_dataset(processed, self.keepbits_for)
         return processed
 
     def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
@@ -217,7 +246,19 @@ class BaseProvider(ABC):
             else:
                 processed = self.process(input_files, it, temp_dir=temp_dir)
 
-            return self.write_to_icechunk(repo, processed)
+            return self.write_to_icechunk(self.store_for(processed, repo), processed)
+
+    def store_for(self, processed: xr.Dataset, repo: icechunk.Repository):
+        """The repository ``processed`` should be written to.
+
+        A hook, taken after the partition has been processed rather than before, so that a
+        provider may choose its store from the *shape* of what it is about to write. The
+        default ignores ``processed`` and keeps the repository opened at the top of
+        :meth:`run_partition`; see
+        :class:`~planetary_datasets.common.generations.GenerationalStoreMixin`, which uses
+        this to roll a store forward when an upstream model is upgraded.
+        """
+        return repo
 
     def run_range(self, timestamps: pd.DatetimeIndex) -> int:
         """Run every missing partition in ``timestamps``. Returns the number written.

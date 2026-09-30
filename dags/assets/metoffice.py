@@ -17,9 +17,11 @@ from planetary_datasets.base import BaseProvider
 from planetary_datasets.providers.metoffice import (
     MetOfficeGlobal10km6Hourly24HourProvider,
     MetOfficeGlobal10kmProvider,
+    MetOfficeGlobalOceanHourlyProvider,
     MetOfficeGlobalWaveProvider,
-    MetOfficeOceanDepthProvider,
-    MetOfficeOceanSurfaceProvider,
+    MetOfficeNWSOceanDepthHourlyProvider,
+    MetOfficeNWSOceanSurfaceHourlyProvider,
+    MetOfficeNWSWaveProvider,
     MetOfficeUK2kmProvider,
 )
 
@@ -39,8 +41,11 @@ uk_partitions = dg.TimeWindowPartitionsDefinition(
     end_offset=-1,
 )
 
-#: The ocean analysis and wave model are archived a day at a time.
+#: The global ocean and wave buckets are archived a day at a time.
 daily_partitions = dg.DailyPartitionsDefinition(start_date="2025-04-09", end_offset=-1)
+
+#: The North West Shelf buckets only go back to 2025-03.
+nws_partitions = dg.DailyPartitionsDefinition(start_date="2025-03-13", end_offset=-1)
 
 
 def _naive(timestamp) -> pd.Timestamp:
@@ -110,17 +115,13 @@ metoffice_uk_2km_asset = build_metoffice_asset(
     runtime_hours=6,
 )
 
-metoffice_ocean_surface_asset = build_metoffice_asset(
-    MetOfficeOceanSurfaceProvider,
-    name="metoffice-global-ocean-surface-analysis",
-    description="Met Office global ORCA025 ocean analysis, hourly surface fields",
-    partitions_def=daily_partitions,
-)
-
-metoffice_ocean_depth_asset = build_metoffice_asset(
-    MetOfficeOceanDepthProvider,
-    name="metoffice-global-ocean-depth-analysis",
-    description="Met Office global ORCA025 ocean analysis, fields on depth levels",
+metoffice_global_ocean_hourly_asset = build_metoffice_asset(
+    MetOfficeGlobalOceanHourlyProvider,
+    name="metoffice-global-ocean-hourly",
+    description=(
+        "Met Office global ORCA025 ocean analysis as a continuous hourly series. Only the "
+        "hourly instantaneous products are read; the rest of each run is daily means."
+    ),
     partitions_def=daily_partitions,
 )
 
@@ -131,11 +132,45 @@ metoffice_global_wave_asset = build_metoffice_asset(
     partitions_def=daily_partitions,
 )
 
+metoffice_nws_wave_asset = build_metoffice_asset(
+    MetOfficeNWSWaveProvider,
+    name="metoffice-nws-wave",
+    description="Met Office North West Shelf (AMM15) wave model, tiled into an hourly series",
+    partitions_def=nws_partitions,
+)
+
+metoffice_nws_ocean_surface_asset = build_metoffice_asset(
+    MetOfficeNWSOceanSurfaceHourlyProvider,
+    name="metoffice-nws-ocean-surface-hourly",
+    description=(
+        "Met Office North West Shelf (AMM15) ocean analysis, hourly surface fields. "
+        "About 2.3 GB a day before compression."
+    ),
+    partitions_def=nws_partitions,
+)
+
+# The heaviest store in the code location: 58 GB a day before compression, and roughly a
+# third of that on disk once bitrounded. `memory_gb` is what keeps it from being dequeued
+# alongside anything else; the run reads and writes one chunk at a time, so the figure is
+# the working set rather than the day.
+metoffice_nws_ocean_depth_asset = build_metoffice_asset(
+    MetOfficeNWSOceanDepthHourlyProvider,
+    name="metoffice-nws-ocean-depth-hourly",
+    description=(
+        "Met Office North West Shelf (AMM15) ocean analysis on all 51 depth levels, "
+        "hourly. About 58 GB a day before compression."
+    ),
+    partitions_def=nws_partitions,
+    runtime_hours=12,
+)
+
 metoffice_assets = [
     metoffice_global_10km_asset,
     metoffice_global_10km_6hourly_24hr_asset,
     metoffice_uk_2km_asset,
-    metoffice_ocean_surface_asset,
-    metoffice_ocean_depth_asset,
+    metoffice_global_ocean_hourly_asset,
     metoffice_global_wave_asset,
+    metoffice_nws_wave_asset,
+    metoffice_nws_ocean_surface_asset,
+    metoffice_nws_ocean_depth_asset,
 ]

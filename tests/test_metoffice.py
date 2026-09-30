@@ -10,13 +10,23 @@ import pytest
 import xarray as xr
 
 from helpers import read_store as open_store
+from planetary_datasets.common.store import (
+    bitround,
+    bitround_dataset,
+    keepbits_for_tolerance,
+)
 from planetary_datasets.providers.metoffice import (
+    KEEPBITS_BY_PATTERN,
+    KEEPBITS_EXACT,
+    METOFFICE_KEEPBITS,
     PROVIDERS,
     MetOfficeGlobal10km6Hourly24HourProvider,
     MetOfficeGlobal10kmProvider,
+    MetOfficeGlobalOceanHourlyProvider,
     MetOfficeGlobalWaveProvider,
-    MetOfficeOceanDepthProvider,
-    MetOfficeOceanSurfaceProvider,
+    MetOfficeNWSOceanDepthHourlyProvider,
+    MetOfficeNWSOceanSurfaceHourlyProvider,
+    MetOfficeNWSWaveProvider,
     MetOfficeUK2kmProvider,
     drop_grid_variables,
     group_files_by_variable,
@@ -167,16 +177,18 @@ DOCUMENTED_STORES = {
         "init_time",
     ),
     MetOfficeUK2kmProvider: ("metoffice_uk_deterministic_2km", "time"),
-    MetOfficeOceanSurfaceProvider: ("metoffice_global_hourly_ocean_surface_analysis", "init_time"),
-    MetOfficeOceanDepthProvider: ("metoffice_global_hourly_ocean_depth_analysis", "init_time"),
+    MetOfficeGlobalOceanHourlyProvider: ("metoffice_global_ocean_hourly", "time"),
     MetOfficeGlobalWaveProvider: ("metoffice_global_wave", "time"),
+    MetOfficeNWSWaveProvider: ("metoffice_nws_wave", "time"),
+    MetOfficeNWSOceanSurfaceHourlyProvider: ("metoffice_nws_ocean_surface_hourly", "time"),
+    MetOfficeNWSOceanDepthHourlyProvider: ("metoffice_nws_ocean_depth_hourly", "time"),
 }
 
 
 def test_the_providers_target_the_documented_stores():
     assert set(PROVIDERS.values()) == set(DOCUMENTED_STORES)
     for cls, (store, append_dim) in DOCUMENTED_STORES.items():
-        assert cls.store_prefix == f"bkr/metoffice/{store}.icechunk", cls.__name__
+        assert cls.base_store_prefix == f"bkr/metoffice/{store}.icechunk", cls.__name__
         assert cls.append_dim == append_dim, cls.__name__
 
 
@@ -269,154 +281,395 @@ def test_process_rejects_a_partition_with_nothing_recognisable(local_config, arc
         provider.process(["notes.txt"], INIT)
 
 
+
 # ------------------------------------------------------------------------ ocean and wave
+#
+# The buckets and a local archive have the same layout, so every test here builds a tree
+# under tmp_path and passes it as `archive_root`. Nothing touches the network.
 
 
-def ocean_file(times, depths=None, init: pd.Timestamp = INIT) -> xr.Dataset:
-    """One ocean product file, shaped like the ORCA025 archive."""
-    shape = (len(times), 2, 3) if depths is None else (len(times), len(depths), 2, 3)
-    dims = ("time", "lat", "lon") if depths is None else ("time", "depth", "lat", "lon")
-    ds = xr.Dataset(
-        {"var": (dims, np.zeros(shape, dtype="float32"), {"long_name": "Sea Surface Height"})},
+def wave_file(times, nlat: int = 2, nlon: int = 3) -> xr.Dataset:
+    """One wave variable over ``times``, shaped like a published file."""
+    return xr.Dataset(
+        {
+            "hs": (
+                ("time", "latitude", "longitude"),
+                np.zeros((len(times), nlat, nlon), dtype="float32"),
+                {"long_name": "Significant Wave Height (m)"},
+            )
+        },
         coords={
-            "time": times,
-            "lat": np.linspace(-1, 1, 2),
-            "lon": np.linspace(0, 1, 3),
-            "forecast_reference_time": init,
-            "forecast_period": np.int32(0),
+            "time": pd.DatetimeIndex(times),
+            "latitude": np.linspace(-1, 1, nlat),
+            "longitude": np.linspace(0, 1, nlon),
         },
     )
-    if depths is not None:
-        ds = ds.assign_coords(depth=list(depths))
-    return ds
 
 
-def write_ocean(root, init: pd.Timestamp, with_depth: bool = True):
-    directory = root / "global-ocean-ORCA025" / init.strftime("%Y/%m/%d/T%H%MZ")
-    directory.mkdir(parents=True, exist_ok=True)
-    hourly = pd.date_range(init - pd.Timedelta(24, "h"), periods=24, freq="1h")
-    ocean_file(hourly, init=init).to_netcdf(directory / f"b{init:%Y%m%d}T0000Z_hi-SSH.nc")
-    if with_depth:
-        depth = ocean_file([init], depths=[0.0, 10.0], init=init).rename({"var": "temperature"})
-        depth["temperature"].attrs["long_name"] = "Sea Water Potential Temperature"
-        depth.to_netcdf(directory / f"b{init:%Y%m%d}T0000Z_dm-TEM.nc")
-    return root
-
-
-def test_ocean_surface_and_depth_go_to_separate_stores(local_config, tmp_path):
-    root = write_ocean(tmp_path / "ocean", INIT)
-    surface = MetOfficeOceanSurfaceProvider(config=local_config, archive_root=root)
-    depth = MetOfficeOceanDepthProvider(config=local_config, archive_root=root)
-
-    assert surface.run_partition(INIT) is True
-    assert depth.run_partition(INIT) is True
-    assert surface.store_path != depth.store_path
-
-    surface_ds = open_store(surface)
-    depth_ds = open_store(depth)
-    assert list(surface_ds.init_time.values) == [INIT.to_numpy()]
-    assert "depth" not in surface_ds.dims
-    assert depth_ds.sizes["depth"] == 2
-    assert "latitude" in surface_ds.coords and "longitude" in surface_ds.coords
-
-
-def test_ocean_runs_are_stored_as_offsets_so_a_second_run_cannot_relabel_the_first(
-    local_config, tmp_path
-):
-    # `time` as a dimension coordinate under `init_time` holds one set of values for the
-    # whole store, so appending a second run would rewrite the first run's hours.
-    root = tmp_path / "ocean"
-    later = INIT + pd.Timedelta(1, "D")
-    write_ocean(root, INIT)
-    write_ocean(root, later)
-    provider = MetOfficeOceanSurfaceProvider(config=local_config, archive_root=root)
-
-    assert provider.run_partition(INIT) is True
-    assert provider.run_partition(later) is True
-
-    ds = open_store(provider)
-    assert list(ds.init_time.values) == [INIT.to_numpy(), later.to_numpy()]
-    assert "time" not in ds.dims
-    assert ds.step.values[0] == np.timedelta64(-24, "h")
-    assert ds.step.values[-1] == np.timedelta64(-1, "h")
-
-
-def test_ocean_depth_store_copes_with_a_run_that_has_no_depth_levels(local_config, tmp_path):
-    # Daily means land before the depth products do; the run is not an error, just empty.
-    root = write_ocean(tmp_path / "ocean", INIT, with_depth=False)
-    provider = MetOfficeOceanDepthProvider(config=local_config, archive_root=root)
-    surface, depth = provider.split(provider.fetch(INIT), INIT)
-    assert depth is None and surface is not None
-    with pytest.raises(ValueError, match="no depth-level fields"):
-        provider.process(provider.fetch(INIT), INIT)
-
-
-def test_ocean_fetch_is_empty_when_the_archive_has_no_such_run(local_config, tmp_path):
-    provider = MetOfficeOceanSurfaceProvider(config=local_config, archive_root=tmp_path / "empty")
-    assert provider.fetch(INIT) == []
-
-
-def write_wave(root, day: pd.Timestamp, first_step_hours: int = 0):
+def write_wave(root, day: pd.Timestamp, product="global-wave", marker="wave_global_standard_v1",
+               nlat: int = 2, runs=("T0000Z", "T0600Z", "T1200Z", "T1800Z")):
+    """A day of wave runs, each publishing 24 steps of which six are kept."""
     stamp = day.strftime("%Y%m%d")
-    for run_index, run in enumerate(("T0000Z", "T0600Z", "T1200Z", "T1800Z")):
-        directory = root / "global-wave" / day.strftime("%Y/%m/%d") / run
+    for index, run in enumerate(runs):
+        directory = root / product / day.strftime("%Y/%m/%d") / run
         directory.mkdir(parents=True, exist_ok=True)
-        start = day + pd.Timedelta(6 * run_index + first_step_hours, "h")
-        # Eight steps are published; only the six that tile the day are kept.
-        times = pd.date_range(start, periods=8, freq="1h")
-        ds = xr.Dataset(
-            {
-                "hs": (
-                    ("time", "latitude", "longitude"),
-                    np.zeros((8, 2, 3), dtype="float32"),
-                    {"long_name": "Significant Wave Height (m)"},
-                )
-            },
-            coords={
-                "time": times,
-                "latitude": np.linspace(-1, 1, 2),
-                "longitude": np.linspace(0, 1, 3),
-            },
-        )
-        ds.to_netcdf(directory / f"b{stamp}{run}_hi{stamp}{run}-wave_global_standard_v1.nc")
+        start = day + pd.Timedelta(6 * index, "h")
+        ds = wave_file(pd.date_range(start, periods=24, freq="1h"), nlat=nlat)
+        ds.to_netcdf(directory / f"b{stamp}{run}_hi{stamp}{run}-{marker}-significant_height.nc")
     return root
 
 
-def test_wave_day_tiles_four_runs_into_an_hourly_series(local_config, tmp_path):
-    day = pd.Timestamp("2026-01-01")
-    root = write_wave(tmp_path / "wave", day)
+def ocean_hourly_file(times, name="zos", long_name="Sea Surface Height Above Geoid",
+                      depths=None) -> xr.Dataset:
+    """One ocean product's hourly file, with or without depth levels."""
+    dims = ("time", "latitude", "longitude") if depths is None else (
+        "time", "depth", "latitude", "longitude"
+    )
+    shape = (len(times), 2, 3) if depths is None else (len(times), len(depths), 2, 3)
+    coords = {
+        "time": pd.DatetimeIndex(times),
+        "latitude": np.linspace(-1, 1, 2),
+        "longitude": np.linspace(0, 1, 3),
+    }
+    if depths is not None:
+        coords["depth"] = np.asarray(depths, dtype="float32")
+    return xr.Dataset(
+        {name: (dims, np.zeros(shape, dtype="float32"), {"long_name": long_name})},
+        coords=coords,
+    )
+
+
+def write_ocean(root, day: pd.Timestamp, product="global-ocean-ORCA025",
+                prefix="level1_coupled_orca025_GL4", with_depth: bool = False):
+    """One daily ocean run: 24 hourly steps, plus the neighbouring forecast days."""
+    directory = root / product / day.strftime("%Y/%m/%d/T0000Z")
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = day.strftime("%Y%m%d")
+
+    # The run's own day, which is what a partition keeps.
+    hours = pd.date_range(day + pd.Timedelta(1, "h"), periods=24, freq="1h")
+    ocean_hourly_file(hours).to_netcdf(directory / f"{prefix}_SSH_b{stamp}_hi{stamp}.nc")
+    if with_depth:
+        ocean_hourly_file(
+            hours, name="thetao", long_name="Sea Water Potential Temperature",
+            depths=[0.0, 10.0],
+        ).to_netcdf(directory / f"{prefix}_TEM_b{stamp}_hi{stamp}.nc")
+
+    # The rest of the forecast, and a daily mean. Neither belongs to this partition.
+    other = (day + pd.Timedelta(1, "D")).strftime("%Y%m%d")
+    ocean_hourly_file(pd.date_range(day + pd.Timedelta(25, "h"), periods=24, freq="1h")).to_netcdf(
+        directory / f"{prefix}_SSH_b{stamp}_hi{other}.nc"
+    )
+    ocean_hourly_file([day + pd.Timedelta(12, "h")]).to_netcdf(
+        directory / f"{prefix}_SSH_b{stamp}_dm{stamp}.nc"
+    )
+    return root
+
+
+DAY = pd.Timestamp("2026-01-01")
+
+
+# ------------------------------------------------------------------------------- wave
+
+
+def test_wave_day_tiles_four_runs_into_a_continuous_hourly_series(local_config, tmp_path):
+    """Each run publishes 24 steps; only the six before the next analysis are kept."""
+    root = write_wave(tmp_path / "wave", DAY)
     provider = MetOfficeGlobalWaveProvider(config=local_config, archive_root=root)
 
-    assert provider.run_partition(day) is True
-    assert provider.run_partition(day) is False
+    assert provider.run_partition(DAY) is True
+    assert provider.run_partition(DAY) is False
 
     ds = open_store(provider)
+    times = pd.DatetimeIndex(ds.time.values)
     assert ds.sizes["time"] == 24
     assert list(ds.data_vars) == ["significant_wave_height_m"]
-    assert ds.time.values[0] == day.to_numpy()
+    assert times[0] == DAY
+    assert times[-1] == DAY + pd.Timedelta(23, "h")
+    assert times.is_unique and times.is_monotonic_increasing
 
 
-def test_a_wave_day_whose_steps_start_an_hour_late_is_still_recognised(local_config, tmp_path):
-    day = pd.Timestamp("2026-01-01")
-    write_wave(tmp_path, day, first_step_hours=1)
-    provider = MetOfficeGlobalWaveProvider(config=local_config, archive_root=tmp_path)
+def test_consecutive_wave_days_tile_without_overlapping(local_config, tmp_path):
+    root = tmp_path / "wave"
+    write_wave(root, DAY)
+    write_wave(root, DAY + pd.Timedelta(1, "D"))
+    provider = MetOfficeGlobalWaveProvider(config=local_config, archive_root=root)
 
-    assert provider.run_partition(day) is True
-    assert provider.missing_timesteps(pd.DatetimeIndex([day])) == []
-    # The last step of the day lands on the next midnight; that must not make the next day
-    # look stored, or every second day would be silently skipped.
-    following = pd.Timestamp("2026-01-02")
-    assert provider.missing_timesteps(pd.DatetimeIndex([following])) == [following]
+    assert provider.run_partition(DAY) is True
+    assert provider.run_partition(DAY + pd.Timedelta(1, "D")) is True
+
+    times = pd.DatetimeIndex(open_store(provider).time.values)
+    assert len(times) == 48
+    assert times.is_unique, "the analysis window let two runs claim one hour"
+    assert (times.to_series().diff().dropna() == pd.Timedelta(1, "h")).all()
 
 
-def test_a_partly_written_wave_day_can_still_be_backfilled(local_config, tmp_path):
-    day = pd.Timestamp("2026-01-01")
-    provider = MetOfficeGlobalWaveProvider(config=local_config, archive_root=tmp_path)
-    write_wave(tmp_path, day)
-    # Only the first run has arrived, so the day holds six of its twenty-four hours.
-    partial = provider.process(
-        [f for f in provider.fetch(day) if "T0000Z_hi" in pathlib.Path(f).name], day
+def test_the_nws_wave_provider_reads_its_own_product(local_config, tmp_path):
+    """Both wave models share a layout; only the product marker tells them apart."""
+    root = write_wave(tmp_path / "w", DAY, product="nws-wave", marker="wave_uk_standard_v1")
+    provider = MetOfficeNWSWaveProvider(config=local_config, archive_root=root)
+
+    assert provider.run_partition(DAY) is True
+    assert open_store(provider).sizes["time"] == 24
+
+
+def test_a_wave_run_that_never_arrived_is_skipped_not_fatal(local_config, tmp_path):
+    root = write_wave(tmp_path / "wave", DAY, runs=("T0000Z", "T0600Z"))
+    provider = MetOfficeGlobalWaveProvider(config=local_config, archive_root=root)
+
+    assert provider.run_partition(DAY) is True
+    assert open_store(provider).sizes["time"] == 12
+
+
+def test_wave_fetch_is_empty_when_the_day_was_never_published(local_config, tmp_path):
+    provider = MetOfficeGlobalWaveProvider(config=local_config, archive_root=tmp_path / "empty")
+    assert provider.fetch(DAY) == []
+    assert provider.run_partition(DAY) is False
+
+
+# ------------------------------------------------------------------------------ ocean
+
+
+def test_ocean_keeps_its_own_day_and_ignores_the_rest_of_the_forecast(local_config, tmp_path):
+    """A run directory holds nine forecast days; a partition is one of them."""
+    root = write_ocean(tmp_path / "ocean", DAY)
+    provider = MetOfficeGlobalOceanHourlyProvider(config=local_config, archive_root=root)
+
+    fetched = [pathlib.Path(f).name for f in provider.fetch(DAY)]
+    assert all(f"_hi{DAY:%Y%m%d}" in f for f in fetched), fetched
+    assert not any("_dm" in f for f in fetched), "a daily mean cannot sit on an hourly axis"
+
+    assert provider.run_partition(DAY) is True
+    times = pd.DatetimeIndex(open_store(provider).time.values)
+    assert len(times) == 24
+    assert times[0] == DAY + pd.Timedelta(1, "h")
+    assert times[-1] == DAY + pd.Timedelta(24, "h")
+
+
+def test_consecutive_ocean_days_tile_without_overlapping(local_config, tmp_path):
+    root = tmp_path / "ocean"
+    write_ocean(root, DAY)
+    write_ocean(root, DAY + pd.Timedelta(1, "D"))
+    provider = MetOfficeGlobalOceanHourlyProvider(config=local_config, archive_root=root)
+
+    assert provider.run_partition(DAY) is True
+    assert provider.run_partition(DAY + pd.Timedelta(1, "D")) is True
+
+    times = pd.DatetimeIndex(open_store(provider).time.values)
+    assert len(times) == 48
+    assert times.is_unique
+    assert (times.to_series().diff().dropna() == pd.Timedelta(1, "h")).all()
+
+
+def test_nws_ocean_splits_surface_from_depth(local_config, tmp_path):
+    """A day is 2.3 GB of surface fields and 58 GB of depth ones; they get a store each."""
+    root = write_ocean(
+        tmp_path / "o", DAY, product="nws-ocean", prefix="metoffice_foam1_amm15_NWS",
+        with_depth=True,
     )
-    provider.write_to_icechunk(provider.get_icechunk_repo(), partial)
+    surface = MetOfficeNWSOceanSurfaceHourlyProvider(config=local_config, archive_root=root)
+    depth = MetOfficeNWSOceanDepthHourlyProvider(config=local_config, archive_root=root)
 
-    assert provider.missing_timesteps(pd.DatetimeIndex([day])) == [day]
+    assert surface.run_partition(DAY) is True
+    assert depth.run_partition(DAY) is True
+    assert surface.store_path != depth.store_path
+
+    surface_ds, depth_ds = open_store(surface), open_store(depth)
+    assert "depth" not in surface_ds.dims
+    assert depth_ds.sizes["depth"] == 2
+    assert set(surface_ds.data_vars).isdisjoint(depth_ds.data_vars)
+
+
+def test_the_nws_wave_files_in_the_ocean_bucket_are_left_to_the_wave_store(local_config, tmp_path):
+    """``nws-ocean`` also carries ``level1_wave_amm15_NWS_WAV_*``; it is not ocean data."""
+    root = write_ocean(
+        tmp_path / "o", DAY, product="nws-ocean", prefix="metoffice_foam1_amm15_NWS"
+    )
+    directory = root / "nws-ocean" / DAY.strftime("%Y/%m/%d/T0000Z")
+    stamp = DAY.strftime("%Y%m%d")
+    ocean_hourly_file(pd.date_range(DAY + pd.Timedelta(1, "h"), periods=24, freq="1h")).to_netcdf(
+        directory / f"level1_wave_amm15_NWS_WAV_b{stamp}_hi{stamp}.nc"
+    )
+    provider = MetOfficeNWSOceanSurfaceHourlyProvider(config=local_config, archive_root=root)
+
+    assert not any("_WAV_" in pathlib.Path(f).name for f in provider.fetch(DAY))
+
+
+def test_products_that_share_a_long_name_are_disambiguated(local_config, tmp_path):
+    """``CUR`` and ``MAXCURU`` both call themselves eastward current velocity."""
+    root = tmp_path / "o"
+    directory = root / "nws-ocean" / DAY.strftime("%Y/%m/%d/T0000Z")
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = DAY.strftime("%Y%m%d")
+    hours = pd.date_range(DAY + pd.Timedelta(1, "h"), periods=24, freq="1h")
+    for code in ("CUR", "MAXCURU"):
+        ocean_hourly_file(hours, name="uo", long_name="Eastward Current Velocity").to_netcdf(
+            directory / f"metoffice_foam1_amm15_NWS_{code}_b{stamp}_hi{stamp}.nc"
+        )
+    provider = MetOfficeNWSOceanSurfaceHourlyProvider(config=local_config, archive_root=root)
+
+    ds = provider.process(provider.fetch(DAY), DAY)
+    assert set(ds.data_vars) == {
+        "eastward_current_velocity_cur",
+        "eastward_current_velocity_maxcuru",
+    }
+
+
+def test_ocean_fetch_is_empty_when_the_run_was_never_published(local_config, tmp_path):
+    provider = MetOfficeGlobalOceanHourlyProvider(config=local_config, archive_root=tmp_path)
+    assert provider.fetch(DAY) == []
+    assert provider.run_partition(DAY) is False
+
+
+# ------------------------------------------------------------------------- generations
+
+
+def test_a_resolution_change_starts_a_new_generation(local_config, tmp_path):
+    """The Met Office upgrades these models; an upgrade must not fail every partition."""
+    root = tmp_path / "wave"
+    write_wave(root, DAY, nlat=2)
+    write_wave(root, DAY + pd.Timedelta(1, "D"), nlat=4)
+    provider = MetOfficeGlobalWaveProvider(config=local_config, archive_root=root)
+
+    assert provider.run_partition(DAY) is True
+    first = provider.store_prefix
+    assert provider.run_partition(DAY + pd.Timedelta(1, "D")) is True
+    second = provider.store_prefix
+
+    assert first == MetOfficeGlobalWaveProvider.base_store_prefix
+    assert second == "bkr/metoffice/metoffice_global_wave_2.icechunk"
+
+
+def test_pre_upgrade_data_backfills_into_the_generation_it_belongs_to(local_config, tmp_path):
+    """Matching on schema rather than recency is what makes a late backfill land right."""
+    root = tmp_path / "wave"
+    write_wave(root, DAY, nlat=2)
+    write_wave(root, DAY + pd.Timedelta(1, "D"), nlat=4)
+    write_wave(root, DAY + pd.Timedelta(2, "D"), nlat=2)
+    provider = MetOfficeGlobalWaveProvider(config=local_config, archive_root=root)
+
+    provider.run_partition(DAY)
+    provider.run_partition(DAY + pd.Timedelta(1, "D"))
+    provider.run_partition(DAY + pd.Timedelta(2, "D"))
+
+    assert provider.store_prefix == MetOfficeGlobalWaveProvider.base_store_prefix
+    assert open_store(provider).sizes["time"] == 48
+
+
+def test_a_partition_already_in_an_older_generation_is_not_rewritten(local_config, tmp_path):
+    """`missing_timesteps` has to look across generations, or a backfill redoes them all."""
+    root = tmp_path / "wave"
+    write_wave(root, DAY, nlat=2)
+    write_wave(root, DAY + pd.Timedelta(1, "D"), nlat=4)
+    provider = MetOfficeGlobalWaveProvider(config=local_config, archive_root=root)
+
+    provider.run_partition(DAY)
+    provider.run_partition(DAY + pd.Timedelta(1, "D"))
+
+    assert provider.missing_timesteps(pd.DatetimeIndex([DAY])) == []
+    assert provider.run_partition(DAY) is False
+
+
+# -------------------------------------------------------------------------- bitrounding
+
+
+def test_every_metoffice_provider_bitrounds():
+    for cls in PROVIDERS.values():
+        assert cls.keepbits == METOFFICE_KEEPBITS, cls.__name__
+        assert cls.keepbits_exact == KEEPBITS_EXACT, cls.__name__
+
+
+def test_the_derived_table_gives_each_family_the_precision_its_units_justify():
+    """Angles need fewer bits than salinity; that is the point of a per-variable table."""
+    assert KEEPBITS_BY_PATTERN["direction"] < KEEPBITS_BY_PATTERN["salinity"]
+    assert KEEPBITS_BY_PATTERN["direction"] < KEEPBITS_BY_PATTERN["temperature"]
+    assert all(6 <= bits <= 23 for bits in KEEPBITS_BY_PATTERN.values())
+
+
+@pytest.mark.parametrize(
+    ("magnitude", "tolerance", "expected_error_below"),
+    [(360.0, 0.1, 0.1), (350.0, 0.01, 0.01), (50.0, 0.001, 0.001), (40.0, 0.001, 0.001)],
+    ids=["direction", "temperature", "salinity", "wave-height"],
+)
+def test_the_derived_keepbits_actually_hold_their_tolerance(
+    magnitude, tolerance, expected_error_below
+):
+    """The table is only meaningful if the bits it picks really deliver the tolerance."""
+    bits = keepbits_for_tolerance(magnitude, absolute_tolerance=tolerance)
+    values = np.linspace(-magnitude, magnitude, 20001, dtype="float32")
+    error = np.max(np.abs(bitround(values, bits) - values))
+
+    assert error <= expected_error_below, f"{bits} bits gave {error} > {expected_error_below}"
+
+
+def test_bitrounding_stays_inside_its_declared_error(local_config, tmp_path):
+    """The saving is only worth having if the error is smaller than the model's own."""
+    values = np.linspace(-40.0, 40.0, 4001, dtype="float32")
+    rounded = bitround(values, METOFFICE_KEEPBITS)
+    relative = np.abs(rounded - values) / np.maximum(np.abs(values), 1e-6)
+
+    assert np.nanmax(relative) < 2.0 ** -(METOFFICE_KEEPBITS - 1)
+    assert rounded.dtype == values.dtype
+
+
+def test_bitrounding_records_itself_and_leaves_coordinates_alone(local_config, tmp_path):
+    root = write_wave(tmp_path / "wave", DAY)
+    provider = MetOfficeGlobalWaveProvider(config=local_config, archive_root=root)
+    provider.run_partition(DAY)
+
+    ds = open_store(provider)
+    variable = ds["significant_wave_height_m"]
+    assert variable.attrs["bitround_keepbits"] == KEEPBITS_BY_PATTERN["wave_height"]
+    # A rounded latitude would fail the alignment check on the next append.
+    assert "bitround_keepbits" not in ds["latitude"].attrs
+
+
+@pytest.mark.parametrize(
+    ("variable", "expected"),
+    [
+        ("surface_air_pressure", None),
+        ("air_pressure_at_sea_level", None),
+        ("tropopause_air_pressure", None),
+        ("eastward_wind_at_10m", None),
+        ("northward_wind_at_10m", None),
+        ("wind_speed_10.0m", KEEPBITS_BY_PATTERN["wind_speed"]),
+        ("sea_water_potential_temperature", KEEPBITS_BY_PATTERN["temperature"]),
+        ("mean_wave_direction_from_mdir", KEEPBITS_BY_PATTERN["direction"]),
+        ("a_brand_new_diagnostic", METOFFICE_KEEPBITS),
+    ],
+    ids=lambda v: str(v),
+)
+def test_rounding_is_decided_per_variable(variable, expected):
+    """Winds and pressures are stored exactly; everything else is rounded."""
+    provider = MetOfficeGlobalWaveProvider()
+    assert provider.keepbits_for(variable) == expected
+
+
+def test_an_exempt_variable_is_stored_bit_for_bit():
+    """A pressure sits on a ~100000 Pa offset, where one part in 4096 is ~25 Pa."""
+    pressure = np.array([100123.456, 98765.432], dtype="float32")
+    wind = np.array([12.3456789, -0.0031415], dtype="float32")
+    ds = xr.Dataset(
+        {
+            "surface_air_pressure": ("x", pressure.copy()),
+            "eastward_wind_at_10m": ("x", wind.copy()),
+            "sea_water_potential_temperature": ("x", wind.copy()),
+        }
+    )
+    provider = MetOfficeGlobalWaveProvider()
+    out = bitround_dataset(ds, provider.keepbits_for)
+
+    assert np.array_equal(out["surface_air_pressure"].values, pressure)
+    assert np.array_equal(out["eastward_wind_at_10m"].values, wind)
+    assert "bitround_keepbits" not in out["surface_air_pressure"].attrs
+    assert "bitround_keepbits" not in out["eastward_wind_at_10m"].attrs
+    # ... while a field that is not exempt still is rounded.
+    assert (
+        out["sea_water_potential_temperature"].attrs["bitround_keepbits"]
+        == KEEPBITS_BY_PATTERN["temperature"]
+    )
+
+
+def test_the_exempt_patterns_are_documented_substrings():
+    assert "pressure" in KEEPBITS_EXACT
+    assert {"eastward_wind", "northward_wind"} <= set(KEEPBITS_EXACT)
