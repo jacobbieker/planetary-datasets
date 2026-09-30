@@ -827,6 +827,11 @@ def ingest_day(
         channel_label=band,
         grid_size=grid_size(band),
         open_batch_fn=build_batch,
+        # build_batch refuses to drop a scene that will not stitch, because
+        # the store only appends along `t` so a dropped timestep could never
+        # be filled in. Its own docstring names the usual cause -- a slot
+        # still uploading when the day was listed -- and the remedy: retry.
+        retryable_error_fn=lambda e: isinstance(e, IncompleteBatch),
         day_urls_fn=make_day_urls_fn(satellite, band),
         scan_start_fn=parse_slot,
         **kwargs,
@@ -885,6 +890,11 @@ def ingest_backwards(
         list_day_files_fn=make_list_day_files(satellite),
         era_preprocess_fn=preprocess,
         open_batch_fn=build_batch,
+        # build_batch refuses to drop a scene that will not stitch, because
+        # the store only appends along `t` so a dropped timestep could never
+        # be filled in. Its own docstring names the usual cause -- a slot
+        # still uploading when the day was listed -- and the remedy: retry.
+        retryable_error_fn=lambda e: isinstance(e, IncompleteBatch),
         probe_select_fn=probe_select,
         probe_open_fn=probe_open,
         probe_list_fn=make_probe_list_day_files(satellite),

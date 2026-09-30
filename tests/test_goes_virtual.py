@@ -839,3 +839,61 @@ def test_a_short_read_during_probing_does_not_split_an_era():
     # stays open rather than being split at a file that was never really bad.
     assert result == "probe-dataset"
     assert len(calls) == 2
+
+
+def test_a_mission_with_its_own_repair_can_use_it_for_an_unreadable_file():
+    """GK-2A's repair drops files it cannot read, but could never be reached.
+
+    The batch handler only caught NotImplementedError and demanded "codec" in
+    the message, while a truncated file raises OSError. So one bad file in
+    NOAA's bucket cost the whole band-day, permanently -- the store appends
+    along `t`, so a re-run skips the day rather than filling it.
+    """
+    truncated = _truncated_oserror()
+    codec = NotImplementedError("cannot concatenate ... different codecs")
+    unrelated = NotImplementedError("something else entirely")
+
+    def gate(exc):
+        # Mirrors the condition in ingest_all_days.
+        return "codec" in str(exc).lower() or common._is_unreadable_source_error(exc)
+
+    assert gate(truncated), "a truncated file must now reach the repair"
+    assert gate(codec), "codec outliers must still reach the repair"
+    assert not gate(unrelated), "an unrelated error must still propagate"
+
+
+def test_himawari_retries_a_scene_that_would_not_stitch():
+    """A tile-based mission cannot drop a file, so its transient case retries.
+
+    build_batch deliberately refuses to commit a partial day: dropping a scene
+    would leave a gap the append-only store could never fill. Its documented
+    common cause -- a slot still uploading when the day was listed -- is a
+    retry case, so IncompleteBatch is declared retryable.
+    """
+    from planetary_datasets.providers.virtualized import himawari_isatss
+
+    is_retryable = lambda e: isinstance(e, himawari_isatss.IncompleteBatch)
+    calls = []
+
+    def flaky(urls):
+        calls.append(urls)
+        if len(calls) == 1:
+            raise himawari_isatss.IncompleteBatch("stitched 143 of 144 scenes")
+        return "batch"
+
+    result = common.open_with_unreadable_retry(
+        flaky, ["t.nc"], is_retryable=is_retryable, sleep=lambda _: None
+    )
+    assert result == "batch"
+    assert len(calls) == 2
+
+    # An unreadable file is still retried as well, not replaced by this.
+    assert common._is_unreadable_source_error(_truncated_oserror())
+    # ...and an unrelated error is still not retried.
+    other = []
+    with pytest.raises(ValueError):
+        common.open_with_unreadable_retry(
+            lambda u: other.append(u) or (_ for _ in ()).throw(ValueError("nope")),
+            ["t.nc"], is_retryable=is_retryable, sleep=lambda _: None,
+        )
+    assert len(other) == 1
