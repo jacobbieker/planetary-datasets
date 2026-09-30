@@ -12,7 +12,19 @@ test = "pytest tests/ -q"
 lint = "ruff check ."
 
 
-[tasks.dagster]
+# Webserver plus daemon for the code location in dags/definitions.py. The daemon is what
+# runs the schedules and the queued run coordinator, hence `dagster dev` and not
+# `dagster-webserver` alone.
+#
+# DAGSTER_HOME is set here, and deliberately overrides whatever is in the shell, so the
+# instance picks up the committed dags/dagster.yaml: the run queue, the per-memory-class
+# concurrency limits and the retry policy. Pointing it elsewhere silently reverts all of
+# that to Dagster's defaults. Dagster demands an absolute path, hence PIXI_PROJECT_ROOT.
+#
+# Named `dev` rather than `dagster` because a task shadows the executable of the same
+# name: `pixi run dagster definitions validate` would append those arguments to
+# `dagster dev` instead of running the subcommand.
+[tasks.dev]
 cmd = "dagster dev -m dags.definitions"
 env = { DAGSTER_HOME = "$PIXI_PROJECT_ROOT/dags" }
 
