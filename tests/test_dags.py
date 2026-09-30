@@ -542,6 +542,60 @@ def test_a_spec_only_asset_does_not_take_down_the_code_location(tmp_path):
     assert _loaded_keys(package) == ["external/upstream_thing", "normal/normal_asset"]
 
 
+def test_two_modules_may_define_an_asset_of_the_same_name(tmp_path):
+    """Regression: colliding op names took the whole code location down.
+
+    ``earth2studio_obs.py`` and ``polar_sounders.py`` both built a ``jpss_atms`` op.
+    Distinct ops of one name collapse in the implicit job Dagster builds over every
+    asset, so one definition won and the other's input was wired onto it:
+    ``op "jpss_atms" does not have input "jpss_atms_download"``.
+    """
+    package = _write_package(
+        tmp_path,
+        "pd_op_collision_pkg",
+        {
+            # Same asset name in both families, and in one of them it has an upstream.
+            "staged": (
+                "import dagster as dg\n\n"
+                "@dg.asset\n"
+                "def atms_download():\n    return 1\n\n"
+                "@dg.asset(deps=[atms_download])\n"
+                "def atms():\n    return 1\n"
+            ),
+            "direct": ASSET_MODULE.format("atms"),
+        },
+    )
+    modules, failures = loader_module.discover_asset_modules(package)
+    assets, load_failures = loader_module.load_assets(modules)
+    assert failures == {} and load_failures == {}
+
+    # Every op is namespaced by family, so the two `atms` assets no longer share a name.
+    assert sorted(a.node_def.name for a in assets) == [
+        "direct__atms",
+        "staged__atms",
+        "staged__atms_download",
+    ]
+
+    # The implicit asset job is what used to fail: it puts every op in one graph.
+    repository = dg.Definitions(assets=assets).get_repository_def()
+    assert len(repository.get_all_jobs()) == 1
+    graph = repository.asset_graph
+    assert [k.to_user_string() for k in graph.get(dg.AssetKey(["staged", "atms"])).parent_keys] == [
+        "staged/atms_download"
+    ]
+    assert graph.get(dg.AssetKey(["direct", "atms"])).parent_keys == set()
+
+
+def test_an_op_is_namespaced_once_however_often_its_module_is_loaded(tmp_path):
+    """The prefix is not reapplied: `nwp__gfs` must not become `nwp__nwp__gfs`."""
+    package = _write_package(tmp_path, "pd_op_idempotent_pkg", {"fam": ASSET_MODULE.format("one")})
+    modules, _ = loader_module.discover_asset_modules(package)
+    (asset,) = loader_module.load_assets(modules)[0]
+
+    assert asset.node_def.name == "fam__one"
+    assert loader_module._qualify_op_name(asset, "fam") is asset
+
+
 def test_skip_prefixes_match_at_package_boundaries():
     """`dags.assets.virtual_goes` merely shares a prefix with the skipped `virt` package."""
     assert loader_module._is_skipped("dags.assets.virt.virtualize_goes_mcmpf")

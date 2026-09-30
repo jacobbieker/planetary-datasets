@@ -12,12 +12,14 @@ continuously and by many people at once. Two consequences follow from that:
   take the whole code location down with it, hiding every other asset. Import errors are
   logged and collected into the ``asset_module_import_failures`` metadata on the
   definitions instead.
-* **Group and key prefix come from the file's location.** A module's *family* is the
-  directory it sits in under ``dags/assets``, or its own filename when it sits directly
-  there: ``dags/assets/nwp/gfs.py`` is family ``nwp``, ``dags/assets/arome.py`` is
-  family ``arome``. Assets are grouped under the family and their keys are prefixed with
-  it, so ``gfs_download`` becomes ``nwp/gfs_download``. An asset that declared its own
-  ``key_prefix``, or a module that declared its own ``group_name``, keeps it.
+* **Group, key prefix and op name come from the file's location.** A module's *family*
+  is the directory it sits in under ``dags/assets``, or its own filename when it sits
+  directly there: ``dags/assets/nwp/gfs.py`` is family ``nwp``, ``dags/assets/arome.py``
+  is family ``arome``. Assets are grouped under the family and their keys are prefixed
+  with it, so ``gfs_download`` becomes ``nwp/gfs_download``. An asset that declared its
+  own ``key_prefix``, or a module that declared its own ``group_name``, keeps it. The op
+  behind each asset is namespaced the same way, ``nwp__gfs_download``, so that two
+  modules may define an asset of the same name; see :func:`_qualify_op_name`.
 
 Concurrency is sized from the host's memory. A factory-built asset declares what it needs
 (see :mod:`dags.factory`); an asset that declares nothing is assumed to need
@@ -241,6 +243,42 @@ def _node_def(asset: dg.AssetsDefinition):
         return None
 
 
+def _qualify_op_name(asset: dg.AssetsDefinition, family: str) -> dg.AssetsDefinition:
+    """Return ``asset`` with its op renamed ``<family>__<op>``.
+
+    Asset *keys* are namespaced by family, but op names used not to be, and Dagster
+    builds one implicit job over every asset in the code location, which puts all of
+    those ops into a single graph. Two modules that ingest the same source then collide:
+    ``earth2studio_obs.py`` and ``polar_sounders.py`` each build a ``jpss_atms`` op, and
+    so do ``earth2studio_obs.py`` and ``mrms.py`` for ``mrms_conus``. Dagster aliases
+    repeated *invocations* of one op, but the graph's node definitions are keyed by name,
+    so with two distinct ops of the same name one definition won and the other's inputs
+    were wired onto it. The whole code location failed to load - hiding every asset,
+    not just the four - with::
+
+        Invalid dependencies: op "jpss_atms" does not have input
+        "jpss_atms_download". Available inputs: []
+
+    Qualifying by family makes the name as unique as the asset key it belongs to.
+
+    Only the op's name changes: asset keys, input names, tags and pools are untouched,
+    so the concurrency pools in ``dags/dagster.yaml`` and the executor's op-tag limits
+    keep matching. Step keys in the event log do change, which costs the *display* of
+    past materialisations nothing - they are recorded against asset keys.
+    """
+    node_def = _node_def(asset)
+    # A spec-only asset has no op at all, and a graph-backed asset's GraphDefinition has
+    # no rename of its own; leave both as they are.
+    if not isinstance(node_def, dg.OpDefinition):
+        return asset
+    prefix = f"{family}__"
+    if node_def.name.startswith(prefix):
+        return asset
+    attributes = asset.get_attributes_dict()
+    attributes["node_def"] = node_def.with_replaced_properties(name=f"{prefix}{node_def.name}")
+    return dg.AssetsDefinition.dagster_internal_init(**attributes)
+
+
 def _load_grouped(
     module: ModuleType, family: str, key_prefix: str | None
 ) -> list[dg.AssetsDefinition]:
@@ -297,6 +335,10 @@ def load_assets(
     thing`` yields a second copy of that asset under its own key prefix. The two copies
     share one op, which is how they are told apart from two genuinely different assets
     that happen to share a name.
+
+    Renaming the op (:func:`_qualify_op_name`) therefore happens *after* that check: it
+    builds a new op per module, and pairs sharing an op would no longer be recognisable
+    as copies of one asset.
     """
     loaded: list[dg.AssetsDefinition] = []
     failures: dict[str, str] = {}
@@ -328,7 +370,14 @@ def load_assets(
                 )
                 continue
             seen_keys |= keys
-            loaded.append(asset)
+            try:
+                loaded.append(_qualify_op_name(asset, family))
+            except Exception as exc:  # noqa: BLE001 - an unrenamed op beats a lost module
+                logger.warning(
+                    f"dagster: could not namespace the op behind "
+                    f"{sorted(k.to_user_string() for k in keys)}: {exc}"
+                )
+                loaded.append(asset)
 
     return loaded, failures
 
