@@ -321,7 +321,7 @@ class CMEMSGlobalOceanForecastProvider(BaseProvider):
         base = base.interp_like(sea_level)
         currents = currents.interp_like(sea_level)
 
-        merged = xr.merge([base, currents, sea_level]).astype(np.float32)
+        merged = xr.merge([base, currents, sea_level], compat="no_conflicts").astype(np.float32)
         for var in self.low_precision_vars:
             if var in merged.data_vars:
                 merged[var] = merged[var].astype(np.float16)

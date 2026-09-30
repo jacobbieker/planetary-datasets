@@ -38,6 +38,7 @@ from planetary_datasets.common.store import (
     StoreReadError,
     build_encoding,
     has_committed_data,
+    quiet_timedelta_decoding,
 )
 
 #: Fixed width used for string variables such as ``icao24`` or ``platform_type``.
@@ -129,7 +130,7 @@ def append_point_observations(
 
     session = repo.writable_session("main")
     try:
-        existing = xr.open_zarr(session.store, consolidated=False)
+        existing = xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
         first_write = append_dim not in existing.coords
     except STORE_READ_ERRORS as exc:
         # A read failure against a store that already holds data must not fall through
@@ -147,7 +148,8 @@ def append_point_observations(
     count = ds.sizes[append_dim]
 
     if first_write:
-        to_icechunk(ds, session, encoding=build_encoding(ds, append_dim=append_dim))
+        with quiet_timedelta_decoding():
+            to_icechunk(ds, session, encoding=build_encoding(ds, append_dim=append_dim))
         session.commit(message or f"Initial write of {count} observations from {first}")
         logger.info(f"created point store with {count} observation(s)")
         return True
@@ -161,7 +163,8 @@ def append_point_observations(
         )
         return False
 
-    to_icechunk(ds, session, append_dim=append_dim)
+    with quiet_timedelta_decoding():
+        to_icechunk(ds, session, append_dim=append_dim)
     session.commit(
         message or f"Append {count} observations from {first}",
         rebase_with=icechunk.ConflictDetector(),

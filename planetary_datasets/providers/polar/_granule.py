@@ -198,7 +198,7 @@ class GranuleProvider(BaseProvider):
             it is what decides whether a partition has already been ingested.
     """
 
-    window: pd.Timedelta = pd.Timedelta("1h")
+    window: pd.Timedelta = pd.Timedelta(1, "h")
 
     def partition_window(self, it: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
         """Half-open ``[start, end)`` interval covered by the partition starting at ``it``."""
@@ -234,7 +234,9 @@ class GranuleProvider(BaseProvider):
         """
         repo = self.get_icechunk_repo()
         try:
-            ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+            ds = xr.open_zarr(
+                repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+            )
         except STORE_READ_ERRORS as exc:
             if has_committed_data(repo):
                 raise

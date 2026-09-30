@@ -28,6 +28,7 @@ from loguru import logger
 
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common.store import write_to_icechunk as _write_to_icechunk
+from planetary_datasets.common.time import freq_to_timedelta
 from planetary_datasets.providers.observations.base import (
     OBSERVATION_ALIGNMENT_COORDS,
     NoStationDataError,
@@ -226,7 +227,7 @@ class GHCNHourlyStationProvider(StationObservationProvider):
             return None
         times = self.partition_times(it)
         window = df.loc[
-            (df.index >= times[0]) & (df.index < times[-1] + pd.Timedelta(self.sample_freq))
+            (df.index >= times[0]) & (df.index < times[-1] + freq_to_timedelta(self.sample_freq))
         ]
         return window[keep] if not window.empty else None
 

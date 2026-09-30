@@ -58,7 +58,7 @@ def write_archive(root, model: str, init: pd.Timestamp, steps, variables=("tempe
     directory = root / model / init.strftime("%Y%m%dT%H%MZ")
     directory.mkdir(parents=True, exist_ok=True)
     for step in steps:
-        valid = init + pd.Timedelta(hours=step)
+        valid = init + pd.Timedelta(step, "h")
         for variable in variables:
             name = f"{valid.strftime('%Y%m%dT%H%MZ')}-PT{step:04d}H00M-{variable}.nc"
             surface_file(valid, "air_temperature").to_netcdf(directory / name)
@@ -259,7 +259,7 @@ def test_uk_partition_keeps_the_valid_times(local_config, archive):
     ds = open_store(provider)
     assert "init_time" not in ds.dims
     assert list(ds.time.values) == [
-        (INIT + pd.Timedelta(hours=h)).to_numpy() for h in range(6)
+        (INIT + pd.Timedelta(h, "h")).to_numpy() for h in range(6)
     ]
 
 
@@ -294,7 +294,7 @@ def ocean_file(times, depths=None, init: pd.Timestamp = INIT) -> xr.Dataset:
 def write_ocean(root, init: pd.Timestamp, with_depth: bool = True):
     directory = root / "global-ocean-ORCA025" / init.strftime("%Y/%m/%d/T%H%MZ")
     directory.mkdir(parents=True, exist_ok=True)
-    hourly = pd.date_range(init - pd.Timedelta("24h"), periods=24, freq="1h")
+    hourly = pd.date_range(init - pd.Timedelta(24, "h"), periods=24, freq="1h")
     ocean_file(hourly, init=init).to_netcdf(directory / f"b{init:%Y%m%d}T0000Z_hi-SSH.nc")
     if with_depth:
         depth = ocean_file([init], depths=[0.0, 10.0], init=init).rename({"var": "temperature"})
@@ -326,7 +326,7 @@ def test_ocean_runs_are_stored_as_offsets_so_a_second_run_cannot_relabel_the_fir
     # `time` as a dimension coordinate under `init_time` holds one set of values for the
     # whole store, so appending a second run would rewrite the first run's hours.
     root = tmp_path / "ocean"
-    later = INIT + pd.Timedelta("1D")
+    later = INIT + pd.Timedelta(1, "D")
     write_ocean(root, INIT)
     write_ocean(root, later)
     provider = MetOfficeOceanSurfaceProvider(config=local_config, archive_root=root)
@@ -361,7 +361,7 @@ def write_wave(root, day: pd.Timestamp, first_step_hours: int = 0):
     for run_index, run in enumerate(("T0000Z", "T0600Z", "T1200Z", "T1800Z")):
         directory = root / "global-wave" / day.strftime("%Y/%m/%d") / run
         directory.mkdir(parents=True, exist_ok=True)
-        start = day + pd.Timedelta(hours=6 * run_index + first_step_hours)
+        start = day + pd.Timedelta(6 * run_index + first_step_hours, "h")
         # Eight steps are published; only the six that tile the day are kept.
         times = pd.date_range(start, periods=8, freq="1h")
         ds = xr.Dataset(

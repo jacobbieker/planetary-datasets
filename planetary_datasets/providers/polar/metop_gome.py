@@ -29,7 +29,7 @@ class MetopGomeProvider(EumdacProvider):
     append_dim = "time"
     store_prefix = "bkr/polar/metop_gome.icechunk"
     collection_id = "EO:EUM:DAT:METOP:GOMEL1"
-    window = pd.Timedelta("1h")
+    window = pd.Timedelta(1, "h")
     chunk_measurements = CHUNK_MEASUREMENTS
 
     def process_granule(self, filename: str) -> xr.Dataset:

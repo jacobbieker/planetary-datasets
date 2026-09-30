@@ -294,7 +294,7 @@ def make_partition(stamps) -> xr.Dataset:
                 [
                     make_step("precipitation_flag", "int8", s),
                     make_step("precipitation_rate", "float16", s),
-                ]
+                ], compat="no_conflicts"
             )
             for s in stamps
         ],
@@ -348,7 +348,7 @@ class TestStoreRoundTrip:
 
     def test_recent_partial_partition_is_retried(self, provider, repo):
         """An hour written while the archive was still filling in must not be sealed."""
-        it = mrms.naive_utc(pd.Timestamp.now("UTC")).floor("h") - pd.Timedelta(hours=2)
+        it = mrms.naive_utc(pd.Timestamp.now("UTC")).floor("h") - pd.Timedelta(2, "h")
         provider.write_to_icechunk(repo, make_partition(provider.partition_timestamps(it)[:5]))
         assert provider.missing_timesteps(pd.DatetimeIndex([it])) == [it]
 

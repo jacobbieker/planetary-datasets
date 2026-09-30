@@ -469,7 +469,7 @@ def test_opensky_run_partition_round_trip(opensky_provider, states_archive, monk
     assert opensky_provider.run_partition(it) is False
 
     session = opensky_provider.get_icechunk_repo().readonly_session("main")
-    stored = xr.open_zarr(session.store, consolidated=False)
+    stored = xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
     assert pd.Timestamp(stored.time.values[0]) == it
 
 

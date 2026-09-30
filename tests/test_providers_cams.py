@@ -169,7 +169,7 @@ def test_open_cams_zip_from_disk_and_memory(cams_zip, tmp_path):
             "total_aerosol_optical_depth_at_550nm",
             "dust_aerosol_0.03_to_0.55_um_mixing_ratio",
         }
-        assert ds["time"].values[0] == np.datetime64(RUN + pd.Timedelta(hours=LEAD_HOURS))
+        assert ds["time"].values[0] == np.datetime64(RUN + pd.Timedelta(LEAD_HOURS, "h"))
         assert "forecast_period" not in ds.variables
 
 
@@ -359,7 +359,7 @@ def test_store_prefixes_are_the_ones_already_published(provider_cls, prefix):
 def test_run_partition_writes_and_is_idempotent(composition, cams_zip, monkeypatch):
     monkeypatch.setattr(composition, "fetch", lambda it, temp_dir=None, **kw: [str(cams_zip)])
 
-    it = RUN + pd.Timedelta(hours=LEAD_HOURS)
+    it = RUN + pd.Timedelta(LEAD_HOURS, "h")
     assert composition.run_partition(it) is True
     assert composition.run_partition(it) is False
 

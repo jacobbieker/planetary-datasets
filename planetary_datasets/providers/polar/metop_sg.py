@@ -52,7 +52,7 @@ class MetopSgProvider(EumdacProvider):
                 path, engine="h5netcdf", group=group, decode_times=self.decode_times
             ) as ds:
                 parts.append(ds[list(names)].load())
-        ds = xr.merge(parts, combine_attrs="drop").drop_encoding()
+        ds = xr.merge(parts, combine_attrs="drop", compat="no_conflicts").drop_encoding()
         ds = ds.rename({k: v for k, v in self.dim_renames.items() if k in ds.dims})
         start = pd.Timestamp(attrs["sensing_start_time_utc"])
         end = pd.Timestamp(attrs["sensing_end_time_utc"])
@@ -92,7 +92,7 @@ class MetopSgMwsProvider(MetopSgProvider):
     name = "metop_sg_mws"
     store_prefix = "bkr/polar/metop_sg_mws.icechunk"
     collection_id = "EO:EUM:DAT:0450"
-    window = pd.Timedelta("1D")
+    window = pd.Timedelta(1, "D")
     groups = {
         "data/navigation": (
             "mws_lat",
@@ -124,7 +124,7 @@ class MetopSgMetimageProvider(MetopSgProvider):
     name = "metop_sg_metimage"
     store_prefix = "bkr/polar/metop_sg_metimage.icechunk"
     collection_id = "EO:EUM:DAT:0464"
-    window = pd.Timedelta("10min")
+    window = pd.Timedelta(10, "min")
     decode_times = False
     groups = {
         "data/measurement_data": (
@@ -152,7 +152,7 @@ class MetopSgRoProvider(MetopSgProvider):
     name = "metop_sg_ro"
     store_prefix = "bkr/polar/metop_sg_ro.icechunk"
     collection_id = "EO:EUM:DAT:0452"
-    window = pd.Timedelta("1h")
+    window = pd.Timedelta(1, "h")
     decode_times = False
     groups = {
         "data/occultation": (

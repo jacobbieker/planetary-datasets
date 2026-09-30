@@ -108,7 +108,7 @@ def write_uk_hour(root: pathlib.Path, hour: pd.Timestamp, steps: int = 12) -> li
     """Write ``steps`` five-minute frames of a synthetic UK hour."""
     written = []
     for index in range(steps):
-        when = hour + pd.Timedelta(minutes=5 * index)
+        when = hour + pd.Timedelta(5 * index, "min")
         written.append(write_odim(root / uk_name(when), when))
     return written
 
@@ -409,7 +409,7 @@ def test_allow_partial_fetches_what_is_there(make_provider):
 def test_fetch_ignores_frames_from_a_neighbouring_hour(uk_provider):
     hour = pd.Timestamp("2025-05-29 20:00")
     write_uk_hour(uk_provider.archive_dir, hour)
-    write_uk_hour(uk_provider.archive_dir, hour + pd.Timedelta(hours=1), steps=2)
+    write_uk_hour(uk_provider.archive_dir, hour + pd.Timedelta(1, "h"), steps=2)
     found = uk_provider.fetch(hour)
     assert len(found) == 12
     assert all(stamp_of(p).hour == 20 for p in found)
@@ -461,7 +461,7 @@ def test_uk_process_refuses_to_outer_join_a_changed_grid(uk_provider, monkeypatc
 
     def shifted(path):
         ds = real(path)
-        if path.endswith(uk_name(hour + pd.Timedelta(minutes=5))):
+        if path.endswith(uk_name(hour + pd.Timedelta(5, "min"))):
             ds = ds.assign_coords(x=ds["x"] + 500.0)
         return ds
 
@@ -481,7 +481,7 @@ def test_fmi_process_merges_the_three_windows(fmi_provider):
 def test_fmi_process_rejects_products_from_different_times(fmi_provider):
     hour = pd.Timestamp("2021-02-02 01:00")
     good = write_fmi(fmi_provider.archive_dir / fmi_name(hour, 1), hour, hours=1)
-    later = hour + pd.Timedelta(hours=1)
+    later = hour + pd.Timedelta(1, "h")
     # Same filename stamp, different observation time in the metadata.
     odd = write_fmi(fmi_provider.archive_dir / fmi_name(hour, 24), later, hours=24)
     with pytest.raises(ValueError, match="disagree"):
@@ -549,7 +549,7 @@ def test_write_rejects_a_grid_that_does_not_match_the_store(uk_provider):
 
     processed = uk_provider.process([str(p) for p in paths], hour)
     shifted = processed.assign_coords(
-        time=processed["time"] + pd.Timedelta(hours=1),
+        time=processed["time"] + pd.Timedelta(1, "h"),
         x=processed["x"] + 500.0,
     )
     assert uk_provider.write_to_icechunk(uk_provider.get_icechunk_repo(), shifted) is False
@@ -568,7 +568,7 @@ def test_fmi_partial_hour_still_carries_every_variable(make_provider):
     assert bool(np.isnan(ds["rainfall_rate_accumulation_12h"].values).all())
 
     # The next, complete hour must append rather than be rejected for a variable mismatch.
-    second = first + pd.Timedelta(hours=1)
+    second = first + pd.Timedelta(1, "h")
     write_fmi_hour(provider.archive_dir, second)
     assert provider.run_partition(second) is True
     ds = stored(provider)

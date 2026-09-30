@@ -64,7 +64,7 @@ def _alaska_step(step_hours: int) -> xr.Dataset:
             "isobaricInhPa": np.array([500.0, 1000.0]),
             "y": np.arange(2),
             "x": np.arange(3),
-            "step": pd.Timedelta(hours=step_hours),
+            "step": pd.Timedelta(step_hours, "h"),
             "time": pd.Timestamp("2026-01-01T00:00"),
         },
     )

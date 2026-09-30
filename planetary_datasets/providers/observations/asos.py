@@ -147,7 +147,7 @@ class ASOSOneMinuteProvider(StationObservationProvider):
     def station_url(self, station: Station, it: pd.Timestamp) -> str:
         """Build the CGI request for one station and one UTC day."""
         start = pd.Timestamp(it)
-        end = start + pd.Timedelta(days=1)
+        end = start + pd.Timedelta(1, "D")
         params = "&".join(f"vars={v}" for v in self.variables)
         return (
             f"{SERVICE}?station={station.id}&{params}"

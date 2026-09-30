@@ -794,7 +794,7 @@ def extend_time_axis(repo, new_times: pd.DatetimeIndex, attempts: int = 5) -> bo
     for attempt in range(attempts):
         session = repo.writable_session("main")
         old_times = pd.DatetimeIndex(
-            xr.open_zarr(session.store, consolidated=False)["time"].values
+            xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)["time"].values
         )
         if old_times.equals(new_times):
             return False
@@ -1406,7 +1406,9 @@ class MARSIcechunkProvider(BaseProvider):
     def store_times(self, repo=None) -> pd.DatetimeIndex:
         """The time axis the store was initialised with."""
         repo = repo or self.get_icechunk_repo()
-        ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+        ds = xr.open_zarr(
+            repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+        )
         return pd.DatetimeIndex(ds["time"].values)
 
     def pending_groups(self, desired_timestamps: Iterable[pd.Timestamp]) -> dict:
@@ -1430,7 +1432,9 @@ class MARSIcechunkProvider(BaseProvider):
         }
         try:
             repo = self.get_icechunk_repo()
-            ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+            ds = xr.open_zarr(
+                repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+            )
             flags = {
                 group: pd.Series(
                     ds[_INGESTED[group]].values.astype(bool),
@@ -1614,10 +1618,12 @@ class MARSIcechunkProvider(BaseProvider):
         session = repo.writable_session("main")
         targets = []
         if regrids:
-            grid = xr.open_zarr(session.store, consolidated=False)
+            grid = xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
             for provider, target_repo in regrids:
                 target_session = target_repo.writable_session("main")
-                target = xr.open_zarr(target_session.store, consolidated=False)
+                target = xr.open_zarr(
+                    target_session.store, consolidated=False, decode_timedelta=True
+                )
                 targets.append(
                     {
                         "provider": provider,
@@ -2078,7 +2084,9 @@ class MARSRegridProvider(BaseProvider):
     def native_dataset(self) -> xr.Dataset:
         """The native O1280 store this regrid reads from."""
         return xr.open_zarr(
-            self.native.get_icechunk_repo().readonly_session("main").store, consolidated=False
+            self.native.get_icechunk_repo().readonly_session("main").store,
+            consolidated=False,
+            decode_timedelta=True,
         )
 
     def weights(self, native: xr.Dataset):
@@ -2342,7 +2350,9 @@ class MARSRegridProvider(BaseProvider):
         }
         try:
             target = xr.open_zarr(
-                self.get_icechunk_repo().readonly_session("main").store, consolidated=False
+                self.get_icechunk_repo().readonly_session("main").store,
+                consolidated=False,
+                decode_timedelta=True,
             )
             target_flags = {
                 g: pd.Series(
@@ -2487,7 +2497,9 @@ def regrid_timestep(
     plans = []
     for provider, repo, groups in targets:
         wanted = set(GROUPS if groups is None else groups)
-        target = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+        target = xr.open_zarr(
+            repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+        )
         plans.append(
             {
                 "provider": provider,

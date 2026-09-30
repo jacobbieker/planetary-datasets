@@ -38,7 +38,7 @@ opensky_partitions = dg.WeeklyPartitionsDefinition(
     start_date=SAMPLE_START.strftime("%Y-%m-%d"),
     # end_date bounds the window's *end*, so the last Monday needs a full week beyond it
     # to be included at all.
-    end_date=(SAMPLE_END + pd.Timedelta(days=7)).strftime("%Y-%m-%d"),
+    end_date=(SAMPLE_END + pd.Timedelta(7, "D")).strftime("%Y-%m-%d"),
     day_offset=1,
 )
 

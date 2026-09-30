@@ -72,7 +72,7 @@ def _time_of_day(day: str, field: str) -> pd.Timestamp:
     """Decode a ``HHMMSSd`` filename field — hours, minutes, seconds and tenths."""
     tod = field[1:]
     stamp = pd.Timestamp(f"{day}T{tod[0:2]}:{tod[2:4]}:{tod[4:6]}")
-    return stamp + pd.Timedelta(milliseconds=int(tod[6]) * 100)
+    return stamp + pd.Timedelta(int(tod[6]) * 100, "ms")
 
 
 def granule_start(filename: str) -> pd.Timestamp:
@@ -91,7 +91,7 @@ def granule_end(filename: str) -> pd.Timestamp:
     day = parts[2][1:]
     start = _time_of_day(day, parts[3])
     end = _time_of_day(day, parts[4])
-    return end + pd.Timedelta("1D") if end < start else end
+    return end + pd.Timedelta(1, "D") if end < start else end
 
 
 def granule_overlaps(filename: str, start: pd.Timestamp, end: pd.Timestamp) -> bool:
@@ -112,7 +112,7 @@ class JpssAtmsProvider(GranuleProvider):
     name = "jpss_atms"
     append_dim = "time"
     store_prefix = "bkr/polar/jpss_atms.icechunk"
-    window = pd.Timedelta("1h")
+    window = pd.Timedelta(1, "h")
 
     def __init__(
         self,
@@ -181,7 +181,7 @@ class JpssAtmsProvider(GranuleProvider):
         """
         first = start.normalize()
         if start == first:
-            first -= pd.Timedelta("1D")
+            first -= pd.Timedelta(1, "D")
         return pd.date_range(first, end.normalize(), freq="1D")
 
     def granule_pairs(self, it: pd.Timestamp) -> List[Tuple[str, str, str]]:

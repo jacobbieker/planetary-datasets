@@ -75,7 +75,7 @@ class MetopIasiProvider(EumdacProvider):
     append_dim = "time"
     store_prefix = "bkr/polar/metop_iasi.icechunk"
     collection_id = "EO:EUM:DAT:METOP:IASIL1C-ALL"
-    window = pd.Timedelta("2h")
+    window = pd.Timedelta(2, "h")
     chunk_soundings = CHUNK_SOUNDINGS
 
     def process_granule(self, filename: str) -> xr.Dataset:

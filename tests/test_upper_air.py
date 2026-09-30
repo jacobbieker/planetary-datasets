@@ -17,6 +17,7 @@ import pytest
 import xarray as xr
 
 from helpers import read_store as _stored
+from planetary_datasets.common.time import freq_to_timedelta
 from planetary_datasets.providers.observations import igra as igra_module
 from planetary_datasets.providers.observations import sondehub as sondehub_module
 from planetary_datasets.providers.observations.amdar import (
@@ -138,7 +139,10 @@ class StubPointProvider(PointObservationProvider):
         return ["stub"]
 
     def process(self, input_files, it, temp_dir=None, **kwargs):
-        times = [pd.Timestamp(it) + pd.Timedelta(o) for o in self.offsets + self.extra_offsets]
+        times = [
+            pd.Timestamp(it) + freq_to_timedelta(o)
+            for o in self.offsets + self.extra_offsets
+        ]
         table = pd.DataFrame({"time": times, "value": np.arange(len(times), dtype="float64")})
         return self.trim_to_window(table_to_dataset(table, {"value": "float32"}), it)
 
@@ -175,7 +179,7 @@ def test_partition_is_missing_until_an_observation_lands_in_it(stub_provider):
 
     # The partition timestamp itself is never a stored value; the window is what counts.
     assert stub_provider.missing_timesteps([day]) == []
-    assert stub_provider.missing_timesteps([day + pd.Timedelta("1D")]) == [day + pd.Timedelta("1D")]
+    assert stub_provider.missing_timesteps([day + pd.Timedelta(1, "D")]) == [day + pd.Timedelta(1, "D")]
 
 
 def test_round_trip_through_a_local_store(stub_provider):

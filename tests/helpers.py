@@ -15,7 +15,9 @@ def read_store(target) -> xr.Dataset:
     ``target`` is a repository, or a provider, whose repository is used.
     """
     repo = target.get_icechunk_repo() if hasattr(target, "get_icechunk_repo") else target
-    return xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    return xr.open_zarr(
+        repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+    )
 
 
 def assert_pipes_accepts(metadata: dict) -> None:

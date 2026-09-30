@@ -60,7 +60,7 @@ def day_of_granules(tmp_path):
     """Four half-hourly granules for 2024-01-01, written out of order."""
     paths = []
     for i in (2, 0, 3, 1):
-        t = DAY + pd.Timedelta(minutes=30 * i)
+        t = DAY + pd.Timedelta(30 * i, "min")
         name = f"3B-HHR.MS.MRG.3IMERG.20240101-S{i:02d}0000-E000000.{i * 30:04d}.V07B.HDF5"
         paths.append(str(write_granule(tmp_path / "granules" / name, t)))
     return paths
@@ -288,7 +288,7 @@ def stage_day(provider, day=DAY, count=3):
     return [
         write_granule(
             staged / f"3B-HHR.MS.MRG.3IMERG.20240101-S{i:02d}0000.{i:04d}.V07B.HDF5",
-            day + pd.Timedelta(minutes=30 * i),
+            day + pd.Timedelta(30 * i, "min"),
         )
         for i in range(count)
     ]

@@ -42,6 +42,7 @@ from loguru import logger
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common.download import cleanup_files, download_one
 from planetary_datasets.common.store import existing_times
+from planetary_datasets.common.time import freq_to_timedelta
 
 AWS_BUCKET = "noaa-mrms-pds"
 AWS_HTTPS_ROOT = f"https://{AWS_BUCKET}.s3.amazonaws.com"
@@ -233,10 +234,10 @@ class MRMSProvider(BaseProvider):
     #: the guard keeps a wide partition from taking the host down.
     guard_memory = True
 
-    partition_span = pd.Timedelta(hours=1)
+    partition_span = pd.Timedelta(1, "h")
 
     #: How long an hour may still gain files before its gaps are treated as permanent.
-    settle_after = pd.Timedelta(days=2)
+    settle_after = pd.Timedelta(2, "D")
 
     def __init__(
         self,
@@ -272,7 +273,7 @@ class MRMSProvider(BaseProvider):
         """
         return max(
             (PRODUCTS[p].freq for p in self.products),
-            key=lambda f: pd.Timedelta(f),
+            key=freq_to_timedelta,
         )
 
     def _default_store_prefix(self) -> str:
@@ -303,7 +304,7 @@ class MRMSProvider(BaseProvider):
     def partition_timestamps(self, it: pd.Timestamp) -> pd.DatetimeIndex:
         """The timesteps that make up the partition starting at ``it``."""
         it = naive_utc(it)
-        step = pd.Timedelta(self.freq)
+        step = freq_to_timedelta(self.freq)
         return pd.date_range(it, it + self.partition_span - step, freq=self.freq)
 
     def run_partition(self, it: pd.Timestamp, check_present: bool = True) -> bool:
@@ -470,7 +471,7 @@ class MRMSProvider(BaseProvider):
                         temp_dir=temp_dir,
                     )
                     for product in self.products
-                ]
+                ], compat="no_conflicts"
             )
             steps.append(merged)
 

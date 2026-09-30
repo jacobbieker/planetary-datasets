@@ -70,7 +70,7 @@ def write_reflectivity(path, time: pd.Timestamp, steps: int = 3):
 
 def write_meps_step(tmp_path, stamp: str, step: int) -> list[str]:
     """The three files (height, pressure, surface) making up one MEPS lead time."""
-    time = pd.DatetimeIndex([pd.Timestamp(stamp) + pd.Timedelta(hours=step)])
+    time = pd.DatetimeIndex([pd.Timestamp(stamp) + pd.Timedelta(step, "h")])
     coords = {"time": time, **_grid()}
 
     hl = xr.Dataset(
@@ -264,10 +264,10 @@ def test_postprocessed_fetch_refuses_a_partial_day(tmp_path, local_config, monke
 
 def test_postprocessed_process_concatenates_hours(tmp_path, local_config):
     start = pd.Timestamp("2026-04-05T00:00")
-    files = [write_nordic_analysis(tmp_path, start + pd.Timedelta(hours=h)) for h in range(3)]
+    files = [write_nordic_analysis(tmp_path, start + pd.Timedelta(h, "h")) for h in range(3)]
     ds = MEPSPostProcessedProvider(config=local_config).process(files, start)
     assert ds.sizes["time"] == 3
-    assert list(pd.DatetimeIndex(ds.time.values)) == [start + pd.Timedelta(hours=h) for h in range(3)]
+    assert list(pd.DatetimeIndex(ds.time.values)) == [start + pd.Timedelta(h, "h") for h in range(3)]
 
 
 def test_postprocessed_partitions_do_not_overlap(local_config):

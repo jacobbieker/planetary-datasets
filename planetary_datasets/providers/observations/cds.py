@@ -117,7 +117,7 @@ def long_table_to_cube(
     df[variable_col] = _decode(df[variable_col]).astype(str)
 
     stamps = pd.to_datetime(df[time_col], errors="coerce", utc=True).dt.tz_localize(None)
-    step = times[1] - times[0] if len(times) > 1 else pd.Timedelta("1h")
+    step = times[1] - times[0] if len(times) > 1 else pd.Timedelta(1, "h")
     # Bin to the grid rather than reindexing: soundings and GNSS solutions do not land on
     # round hours.
     df["_time"] = stamps.dt.floor(step)

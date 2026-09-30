@@ -34,7 +34,7 @@ class MetopAmsuaProvider(EumdacProvider):
     collection_id = "EO:EUM:DAT:METOP:AMSUL1"
     obs_store = True
     epct_product = "AMSAL1"
-    window = pd.Timedelta("1D")
+    window = pd.Timedelta(1, "D")
     along_track_length = ALONG_TRACK_LENGTH
 
     def open_tailored(self, path: str) -> xr.Dataset | None:

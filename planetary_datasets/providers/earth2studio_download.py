@@ -789,8 +789,10 @@ def fetch_table(dataset: Dataset, start: dt.datetime, end: dt.datetime, factory=
     import pandas as pd
     import pyarrow as pa
 
+    from planetary_datasets.common.time import freq_to_timedelta
+
     cls = factory or _e2s_class(dataset.source)
-    lead = pd.Timedelta(dataset.lead).to_pytimedelta()
+    lead = freq_to_timedelta(dataset.lead).to_pytimedelta()
     kwargs = {
         "time_tolerance": (-lead, end - start),
         "cache": True,

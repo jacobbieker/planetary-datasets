@@ -36,7 +36,7 @@ def _grid(n_lat: int = 4, n_lon: int = 6) -> dict:
 def write_dust_step(directory, init: pd.Timestamp, step: int) -> str:
     """Write a file shaped like one SILAM dust forecast step."""
     grid = _grid()
-    valid = init + pd.Timedelta(hours=step)
+    valid = init + pd.Timedelta(step, "h")
     shape = (1, 1, grid["lat"].size, grid["lon"].size)
     ds = xr.Dataset(
         {
@@ -65,7 +65,7 @@ def write_aerosol_file(
 ) -> str:
     """Write a file shaped like one species/day slice of the surface aerosol forecast."""
     grid = _grid()
-    valid = pd.DatetimeIndex([init + pd.Timedelta(hours=day * 24 + h) for h in range(1, 25)])
+    valid = pd.DatetimeIndex([init + pd.Timedelta(day * 24 + h, "h") for h in range(1, 25)])
     values = np.ones((24, grid["lat"].size, grid["lon"].size), "float32")
     ds = xr.Dataset(
         {species: (("time", "lat", "lon"), values, {"units": units})},
@@ -252,4 +252,4 @@ def test_write_is_refused_loudly_when_the_step_axis_changes(local_config, tmp_pa
     longer = _OfflineDust(tmp_path / "dust_long", config=local_config)
     longer.max_step = 4
     with pytest.raises(IncompleteForecast):
-        longer.run_partition(INIT + pd.Timedelta(days=1))
+        longer.run_partition(INIT + pd.Timedelta(1, "D"))

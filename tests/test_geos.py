@@ -242,7 +242,7 @@ def test_run_partition_writes_then_skips(v2, monkeypatch, geos_file):
     assert v2.run_partition(STAMP) is False
 
     session = v2.get_icechunk_repo().readonly_session("main")
-    stored = xr.open_zarr(session.store, consolidated=False)
+    stored = xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
     assert pd.Timestamp(stored["time"].values[0]) == STAMP
     assert set(stored.data_vars) == {"SLP", "T2M"}
 

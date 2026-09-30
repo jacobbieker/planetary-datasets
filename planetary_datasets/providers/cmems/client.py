@@ -246,7 +246,7 @@ def subset_day(
             start_datetime=day,
             # 23:59 rather than the next midnight, so a day is never fetched twice and
             # appends along time cannot collide with the following partition.
-            end_datetime=day + pd.Timedelta(hours=23, minutes=59),
+            end_datetime=day + pd.Timedelta(23, "h") + pd.Timedelta(59, "min"),
             output_directory=str(out_dir),
             output_filename=output_filename,
             file_format="netcdf",

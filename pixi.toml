@@ -1,6 +1,6 @@
 [project]
 name = "planetary-datasets"
-version = "0.0.1"
+version = "0.0.2"
 description = "Datasets for ML models for planetary use-cases (e.g. solar mapping, land use, forecasting)"
 authors = ["Jacob Bieker <jacob@bieker.tech>"]
 channels = ["conda-forge"]
@@ -10,6 +10,12 @@ platforms = ["linux-64", "osx-arm64"]
 
 test = "pytest tests/ -q"
 lint = "ruff check ."
+
+
+[tasks.dagster]
+cmd = "dagster dev -m dags.definitions"
+env = { DAGSTER_HOME = "$PIXI_PROJECT_ROOT/dags" }
+
 [dependencies]
 python = ">=3.14.6,<3.15"
 fsspec = ">=2025.10.0,<2026"
@@ -55,10 +61,6 @@ ruff = ">=0.14.5,<0.15"
 harp = ">=1.28.1,<2"
 eccodes = ">=2.44.0,<3"
 
-# MIR, reached through Metview, transforms the MARS spherical harmonics onto
-# the gridpoint octahedral grid. Every model level field goes through it, so
-# without these the MARS ingest fails on its first timestep with
-# "ModuleNotFoundError: No module named 'metview'".
 metview-python = ">=1.16.2,<2"
 metview = ">=5.26.2,<6"
 
@@ -67,6 +69,7 @@ python-dotenv = ">=1.0,<2"
 loguru = ">=0.7,<1"
 obstore = ">=0.11,<1"
 copernicusmarine = ">=2.4.1,<3"
+
 [pypi-dependencies]
 odc-stac = ">=0.4.0, <0.5"
 planetary-computer = ">=1.0.0, <2"

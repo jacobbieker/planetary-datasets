@@ -36,7 +36,7 @@ def main() -> None:
             storage = icechunk.local_filesystem_storage(f"/data/AOML/aoml_{obs_type[0]}_{year}.icechunk")
             repo = icechunk.Repository.open_or_create(storage)
             session = repo.readonly_session("main")
-            ds = xr.open_zarr(session.store, consolidated=False)
+            ds = xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
             times = len(ds.time.values)
             if times % 100000 != 0:
                 print(f"Warning: {obs_type[0]} data for {year} has {times} time steps, which is not a multiple of 100000. Truncating to be a multiple.")

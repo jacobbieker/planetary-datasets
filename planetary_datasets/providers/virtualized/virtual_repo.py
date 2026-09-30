@@ -203,7 +203,10 @@ def committed_times(
 
     try:
         ds = xr.open_zarr(
-            repo.readonly_session(branch).store, group=group or None, consolidated=False
+            repo.readonly_session(branch).store,
+            group=group or None,
+            consolidated=False,
+            decode_timedelta=True,
         )
     except Exception as exc:  # noqa: BLE001 - any failure here means "nothing written yet"
         logger.debug(f"store not readable ({type(exc).__name__}: {exc})")
@@ -299,7 +302,9 @@ def describe_store(repo: "icechunk.Repository", branch: str = "main") -> dict[st
     import xarray as xr
 
     try:
-        ds = xr.open_zarr(repo.readonly_session(branch=branch).store, consolidated=False)
+        ds = xr.open_zarr(
+            repo.readonly_session(branch=branch).store, consolidated=False, decode_timedelta=True
+        )
     except Exception as exc:  # noqa: BLE001 - any failure here means "nothing written yet"
         logger.debug(f"store not readable ({type(exc).__name__}: {exc})")
         return {}

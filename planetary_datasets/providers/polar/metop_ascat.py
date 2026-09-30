@@ -27,7 +27,7 @@ class MetopAscatProvider(EumdacProvider):
     collection_id = "EO:EUM:DAT:METOP:ASCSZF1B"
     obs_store = True
     epct_product = "ASCATL1SZR"
-    window = pd.Timedelta("1D")
+    window = pd.Timedelta(1, "D")
 
     #: Unlike AMSU-A there is no measured upper bound on an ASCAT orbit to pad to, so the
     #: length is taken from the store once it exists and from the partition before that.

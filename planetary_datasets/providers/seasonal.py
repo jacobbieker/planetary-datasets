@@ -262,7 +262,7 @@ class SeasonalForecastProvider(NaiveUTCPartitions, BaseProvider):
             members.extend(_extract_if_zip(pathlib.Path(path), scratch))
 
         datasets = [xr.open_dataset(p) for p in members]
-        ds = datasets[0] if len(datasets) == 1 else xr.merge(datasets)
+        ds = datasets[0] if len(datasets) == 1 else xr.merge(datasets, compat="no_conflicts")
         return self.normalise(ds, it)
 
     def normalise(self, ds: xr.Dataset, it: pd.Timestamp) -> xr.Dataset:

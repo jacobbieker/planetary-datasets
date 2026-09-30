@@ -66,6 +66,26 @@ MAX_CONSECUTIVE_FAILED_DAYS = 14
 #: wholly unreadable archive terminates instead of walking all of it.
 MAX_CONSECUTIVE_UNREADABLE_DAYS = 90
 
+#: Attempts to open a batch before believing its files are unreadable.
+#:
+#: A short read from object storage reaches HDF5 as a *byte-identical* error to
+#: genuine corruption — "truncated file: eof = N, stored_eof = M" — so the two
+#: cannot be told apart from the message. They are told apart by retrying: a
+#: corrupt file fails every time, a short read usually succeeds on the next.
+#:
+#: This is not hypothetical. GK-2A ir105 discarded 581 of 909 attempted days
+#: (~64%) this way while its files were intact in the bucket: the reported
+#: ``eof`` was always an exact 2**20 multiple (32MiB, 33MiB) where the real
+#: object was 35,457,893 bytes, and a later read returned all of it. The band
+#: was doing nearly every file-open on its box at the time, so the rate tracks
+#: read volume under concurrency rather than anything about the data.
+UNREADABLE_RETRY_ATTEMPTS = 3
+
+#: Seconds to wait before retrying, multiplied by the attempt number. Short
+#: reads cluster when many workers hit the bucket at once, so backing off also
+#: thins the concurrency that provoked them.
+UNREADABLE_RETRY_BACKOFF_S = 5.0
+
 #: Reopen the icechunk Repository every N batches.
 #:
 #: Repeatedly appending into a growing store leaks memory in proportion to the
@@ -629,6 +649,43 @@ def _is_unreadable_source_error(exc: Exception) -> bool:
             "bad object header",
         )
     )
+
+
+def open_with_unreadable_retry(
+    open_fn: Callable[[list[str]], Any],
+    urls: list[str],
+    *,
+    attempts: int = UNREADABLE_RETRY_ATTEMPTS,
+    backoff_s: float = UNREADABLE_RETRY_BACKOFF_S,
+    on_retry: Callable[[int, float, Exception], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Any:
+    """Open a batch, retrying when its files merely *look* unreadable.
+
+    :func:`_is_unreadable_source_error` cannot distinguish a corrupt file from a
+    short read, because object storage produces the identical HDF5 message for
+    both — see :data:`UNREADABLE_RETRY_ATTEMPTS`. Retrying separates them: a
+    corrupt file fails every attempt and is skipped exactly as before, while a
+    short read succeeds and the day is kept instead of being lost forever to an
+    append-only store.
+
+    Only unreadable-source errors are retried. Anything else — a codec
+    boundary, a missing variable, a bug — is raised on the first attempt, since
+    repeating it would just be slower.
+    """
+    last: Exception
+    for attempt in range(1, attempts + 1):
+        try:
+            return open_fn(urls)
+        except Exception as exc:  # noqa: BLE001 - re-raised below unless retryable
+            if attempt >= attempts or not _is_unreadable_source_error(exc):
+                raise
+            last = exc
+            delay = backoff_s * attempt
+            if on_retry is not None:
+                on_retry(attempt, delay, last)
+            sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _source_of(ds: xr.Dataset) -> str:
@@ -1195,7 +1252,11 @@ def _last_committed_day(
     try:
         session = repo.readonly_session(branch=branch)
         existing = xr.open_zarr(
-            session.store, group=group or None, chunks=None, zarr_format=3,
+            session.store,
+            group=group or None,
+            chunks=None,
+            zarr_format=3,
+            decode_timedelta=True,
         )
     except (FileNotFoundError, KeyError):
         return None
@@ -1486,9 +1547,27 @@ def ingest_all_days(
                     **_COMBINE_KWARGS,
                 )
 
+            def _note_retry(attempt: int, delay: float, exc: Exception) -> None:
+                msg = (
+                    f"source files unreadable ({type(exc).__name__}); "
+                    f"attempt {attempt}/{UNREADABLE_RETRY_ATTEMPTS}, "
+                    f"retrying in {delay:.0f}s"
+                )
+                print(f"    {msg}", flush=True)
+                if log_dir is not None:
+                    log_event(
+                        log_dir, satellite, channel_label, date_range,
+                        "UNREADABLE_RETRY", msg,
+                    )
+
+            def _open_batch_resilient(urls: list[str]) -> xr.Dataset:
+                return open_with_unreadable_retry(
+                    _open_batch, urls, on_retry=_note_retry
+                )
+
             with timer("Creating the virtual dataset"):
                 try:
-                    vds = _open_batch(urls_for_this_batch)
+                    vds = _open_batch_resilient(urls_for_this_batch)
                 except NotImplementedError as e:
                     # A single file that is unlike the rest of its day is enough to make
                     # the whole day unconcatenatable: a different codec pipeline, or a
@@ -1534,7 +1613,7 @@ def ingest_all_days(
                             "CODEC_OUTLIERS_DROPPED", msg,
                         )
                     urls_for_this_batch = kept
-                    vds = _open_batch(kept)
+                    vds = _open_batch_resilient(kept)
 
             with timer("Validating batch data variables"):
                 missing, extra = validate_batch_data_vars(vds, keep_data_vars)

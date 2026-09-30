@@ -184,7 +184,7 @@ def prepbufr_urls(day: pd.Timestamp) -> List[str]:
     Each cycle holds a +-3 h window, so the next day's 00z carries this day's last three hours.
     """
     day = pd.Timestamp(day).normalize()
-    cycles = [(day, h) for h in GDAS_CYCLES] + [(day + pd.Timedelta(days=1), 0)]
+    cycles = [(day, h) for h in GDAS_CYCLES] + [(day + pd.Timedelta(1, "D"), 0)]
     return [GDEX_PREPBUFR_URL.format(day=d, hour=h) for d, h in cycles]
 
 #: Observation types whose "unit" makes them a code rather than a measurement. The

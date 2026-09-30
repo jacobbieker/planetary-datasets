@@ -240,7 +240,7 @@ def _step_dataset(step_hours: int) -> xr.Dataset:
             # GRIB order: latitude descending, longitude on 0-360.
             "latitude": [1.0, 0.0, -1.0],
             "longitude": [0.0, 90.0, 180.0, 270.0],
-            "step": pd.Timedelta(hours=step_hours),
+            "step": pd.Timedelta(step_hours, "h"),
         },
     )
 
@@ -317,7 +317,7 @@ def _cube_with_steps(it: str, steps) -> xr.Dataset:
         },
         coords={
             "time": pd.DatetimeIndex([it]),
-            "step": [pd.Timedelta(hours=h) for h in steps],
+            "step": [pd.Timedelta(h, "h") for h in steps],
             "latitude": [-1.0, 0.0, 1.0],
         },
     )

@@ -29,6 +29,7 @@ import fsspec
 import pandas as pd
 from loguru import logger
 
+from planetary_datasets.common.time import freq_to_timedelta
 from planetary_datasets.providers.observations.base import (
     Station,
     StationObservationProvider,
@@ -193,7 +194,7 @@ class MeteostatHourlyProvider(StationObservationProvider):
 
         times = self.partition_times(it)
         window = df.loc[
-            (df.index >= times[0]) & (df.index < times[-1] + pd.Timedelta(self.sample_freq))
+            (df.index >= times[0]) & (df.index < times[-1] + freq_to_timedelta(self.sample_freq))
         ]
         if window.empty:
             return None

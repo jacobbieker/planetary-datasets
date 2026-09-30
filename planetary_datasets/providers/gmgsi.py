@@ -275,7 +275,7 @@ def rewrite_store_skipping_bad_chunks(
     """
     source, destination = str(source), str(destination)
 
-    with xr.open_zarr(source, consolidated=False) as probe:
+    with xr.open_zarr(source, consolidated=False, decode_timedelta=True) as probe:
         n_times = probe.sizes["time"]
 
     readable = _map(_timestep_reads, [source] * n_times, range(n_times), max_workers=max_workers)
@@ -287,7 +287,7 @@ def rewrite_store_skipping_bad_chunks(
     if not good:
         raise ValueError(f"no readable timesteps in {source}")
 
-    template = xr.open_zarr(source, consolidated=False).isel(time=good)
+    template = xr.open_zarr(source, consolidated=False, decode_timedelta=True).isel(time=good)
     for var in list(template.variables):
         template[var] = template[var].drop_encoding()
     template.to_zarr(destination, compute=False, mode="w", consolidated=False)
@@ -322,7 +322,7 @@ def _map(fn, *iterables, max_workers: int | None) -> list:
 def _timestep_reads(source: str, itime: int) -> bool:
     """True when one timestep of ``source`` decompresses without error."""
     try:
-        with xr.open_zarr(source, consolidated=False) as ds:
+        with xr.open_zarr(source, consolidated=False, decode_timedelta=True) as ds:
             ds.isel(time=itime).load()
     except Exception as exc:  # noqa: BLE001 - a bad chunk must not stop the salvage
         logger.warning(f"timestep {itime} could not be read: {exc}")
@@ -338,7 +338,7 @@ def _copy_timestep(source: str, destination: str, itime: int) -> bool:
     """
     try:
         # isel with a list keeps the time dimension, which region="auto" needs.
-        ds = xr.open_zarr(source, consolidated=False).isel(time=[itime])
+        ds = xr.open_zarr(source, consolidated=False, decode_timedelta=True).isel(time=[itime])
         ds.to_zarr(destination, region="auto", consolidated=False)
     except Exception as exc:  # noqa: BLE001 - a bad chunk must not stop the salvage
         logger.warning(f"timestep {itime} could not be copied: {exc}")

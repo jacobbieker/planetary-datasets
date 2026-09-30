@@ -692,7 +692,7 @@ def check_stores(
         try:
             repo = _open_repo(args, channel=channel, date_suffix=suffix)
             session = repo.readonly_session(branch=args.branch)
-            ds = xr.open_zarr(session.store, consolidated=False)
+            ds = xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
 
             n_t = ds.sizes.get("t", 0)
             t_first = str(ds["t"].values[0])[:19] if n_t > 0 else "N/A"

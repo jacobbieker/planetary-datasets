@@ -112,7 +112,9 @@ def existing_station_axis(repo, station_dim: str = STATION_DIM) -> list[str] | N
     the axis the first write established, instead of letting the append be refused.
     """
     try:
-        ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+        ds = xr.open_zarr(
+            repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+        )
     except Exception as exc:  # noqa: BLE001 - an unreadable store is handled by the writer
         logger.debug(f"could not read the station axis ({type(exc).__name__}: {exc})")
         return None

@@ -738,3 +738,78 @@ def test_max_eras_all_means_every_era(gv):
     assert gv._run_options({"goes_virtual/max_eras": "all"})[1] is None
     assert gv._run_options({"goes_virtual/max_eras": "3"})[1] == 3
     assert gv._run_options({"goes_virtual/batch_size": "5"})[2] == 5
+
+
+def _truncated_oserror(eof: int = 34603008, stored: int = 35675309) -> OSError:
+    """The exact error a short read produces, indistinguishable from corruption."""
+    return OSError(
+        f"Unable to synchronously open file (truncated file: eof = {eof}, "
+        f"sblock->base_addr = 0, stored_eof = {stored})"
+    )
+
+
+def test_a_short_read_is_retried_rather_than_treated_as_corruption():
+    """A file that reads short once and fully next time must not be lost.
+
+    Object storage surfaces a short read as a byte-identical HDF5 error to real
+    corruption, and the store only appends along `t`, so believing the first
+    attempt discards the day permanently. GK-2A ir105 lost 581 of 909 days this
+    way while the files were intact in the bucket.
+    """
+    attempts = []
+
+    def flaky(urls):
+        attempts.append(urls)
+        if len(attempts) < 3:
+            raise _truncated_oserror()
+        return "dataset"
+
+    slept = []
+    result = common.open_with_unreadable_retry(
+        flaky, ["a.nc"], sleep=slept.append
+    )
+
+    assert result == "dataset"
+    assert len(attempts) == 3
+    # Backs off further each time, since short reads cluster under concurrency.
+    assert slept == [5.0, 10.0]
+
+
+def test_a_genuinely_corrupt_file_still_gives_up():
+    """Retrying must not turn a permanent failure into an unbounded loop."""
+    attempts = []
+
+    def always_bad(urls):
+        attempts.append(urls)
+        raise _truncated_oserror()
+
+    with pytest.raises(OSError, match="truncated file"):
+        common.open_with_unreadable_retry(
+            always_bad, ["a.nc"], sleep=lambda _: None
+        )
+    assert len(attempts) == common.UNREADABLE_RETRY_ATTEMPTS
+    # Still classified as unreadable, so the caller keeps counting it against
+    # MAX_CONSECUTIVE_UNREADABLE_DAYS rather than the much tighter failure cap.
+    assert common._is_unreadable_source_error(_truncated_oserror())
+
+
+def test_a_codec_boundary_is_not_retried():
+    """Only unreadable-source errors retry; a codec change must raise at once.
+
+    An era boundary is detected by the open failing, so retrying it would delay
+    every era split by the full backoff for no benefit.
+    """
+    attempts = []
+
+    def codec_error(urls):
+        attempts.append(urls)
+        raise NotImplementedError(
+            "The ManifestArray class cannot concatenate arrays which were "
+            "stored using different codecs"
+        )
+
+    with pytest.raises(NotImplementedError, match="different codecs"):
+        common.open_with_unreadable_retry(
+            codec_error, ["a.nc"], sleep=lambda _: None
+        )
+    assert len(attempts) == 1

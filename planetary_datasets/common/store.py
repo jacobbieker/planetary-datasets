@@ -7,7 +7,9 @@ encoding-dict builder that appeared in seventy-one. The append-or-create decisio
 
 from __future__ import annotations
 
+import contextlib
 import itertools
+import warnings
 from typing import Iterable, Sequence
 
 import icechunk
@@ -26,6 +28,10 @@ ALIGNMENT_COORDS = ("latitude", "longitude", "level", "isobaricInhPa", "height")
 # Errors that mean "this store has nothing in it yet" when the repository is also empty.
 STORE_READ_ERRORS = (ValueError, KeyError, FileNotFoundError, icechunk.IcechunkError)
 
+#: Start of the FutureWarning xarray raises when it decodes a timedelta variable - a
+#: forecast ``step`` axis, here - from its ``units`` attribute alone.
+_TIMEDELTA_DECODE_WARNING = "In a future version, xarray will not decode the variable"
+
 
 class StoreReadError(RuntimeError):
     """A store that is known to hold data could not be read.
@@ -33,6 +39,27 @@ class StoreReadError(RuntimeError):
     Distinct from an empty store. Treating this as empty would silently discard the
     archive, so it is raised rather than swallowed.
     """
+
+
+@contextlib.contextmanager
+def quiet_timedelta_decoding():
+    """Silence xarray's timedelta-decoding FutureWarning for the duration of a write.
+
+    Appending makes xarray read the store's own coordinates back to validate the write,
+    and a ``step`` axis written before xarray started tagging timedelta variables with a
+    ``dtype`` attribute - which is every forecast store in this project - warns once per
+    append. The flag that settles it, ``decode_timedelta``, cannot be passed through
+    icechunk's writer, so it is silenced here instead; every read this project makes
+    passes ``decode_timedelta=True`` explicitly, so the future default does not change
+    what we get back.
+
+    Use it around bespoke ``to_icechunk`` calls that append to a store with a ``step``.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message=_TIMEDELTA_DECODE_WARNING, category=FutureWarning
+        )
+        yield
 
 
 def has_committed_data(repo: icechunk.Repository, branch: str = "main") -> bool:
@@ -77,7 +104,9 @@ def existing_times(repo: icechunk.Repository, append_dim: str = "time") -> np.nd
     coordinate, which is the normal state before the first write.
     """
     try:
-        ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+        ds = xr.open_zarr(
+            repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+        )
     except STORE_READ_ERRORS as exc:
         if has_committed_data(repo):
             raise StoreReadError(
@@ -185,7 +214,7 @@ def write_to_icechunk(
 
     session = repo.writable_session("main")
     try:
-        existing = xr.open_zarr(session.store, consolidated=False)
+        existing = xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
         first_write = append_dim not in existing.coords
     except STORE_READ_ERRORS as exc:
         # A read failure against a store that already holds data must not fall through to
@@ -203,7 +232,8 @@ def write_to_icechunk(
     incoming = np.atleast_1d(ds[append_dim].values)
 
     if first_write:
-        to_icechunk(ds, session, encoding=build_encoding(ds, append_dim=append_dim))
+        with quiet_timedelta_decoding():
+            to_icechunk(ds, session, encoding=build_encoding(ds, append_dim=append_dim))
         session.commit(message or f"Initial write of {append_dim} {incoming[0]}")
         logger.info(f"created store with {ds.sizes.get(append_dim, 1)} step(s)")
         return True
@@ -260,7 +290,8 @@ def write_to_icechunk(
     # "a-" appends only the variables that have append_dim. Everything else - static
     # 2-D latitude/longitude, say - was written with the store and was just checked
     # against it; plain "a" would rewrite it on every append.
-    to_icechunk(ds, session, append_dim=append_dim, mode="a-")
+    with quiet_timedelta_decoding():
+        to_icechunk(ds, session, append_dim=append_dim, mode="a-")
     session.commit(
         message or f"Append {append_dim} {incoming[0]}",
         rebase_with=icechunk.ConflictDetector(),

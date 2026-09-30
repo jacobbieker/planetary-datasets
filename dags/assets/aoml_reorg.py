@@ -18,7 +18,7 @@ def main() -> None:
     storage = icechunk.local_filesystem_storage("/data/AOML/aoml_bouys.icechunk")
     repo = icechunk.Repository.open(storage)
     session = repo.readonly_session("main")
-    ds = xr.open_zarr(session.store, consolidated=False)
+    ds = xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
     # Select only timestamps from 2012 onwards, others are probably not useful
     ds = ds.where(ds.time >= np.datetime64("2012-01-01"), drop=True)
     print(ds)

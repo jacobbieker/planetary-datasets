@@ -63,7 +63,7 @@ class FakeTable:
     def __call__(self, time, variable):
         (start,) = time
         lower, upper = self.tolerance
-        times = pd.date_range(start + lower - pd.Timedelta("15min"), start + upper, freq="15min")
+        times = pd.date_range(start + lower - pd.Timedelta(15, "min"), start + upper, freq="15min")
         stations = self.kwargs.get("stations") or ["A"]
         rows = [
             {"time": t, "lat": 1.0, "lon": 2.0, "station": s, "observation": 3.0, "variable": v}
@@ -297,7 +297,7 @@ def test_a_table_partition_is_widened_then_cut_to_its_window(registered, staging
     table = pq.read_table(staging / "fake_table/2020/01/01/fake_table_202001010600.parquet")
     times = pd.DatetimeIndex(table.column("time").to_pandas())
     assert times.min() == pd.Timestamp(HOUR)
-    assert times.max() < pd.Timestamp(HOUR) + pd.Timedelta("1h")
+    assert times.max() < pd.Timestamp(HOUR) + pd.Timedelta(1, "h")
     assert summary["rows"] == table.num_rows == 4 * 2
     assert table.schema.field("station").type == pa.string(), "categoricals are cast to the schema"
 
@@ -371,7 +371,7 @@ def test_a_staged_file_with_rows_outside_its_window_is_refused(staged_table, sta
     path = next(staging.rglob("*.parquet"))
     table = pq.read_table(path)
     shifted = table.set_column(
-        0, "time", pa.array(pd.DatetimeIndex(table.column("time").to_pandas()) - pd.Timedelta("2h"))
+        0, "time", pa.array(pd.DatetimeIndex(table.column("time").to_pandas()) - pd.Timedelta(2, "h"))
     )
     pq.write_table(shifted, path)
     with pytest.raises(obs.StagedPartitionError, match="outside"):

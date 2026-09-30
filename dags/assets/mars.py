@@ -252,7 +252,7 @@ def ecmwf_mars_regrid_asset(context: dg.AssetExecutionContext) -> dg.Materialize
     axis = pd.DatetimeIndex(targets[0].native_dataset()["time"].values)
     # `end` is midnight on the month's last day; the partition runs to 23:00
     # on it, and the next hour belongs to the next partition.
-    stop = pd.Timestamp(end) + pd.Timedelta("1D")
+    stop = pd.Timestamp(end) + pd.Timedelta(1, "D")
     wanted = axis[(axis >= pd.Timestamp(start)) & (axis < stop)]
     context.log.info(f"Checking {len(wanted)} timestep(s) against {len(targets)} target store(s)")
     # No --follow: the asset covers a closed month, so there is nothing more

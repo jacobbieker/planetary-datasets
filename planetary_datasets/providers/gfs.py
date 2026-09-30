@@ -36,6 +36,7 @@ from planetary_datasets.common.dataset import (
     rename_vars_by_long_name,
 )
 from planetary_datasets.common.download import download_one
+from planetary_datasets.common.grib import open_grib_datasets
 from planetary_datasets.common.store import ALIGNMENT_COORDS, write_to_icechunk
 from planetary_datasets.config import Config
 
@@ -274,15 +275,13 @@ def group_files_by_step(paths: Iterable[str | pathlib.Path]) -> dict[int, dict[s
 
 def merge_step(main_path: str | pathlib.Path, extra_path: str | pathlib.Path) -> xr.Dataset:
     """Merge the two GDEX files for one forecast step into a single dataset."""
-    import cfgrib
-
-    datasets = filter_datasets(cfgrib.open_datasets(str(main_path)))
-    datasets += filter_datasets(cfgrib.open_datasets(str(extra_path)))
+    datasets = filter_datasets(open_grib_datasets(str(main_path)))
+    datasets += filter_datasets(open_grib_datasets(str(extra_path)))
     if not datasets:
         raise ValueError(f"no usable GRIB messages in {main_path} / {extra_path}")
 
     levels = _temperature_levels(datasets)
-    ds = xr.merge(datasets, combine_attrs="drop_conflicts")
+    ds = xr.merge(datasets, combine_attrs="drop_conflicts", compat="no_conflicts")
 
     renames = {
         old: new
@@ -440,7 +439,9 @@ class GFSProvider(BaseProvider):
         import icechunk
 
         try:
-            existing = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+            existing = xr.open_zarr(
+                repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+            )
         except (ValueError, KeyError, FileNotFoundError, icechunk.IcechunkError):
             return ds
         if self.append_dim not in existing.coords:

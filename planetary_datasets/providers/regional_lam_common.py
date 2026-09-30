@@ -28,6 +28,7 @@ from loguru import logger
 
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common.download import download_many
+from planetary_datasets.common.grib import open_grib_datasets
 
 #: Level types that carry fields nobody asked for, or that collide with the levels that are
 #: kept. A cfgrib sub-dataset exposing any of these as a coordinate is dropped whole.
@@ -274,20 +275,18 @@ def clean_grib_subset(ds: xr.Dataset, spec: GribMergeSpec) -> xr.Dataset | None:
 def merge_grib_files(paths: Sequence[str | os.PathLike], spec: GribMergeSpec) -> xr.Dataset:
     """Open GRIB files with cfgrib and merge their usable sub-datasets into one.
 
-    Every path is opened with :func:`cfgrib.open_datasets`, which splits a GRIB file into
-    one dataset per level type / step type combination. The sub-datasets from all the
-    paths are pooled before filtering, so the surface, native and pressure-level files of
-    a single forecast step merge as if they had arrived together.
+    Every path is opened with :func:`~planetary_datasets.common.grib.open_grib_datasets`,
+    which splits a GRIB file into one dataset per level type / step type combination. The
+    sub-datasets from all the paths are pooled before filtering, so the surface, native and
+    pressure-level files of a single forecast step merge as if they had arrived together.
 
     Raises:
         ValueError: If nothing survives the filter, which means the inputs were not the
             files this provider expects.
     """
-    import cfgrib  # imported lazily: eccodes is a heavy, optional native dependency
-
     subsets: list[xr.Dataset] = []
     for path in paths:
-        subsets.extend(cfgrib.open_datasets(str(path)))
+        subsets.extend(open_grib_datasets(str(path)))
 
     kept = [cleaned for ds in subsets if (cleaned := clean_grib_subset(ds, spec)) is not None]
     if not kept:

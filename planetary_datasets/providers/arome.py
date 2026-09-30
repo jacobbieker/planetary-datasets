@@ -25,7 +25,6 @@ import pathlib
 from dataclasses import dataclass
 from typing import Iterable, List, Sequence
 
-import cfgrib
 import pandas as pd
 import xarray as xr
 from loguru import logger
@@ -37,6 +36,7 @@ from planetary_datasets.common.dataset import (
     sort_vertical_coords,
 )
 from planetary_datasets.common.download import cleanup_files, download_one
+from planetary_datasets.common.grib import open_grib_datasets
 from planetary_datasets.memory import memory_guard, require_dataset_fits
 
 URL_BASE = "https://files.data.gouv.fr/meteofrance-pnt/pnt"
@@ -245,7 +245,8 @@ class AromeOverseasProvider(AromeProvider):
         **kwargs,
     ) -> xr.Dataset:
         height = xr.merge(
-            [_open_steps(_require_all(input_files, paquet, it)) for paquet in ("HP1", "HP2")]
+            [_open_steps(_require_all(input_files, paquet, it)) for paquet in ("HP1", "HP2")],
+            compat="no_conflicts",
         )
 
         pressure_parts = []
@@ -259,7 +260,9 @@ class AromeOverseasProvider(AromeProvider):
                 # the isobaric fields of the other pressure paquets.
                 part = part.drop_vars(["potentialVorticity", "u", "v", "z"], errors="ignore")
             pressure_parts.append(part)
-        pressure = xr.merge(pressure_parts).drop_vars(["time", "step"], errors="ignore")
+        pressure = xr.merge(
+            pressure_parts, compat="no_conflicts"
+        ).drop_vars(["time", "step"], errors="ignore")
 
         surface = xr.merge(
             [
@@ -271,7 +274,7 @@ class AromeOverseasProvider(AromeProvider):
                     dim="valid_time",
                 )
                 for paquet in ("SP1", "SP2")
-            ]
+            ], compat="no_conflicts"
         )
 
         surface = rename_vars_by_long_name(surface, suffix="_at_surface")
@@ -279,7 +282,7 @@ class AromeOverseasProvider(AromeProvider):
         pressure = rename_vars_by_long_name(pressure)
 
         ds = (
-            xr.merge([surface, pressure, height])
+            xr.merge([surface, pressure, height], compat="no_conflicts")
             .drop_vars(["time", "step"], errors="ignore")
             .rename({"valid_time": "time", "heightAboveGround": "height", "isobaricInhPa": "level"})
         )
@@ -317,13 +320,18 @@ class AromeFranceProvider(AromeProvider):
         **kwargs,
     ) -> xr.Dataset:
         height = xr.merge(
-            [xr.merge(cfgrib.open_datasets(f)) for f in _require(input_files, ("HP1", "HP2"), it)]
+            [xr.merge(
+                open_grib_datasets(f)
+            ) for f in _require(input_files, ("HP1", "HP2"), it)], compat="no_conflicts"
         )
         pressure = xr.merge(
-            [xr.merge(cfgrib.open_datasets(f)) for f in _require(input_files, ("IP1", "IP3"), it)]
+            [xr.merge(
+                open_grib_datasets(f)
+            ) for f in _require(input_files, ("IP1", "IP3"), it)], compat="no_conflicts"
         )
         surface = xr.merge(
-            [_open_surface(f) for f in _require(input_files, ("SP1", "SP2", "SP3"), it)]
+            [_open_surface(f) for f in _require(input_files, ("SP1", "SP2", "SP3"), it)],
+            compat="no_conflicts",
         )
 
         # Keep the three hours up to the next init time; the rest of the 0-6h file is
@@ -336,7 +344,7 @@ class AromeFranceProvider(AromeProvider):
         height = rename_vars_by_long_name(height, suffix="_at_height")
         pressure = rename_vars_by_long_name(pressure, suffix="_at_pressure")
 
-        ds = xr.merge([surface, height, pressure]).rename(
+        ds = xr.merge([surface, height, pressure], compat="no_conflicts").rename(
             {"heightAboveGround": "height", "isobaricInhPa": "level"}
         )
         return _finalise(_step_to_time(ds))
@@ -376,9 +384,14 @@ class AromeFranceHDProvider(AromeProvider):
         surfaces = []
         for step_token in layout.step_tokens:
             per_step = [f for f in input_files if f"__{step_token}__" in os.path.basename(f)]
-            heights.append(xr.merge(cfgrib.open_datasets(_require(per_step, ("HP1",), it)[0])))
+            heights.append(xr.merge(
+                open_grib_datasets(_require(per_step, ("HP1",), it)[0]), compat="no_conflicts"
+            ))
             surfaces.append(
-                xr.merge([_open_surface(f) for f in _require(per_step, ("SP1", "SP2", "SP3"), it)])
+                xr.merge(
+                    [_open_surface(f) for f in _require(per_step, ("SP1", "SP2", "SP3"), it)],
+                    compat="no_conflicts",
+                )
             )
 
         height = xr.concat(heights, dim="step")
@@ -387,7 +400,9 @@ class AromeFranceHDProvider(AromeProvider):
         surface = rename_vars_by_long_name(surface, suffix="_at_surface")
         height = rename_vars_by_long_name(height, suffix="_at_height")
 
-        ds = xr.merge([surface, height]).rename({"heightAboveGround": "height"})
+        ds = xr.merge(
+            [surface, height], compat="no_conflicts"
+        ).rename({"heightAboveGround": "height"})
         return _finalise(_step_to_time(ds))
 
 
@@ -429,7 +444,10 @@ def _open_surface(path: str, per_step_file: bool = False) -> xr.Dataset:
     """
     drop = list(_SURFACE_DROP)
     drop += ["step", "time"] if per_step_file else ["valid_time"]
-    return xr.merge([ds.drop_vars(drop, errors="ignore") for ds in cfgrib.open_datasets(path)])
+    return xr.merge(
+        [ds.drop_vars(drop, errors="ignore") for ds in open_grib_datasets(path)],
+        compat="no_conflicts",
+    )
 
 
 def _keep_steps(ds: xr.Dataset, hours: int) -> xr.Dataset:
@@ -438,7 +456,7 @@ def _keep_steps(ds: xr.Dataset, hours: int) -> xr.Dataset:
     Selected by value rather than position: a surface paquet whose accumulated fields
     only start at 1h would otherwise shift the window.
     """
-    return ds.sel(step=slice(pd.Timedelta(0), pd.Timedelta(hours=hours - 1)))
+    return ds.sel(step=slice(pd.Timedelta(0), pd.Timedelta(hours - 1, "h")))
 
 
 def _keep_hours(ds: xr.Dataset, it: pd.Timestamp, hours: int) -> xr.Dataset:
@@ -448,7 +466,7 @@ def _keep_hours(ds: xr.Dataset, it: pd.Timestamp, hours: int) -> xr.Dataset:
     is shorter than expected, and a positional slice would let the step belonging to the
     next init time through and write that timestamp twice.
     """
-    return ds.sel(time=slice(None, it + pd.Timedelta(hours=hours - 1)))
+    return ds.sel(time=slice(None, it + pd.Timedelta(hours - 1, "h")))
 
 
 def _step_to_time(ds: xr.Dataset) -> xr.Dataset:

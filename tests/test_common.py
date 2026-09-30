@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+import zarr
 
 from planetary_datasets.common import dataset as ds_helpers
 from planetary_datasets.common import download as dl
 from planetary_datasets.common import store as store_helpers
+from planetary_datasets.common.grib import quiet_combine_defaults
+from planetary_datasets.common.time import freq_to_timedelta
 
 
 class TestReducePrecision:
@@ -252,6 +257,49 @@ class TestBuildEncoding:
         assert "compressors" in enc["v"]
 
 
+class TestFreqToTimedelta:
+    @pytest.mark.parametrize(
+        ("freq", "expected"),
+        [("1h", 3600), ("2min", 120), ("1D", 86400), ("0s", 0), ("20s", 20)],
+    )
+    def test_a_frequency_string_becomes_its_duration(self, freq, expected):
+        assert freq_to_timedelta(freq).total_seconds() == expected
+
+    def test_it_does_not_build_a_generic_unit_timedelta(self):
+        """``pd.Timedelta("1h")`` warns on the pinned pandas; the helper must not."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            assert freq_to_timedelta("1h") == pd.Timedelta(1, "h")
+
+
+class TestQuietCombineDefaults:
+    """cfgrib merges the hypercubes it reads without passing ``compat``; we cannot fix
+    that call, so :func:`quiet_combine_defaults` covers it."""
+
+    @staticmethod
+    def _overlapping_merge():
+        """Merge two datasets sharing a variable name, which is when ``compat`` matters."""
+
+        def build():
+            return xr.Dataset({"v": ("x", np.ones(3))}, coords={"x": [1, 2, 3]})
+
+        return lambda: xr.merge([build(), build()])
+
+    def test_the_warning_this_suppresses_is_still_worded_the_way_we_match_it(self):
+        """If xarray rewords it the filter stops matching, so assert it fires unwrapped."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._overlapping_merge()()
+        assert [w for w in caught if "default value for compat" in str(w.message)]
+
+    def test_inside_the_context_manager_it_is_silent(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with quiet_combine_defaults():
+                self._overlapping_merge()()
+        assert [w for w in caught if "default value for compat" in str(w.message)] == []
+
+
 def _at(ds: xr.Dataset, *stamps: str) -> xr.Dataset:
     """``ds`` moved to the given time steps."""
     return ds.assign_coords(time=pd.DatetimeIndex(list(stamps)))
@@ -359,3 +407,57 @@ class TestStoreRoundTrip:
     def test_dataset_without_append_dim_is_rejected(self, repo):
         with pytest.raises(ValueError, match="no 'time' coordinate"):
             store_helpers.write_to_icechunk(repo, xr.Dataset({"v": ("x", np.arange(3))}))
+
+
+def _forecast(stamp: str) -> xr.Dataset:
+    """One init time of a three step forecast, the shape the ``step`` stores have."""
+    return xr.Dataset(
+        {"x": (("init_time", "step"), np.zeros((1, 3), dtype="float32"))},
+        coords={
+            "init_time": pd.DatetimeIndex([stamp]),
+            "step": pd.to_timedelta(np.arange(1, 4), unit="h"),
+        },
+    )
+
+
+class TestLegacyStepStores:
+    """Appending to a store whose ``step`` predates xarray's ``dtype`` attribute.
+
+    Every forecast store in the archive was written before xarray started tagging
+    timedelta variables with a ``dtype`` attribute, so xarray decodes their ``step`` from
+    its ``units`` alone and warns that it will stop doing so. Reads pin the behaviour
+    down with ``decode_timedelta=True``; the append path cannot pass it through icechunk
+    and silences the warning instead.
+    """
+
+    @pytest.fixture
+    def legacy_store(self, local_config):
+        repo = local_config.icechunk_repo("test/legacy_step.icechunk")
+        store_helpers.write_to_icechunk(repo, _forecast("2026-01-01T00:00"), append_dim="init_time")
+        session = repo.writable_session("main")
+        step = zarr.open_group(session.store, mode="a")["step"]
+        attrs = {k: v for k, v in step.attrs.items() if k != "dtype"}
+        step.attrs.clear()
+        step.attrs.update(attrs)
+        session.commit("drop the dtype attribute xarray now writes")
+        return repo
+
+    def test_appending_emits_no_timedelta_decoding_warning(self, legacy_store):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            assert (
+                store_helpers.write_to_icechunk(
+                    legacy_store, _forecast("2026-01-02T00:00"), append_dim="init_time"
+                )
+                is True
+            )
+        assert [w for w in caught if "will not decode the variable" in str(w.message)] == []
+
+    def test_step_still_reads_back_as_a_timedelta(self, legacy_store):
+        stored = xr.open_zarr(
+            legacy_store.readonly_session("main").store,
+            consolidated=False,
+            decode_timedelta=True,
+        )
+        assert stored["step"].dtype == np.dtype("timedelta64[ns]")
+        assert stored["step"].values[0] == pd.Timedelta(1, "h")

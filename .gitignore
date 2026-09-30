@@ -212,3 +212,14 @@ planetary_datasets/providers/*.grib
 planetary_datasets/providers/*.grib.tmp
 planetary_datasets/providers/mars_grib_index.parquet
 mars_staging/
+
+# Local Dagster instance state. `pixi run dagster` sets DAGSTER_HOME to dags/ so the
+# committed dags/dagster.yaml is the instance config; run history, event logs and
+# compute logs then land next to it.
+dags/storage/
+dags/history/
+dags/logs/
+dags/schedules/
+dags/.logs_queue/
+dags/.telemetry/
+dags/.nux/

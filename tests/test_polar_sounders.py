@@ -165,7 +165,7 @@ def test_eumdac_fetch_surfaces_missing_credentials(iasi):
 
 def test_partition_window_matches_provider_width(iasi):
     start, end = iasi.partition_window(pd.Timestamp("2025-01-01T04:00"))
-    assert end - start == pd.Timedelta("2h")
+    assert end - start == pd.Timedelta(2, "h")
 
 
 def test_partition_window_drops_timezone(jpss):
@@ -251,13 +251,13 @@ def test_granule_overlap_selects_a_granule_the_next_partition_owns():
     """The boundary case: selected by this hour, stored under the next one."""
     name = SDR_NAME.replace("t0000244", "t0059504").replace("e0000560", "e0100266")
     hour = pd.Timestamp("2025-06-01T00:00")
-    assert granule_overlaps(name, hour, hour + pd.Timedelta("1h"))
-    assert granule_overlaps(name, hour + pd.Timedelta("1h"), hour + pd.Timedelta("2h"))
+    assert granule_overlaps(name, hour, hour + pd.Timedelta(1, "h"))
+    assert granule_overlaps(name, hour + pd.Timedelta(1, "h"), hour + pd.Timedelta(2, "h"))
 
 
 def test_granule_overlap_excludes_a_granule_in_another_hour():
     hour = pd.Timestamp("2025-06-01T05:00")
-    assert not granule_overlaps(SDR_NAME, hour, hour + pd.Timedelta("1h"))
+    assert not granule_overlaps(SDR_NAME, hour, hour + pd.Timedelta(1, "h"))
 
 
 def test_days_to_list_only_reaches_back_at_midnight(jpss):
@@ -573,7 +573,9 @@ def test_epct_providers_also_write_the_obs_store(ascat, local_config):
     assert ascat.obs_store_prefix == "bkr/obs/metop_ascat.icechunk"
     assert ascat.write_to_icechunk(ascat.get_icechunk_repo(), orbit) is True
     obs = local_config.icechunk_repo(ascat.obs_store_prefix)
-    stored = xr.open_zarr(obs.readonly_session("main").store, consolidated=False)
+    stored = xr.open_zarr(
+        obs.readonly_session("main").store, consolidated=False, decode_timedelta=True
+    )
     assert stored.sizes["time"] == 1
     assert MetopIasiProvider(config=local_config).obs_store_prefix is None
 
@@ -710,7 +712,7 @@ def mws_product(tmp_path, start: str, scans: int) -> str:
         attrs={
             "spacecraft": "SGA1",
             "sensing_start_time_utc": str(begin),
-            "sensing_end_time_utc": str(begin + pd.Timedelta("3min")),
+            "sensing_end_time_utc": str(begin + pd.Timedelta(3, "min")),
         }
     ).to_netcdf(nc, engine="h5netcdf")
     grid = ("n_scans", "n_fovs")
@@ -746,4 +748,6 @@ def test_metop_sg_mws_granules_are_padded_and_written_to_both_stores(local_confi
     assert provider.write_to_icechunk(provider.get_icechunk_repo(), ds) is True
     assert provider.partition_stored(pd.Timestamp("2026-09-27"))
     obs = local_config.icechunk_repo("bkr/obs/metop_sg_mws.icechunk")
-    assert xr.open_zarr(obs.readonly_session("main").store, consolidated=False).sizes["time"] == 2
+    assert xr.open_zarr(
+        obs.readonly_session("main").store, consolidated=False, decode_timedelta=True
+    ).sizes["time"] == 2

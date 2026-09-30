@@ -476,7 +476,7 @@ def _icon_run(init: pd.Timestamp, variables: list[str], steps: int = 3) -> xr.Da
 
 
 def _hours_ago(hours: int) -> pd.Timestamp:
-    return pd.Timestamp.utcnow().tz_localize(None).floor("h") - pd.Timedelta(hours=hours)
+    return pd.Timestamp.utcnow().tz_localize(None).floor("h") - pd.Timedelta(hours, "h")
 
 
 @pytest.fixture
@@ -516,7 +516,7 @@ def test_an_incomplete_run_is_refused(eu_provider, stored, incoming, match):
 
     with pytest.raises(icon.IncompleteRun, match=match):
         eu_provider.write_to_icechunk(
-            repo, _icon_run(first + pd.Timedelta(hours=6), incoming[0], steps=incoming[1])
+            repo, _icon_run(first + pd.Timedelta(6, "h"), incoming[0], steps=incoming[1])
         )
 
 

@@ -394,7 +394,7 @@ def test_run_partition_writes_and_then_skips(local_config, forecast_archives):
     assert provider.run_partition(it) is False
 
     session = provider.get_icechunk_repo().readonly_session("main")
-    stored = xr.open_zarr(session.store, consolidated=False)
+    stored = xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
     assert pd.Timestamp(stored.init_time.values[0]) == it
     assert set(stored.data_vars) == {"dis24", "rowe"}
 

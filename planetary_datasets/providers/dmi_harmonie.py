@@ -22,6 +22,7 @@ import xarray as xr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
+from planetary_datasets.common.grib import open_grib_datasets
 from planetary_datasets.providers.regional_lam_common import (
     chunk_present,
     download_with_filesystem,
@@ -104,10 +105,8 @@ def _split_by_height(
 
 def process_surface_file(path: str) -> xr.Dataset:
     """Turn one HARMONIE ``SF`` file into a single merged surface dataset."""
-    import cfgrib  # imported lazily: eccodes is a heavy, optional native dependency
-
     cleaned: list[xr.Dataset] = []
-    for sub_ds in cfgrib.open_datasets(str(path)):
+    for sub_ds in open_grib_datasets(str(path)):
         if "h" in sub_ds.data_vars:
             name = next(
                 (new for coord, new in _HEIGHT_BY_LEVEL_TYPE.items() if coord in sub_ds.coords),
@@ -143,14 +142,12 @@ def process_surface_file(path: str) -> xr.Dataset:
         else:
             cleaned.append(_drop_scalar_level_coords(_rename_by_long_name(sub_ds)))
 
-    return xr.merge(cleaned)
+    return xr.merge(cleaned, compat="no_conflicts")
 
 
 def process_pressure_level_file(path: str) -> xr.Dataset:
     """Turn one HARMONIE ``PL`` file into a single merged dataset."""
-    import cfgrib  # imported lazily: eccodes is a heavy, optional native dependency
-
-    ds = xr.merge(cfgrib.open_datasets(str(path)))
+    ds = xr.merge(open_grib_datasets(str(path)), compat="no_conflicts")
     # Near-surface fields already name their height, so only the rest take the suffix.
     renames = {
         var: long_name_slug(str(ds[var].attrs.get("long_name", var)), strip_parens=True)
@@ -187,7 +184,7 @@ class _DMIHarmonieBase(BaseProvider):
     def remote_key(self, it: pd.Timestamp, step: int, level_type: str) -> str:
         """Bucket key of one GRIB file, without a scheme."""
         init = it.strftime(TIME_FORMAT)
-        valid = (it + pd.Timedelta(hours=step)).strftime(TIME_FORMAT)
+        valid = (it + pd.Timedelta(step, "h")).strftime(TIME_FORMAT)
         name = f"HARMONIE_IG_{level_type}_{init}_{valid}.grib"
         return f"{BUCKET}/forecastdata/HARMONIE_IG_{level_type}/{name}"
 
@@ -254,7 +251,8 @@ class DMIHarmonieProvider(_DMIHarmonieBase):
         """Merge the pressure-level and surface files of one forecast step."""
         pressure_file, surface_file = files
         merged = xr.merge(
-            [process_pressure_level_file(pressure_file), process_surface_file(surface_file)]
+            [process_pressure_level_file(pressure_file), process_surface_file(surface_file)],
+            compat="no_conflicts",
         )
         return _drop_scalar_level_coords(merged, keep=("latitude", "longitude", "time", "step"))
 
@@ -269,9 +267,9 @@ class DMIHarmonieModelLevelProvider(_DMIHarmonieBase):
 
     def process_step(self, files: List[str]) -> xr.Dataset:
         """Merge the model-level file of one forecast step."""
-        import cfgrib  # imported lazily: eccodes is a heavy, optional native dependency
-
         # The local renamer rather than common.rename_vars_by_long_name: it goes through
         # resolve_renames, so a long_name shared by two model-level fields cannot take
         # the whole init time down with it.
-        return _rename_by_long_name(xr.merge(cfgrib.open_datasets(str(files[0]))))
+        return _rename_by_long_name(xr.merge(
+            open_grib_datasets(str(files[0])), compat="no_conflicts"
+        ))

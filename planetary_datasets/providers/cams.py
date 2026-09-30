@@ -653,8 +653,8 @@ class CAMSGlobalCompositionProvider(_CAMSProvider):
     def run_and_leadtime(it: pd.Timestamp) -> tuple[pd.Timestamp, int]:
         """Split a valid time into the run that produces it and the lead hour."""
         it = pd.Timestamp(it)
-        run = it.normalize() + pd.Timedelta(hours=0 if it.hour < 12 else 12)
-        return run, int((it - run) // pd.Timedelta(hours=1))
+        run = it.normalize() + pd.Timedelta(0 if it.hour < 12 else 12, "h")
+        return run, int((it - run) // pd.Timedelta(1, "h"))
 
     def target_path(self, it: pd.Timestamp) -> pathlib.Path:
         return self.archive_dir / f"cams_composition_{pd.Timestamp(it):%Y%m%d_%H%M}.nc.zip"
@@ -713,7 +713,7 @@ class _CAMSWeeklyProvider(_CAMSProvider):
     def window(self, it: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
         """Half-open ``[start, end)`` partition window, matching Dagster's time window."""
         start = pd.Timestamp(it)
-        return start, start + pd.Timedelta(days=self.window_days)
+        return start, start + pd.Timedelta(self.window_days, "D")
 
     def request_window(self, it: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
         """Closed ``[start, end]`` window for the ADS ``date`` range.
@@ -723,7 +723,7 @@ class _CAMSWeeklyProvider(_CAMSProvider):
         append the same runs to the store.
         """
         start, end = self.window(it)
-        return start, end - pd.Timedelta(days=1)
+        return start, end - pd.Timedelta(1, "D")
 
     def target_path(self, it: pd.Timestamp, variable: str) -> pathlib.Path:
         start, end = self.window(it)

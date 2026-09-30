@@ -510,12 +510,14 @@ class MetOfficeOceanProviderBase(BaseProvider):
             else:
                 # Keep only the 24 hours of analysis leading up to the initialisation.
                 ds = ds.sel(
-                    time=slice(init_time - pd.Timedelta("24h"), init_time - pd.Timedelta("1min"))
+                    time=slice(
+                        init_time - pd.Timedelta(24, "h"), init_time - pd.Timedelta(1, "min")
+                    )
                 )
                 surface.append(ds)
 
-        surface_ds = xr.merge(surface) if surface else None
-        depth_ds = xr.merge(depth) if depth else None
+        surface_ds = xr.merge(surface, compat="no_conflicts") if surface else None
+        depth_ds = xr.merge(depth, compat="no_conflicts") if depth else None
         if depth_ds is not None and "depth" in depth_ds.dims:
             depth_ds = depth_ds.sortby("depth")
         return surface_ds, depth_ds

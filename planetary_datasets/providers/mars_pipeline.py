@@ -523,7 +523,9 @@ def retrieve(
 
 
 def _read_flags(repo) -> dict[str, pd.Series]:
-    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    ds = xr.open_zarr(
+        repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+    )
     times = pd.DatetimeIndex(ds["time"].values)
     return {g: pd.Series(ds[mi._INGESTED[g]].values.astype(bool), index=times) for g in mi.GROUPS}
 
@@ -696,7 +698,9 @@ def _ingest_task(cfg: dict, it: pd.Timestamp, groups: List[str], rows: pd.DataFr
     stores = {"native": state["repo"], **{str(t.resolution): r for t, r in state["targets"]}}
     flags = {}
     for name, repo in stores.items():
-        ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+        ds = xr.open_zarr(
+            repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+        )
         at = int(pd.DatetimeIndex(ds["time"].values).get_loc(it))
         flags[name] = {g: bool(ds[mi._INGESTED[g]].isel(time=at).values) for g in mi.GROUPS}
     return flags

@@ -228,7 +228,7 @@ def test_a_staged_file_of_the_wrong_product_is_rejected(stage):
 
 def test_hours_append_to_the_store_and_staging_is_cleared(stage, opera_root):
     provider = opera.OPERARainfallProvider()
-    first, second = pd.Timestamp(HOUR), pd.Timestamp(HOUR) + pd.Timedelta("1h")
+    first, second = pd.Timestamp(HOUR), pd.Timestamp(HOUR) + pd.Timedelta(1, "h")
     for hour in (first, second):
         stage("rainfall", hour.to_pydatetime())
 
@@ -251,7 +251,7 @@ def test_hours_append_to_the_store_and_staging_is_cleared(stage, opera_root):
 def test_hours_before_the_store_end_are_not_appendable_and_are_discarded(stage):
     """The existing stores have gaps before their latest time that cannot be filled."""
     provider = opera.OPERARainfallProvider()
-    early, late = pd.Timestamp(HOUR), pd.Timestamp(HOUR) + pd.Timedelta("2h")
+    early, late = pd.Timestamp(HOUR), pd.Timestamp(HOUR) + pd.Timedelta(2, "h")
     assert provider.appendable(early), "an empty store accepts anything"
 
     stage("rainfall", late.to_pydatetime())
@@ -259,7 +259,7 @@ def test_hours_before_the_store_end_are_not_appendable_and_are_discarded(stage):
     stage("rainfall", early.to_pydatetime())
 
     assert not provider.appendable(early)
-    assert provider.appendable(late + pd.Timedelta("1h"))
+    assert provider.appendable(late + pd.Timedelta(1, "h"))
     assert not provider.run_partition(early), "the writer drops it"
     assert len(provider.discard_staged(early)) == 1, "so it must not stay staged"
 

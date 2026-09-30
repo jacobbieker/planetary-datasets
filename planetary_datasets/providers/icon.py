@@ -879,7 +879,7 @@ class ICONProvider(BaseProvider):
     #: only when the store does not exist yet, where there is no schema to check against.
     #: DWD publishes a global run over roughly two hours; six is generous but the cost of
     #: waiting is one retry, and the cost of not waiting is a permanently poisoned store.
-    settle_after: pd.Timedelta = pd.Timedelta(hours=6)
+    settle_after: pd.Timedelta = pd.Timedelta(6, "h")
 
     def __init__(
         self,
@@ -1047,7 +1047,9 @@ class ICONProvider(BaseProvider):
             return
 
         try:
-            existing = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+            existing = xr.open_zarr(
+                repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+            )
         except STORE_READ_ERRORS as exc:
             raise IncompleteRun(
                 f"{self.name}: store holds data but could not be read to check run {init} "
@@ -1254,7 +1256,7 @@ class ICOND2RUCProvider(BaseProvider):
         if not selected:
             raise ValueError(f"{self.name}: no {self.timescale} variables found for {it}")
 
-        merged = xr.merge(selected)
+        merged = xr.merge(selected, compat="no_conflicts")
         merged = merged.drop_vars(
             ["entireLake", "meanSea", "entireAtmosphere"], errors="ignore"
         )
@@ -1438,7 +1440,9 @@ def write_model_level_half_heights(
     repo = cfg.icechunk_repo(STATIC_HEIGHTS_PREFIX)
 
     try:
-        existing = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+        existing = xr.open_zarr(
+            repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+        )
     except Exception:  # noqa: BLE001 - an unreadable store is an empty store here
         existing = None
     if existing is not None and "model_level_half" in existing.dims:

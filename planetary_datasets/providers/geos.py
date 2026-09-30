@@ -143,7 +143,7 @@ class GEOSProvider(BaseProvider):
     def day_timestamps(day: pd.Timestamp) -> pd.DatetimeIndex:
         """The 96 instants belonging to ``day``, for backfilling a whole day."""
         start = pd.Timestamp(day).normalize()
-        return pd.date_range(start, start + pd.Timedelta(days=1), freq="15min", inclusive="left")
+        return pd.date_range(start, start + pd.Timedelta(1, "D"), freq="15min", inclusive="left")
 
     def get_icechunk_repo(self) -> icechunk.Repository:
         """Open the store, first disabling the AWS checksum headers source.coop rejects.

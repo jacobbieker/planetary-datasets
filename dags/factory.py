@@ -199,7 +199,7 @@ def _partition_window(
             ) from key_exc
         logger.debug(f"{key}: not a time-window partitioning ({type(exc).__name__})")
         start = _naive_utc(key)
-        return start, start + pd.Timedelta(days=1)
+        return start, start + pd.Timedelta(1, "D")
     return _naive_utc(window.start), _naive_utc(window.end)
 
 

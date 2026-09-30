@@ -17,7 +17,9 @@ def open_icechunk_store(storage_config: dict) -> icechunk.Repository:
 
 def open_xarray_from_icechunk(repo: icechunk.Repository, branch: str = "main") -> xr.Dataset:
     """Open a repository's contents as an xarray Dataset."""
-    return xr.open_zarr(repo.readonly_session(branch).store, consolidated=False)
+    return xr.open_zarr(
+        repo.readonly_session(branch).store, consolidated=False, decode_timedelta=True
+    )
 
 
 def get_time_dim(ds: xr.Dataset) -> str:

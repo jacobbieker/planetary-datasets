@@ -887,7 +887,11 @@ def _last_committed_day(
     try:
         session = repo.readonly_session(branch=branch)
         existing = xr.open_zarr(
-            session.store, group=group or None, chunks=None, zarr_format=3,
+            session.store,
+            group=group or None,
+            chunks=None,
+            zarr_format=3,
+            decode_timedelta=True,
         )
     except (FileNotFoundError, KeyError):
         return None

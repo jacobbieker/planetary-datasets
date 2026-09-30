@@ -226,7 +226,7 @@ class CFSSeasonalProvider(NaiveUTCPartitions, BaseProvider):
         target_steps = self.max_steps
         opened = [xr.open_dataset(path) for path in input_files]
         padded = [pad_to_steps(ds, target_steps, step_dim=self.step_dim) for ds in opened]
-        ds = padded[0] if len(padded) == 1 else xr.merge(padded)
+        ds = padded[0] if len(padded) == 1 else xr.merge(padded, compat="no_conflicts")
 
         if self.append_dim not in ds.coords:
             ds = ds.expand_dims({self.append_dim: pd.DatetimeIndex([it])})

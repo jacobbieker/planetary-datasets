@@ -95,7 +95,7 @@ def process_year(satellite: str):
     first_write = False
     try:
         session = repo.readonly_session("main")
-        ds = xr.open_zarr(session.store, consolidated=False)
+        ds = xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
         times = ds["time"].values
         print(ds)
         print(times)

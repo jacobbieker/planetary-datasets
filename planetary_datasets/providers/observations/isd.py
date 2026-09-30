@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from planetary_datasets.common.time import freq_to_timedelta
 from planetary_datasets.providers.observations.base import (
     Station,
     StationObservationProvider,
@@ -250,6 +251,6 @@ class ISDProvider(StationObservationProvider):
         times = self.partition_times(it)
         # The file holds a whole year; the partition is one month of it.
         window = df.loc[
-            (df.index >= times[0]) & (df.index < times[-1] + pd.Timedelta(self.sample_freq))
+            (df.index >= times[0]) & (df.index < times[-1] + freq_to_timedelta(self.sample_freq))
         ]
         return window if not window.empty else None

@@ -238,7 +238,7 @@ def test_rewrite_store_copies_every_readable_timestep(tmp_path):
     failed = rewrite_store_skipping_bad_chunks(source, tmp_path / "destination.zarr", max_workers=1)
 
     assert failed == []
-    copied = xr.open_zarr(tmp_path / "destination.zarr", consolidated=False)
+    copied = xr.open_zarr(tmp_path / "destination.zarr", consolidated=False, decode_timedelta=True)
     assert np.array_equal(copied["vis"].values, ds["vis"].values)
 
 
@@ -252,7 +252,7 @@ def test_rewrite_store_drops_unreadable_timesteps(tmp_path, monkeypatch):
     failed = rewrite_store_skipping_bad_chunks(source, tmp_path / "destination.zarr", max_workers=1)
 
     assert failed == [1]
-    copied = xr.open_zarr(tmp_path / "destination.zarr", consolidated=False)
+    copied = xr.open_zarr(tmp_path / "destination.zarr", consolidated=False, decode_timedelta=True)
     # The corrupt step is absent rather than present as an all-zero image.
     times = pd.DatetimeIndex(ds["time"].values)
     assert list(pd.DatetimeIndex(copied["time"].values)) == [times[0], times[2]]

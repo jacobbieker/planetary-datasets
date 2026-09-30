@@ -55,7 +55,7 @@ class MetopAvhrrProvider(EumdacProvider):
     append_dim = "time"
     store_prefix = "bkr/polar/metop_avhrr.icechunk"
     collection_id = "EO:EUM:DAT:METOP:AVHRRL1"
-    window = pd.Timedelta("4h")
+    window = pd.Timedelta(4, "h")
     swath_shape = SWATH_SHAPE
 
     def process_granule(self, filename: str) -> xr.Dataset:
