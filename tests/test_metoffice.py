@@ -913,3 +913,74 @@ def test_a_damaged_generation_is_skipped_not_written_to(local_config, tmp_path):
 
     assert state == DAMAGED
     assert fingerprint is None
+
+
+def test_a_generation_created_mid_run_is_seen_by_the_next_partition(local_config, tmp_path):
+    """Regression: one schema came to own two stores, dated a day apart.
+
+    `existing_generations` lists through fsspec, which caches directory listings, and it is
+    called repeatedly inside a process that creates the entries it is looking for. Without
+    dropping that cache a backfill never sees the generation its own previous partition
+    started, so it starts another, and dates it after whatever day it is now working on.
+    """
+    from planetary_datasets.common.generations import existing_generations, resolve_generation
+    from planetary_datasets.common.store import write_to_icechunk
+
+    base = "bkr/test/midrun.icechunk"
+
+    def grid(nlat, when):
+        return xr.Dataset(
+            {"hs": (("time", "latitude"), np.zeros((1, nlat), dtype="float32"))},
+            coords={"time": pd.DatetimeIndex([when]), "latitude": np.linspace(0, 10, nlat)},
+        )
+
+    # The series exists at one resolution ...
+    write_to_icechunk(
+        local_config.icechunk_repo(base), grid(4, DAY), append_dim="time", message="x"
+    )
+    assert existing_generations(local_config, base) == [base]
+
+    # ... the model changes, and a new generation is created and written, all in-process.
+    changed = DAY + pd.Timedelta(1, "D")
+    first = resolve_generation(local_config, base, grid(8, changed), "time")
+    assert first.endswith("_02012026.icechunk")
+    write_to_icechunk(
+        local_config.icechunk_repo(first), grid(8, changed), append_dim="time", message="x"
+    )
+
+    # The next partition, same process, same schema: it must find what it just made.
+    later = changed + pd.Timedelta(1, "D")
+    assert resolve_generation(local_config, base, grid(8, later), "time") == first
+
+
+def test_an_abandoned_empty_generation_does_not_misdate_the_next_change(local_config):
+    """An empty dated store is an earlier run's false start, not a slot to fill.
+
+    Claiming it would file a change that happened on one day under the day some
+    interrupted run happened to be working on, which is exactly the information the dated
+    name exists to carry.
+    """
+    from planetary_datasets.common.generations import prefix_for_date, resolve_generation
+    from planetary_datasets.common.store import write_to_icechunk
+
+    base = "bkr/test/abandoned.icechunk"
+
+    def grid(nlat, when):
+        return xr.Dataset(
+            {"hs": (("time", "latitude"), np.zeros((1, nlat), dtype="float32"))},
+            coords={"time": pd.DatetimeIndex([when]), "latitude": np.linspace(0, 10, nlat)},
+        )
+
+    write_to_icechunk(
+        local_config.icechunk_repo(base), grid(4, DAY), append_dim="time", message="x"
+    )
+    # An earlier run named a generation for the 2nd and never wrote to it.
+    stale = prefix_for_date(base, DAY + pd.Timedelta(1, "D"))
+    local_config.icechunk_repo(stale)
+
+    # A change that actually shows up on the 5th must be dated the 5th.
+    changed = DAY + pd.Timedelta(4, "D")
+    chosen = resolve_generation(local_config, base, grid(8, changed), "time")
+
+    assert chosen == prefix_for_date(base, changed)
+    assert chosen != stale

@@ -41,6 +41,7 @@ so a change in an attribute or in the data itself never splits a store.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -168,6 +169,13 @@ def existing_generations(config, base_prefix: str) -> list[str]:
 
         root = config.store_path(parent) if parent else config.store_path("")
         filesystem, path = fsspec.core.url_to_fs(root, **config.fsspec_storage_options())
+        # fsspec caches directory listings, and this is called repeatedly inside a process
+        # that *creates* the very entries it is looking for. Without dropping the cache a
+        # backfill never sees the generation its own previous partition started, so it
+        # starts another one, and another, dating each after the day it happened to be
+        # working on. That is how one schema came to own two stores.
+        with contextlib.suppress(Exception):
+            filesystem.invalidate_cache(path)
         entries = [str(e).rstrip("/").rpartition("/")[2] for e in filesystem.ls(path, detail=False)]
     except Exception as exc:  # noqa: BLE001 - a backend that will not list is not fatal
         logger.debug(f"could not list generations of {base_prefix} ({type(exc).__name__}: {exc})")
@@ -365,12 +373,21 @@ def resolve_generation(
     if base_prefix not in candidates:
         candidates = [base_prefix, *candidates]
 
+    empty: set[str] = set()
     for prefix in candidates[:max_generations]:
         state, found = inspect_generation(config, prefix, append_dim)
 
         if state == EMPTY:
-            logger.info(f"{base_prefix}: starting a generation at {prefix}")
-            return prefix
+            # The base store being empty means a brand new series; claim it. A *dated*
+            # store being empty means an earlier run named one and then did not write —
+            # interrupted, or its partition turned out to have no data. Claiming that one
+            # would file today's change under the day that run happened to be working on,
+            # so it is only reused below if its name is the one this change wants anyway.
+            if prefix == base_prefix:
+                logger.info(f"{base_prefix}: starting the series at {prefix}")
+                return prefix
+            empty.add(prefix)
+            continue
 
         if state == DAMAGED:
             # Not ours to write to and not ours to judge: skip past it and let the data
@@ -390,7 +407,7 @@ def resolve_generation(
     start = generation_start(ds, append_dim)
     for disambiguator in range(0, max_generations):
         prefix = prefix_for_date(base_prefix, start, disambiguator)
-        if prefix not in candidates:
+        if prefix not in candidates or prefix in empty:
             logger.info(
                 f"{base_prefix}: schema {wanted} is new; the model changed on "
                 f"{start:%Y-%m-%d}, starting {prefix}"
