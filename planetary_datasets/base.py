@@ -227,7 +227,7 @@ class BaseProvider(ABC):
         repo = self.get_icechunk_repo()
 
         if check_present and not self.missing_timesteps(pd.DatetimeIndex([it])):
-            logger.debug(f"{self.name}: {it} already in {self.store_path}, skipping")
+            logger.debug(f"{self.name}: {it} already in {self.describe_store()}, skipping")
             return False
 
         with self.local_tempdir() as temp_dir:
@@ -247,6 +247,15 @@ class BaseProvider(ABC):
                 processed = self.process(input_files, it, temp_dir=temp_dir)
 
             return self.write_to_icechunk(self.store_for(processed, repo), processed)
+
+    def describe_store(self) -> str:
+        """Where this provider's data lives, for a log line.
+
+        Its own store, for most providers. Overridden where "the store" is not one place:
+        a provider that picks between generations has to name the ones it actually looked
+        in, or a skip reads as though it came from a store that was never consulted.
+        """
+        return self.store_path
 
     def store_for(self, processed: xr.Dataset, repo: icechunk.Repository):
         """The repository ``processed`` should be written to.

@@ -517,6 +517,13 @@ class GenerationalStoreMixin:
             if store_exists(self.config, prefix)
         ]
 
+    def describe_store(self) -> str:
+        """The generations a presence check actually consults, not just the base name."""
+        found = self.generations()
+        if not found:
+            return f"{self.config.store_path(self.base_store_prefix)} (empty)"
+        return ", ".join(prefix.rpartition("/")[2] for prefix in found)
+
     def stored_times(self) -> set:
         """Every value along the append dimension, across all generations.
 
