@@ -537,7 +537,8 @@ def test_a_resolution_change_starts_a_new_generation(local_config, tmp_path):
     second = provider.store_prefix
 
     assert first == MetOfficeGlobalWaveProvider.base_store_prefix
-    assert second == "bkr/metoffice/metoffice_global_wave_2.icechunk"
+    # Named after the day the upgrade appears, not after a counter.
+    assert second == "bkr/metoffice/metoffice_global_wave_02012026.icechunk"
 
 
 def test_pre_upgrade_data_backfills_into_the_generation_it_belongs_to(local_config, tmp_path):
@@ -769,3 +770,87 @@ def test_a_genuinely_different_axis_is_left_alone_to_be_rejected(local_config):
     snapped = snap_to_stored_coords(incoming, stored, ("latitude",))
 
     assert np.array_equal(snapped["latitude"].values, incoming["latitude"].values)
+
+
+# --------------------------------------------------------- dating a new generation
+
+
+def test_a_new_generation_is_named_after_the_day_the_model_changed(local_config, tmp_path):
+    """A counter says a break happened; a date says when, which is the useful half."""
+    root = tmp_path / "wave"
+    write_wave(root, DAY, nlat=2)
+    changed = pd.Timestamp("2025-09-20")
+    write_wave(root, changed, nlat=4)
+    provider = MetOfficeGlobalWaveProvider(config=local_config, archive_root=root)
+
+    assert provider.run_partition(DAY) is True
+    assert provider.store_prefix == MetOfficeGlobalWaveProvider.base_store_prefix
+
+    assert provider.run_partition(changed) is True
+    assert provider.store_prefix.endswith("metoffice_global_wave_20092025.icechunk")
+
+
+def test_the_date_suffix_is_day_month_year():
+    from planetary_datasets.common.generations import prefix_for_date
+
+    assert prefix_for_date("a/b/wave.icechunk", "2025-09-20") == "a/b/wave_20092025.icechunk"
+    # A January date keeps its leading zeros, or the names would not sort or parse.
+    assert prefix_for_date("a/b/wave.icechunk", "2026-01-05") == "a/b/wave_05012026.icechunk"
+
+
+def test_a_store_without_a_suffix_is_still_handled():
+    from planetary_datasets.common.generations import prefix_for_date
+
+    assert prefix_for_date("a/b/wave", "2025-09-20") == "a/b/wave_20092025"
+
+
+def test_two_changes_on_one_day_get_distinct_names():
+    """Unlikely, but two names that collide would silently merge two schemas."""
+    from planetary_datasets.common.generations import prefix_for_date
+
+    first = prefix_for_date("a/b/wave.icechunk", "2025-09-20")
+    second = prefix_for_date("a/b/wave.icechunk", "2025-09-20", disambiguator=1)
+    assert first != second
+    assert second == "a/b/wave_20092025_1.icechunk"
+
+
+def test_legacy_numbered_generations_are_still_found_and_matched(local_config, tmp_path):
+    """``metoffice_global_wave_2`` was made by hand and must go on being used."""
+    from planetary_datasets.common.generations import (
+        existing_generations,
+        prefix_for_generation,
+        resolve_generation,
+    )
+    from planetary_datasets.common.store import write_to_icechunk
+
+    base = "bkr/test/legacy.icechunk"
+    numbered = prefix_for_generation(base, 2)
+
+    def grid(nlat, when):
+        return xr.Dataset(
+            {"hs": (("time", "latitude"), np.zeros((1, nlat), dtype="float32"))},
+            coords={"time": pd.DatetimeIndex([when]), "latitude": np.linspace(0, 10, nlat)},
+        )
+
+    write_to_icechunk(local_config.icechunk_repo(base), grid(4, DAY), append_dim="time", message="x")
+    write_to_icechunk(
+        local_config.icechunk_repo(numbered), grid(8, DAY), append_dim="time", message="x"
+    )
+
+    assert existing_generations(local_config, base) == [base, numbered]
+    # The old store is matched on schema, not skipped because its name is the old style.
+    later = DAY + pd.Timedelta(1, "D")
+    assert resolve_generation(local_config, base, grid(8, later), "time") == numbered
+    assert resolve_generation(local_config, base, grid(4, later), "time") == base
+
+
+def test_a_brand_new_series_starts_at_the_base_name_not_a_dated_one(local_config, tmp_path):
+    """There is no change to date yet, so dating the first store would be a lie."""
+    root = write_wave(tmp_path / "wave", DAY)
+    provider = MetOfficeNWSWaveProvider(config=local_config, archive_root=root)
+    # NWS files, so point it at the right product.
+    root = write_wave(tmp_path / "w2", DAY, product="nws-wave", marker="wave_uk_standard_v1")
+    provider = MetOfficeNWSWaveProvider(config=local_config, archive_root=root)
+
+    assert provider.run_partition(DAY) is True
+    assert provider.store_prefix == MetOfficeNWSWaveProvider.base_store_prefix

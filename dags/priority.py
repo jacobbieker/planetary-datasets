@@ -159,10 +159,17 @@ def recent_partition_keys(
     if not isinstance(partitions_def, dg.TimeWindowPartitionsDefinition):
         return []
     try:
-        # `get_last_partition_key` takes no `current_time`; it already honours end_offset.
-        last = partitions_def.get_last_partition_key()
-        if last is None:
+        # Anchored on `now`, not on the wall clock. `get_last_partition_key` takes no
+        # `current_time` and so answers for the moment it is called, which made this
+        # function's result depend on when it ran rather than on the tick it was answering
+        # for: a schedule firing either side of midnight got different windows, and the
+        # tests covering it passed only on the day the clock happened to agree with them.
+        # `get_partition_keys` is the one API here that accepts a `current_time`, and it
+        # already honours `end_offset`.
+        keys_now = partitions_def.get_partition_keys(current_time=now)
+        if not keys_now:
             return []
+        last = keys_now[-1]
         end = partitions_def.time_window_for_partition_key(last).end
         window = dg.TimeWindow(start=end - dt.timedelta(days=days), end=end)
         keys = list(partitions_def.get_partition_keys_in_time_window(window))
