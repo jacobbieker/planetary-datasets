@@ -255,6 +255,42 @@ def resolve_generation(
     )
 
 
+def snap_to_stored_coords(
+    ds: xr.Dataset, stored: xr.Dataset, coords: tuple[str, ...] = GRID_COORDS
+) -> xr.Dataset:
+    """Adopt the store's coordinate values wherever they describe the same axis.
+
+    Closes a gap between the two checks a write passes. :func:`schema_fingerprint` is
+    deliberately *tolerant* — it has to be, or float32 construction noise would fork a
+    store — while the alignment guard in
+    :func:`~planetary_datasets.common.store.write_to_icechunk` is exact, because an append
+    lands on the store's own axis and a coordinate that is off by anything is a different
+    axis to zarr.
+
+    Between the two sits a real case: an axis that the fingerprint calls the same and
+    ``array_equal`` calls different. Without this the generation machinery would route such
+    a partition to a store that then refuses it — and refuses it by returning False, so the
+    partition would be reported as "nothing to do" and quietly never written.
+
+    So where an incoming coordinate has the same digest as the store's, the store's values
+    are adopted verbatim. The grid is the same; this just settles which of two spellings of
+    it the store keeps — the one it already has.
+    """
+    for name in coords:
+        if name not in ds.coords or name not in stored.coords:
+            continue
+        incoming, existing = np.asarray(ds[name].values), np.asarray(stored[name].values)
+        if incoming.shape != existing.shape or np.array_equal(incoming, existing):
+            continue
+        if _coord_digest(incoming) != _coord_digest(existing):
+            # A genuinely different axis. Leave it alone and let the alignment guard
+            # reject it rather than silently bending the data onto the wrong grid.
+            continue
+        logger.debug(f"adopting the store's {name} values; same axis, different spelling")
+        ds = ds.assign_coords({name: (ds[name].dims, existing)})
+    return ds
+
+
 class GenerationalStoreMixin:
     """Give a provider a store prefix chosen by :func:`resolve_generation`.
 
@@ -290,6 +326,21 @@ class GenerationalStoreMixin:
         """Choose the generation for this partition, opening its repository."""
         self.resolve_store(processed)
         return self.get_icechunk_repo()
+
+    def write_to_icechunk(self, repo, processed: xr.Dataset) -> bool:
+        """Adopt the chosen store's grid spelling, then write.
+
+        See :func:`snap_to_stored_coords`: without this a partition the fingerprint sends
+        to a store can still be refused by that store's exact alignment check, and refused
+        silently.
+        """
+        try:
+            stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+        except Exception:  # noqa: BLE001 - a store with nothing in it has nothing to adopt
+            stored = None
+        if stored is not None:
+            processed = snap_to_stored_coords(processed, stored, self.alignment_coords)
+        return super().write_to_icechunk(repo, processed)
 
     def generations(self) -> list[str]:
         """Every generation of this series that currently holds data, oldest first."""
@@ -335,6 +386,7 @@ class GenerationalStoreMixin:
 
 __all__ = [
     "GRID_COORDS",
+    "snap_to_stored_coords",
     "GenerationalStoreMixin",
     "MAX_GENERATIONS",
     "prefix_for_generation",

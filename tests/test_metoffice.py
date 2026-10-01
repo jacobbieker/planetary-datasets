@@ -726,3 +726,46 @@ def test_a_shifted_domain_of_the_same_size_still_splits_a_store():
         )
 
     assert schema_fingerprint(grid(-80, 80), "time") != schema_fingerprint(grid(-90, 90), "time")
+
+
+def test_a_tolerated_axis_difference_is_snapped_to_the_store(local_config, tmp_path):
+    """The fingerprint is tolerant but the store's alignment guard is exact.
+
+    An axis the fingerprint calls the same and ``array_equal`` calls different would be
+    routed to a store that then refuses it — and refuses it by returning False, so the
+    partition would be reported as "nothing to do" and silently never written. The store's
+    own spelling of the axis is adopted instead.
+    """
+    from planetary_datasets.common.generations import snap_to_stored_coords
+
+    exact = np.linspace(0.17578125, 359.82421875, 64, dtype="float64")
+    drifted = exact - np.linspace(0.0, 5.2e-4, 64)
+
+    def grid(longitude, when):
+        return xr.Dataset(
+            {"hs": (("time", "longitude"), np.zeros((1, 64), dtype="float32"))},
+            coords={"time": pd.DatetimeIndex([when]), "longitude": longitude},
+        )
+
+    stored = grid(exact, DAY)
+    incoming = grid(drifted, DAY + pd.Timedelta(1, "D"))
+    assert not np.array_equal(incoming["longitude"].values, stored["longitude"].values)
+
+    snapped = snap_to_stored_coords(incoming, stored, ("longitude",))
+    assert np.array_equal(snapped["longitude"].values, stored["longitude"].values)
+
+
+def test_a_genuinely_different_axis_is_left_alone_to_be_rejected(local_config):
+    """Snapping a real regrid onto the store's axis would mislabel where the data is."""
+    from planetary_datasets.common.generations import snap_to_stored_coords
+
+    def grid(start, stop):
+        return xr.Dataset(
+            {"hs": (("time", "latitude"), np.zeros((1, 64), dtype="float32"))},
+            coords={"time": pd.DatetimeIndex([DAY]), "latitude": np.linspace(start, stop, 64)},
+        )
+
+    stored, incoming = grid(-80, 80), grid(-90, 90)
+    snapped = snap_to_stored_coords(incoming, stored, ("latitude",))
+
+    assert np.array_equal(snapped["latitude"].values, incoming["latitude"].values)
