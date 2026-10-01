@@ -280,11 +280,16 @@ GLOBAL_10KM_6HOURLY_24HR = AtmosphericVariant(
     to_float16=False,
 )
 
+#: The UK model runs *every hour*, unlike the global one's four runs a day. So its
+#: continuous hourly analysis is built from the analysis step of each hourly run rather
+#: than from the first six forecast steps of every sixth run: each hour is then the
+#: freshest estimate of itself that the Met Office published, instead of a forecast up to
+#: five hours old.
 UK_2KM = AtmosphericVariant(
     name="metoffice_uk_deterministic_2km",
     store_prefix="bkr/metoffice/metoffice_uk_deterministic_2km.icechunk",
     model="uk-deterministic-2km",
-    steps=(0, 1, 2, 3, 4, 5),
+    steps=(0,),
     collapse_to_step=False,
     to_float16=True,
 )

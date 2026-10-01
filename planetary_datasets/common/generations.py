@@ -281,15 +281,49 @@ def schema_fingerprint(ds: xr.Dataset, append_dim: str) -> str:
     return hashlib.sha1(payload.encode()).hexdigest()[:16]
 
 
-def _stored_fingerprint(config, prefix: str, append_dim: str) -> str | None:
-    """Fingerprint of the store at ``prefix``, or None when it is absent or unreadable.
+#: What :func:`inspect_generation` found at a prefix.
+EMPTY = "empty"
+DAMAGED = "damaged"
 
-    The two are not distinguished on purpose at this level; :func:`resolve_generation`
-    handles them differently and logs which happened.
+
+def inspect_generation(config, prefix: str, append_dim: str) -> tuple[str, str | None]:
+    """Classify the store at ``prefix`` as empty, damaged, or holding a schema.
+
+    The distinction is the whole point and getting it wrong is expensive. An *empty* store
+    is the normal way a generation begins and should be claimed. A *damaged* one — a store
+    whose variables disagree about the length of the append dimension, which is what a
+    half-finished append leaves behind — must be left alone: it cannot be fingerprinted, so
+    there is no way to know whether the incoming data belongs in it, and writing to it
+    piles more on top of the damage.
+
+    Returns ``(EMPTY, None)``, ``(DAMAGED, None)`` or ``("ok", fingerprint)``.
     """
-    repo = config.icechunk_repo(prefix)
-    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
-    return schema_fingerprint(ds, append_dim)
+    try:
+        repo = config.icechunk_repo(prefix)
+        session = repo.readonly_session("main")
+    except Exception as exc:  # noqa: BLE001 - no repository at all is an empty slot
+        logger.debug(f"{prefix}: no repository ({type(exc).__name__}: {exc})")
+        return EMPTY, None
+
+    try:
+        ds = xr.open_zarr(session.store, consolidated=False)
+    except Exception as exc:  # noqa: BLE001
+        # icechunk raises GroupNotFoundError for a repository with nothing committed to it,
+        # which `icechunk_repo` creates as a side effect of merely looking. Anything else
+        # means there *is* data and it cannot be read.
+        if "GroupNotFound" in type(exc).__name__ or "NotFound" in type(exc).__name__:
+            return EMPTY, None
+        logger.warning(
+            f"{prefix}: holds committed data that cannot be read "
+            f"({type(exc).__name__}: {str(exc)[:160]}); leaving it alone"
+        )
+        return DAMAGED, None
+
+    try:
+        return "ok", schema_fingerprint(ds, append_dim)
+    except Exception as exc:  # noqa: BLE001 - readable but un-fingerprintable is damaged
+        logger.warning(f"{prefix}: cannot be fingerprinted ({type(exc).__name__}); leaving it")
+        return DAMAGED, None
 
 
 def store_exists(config, prefix: str) -> bool:
@@ -332,12 +366,17 @@ def resolve_generation(
         candidates = [base_prefix, *candidates]
 
     for prefix in candidates[:max_generations]:
-        try:
-            found = _stored_fingerprint(config, prefix, append_dim)
-        except Exception as exc:  # noqa: BLE001 - empty and damaged both land here
-            logger.debug(f"{prefix}: not readable as a store ({type(exc).__name__}), claiming it")
+        state, found = inspect_generation(config, prefix, append_dim)
+
+        if state == EMPTY:
             logger.info(f"{base_prefix}: starting a generation at {prefix}")
             return prefix
+
+        if state == DAMAGED:
+            # Not ours to write to and not ours to judge: skip past it and let the data
+            # land in a sound store. Writing here would turn an unreadable store into an
+            # unreadable store with more in it.
+            continue
 
         if found == wanted:
             if prefix != base_prefix:

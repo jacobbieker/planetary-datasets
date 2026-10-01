@@ -262,7 +262,12 @@ def test_global_partition_round_trips_through_the_store(local_config, archive):
     assert ds["air_temperature_1.5m"].dtype == np.float16
 
 
-def test_uk_partition_keeps_the_valid_times(local_config, archive):
+def test_uk_partition_keeps_only_its_own_analysis_hour(local_config, archive):
+    """The UK model runs hourly, so each hour comes from its own run, not a forecast.
+
+    The run publishes six steps; only step 0 is kept, because the next hour has a run of
+    its own and that run's analysis beats this run's one-hour forecast.
+    """
     root = write_archive(archive, "uk-deterministic-2km", INIT, range(6))
     provider = MetOfficeUK2kmProvider(config=local_config, archive_dir=root)
 
@@ -270,9 +275,21 @@ def test_uk_partition_keeps_the_valid_times(local_config, archive):
 
     ds = open_store(provider)
     assert "init_time" not in ds.dims
-    assert list(ds.time.values) == [
-        (INIT + pd.Timedelta(h, "h")).to_numpy() for h in range(6)
-    ]
+    assert list(ds.time.values) == [INIT.to_numpy()]
+
+
+def test_consecutive_uk_hours_tile_from_their_own_runs(local_config, archive):
+    root = write_archive(archive, "uk-deterministic-2km", INIT, range(6))
+    later = INIT + pd.Timedelta(1, "h")
+    write_archive(archive, "uk-deterministic-2km", later, range(6))
+    provider = MetOfficeUK2kmProvider(config=local_config, archive_dir=root)
+
+    assert provider.run_partition(INIT) is True
+    assert provider.run_partition(later) is True
+
+    times = pd.DatetimeIndex(open_store(provider).time.values)
+    assert list(times) == [INIT, later]
+    assert times.is_unique
 
 
 def test_process_rejects_a_partition_with_nothing_recognisable(local_config, archive):
@@ -832,7 +849,9 @@ def test_legacy_numbered_generations_are_still_found_and_matched(local_config, t
             coords={"time": pd.DatetimeIndex([when]), "latitude": np.linspace(0, 10, nlat)},
         )
 
-    write_to_icechunk(local_config.icechunk_repo(base), grid(4, DAY), append_dim="time", message="x")
+    write_to_icechunk(
+        local_config.icechunk_repo(base), grid(4, DAY), append_dim="time", message="x"
+    )
     write_to_icechunk(
         local_config.icechunk_repo(numbered), grid(8, DAY), append_dim="time", message="x"
     )
@@ -854,3 +873,43 @@ def test_a_brand_new_series_starts_at_the_base_name_not_a_dated_one(local_config
 
     assert provider.run_partition(DAY) is True
     assert provider.store_prefix == MetOfficeNWSWaveProvider.base_store_prefix
+
+
+def test_a_damaged_generation_is_skipped_not_written_to(local_config, tmp_path):
+    """Regression: an unreadable store was claimed and then exploded on write.
+
+    A store whose variables disagree about the length of the append dimension - what a
+    half-finished append leaves behind - cannot be fingerprinted, so there is no way to
+    know whether incoming data belongs in it. It used to be treated the same as an empty
+    store and claimed, and the write then failed with StoreReadError on every partition.
+    """
+    from planetary_datasets.common.generations import DAMAGED, inspect_generation
+
+    base = "bkr/test/damaged.icechunk"
+
+    class Session:
+        @property
+        def store(self):
+            # What a store left inconsistent by a half-finished append raises.
+            raise ValueError("conflicting sizes for dimension 'time'")
+
+    class Repo:
+        def readonly_session(self, _branch):
+            return Session()
+
+    class Unreadable:
+        """``local_config``, except that the store at ``base`` will not open."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def icechunk_repo(self, prefix):
+            return Repo() if prefix == base else self._inner.icechunk_repo(prefix)
+
+    state, fingerprint = inspect_generation(Unreadable(local_config), base, "time")
+
+    assert state == DAMAGED
+    assert fingerprint is None

@@ -33,10 +33,13 @@ six_hourly_partitions = dg.TimeWindowPartitionsDefinition(
     end_offset=-1,
 )
 
-#: The UK 2 km archive on the public bucket starts almost eighteen months later.
+#: The UK 2 km archive on the public bucket starts almost eighteen months later, and it
+#: publishes a run every hour rather than four a day. One partition is one run, and the
+#: store keeps that run's analysis step, so the hours tile without any of them being a
+#: forecast; see ``UK_2KM`` in the provider module.
 uk_partitions = dg.TimeWindowPartitionsDefinition(
     start=dt.datetime(2024, 9, 27),
-    cron_schedule="0 0,6,12,18 * * *",
+    cron_schedule="0 * * * *",
     fmt="%Y-%m-%d-%H:%M",
     end_offset=-1,
 )
