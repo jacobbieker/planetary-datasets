@@ -39,12 +39,19 @@ Usage:
     # Ingest a specific channel range, oldest data first, one store per channel
     python -m planetary_datasets.providers.virtualized.ingest_goes_radf \
         --satellite goes18 --channels 7 8 9 10 11 12 13 14 15 16 --forward
+
+    # Live append: every scan newer than each live store's last commit, from
+    # at most the last three hours, one commit per channel. Prints a JSON
+    # summary as its last line.
+    python -m planetary_datasets.providers.virtualized.ingest_goes_radf \
+        --satellite goes19 --channels all --append-latest --lookback-minutes 180
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import sys
 from typing import TYPE_CHECKING
 
@@ -402,6 +409,163 @@ def _storage_summary(args: argparse.Namespace) -> str:
     return get_config().store_path(prefix)
 
 
+ALL_CHANNELS: list[int] = list(range(1, 17))
+
+
+def parse_channels(value: str) -> list[int]:
+    """Channels from one CLI token: ``13``, ``C13``, ``C01,C02`` or ``all``.
+
+    ``all`` is every ABI channel, C02 included. Used as an argparse ``type``, so
+    a bad token is reported as a usage error.
+    """
+    out: list[int] = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part.lower() == "all":
+            out.extend(ALL_CHANNELS)
+            continue
+        digits = part[1:] if part[:1] in ("C", "c") else part
+        try:
+            channel = int(digits)
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"expected a channel number, C01..C16 or 'all', got {part!r}"
+            ) from None
+        if not 1 <= channel <= 16:
+            raise argparse.ArgumentTypeError(f"Channel must be 1-16, got {part!r}")
+        out.append(channel)
+    if not out:
+        raise argparse.ArgumentTypeError(f"no channel in {value!r}")
+    return out
+
+
+def _append_renamer(args: argparse.Namespace, channel: int):
+    """rename_store_fn for a live append's era rollover, or None to refuse it.
+
+    Only the ``config`` storage the container uses can roll over: its renamer
+    refuses to move onto a store holding data, and can undo a rollover whose
+    first write failed. The backwards walk's ``s3`` renamer merges into an
+    existing destination by design (that is how it resumes an interrupted
+    rename), which is not safe unattended, so explicit ``s3`` and ``local``
+    storage raise ``CodecEraChange`` instead.
+    """
+    if getattr(args, "storage", None) != "config":
+        return None
+    return common.make_config_store_renamer(
+        lambda suffix, ch=channel: _store_prefix(args, ch, suffix)
+    )
+
+
+def append_latest(
+    satellite: str,
+    channel: int,
+    *,
+    lookback_minutes: float,
+    now: datetime.datetime | None = None,
+    args: argparse.Namespace | None = None,
+    **kwargs,
+) -> dict:
+    """Append one channel's scans newer than its live store's last commit.
+
+    The live store is the unsuffixed ``<satellite>_radf_C<NN>.icechunk``. Scans
+    are taken from at most ``lookback_minutes`` before ``now`` (default: the
+    current time). ``args`` locates the store as for the rest of this CLI and
+    defaults to :func:`build_args` for ``satellite``, i.e. the shared config.
+    Extra keyword arguments go to
+    :func:`~planetary_datasets.providers.virtualized.goes_radf_common.append_latest_scans`.
+
+    Returns ``{"appended": n, "last": "<iso t>"}``.
+    """
+    if args is None:
+        args = build_args(satellite)
+    mod = _module_for(satellite)
+
+    def repo_factory(suffix: str, ch: int = channel):
+        return _open_repo(args, channel=ch, date_suffix=suffix)
+
+    kwargs.setdefault("rename_store_fn", _append_renamer(args, channel))
+    return mod.common.append_latest_scans(
+        channel,
+        repo_factory=repo_factory,
+        satellite_name=mod.SATELLITE_NAME,
+        satellite=mod.SATELLITE,
+        product_label=mod.PRODUCT.rstrip("/"),
+        archive_start_date=mod.ARCHIVE_START_DATE,
+        store=mod._store(),
+        bucket=mod.BUCKET,
+        product=mod.PRODUCT,
+        product_keys=mod.PRODUCT_KEYS,
+        loadable_variables=mod.DEFAULT_LOADABLE_VARIABLES,
+        epoch_threshold=mod.EPOCH_THRESHOLD,
+        lookback_minutes=lookback_minutes,
+        now=now,
+        branch=args.branch,
+        group="",
+        log_dir=args.log_dir,
+        **kwargs,
+    )
+
+
+def append_channel_from_args(args: argparse.Namespace, channel: int) -> dict:
+    """:func:`append_latest` for one channel. Top-level so a process pool can pickle it."""
+    return append_latest(
+        args.satellite, channel, lookback_minutes=args.lookback_minutes, args=args
+    )
+
+
+def run_append(
+    args: argparse.Namespace, channel_list: list[int], *, append_fn=None
+) -> int:
+    """Append every channel, print the JSON summary, return the exit code.
+
+    A failed channel does not stop the others: its error goes into the summary
+    instead. The exit code is non-zero only when every channel failed, so one
+    bad channel does not fail the run while a wholly broken run still does.
+    The summary is the last line on stdout.
+    """
+    append_fn = append_fn or append_channel_from_args
+    results: dict[str, dict] = {}
+
+    def record(channel: int, outcome: dict | None, exc: BaseException | None) -> None:
+        label = common._ch(channel)
+        if exc is None:
+            results[label] = outcome
+            print(f"  {label}: appended {outcome.get('appended', 0)}", flush=True)
+        else:
+            results[label] = {
+                "appended": 0, "last": None, "error": f"{type(exc).__name__}: {exc}",
+            }
+            print(f"  {label}: FAILED — {type(exc).__name__}: {exc}", flush=True)
+
+    if getattr(args, "parallel", False) and len(channel_list) > 1:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        max_workers = getattr(args, "max_workers", None) or len(channel_list)
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(append_fn, args, channel): channel
+                for channel in channel_list
+            }
+            for future in as_completed(futures):
+                try:
+                    record(futures[future], future.result(), None)
+                except Exception as exc:  # noqa: BLE001 - reported per channel
+                    record(futures[future], None, exc)
+    else:
+        for channel in channel_list:
+            try:
+                record(channel, append_fn(args, channel), None)
+            except Exception as exc:  # noqa: BLE001 - reported per channel
+                record(channel, None, exc)
+
+    ordered = {common._ch(ch): results[common._ch(ch)] for ch in channel_list}
+    failed = [label for label, r in ordered.items() if "error" in r]
+    print(json.dumps({"satellite": args.satellite, "channels": ordered}), flush=True)
+    return 1 if channel_list and len(failed) == len(channel_list) else 0
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         description="Ingest GOES ABI-L1b-RadF per-channel radiance into Icechunk. "
@@ -414,12 +578,14 @@ def main() -> None:
         help="Which GOES satellite to ingest.",
     )
     p.add_argument(
-        "--channel", type=int, default=None,
-        help="Single ABI channel number 1-16. Mutually exclusive with --channels.",
+        "--channel", type=parse_channels, default=None,
+        help="Single ABI channel: 1-16, C01-C16, or 'all'. Mutually exclusive "
+             "with --channels.",
     )
     p.add_argument(
-        "--channels", type=int, nargs="+", default=None,
-        help="Multiple ABI channel numbers to ingest sequentially.",
+        "--channels", type=parse_channels, nargs="+", default=None,
+        help="ABI channels to ingest sequentially: numbers, C01-C16 (space or "
+             "comma separated), or 'all'.",
     )
 
     # Storage options
@@ -483,12 +649,23 @@ def main() -> None:
                              "nothing, so it needs no store.")
     ingest.add_argument("--n-files", type=int, default=3,
                         help="Files to open for --smoke-test (default: 3).")
+    ingest.add_argument("--append-latest", action="store_true",
+                        help="Append to each channel's live store every scan "
+                             "newer than its last commit, from within "
+                             "--lookback-minutes, one commit per channel. Prints "
+                             "a JSON summary as the last line, and exits "
+                             "non-zero only if every channel failed.")
+    ingest.add_argument("--lookback-minutes", type=float, default=180,
+                        help="With --append-latest: never reach further back "
+                             "than this (default: 180).")
 
     args = p.parse_args()
 
     if args.smoke_test:
         mod = _module_for(args.satellite)
-        print(mod.smoke_test(channel=args.channel or 13, n_files=args.n_files))
+        print(mod.smoke_test(
+            channel=args.channel[0] if args.channel else 13, n_files=args.n_files
+        ))
         return
 
     for name in ("end_date", "start_date"):
@@ -519,9 +696,9 @@ def main() -> None:
     if args.channel is not None and args.channels is not None:
         p.error("--channel and --channels are mutually exclusive")
     if args.channel is not None:
-        channel_list = [args.channel]
+        channel_list = list(args.channel)
     elif args.channels is not None:
-        channel_list = args.channels
+        channel_list = [ch for group in args.channels for ch in group]
     else:
         channel_list = list(range(1, 17))[::-1]
         # Remove channel 2, as its much bigger
@@ -530,6 +707,10 @@ def main() -> None:
     for ch in channel_list:
         if ch < 1 or ch > 16:
             p.error(f"Channel must be 1-16, got {ch}")
+    # A repeated channel would race itself for the same store.
+    channel_list = list(dict.fromkeys(channel_list))
+    if args.lookback_minutes <= 0:
+        p.error(f"--lookback-minutes must be > 0, got {args.lookback_minutes}")
 
     if args.log_dir is None:
         args.log_dir = str(common.default_log_dir())
@@ -537,6 +718,14 @@ def main() -> None:
     # Bound glibc arena growth before any channel worker is spawned; workers
     # inherit the setting, which is where it does its work.
     common.configure_ingest_process()
+
+    if args.append_latest:
+        print(f"Satellite: {args.satellite}")
+        print(f"Channels:  {channel_list}")
+        print(f"Storage:   {args.storage} ({_storage_summary(args)})")
+        print(f"Mode:      append scans since the last commit, at most "
+              f"{args.lookback_minutes:g} min back", flush=True)
+        sys.exit(run_append(args, channel_list))
 
     print(f"Satellite: {args.satellite}")
     print(f"Channels:  {channel_list}")
@@ -613,6 +802,7 @@ def build_args(
     start_date: datetime.date | None = None,
     max_eras: int | None = None,
     forward: bool = False,
+    lookback_minutes: float = 180,
 ) -> argparse.Namespace:
     """Build the options :func:`ingest_channel_from_args` takes.
 
@@ -638,6 +828,7 @@ def build_args(
         start_date=start_date,
         max_eras=max_eras,
         forward=forward,
+        lookback_minutes=lookback_minutes,
     )
 
 

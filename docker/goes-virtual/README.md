@@ -136,6 +136,105 @@ Useful flags: `--max-eras 1` (only what still combines with the anchor),
 `--start-date` (bound the walk), `--forward` (old oldest-first whole-archive
 mode), `--check` (summarise the stores written).
 
+## Live append (keeping the stores current)
+
+The backwards walk fills the archive a day at a time. To keep the live stores
+current with sub-day latency, a scheduler (the operational Dagster) runs the
+`append` subcommand every 30 minutes or so:
+
+```bash
+docker run --rm \
+  -e SC_ACCESS_KEY_ID=<source-coop-key> \
+  -e SC_SECRET_ACCESS_KEY=<source-coop-secret> \
+  $REGISTRY/goes-virtual-ingest:latest \
+  append goes19 --channels all --lookback-minutes 180
+```
+
+`<satellite>` is `goes16`–`goes19`. `--channels` takes `C01`..`C16` (comma or
+space separated), bare numbers, or `all`, which includes C02. C02's manifest is
+~16× a 2 km channel's, so a scheduler may give it its own job:
+`append goes19 --channels C02 --lookback-minutes 180`.
+
+For each channel it reads the last committed `t` of the **live** store
+(`$SC_PREFIX_ROOT/goes{N}_radf_C{CH}.icechunk`, no era suffix), lists NOAA's
+hour directories (`ABI-L1b-RadF/YYYY/DDD/HH/`) from that time through now —
+never further back than `--lookback-minutes`, and across midnight where the
+window crosses it — and appends every scan strictly newer than the last commit,
+in one commit per channel. A commit lost to a concurrent writer is retried from
+a fresh session; each retry re-reads the store, so nothing is written twice.
+
+Before writing, every new scan is checked against the scan the store ends with,
+using the same combine test as the backwards walk:
+
+- an odd scan between good ones is skipped (`SKIPPED` in the channel log);
+- fewer than 3 trailing scans that do not combine are left for the next run
+  (`DEFERRED`), as one bad file must not split an era;
+- 3 or more that do not combine with the store but do with each other are a new
+  codec era. The live store is frozen as `..._C{CH}_{LAST_DAY}.icechunk` and a
+  new live store started (`CODEC_CHANGE`). It refuses rather than rename onto a
+  store that holds data, and puts the old live store back if the new era's
+  first write fails. Only the config storage (this entrypoint, or
+  `--storage config`) rolls over; explicit `--storage s3`/`local` fails the
+  channel with `CodecEraChange` instead;
+- a scan that will not open is held back, with everything after it, for the
+  next run, rather than written past.
+
+Icechunk only appends along `t`, so a scan NOAA publishes *after* a newer one
+has been appended can no longer be added; it is left out.
+
+Exit status and output:
+
+- exit 0 when nothing is new, or when at least one channel succeeded;
+- non-zero only when every channel failed (a failed channel never stops the
+  rest);
+- the last line on stdout is a JSON summary:
+  `{"satellite": "goes19", "channels": {"C13": {"appended": 3, "last": "2026-10-06T13:55:07.161776"}, "C02": {"appended": 0, "last": null, "error": "..."}}}`.
+  `dropped`, `deferred` and `new_era` appear on a channel when they apply.
+
+The job is meant to run next to the NOAA buckets in `us-east-1`, while the
+stores are in `us-west-2`: the store region is `SC_REGION`, else `us-west-2`,
+and deliberately not the task's own `AWS_REGION`. NOAA reads are anonymous.
+Set `ICECHUNK_LOCAL_PATH` to append to local stores instead. The same mode is
+`--append-latest --lookback-minutes N` on the GOES CLI.
+
+### GK-2A live append
+
+`append <satellite>` keeps the live (un-suffixed) stores current between
+backfills. It is what the operational Dagster schedule runs every 30 minutes:
+
+```bash
+docker run --rm \
+  -e SC_ACCESS_KEY_ID=<source-coop-key> -e SC_SECRET_ACCESS_KEY=<source-coop-secret> \
+  $REGISTRY/goes-virtual-ingest:latest \
+  append gk2a --channels all --lookback-minutes 180
+```
+
+- `--channels` takes AMI band names, comma-separated (`ir105,wv063`), or `all`
+  for all 16 including `vi006`. `vi006` can run on its own (`--channels vi006`).
+- For each band it reads the newest committed `t` from
+  `$SC_PREFIX_ROOT/gk2a_ami_fd_<band>.icechunk` (root group), lists only the
+  `AMI/L1B/FD/YYYYMM/DD/HH/` directories from there (no further back than the
+  lookback) to now, across midnight if need be, and appends the strictly newer
+  scans in one commit. The codec check, the uncompressed-file filter and the
+  codec-outlier repair are the backfill's; a codec change fails the band
+  rather than mixing eras in one store.
+- A commit that loses a race with another writer is retried from a fresh
+  session (three attempts).
+- A store whose last `t` is older than the lookback is still appended to
+  from the window on, but the skipped stretch is reported as
+  `"gap": {"from": ..., "to": ...}` in that band's entry (and logged as a
+  warning): the store only appends along `t`, so it cannot be filled later.
+- A missing live store fails that band: seeding one from a few hours of data
+  would block the backfill. Pass `--create-missing` to start one anyway.
+- The last stdout line is a JSON summary:
+  `{"satellite": "gk2a", "channels": {"ir105": {"appended": 3, "last": "2026-10-06T13:40:32"}, ...}, "errors": {}}`.
+  A failed band carries an `error` in its entry and in `errors`; the others
+  still run. The exit status is non-zero only when every band failed, and 0
+  when there was simply nothing new.
+- Credentials and destination come from the same `SC_*` / `AWS_*` /
+  `ICECHUNK_BUCKET` fallbacks as the orchestrated mode. NOAA is read
+  anonymously. `ICECHUNK_LOCAL_PATH` sends the writes to local disk instead.
+
 ## Monitoring
 
 ```bash

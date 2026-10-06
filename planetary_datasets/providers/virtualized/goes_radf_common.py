@@ -1025,6 +1025,53 @@ def _drop_metadata_only_files(
     return kept
 
 
+def list_prefix_files(
+    store,
+    bucket: str,
+    prefixes: Iterable[str],
+    channel: int,
+) -> list[str]:
+    """Every usable .nc file URL for ``channel`` under the given key prefixes.
+
+    The filtering :func:`list_day_files` applies to one day, applied to any set
+    of prefixes — the live append lists hour directories rather than whole days.
+    Drops aborted scans, other channels and other products, and the
+    metadata-only files NOAA occasionally publishes (judged against the median
+    of everything listed here). Returns URLs in scan-time order, one per
+    scan-start token.
+    """
+    urls: list[str] = []
+    sizes: dict[str, int] = {}
+    for prefix in prefixes:
+        for page in obs.list(store, prefix=prefix):
+            for obj in page:
+                path = obj["path"]
+                if not path.endswith(".nc"):
+                    continue
+                if _is_aborted_scan(path):
+                    continue
+                fname = path.rsplit("/", 1)[-1]
+                if "RadF-M" not in fname:
+                    continue
+                if _channel_from_filename(path) != channel:
+                    continue
+                url = f"{bucket}/{path}"
+                urls.append(url)
+                sizes[url] = obj["size"]
+    urls = _drop_metadata_only_files(urls, sizes, channel)
+    urls.sort(key=_scan_start_token)
+
+    # Deduplicate by scan-start token
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for u in urls:
+        tok = _scan_start_token(u)
+        if tok not in seen:
+            seen.add(tok)
+            deduped.append(u)
+    return deduped
+
+
 def list_day_files(
     store,
     bucket: str,
@@ -1044,36 +1091,9 @@ def list_day_files(
     occasionally publishes. Returns URLs in chronological scan-time order.
     """
     effective_product = product_reproc if (reproc and product_reproc) else product
-    day_prefix = f"{effective_product}{year}/{doy:03d}/"
-    urls: list[str] = []
-    sizes: dict[str, int] = {}
-    for page in obs.list(store, prefix=day_prefix):
-        for obj in page:
-            path = obj["path"]
-            if not path.endswith(".nc"):
-                continue
-            if _is_aborted_scan(path):
-                continue
-            fname = path.rsplit("/", 1)[-1]
-            if "RadF-M" not in fname:
-                continue
-            if _channel_from_filename(path) != channel:
-                continue
-            url = f"{bucket}/{path}"
-            urls.append(url)
-            sizes[url] = obj["size"]
-    urls = _drop_metadata_only_files(urls, sizes, channel)
-    urls.sort(key=_scan_start_token)
-
-    # Deduplicate by scan-start token
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for u in urls:
-        tok = _scan_start_token(u)
-        if tok not in seen:
-            seen.add(tok)
-            deduped.append(u)
-    urls = deduped
+    urls = list_prefix_files(
+        store, bucket, [f"{effective_product}{year}/{doy:03d}/"], channel
+    )
 
     if start is not None:
         urls = [u for u in urls if _scan_start_token(u) >= _scan_start_token(start)]
@@ -2422,6 +2442,671 @@ def ingest_backwards(
             flush=True,
         )
     return suffixes
+
+
+# =============================================================================
+# Live append: every scan since the last commit
+# =============================================================================
+class CodecEraChange(RuntimeError):
+    """New scans no longer combine with the live store, and it cannot be frozen.
+
+    The backwards walk handles an era boundary by renaming the live store to the
+    last day it holds and starting a fresh one. A live append does the same when
+    it has a rename hook; without one it raises this rather than write scans
+    that cannot share a store, or quietly stop appending.
+    """
+
+
+class AppendIncomplete(RuntimeError):
+    """Scans newer than the live store were listed but none could be committed."""
+
+
+def _utc_naive(when: datetime.datetime) -> datetime.datetime:
+    """``when`` as a naive UTC datetime, the form the scan-start tokens parse to."""
+    if when.tzinfo is not None:
+        when = when.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return when
+
+
+def _to_datetime(t: np.datetime64) -> datetime.datetime:
+    return pd.Timestamp(t).to_pydatetime(warn=False)
+
+
+def _iso(t: np.datetime64 | None) -> str | None:
+    return None if t is None else pd.Timestamp(t).isoformat()
+
+
+def hour_prefixes(
+    product: str, start: datetime.datetime, end: datetime.datetime
+) -> list[str]:
+    """Hour directories ``<product>YYYY/DDD/HH/`` covering ``start`` through ``end``.
+
+    Both ends are inclusive at hour resolution, so a window from 23:40 to 00:20
+    lists the hour before midnight and the one after it, on two different days
+    and, at New Year, in two different years.
+    """
+    hour = _utc_naive(start).replace(minute=0, second=0, microsecond=0)
+    last = _utc_naive(end).replace(minute=0, second=0, microsecond=0)
+    out: list[str] = []
+    while hour <= last:
+        doy = hour.timetuple().tm_yday
+        out.append(f"{product}{hour.year}/{doy:03d}/{hour.hour:02d}/")
+        hour += datetime.timedelta(hours=1)
+    return out
+
+
+def scans_after(
+    urls: Iterable[str],
+    *,
+    after: np.datetime64 | None,
+    since: np.datetime64 | None = None,
+    until: np.datetime64 | None = None,
+    scan_start_fn: Callable[[str], np.datetime64] = parse_scan_start_to_datetime,
+) -> list[str]:
+    """The scans to append: strictly newer than ``after``, within ``[since, until]``.
+
+    ``after`` is the store's last committed ``t``. That is the scan's mid-point
+    while the filename carries its start, so the scan already committed starts
+    *before* ``after`` and is excluded, and the next one starts after it. This is
+    the comparison the cross-batch ordering check in :func:`ingest_all_days`
+    makes; a live append turns that check off (``resume=False``), so this filter
+    is what keeps the store in order. It also means a scan published late, after
+    a newer one was appended, is never added: the store cannot insert behind
+    its end.
+    """
+    out: list[str] = []
+    for url in urls:
+        t = scan_start_fn(url)
+        if after is not None and t <= after:
+            continue
+        if since is not None and t < since:
+            continue
+        if until is not None and t > until:
+            continue
+        out.append(url)
+    return sorted(out, key=scan_start_fn)
+
+
+def group_scans_by_day(
+    urls: Iterable[str], product_keys: list[str]
+) -> list[tuple[tuple[int, int], list[str]]]:
+    """``[((year, doy), [urls]), ...]`` in day order, the shape ingest_all_days takes."""
+    days: dict[tuple[int, int], list[str]] = {}
+    for url in urls:
+        days.setdefault(parse_url_to_day(url, product_keys), []).append(url)
+    return sorted(days.items())
+
+
+def last_committed_time(
+    repo: "icechunk.Repository", branch: str = "main", group: str | None = None
+) -> np.datetime64 | None:
+    """The newest committed ``t``, or None for a store with nothing in it.
+
+    Raises if the store's ``t`` is not strictly increasing: appending after its
+    last value would then skip whatever lies between it and the true maximum.
+    """
+    if not _schema_exists(repo, branch, group):
+        return None
+    info = _last_committed_day(repo, branch, group)
+    return None if info is None else info[1]
+
+
+def _count_committed_after(
+    repo: "icechunk.Repository",
+    after: np.datetime64 | None,
+    branch: str = "main",
+    group: str | None = None,
+) -> int:
+    """Committed timesteps newer than ``after`` (every one, when it is None)."""
+    if not _schema_exists(repo, branch, group):
+        return 0
+    ds = xr.open_zarr(
+        repo.readonly_session(branch=branch).store,
+        group=group or None,
+        chunks=None,
+        zarr_format=3,
+        decode_timedelta=True,
+    )
+    if "t" not in ds.coords:
+        return 0
+    t = ds["t"].values
+    return int(t.size if after is None else (t > after).sum())
+
+
+def _last_logged_error(
+    log_dir: str | None, satellite: str, channel_label: str
+) -> str | None:
+    """The newest ERROR line :func:`log_event` wrote for this channel, if any.
+
+    ingest_all_days logs and swallows a failed batch, so this is where the
+    reason a live append committed nothing is recorded.
+    """
+    if log_dir is None:
+        return None
+    from planetary_datasets.common.paths import safe_component, safe_join
+
+    name = f"{safe_component(satellite)}_{safe_component(channel_label)}_ingest.log"
+    try:
+        lines = safe_join(log_dir, name).read_text().splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        parts = line.split(" | ", 3)
+        if len(parts) == 4 and parts[2] == "ERROR":
+            return parts[3]
+    return None
+
+
+def make_config_store_renamer(
+    prefix_for: Callable[[str], str],
+    *,
+    config=None,
+    max_workers: int = 64,
+):
+    """A rename_store_fn for stores located through the shared config.
+
+    :func:`make_s3_store_renamer` needs an explicit bucket and keys; this takes
+    them from :func:`~planetary_datasets.config.get_config`, so it also works
+    under ``ICECHUNK_LOCAL_PATH``, where a store is a directory and the rename a
+    single move.
+
+    It refuses to rename onto a store that holds data: merging two stores'
+    objects would corrupt both. A destination that is an Icechunk store with
+    nothing written to it — the fresh live store a failed rollover leaves
+    behind — is discarded first, which is what lets a rollover be undone.
+    """
+    import icechunk
+
+    cfg = config if config is not None else get_config()
+
+    def holds_nothing(prefix: str) -> bool:
+        try:
+            repo = icechunk.Repository.open(cfg.icechunk_storage(prefix))
+        except Exception:  # noqa: BLE001 - not an openable store: treat as data
+            return False
+        return not _schema_exists(repo, "main")
+
+    def rename(old_suffix: str, new_suffix: str) -> None:
+        src, dst = prefix_for(old_suffix), prefix_for(new_suffix)
+        if cfg.use_local_store:
+            import shutil
+
+            src_path, dst_path = cfg.local_store_path(src), cfg.local_store_path(dst)
+            if dst_path.exists() and any(dst_path.iterdir()):
+                if not holds_nothing(dst):
+                    raise FileExistsError(
+                        f"cannot rename {src_path}: {dst_path} already holds a store"
+                    )
+                shutil.rmtree(dst_path)
+            if dst_path.exists():
+                dst_path.rmdir()
+            with timer(f"Freezing store {src_path} -> {dst_path}"):
+                shutil.move(str(src_path), str(dst_path))
+            return
+
+        creds = cfg.credentials
+        kwargs: dict[str, Any] = {"region": cfg.region}
+        if cfg.endpoint_url:
+            kwargs["endpoint"] = cfg.endpoint_url
+            if cfg.allow_http:
+                kwargs["client_options"] = {"allow_http": True}
+        if cfg._s3_addressing().get("force_path_style"):
+            kwargs["virtual_hosted_style_request"] = False
+        if creds.aws_access_key_id and creds.aws_secret_access_key:
+            kwargs["access_key_id"] = creds.aws_access_key_id
+            kwargs["secret_access_key"] = creds.aws_secret_access_key
+        store = obs.store.S3Store(cfg.bucket, **kwargs)
+        full_src, full_dst = cfg.full_prefix(src), cfg.full_prefix(dst)
+        dst_keys = [
+            o["path"]
+            for page in obs.list(store, prefix=full_dst.rstrip("/") + "/")
+            for o in page
+        ]
+        if dst_keys:
+            if not holds_nothing(dst):
+                raise FileExistsError(
+                    f"cannot rename {full_src!r}: {full_dst!r} already holds a store"
+                )
+            obs.delete(store, dst_keys)
+        with timer(f"Freezing store {full_src!r} -> {full_dst!r}"):
+            moved = rename_store_objects(store, full_src, full_dst, max_workers=max_workers)
+        print(f"    moved {moved} object(s)", flush=True)
+
+    return rename
+
+
+@dataclasses.dataclass
+class _EraSplit:
+    """How listed scans relate to the scan the live store ends with."""
+
+    #: Combine with the live store; append them to it.
+    keep: list[str]
+    #: A run of trailing scans that combine with each other but not with the
+    #: live store: a new codec era. Empty when there is none.
+    new_era: list[str]
+    #: Odd ones out ahead of scans that do combine. Behind the append point once
+    #: the rest is written, so they are skipped for good.
+    dropped: list[str]
+    #: Trailing scans that do not combine but are too few to call a new era.
+    #: Left unwritten; the next run sees them again with more scans behind them.
+    deferred: list[str]
+
+
+def split_at_era_change(
+    reference_url: str,
+    candidates: list[str],
+    *,
+    open_fn: Callable[[str], xr.Dataset],
+    mismatch_tolerance: int = PROBE_MISMATCH_TOLERANCE,
+    probe_workers: int = 8,
+) -> _EraSplit:
+    """Sort new scans by whether they still combine with the live store's last scan.
+
+    The test is :func:`combine_failure_reason`, the one the backwards walk uses
+    to find era boundaries; every new scan's metadata is opened for it. As in
+    the walk, one odd scan does not end an era: a new era needs
+    ``mismatch_tolerance`` trailing scans that all fail against the store and
+    combine with each other.
+    """
+    if not candidates:
+        return _EraSplit([], [], [], [])
+
+    cache: dict[str, tuple[xr.Dataset | None, str | None]] = {}
+
+    def _open_safely(url: str) -> tuple[xr.Dataset | None, str | None]:
+        try:
+            return open_fn(url), None
+        except Exception as exc:  # noqa: BLE001 - an unopenable scan does not combine
+            return None, f"could not open: {type(exc).__name__}: {exc}"
+
+    def probe(url: str) -> tuple[xr.Dataset | None, str | None]:
+        if url not in cache:
+            cache[url] = _open_safely(url)
+        return cache[url]
+
+    reference, ref_error = probe(reference_url)
+    if reference is None:
+        raise RuntimeError(
+            f"cannot open the live store's last scan {reference_url} to check "
+            f"new scans against it ({ref_error})"
+        )
+
+    def reason(url: str) -> str | None:
+        ds, error = probe(url)
+        return error if ds is None else combine_failure_reason(reference, ds)
+
+    try:
+        # Every scan, not just the ends: an odd one in the middle would
+        # otherwise reach the write and fail the whole channel's commit.
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=max(1, min(probe_workers, len(candidates)))) as pool:
+            for url, result in zip(candidates, pool.map(_open_safely, candidates)):
+                cache[url] = result
+        # A scan that would not open says nothing about its codecs, and may be a
+        # timeout rather than a bad file. Writing anything after it would put it
+        # behind the append point for good, so stop there and let the next run
+        # try it again; a file that never opens ages out of the lookback.
+        unopened = next(
+            (i for i, u in enumerate(candidates) if cache[u][0] is None), None
+        )
+        held_back: list[str] = []
+        if unopened is not None:
+            held_back = candidates[unopened:]
+            print(
+                f"    {held_back[0].rsplit('/', 1)[-1]} could not be opened "
+                f"({cache[held_back[0]][1]}); holding back {len(held_back)} scan(s) "
+                "from it for the next run.",
+                flush=True,
+            )
+            candidates = candidates[:unopened]
+            if not candidates:
+                return _EraSplit([], [], [], held_back)
+
+        reasons = [reason(u) for u in candidates]
+        for url, why in zip(candidates, reasons):
+            if why is not None:
+                print(
+                    f"    {url.rsplit('/', 1)[-1]} does not combine with the live "
+                    f"store — {why}",
+                    flush=True,
+                )
+        last_good = max((i for i, r in enumerate(reasons) if r is None), default=-1)
+        keep = [u for u, r in zip(candidates, reasons) if r is None]
+        dropped = [
+            u for i, (u, r) in enumerate(zip(candidates, reasons))
+            if r is not None and i < last_good
+        ]
+        trailing = candidates[last_good + 1:]
+        new_era: list[str] = []
+        if trailing:
+            anchor = probe(trailing[-1])[0]
+            new_era = [
+                u for u in trailing
+                if u == trailing[-1] or combine_failure_reason(anchor, probe(u)[0]) is None
+            ]
+        if len(new_era) >= mismatch_tolerance:
+            dropped += [u for u in trailing if u not in new_era]
+            return _EraSplit(keep, new_era, dropped, held_back)
+        return _EraSplit(keep, [], dropped, list(trailing) + held_back)
+    finally:
+        for ds, _ in cache.values():
+            if ds is not None:
+                ds.close()
+
+
+def append_latest_scans(
+    channel: int | str,
+    *,
+    repo_factory: Callable[[str], "icechunk.Repository"],
+    satellite_name: str,
+    satellite: str,
+    product_label: str,
+    archive_start_date: datetime.date,
+    store,
+    bucket: str,
+    product: str,
+    product_keys: list[str],
+    loadable_variables: Iterable[str],
+    epoch_threshold: np.datetime64,
+    lookback_minutes: float,
+    now: datetime.datetime | None = None,
+    branch: str = "main",
+    group: str | None = "",
+    log_dir: str | None = None,
+    rename_store_fn: Callable[[str, str], None] | None = None,
+    max_attempts: int = 3,
+    keep_data_vars: frozenset[str] = _KEEP_DATA_VARS,
+    registry: ObjectStoreRegistry | None = None,
+    channel_label: str | None = None,
+    grid_size: int | None = None,
+    open_batch_fn: Callable[..., xr.Dataset] | None = None,
+    scan_start_fn: Callable[[str], np.datetime64] = parse_scan_start_to_datetime,
+    list_files_fn: Callable[[list[str]], list[str]] | None = None,
+) -> dict[str, Any]:
+    """Append every scan newer than the live store's last commit, within a lookback.
+
+    Lists the archive's hour directories from the later of the last committed
+    ``t`` and ``now - lookback_minutes`` through ``now`` — crossing midnight
+    where the window does — keeps only scans strictly newer than the last
+    commit, and hands them to :func:`ingest_all_days` as one commit for the
+    channel. ``resume=False`` there, so the filter here is what keeps ``t`` in
+    order.
+
+    New scans are first checked against the scan the store ends with. If they
+    have moved to a new codec era the live store is frozen under the date of the
+    last day it holds and a fresh live store started, as the backwards walk
+    does; without ``rename_store_fn`` that raises :class:`CodecEraChange`.
+
+    A commit that loses a race with another writer is not reported by
+    ingest_all_days, which logs and moves on, so the outcome is read back from
+    the store and the append retried from a fresh repository, up to
+    ``max_attempts`` times.
+
+    Returns ``{"appended": n, "last": "<iso t>"}``, plus ``dropped``,
+    ``deferred`` and ``new_era`` counts when any are non-zero.
+    """
+    if channel_label is None:
+        channel_label = _ch(channel)  # type: ignore[arg-type]
+    if registry is None:
+        registry = ObjectStoreRegistry({bucket: store})
+    if list_files_fn is None:
+        def list_files_fn(prefixes: list[str]) -> list[str]:
+            return list_prefix_files(store, bucket, prefixes, channel)  # type: ignore[arg-type]
+    loadable_variables = list(loadable_variables)
+    # As in the backwards walk: the era check below replaces the per-file codec
+    # whitelist, which would only reject a new but self-consistent pipeline.
+    preprocess_fn = make_preprocess_no_codec_check(epoch_threshold, keep_data_vars)
+
+    now_dt = _utc_naive(now or datetime.datetime.now(datetime.timezone.utc))
+    since_dt = now_dt - datetime.timedelta(minutes=lookback_minutes)
+    since = np.datetime64(since_dt, "ns")
+
+    repo = repo_factory("")
+    last_t = last_committed_time(repo, branch, group)
+    list_from = since_dt if last_t is None else max(since_dt, _to_datetime(last_t))
+    prefixes = hour_prefixes(product, list_from, now_dt)
+    print(
+        f"{satellite_name} {channel_label}: last committed t = {_iso(last_t)}; "
+        f"listing {len(prefixes)} hour(s) {prefixes[0] if prefixes else '-'} .. "
+        f"{prefixes[-1] if prefixes else '-'}",
+        flush=True,
+    )
+    candidates = scans_after(
+        list_files_fn(prefixes),
+        after=last_t,
+        since=since,
+        until=np.datetime64(now_dt, "ns"),
+        scan_start_fn=scan_start_fn,
+    )
+    result: dict[str, Any] = {"appended": 0, "last": _iso(last_t)}
+    if not candidates:
+        print(f"  {channel_label}: nothing new.", flush=True)
+        return result
+    print(f"  {channel_label}: {len(candidates)} new scan(s).", flush=True)
+
+    split = _EraSplit(candidates, [], [], [])
+    if last_t is not None:
+        reference = _reference_scan(
+            last_t, product=product, list_files_fn=list_files_fn,
+            scan_start_fn=scan_start_fn,
+        )
+        if reference is None:
+            # Nothing to compare against — the store's last scan is gone from
+            # the listing. The write itself still fails on a codec mismatch, and
+            # a failure to commit is reported below.
+            print(
+                f"  {channel_label}: could not find the store's last scan in the "
+                "archive listing; skipping the era check.",
+                flush=True,
+            )
+        else:
+            parser = vz.parsers.HDFParser()
+            opener = open_batch_fn or open_virtual_batch
+
+            def open_one(url: str) -> xr.Dataset:
+                return open_with_unreadable_retry(
+                    lambda u: opener(
+                        u, registry=registry, parser=parser,
+                        preprocess_fn=preprocess_fn,
+                        loadable_variables=loadable_variables,
+                    ),
+                    [url],
+                )
+
+            split = split_at_era_change(reference, candidates, open_fn=open_one)
+
+    def note(event: str, reason: str) -> None:
+        if log_dir is not None:
+            log_event(log_dir, satellite, channel_label, now_dt.isoformat(), event, reason)
+
+    if split.dropped:
+        names = [u.rsplit("/", 1)[-1] for u in split.dropped]
+        note("SKIPPED", f"scan(s) not combinable with the live store: {names}")
+        result["dropped"] = len(split.dropped)
+    if split.deferred:
+        names = [u.rsplit("/", 1)[-1] for u in split.deferred]
+        print(
+            f"  {channel_label}: holding back {len(names)} trailing scan(s) that "
+            f"would not open or do not combine with the live store (too few to "
+            f"call a new era); retried next run: {names}",
+            flush=True,
+        )
+        note("DEFERRED", f"unopenable or possible era change, retried next run: {names}")
+        result["deferred"] = len(split.deferred)
+
+    def append(urls: list[str]) -> tuple[int, np.datetime64 | None]:
+        return _append_scans_with_retry(
+            urls,
+            channel,
+            repo_factory=repo_factory,
+            max_attempts=max_attempts,
+            satellite_name=satellite_name,
+            satellite=satellite,
+            product_label=product_label,
+            archive_start_date=archive_start_date,
+            product_keys=product_keys,
+            preprocess_fn=preprocess_fn,
+            branch=branch,
+            group=group,
+            registry=registry,
+            bucket=bucket,
+            loadable_variables=loadable_variables,
+            log_dir=log_dir,
+            keep_data_vars=keep_data_vars,
+            channel_label=channel_label,
+            grid_size=grid_size,
+            open_batch_fn=open_batch_fn,
+            scan_start_fn=scan_start_fn,
+        )
+
+    del repo
+    appended = 0
+    if split.keep:
+        appended, last_t = append(split.keep)
+        result.update(appended=appended, last=_iso(last_t))
+
+    if split.new_era:
+        names = [u.rsplit("/", 1)[-1] for u in split.new_era]
+        if rename_store_fn is None:
+            note("CODEC_CHANGE", f"refused: no way to freeze the live store; {names}")
+            raise CodecEraChange(
+                f"{satellite_name} {channel_label}: {len(names)} new scan(s) from "
+                f"{names[0]} no longer combine with the live store, and this storage "
+                "has no rename hook to freeze it. Run the backwards walk to split "
+                "the era, or rename the live store by hand."
+            )
+        last_t = last_committed_time(repo_factory(""), branch, group)
+        if last_t is None:
+            raise CodecEraChange(
+                f"{satellite_name} {channel_label}: the live store is empty yet the "
+                "new scans failed the era check against it"
+            )
+        frozen_as = _to_datetime(last_t).date().isoformat()
+        print(
+            f"\nCodec change detected for {channel_label} at {names[0]}. Freezing "
+            f"the live store as '{frozen_as}' and starting a new live store.",
+            flush=True,
+        )
+        note("CODEC_CHANGE", f"Froze live store as {frozen_as}; new live store from {names[0]}")
+        rename_store_fn("", frozen_as)
+        try:
+            era_appended, last_t = append(split.new_era)
+        except BaseException:
+            # A live store left empty would skip the era check on the next run
+            # and re-list scans the frozen store already holds. Put the old one
+            # back while nothing has been written to the new one.
+            if last_committed_time(repo_factory(""), branch, group) is None:
+                print(
+                    f"  {channel_label}: new-era append failed; restoring the "
+                    f"live store from '{frozen_as}'.",
+                    flush=True,
+                )
+                note("CODEC_CHANGE", f"new era not written; restored live store from {frozen_as}")
+                rename_store_fn(frozen_as, "")
+            raise
+        appended += era_appended
+        result.update(appended=appended, last=_iso(last_t), new_era=frozen_as)
+
+    return result
+
+
+def _reference_scan(
+    last_t: np.datetime64,
+    *,
+    product: str,
+    list_files_fn: Callable[[list[str]], list[str]],
+    scan_start_fn: Callable[[str], np.datetime64],
+) -> str | None:
+    """The archive file the store's last committed ``t`` came from.
+
+    ``t`` is the scan's mid-point, so the file is the latest one starting at or
+    before it. It may start in the previous hour when the scan straddles one.
+    """
+    last_dt = _to_datetime(last_t)
+    prefixes = hour_prefixes(product, last_dt - datetime.timedelta(hours=1), last_dt)
+    before = [u for u in list_files_fn(prefixes) if scan_start_fn(u) <= last_t]
+    return max(before, key=scan_start_fn) if before else None
+
+
+def _append_scans_with_retry(
+    urls: list[str],
+    channel: int | str,
+    *,
+    repo_factory: Callable[[str], "icechunk.Repository"],
+    max_attempts: int,
+    product_keys: list[str],
+    branch: str,
+    group: str | None,
+    satellite: str,
+    channel_label: str,
+    log_dir: str | None,
+    scan_start_fn: Callable[[str], np.datetime64],
+    **ingest_kwargs: Any,
+) -> tuple[int, np.datetime64 | None]:
+    """Commit ``urls`` to the live store, retrying from a fresh repository.
+
+    Each attempt re-reads the last committed ``t`` and appends only what is still
+    newer, so a retry after losing a race to another writer neither duplicates
+    nor reorders anything. Returns ``(timesteps appended, last committed t)``.
+    """
+    appended = 0
+    last_t: np.datetime64 | None = None
+    remaining = list(urls)
+    for attempt in range(1, max_attempts + 1):
+        repo = repo_factory("")
+        before = last_committed_time(repo, branch, group)
+        todo = scans_after(remaining, after=before, scan_start_fn=scan_start_fn)
+        if not todo:
+            last_t = before
+            remaining = []
+            break
+        all_days = group_scans_by_day(todo, product_keys)
+        ingest_all_days(
+            repo,
+            channel,
+            all_days=all_days,
+            branch=branch,
+            group=group,
+            satellite=satellite,
+            channel_label=channel_label,
+            log_dir=log_dir,
+            scan_start_fn=scan_start_fn,
+            # One commit for the channel, even across midnight.
+            batch_size=max(1, len(all_days)),
+            resume=False,
+            **ingest_kwargs,
+        )
+        del repo
+        gc.collect()
+        repo = repo_factory("")
+        appended += _count_committed_after(repo, before, branch, group)
+        last_t = last_committed_time(repo, branch, group)
+        remaining = scans_after(todo, after=last_t, scan_start_fn=scan_start_fn)
+        del repo
+        if not remaining:
+            break
+        if attempt < max_attempts:
+            print(
+                f"  {channel_label}: {len(remaining)} scan(s) not committed "
+                f"(attempt {attempt}/{max_attempts}); retrying from a fresh session.",
+                flush=True,
+            )
+
+    if remaining:
+        why = _last_logged_error(log_dir, satellite, channel_label) or "see the log above"
+        names = [u.rsplit("/", 1)[-1] for u in remaining]
+        if appended == 0:
+            raise AppendIncomplete(
+                f"{channel_label}: none of {len(remaining)} new scan(s) committed after "
+                f"{max_attempts} attempt(s) ({names[0]} .. {names[-1]}): {why}"
+            )
+        print(
+            f"  {channel_label}: appended {appended}, but {len(remaining)} newer scan(s) "
+            f"were not committed ({why}); the next run picks them up.",
+            flush=True,
+        )
+    return appended, last_t
 
 
 def ingest_all_channels(
