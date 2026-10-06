@@ -174,8 +174,8 @@ def run(source, **kwargs):
 def h5_physical(bucket, year: int, group: str, name: str) -> np.ndarray:
     with h5py.File(bucket / DIRECTORY / f"{STEM}_{group}_{year}.h5", "r") as f:
         dset = f[name]
-        sf = np.float32(dset.attrs["scale_factor"])
-        return dset[:].astype(np.float32) / sf
+        # What the scale codec computes: stored / scale in float64, then float32.
+        return (dset[:] / np.float64(dset.attrs["scale_factor"])).astype(np.float32)
 
 
 def year_slice(ds, year: int):
@@ -323,14 +323,23 @@ def test_virtual_arrays_carry_no_compressor_and_reference_the_source(
     repo = nsrdb.open_repo(KEY, source=source, config=local_config, create=False)
     root = zarr.open_group(repo.readonly_session("main").store, mode="r")
     ghi = root["ghi"]
-    assert ghi.compressors == () and ghi.filters == ()
+    assert ghi.compressors == ()
+    assert ghi.dtype == np.float32 and np.isnan(ghi.fill_value)
+    (scale,) = ghi.filters
+    assert {k: v for k, v in scale.codec_config.items() if k != "id"} == {
+        "offset": 0,
+        "scale": 1.0,
+        "dtype": "<f4",
+        "astype": "<u2",
+    }
     assert ghi.chunks == NORMAL_CHUNKS
-    assert ghi.attrs["scale_factor"] == 1.0 and ghi.attrs["_FillValue"] == 65535
+    assert "scale_factor" not in ghi.attrs and "_FillValue" not in ghi.attrs
+    assert ghi.attrs["nsrdb_stored_dtype"] == "<u2" and ghi.attrs["nsrdb_scale_factor"] == 1.0
     assert "chunks" not in ghi.attrs
     assert "coordinates" not in root
 
 
-def test_plain_open_zarr_decodes_with_the_cf_scale_factor(bucket, source, local_config, four_years):
+def test_plain_open_zarr_decodes_to_float32(bucket, source, local_config, four_years):
     import xarray as xr
 
     run(source, years=[2001])
@@ -339,12 +348,76 @@ def test_plain_open_zarr_decodes_with_the_cf_scale_factor(bucket, source, local_
     store = repo.readonly_session("main").store
     ds = xr.open_zarr(store, consolidated=False, decode_times=False)
     expected = h5_physical(bucket, 2001, "clouds", "cld_opd_dcomp")
-    np.testing.assert_allclose(ds["cld_opd_dcomp"].values[:365], expected, rtol=1e-6)
+    assert ds["cld_opd_dcomp"].dtype == np.float32
+    np.testing.assert_array_equal(ds["cld_opd_dcomp"].values[:365], expected)
     assert ds["valid"].values[:365].all() and not ds["valid"].values[365:].any()
     raw = ds["time"].values
     assert raw[0] == 978307200 and (raw[365:] == np.iinfo(np.int64).min).all()
     assert ds["time"].attrs["units"] == "seconds since 1970-01-01"
     assert "latitude" in ds.coords
+
+
+def _write_legacy_encoding(store) -> None:
+    """Rewrite every data variable as the earlier integer + CF-attribute encoding."""
+    import json
+
+    from zarr.core.buffer import default_buffer_prototype
+    from zarr.core.sync import sync
+
+    root = zarr.open_group(store, mode="r")
+    for name, arr in root.arrays():
+        if arr.ndim != 2:
+            continue
+        stored = np.dtype(arr.attrs["nsrdb_stored_dtype"])
+        sf = arr.attrs["nsrdb_scale_factor"]
+        info = np.iinfo(stored)
+        meta = arr.metadata.to_dict()
+        attrs = {k: v for k, v in arr.attrs.items() if k != "nsrdb_stored_dtype"}
+        attrs.update(
+            scale_factor=1.0 / sf, _FillValue=int(info.max if stored.kind == "u" else info.min)
+        )
+        meta.update(
+            data_type=stored.name,
+            fill_value=attrs["_FillValue"],
+            codecs=[{"name": "bytes", "configuration": {"endian": "little"}}],
+            attributes=attrs,
+        )
+        buf = default_buffer_prototype().buffer.from_bytes(json.dumps(meta).encode())
+        sync(store.set(f"{name}/zarr.json", buf))
+
+
+def test_migrate_float32_converts_an_integer_encoded_store(
+    bucket, source, local_config, four_years
+):
+    import xarray as xr
+
+    run(source, years=[2001])
+    repo = nsrdb.open_repo(KEY, source=source, config=local_config, create=False)
+    session = repo.writable_session("main")
+    _write_legacy_encoding(session.store)
+    session.commit("legacy encoding")
+
+    def plain():
+        store = repo.readonly_session("main").store
+        return xr.open_zarr(store, consolidated=False, decode_times=False)
+
+    assert plain()["ghi"].dtype == np.float64
+    legacy = nsrdb.open_nsrdb(KEY, source=source, config=local_config)
+    refs_before = sorted(repo.readonly_session("main").all_virtual_chunk_locations())
+
+    assert nsrdb.migrate_float32(KEY, source=source, config=local_config) > 0
+    assert nsrdb.migrate_float32(KEY, source=source, config=local_config) == 0
+
+    ds = plain()
+    assert all(ds[n].dtype == np.float32 for n in ds.data_vars if ds[n].ndim == 2)
+    for group, names in VARIABLES.items():
+        for name in names:
+            np.testing.assert_array_equal(
+                ds[name].values[:365], h5_physical(bucket, 2001, group, name), err_msg=name
+            )
+    migrated = nsrdb.open_nsrdb(KEY, source=source, config=local_config)
+    np.testing.assert_allclose(migrated["ghi"].values, legacy["ghi"].values, rtol=1e-6)
+    assert sorted(repo.readonly_session("main").all_virtual_chunk_locations()) == refs_before
 
 
 # ---------------------------------------------------------------------------

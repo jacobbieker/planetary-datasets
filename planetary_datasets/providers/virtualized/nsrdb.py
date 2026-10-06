@@ -29,11 +29,17 @@ Why the store looks the way it does:
   cannot share an array with the other years. Such a year is written to a
   subgroup ``layout_<t>x<g>`` with its own ``time``, ``valid`` and variables;
   :func:`open_nsrdb` stitches the groups back together.
-* **NSRDB scales the other way round.** NREL's convention is
-  ``physical = stored / scale_factor``, the inverse of CF. The store keeps the
-  original as ``nsrdb_scale_factor`` and sets CF ``scale_factor = 1 /
-  nsrdb_scale_factor``, so a plain ``xr.open_zarr`` decodes sensibly;
-  :func:`open_nsrdb` divides instead, which matches NREL's ``rex`` exactly.
+* **Variables are float32 arrays over integer chunks.** NREL stores scaled
+  integers with ``physical = stored / scale_factor``, the inverse of CF. A CF
+  ``scale_factor`` attribute cannot fix that well: Zarr attributes are JSON, so
+  it reads back as a Python float and xarray decodes every variable to
+  float64. Instead each array is declared float32 with a
+  ``numcodecs.fixedscaleoffset`` codec (``scale = nsrdb_scale_factor``,
+  ``astype`` the stored integer dtype), so any Zarr reader gets float32
+  ``stored / scale_factor``, as NREL's ``rex`` does, and absent chunks read as
+  NaN. The original factor and dtype are kept as ``nsrdb_scale_factor`` and
+  ``nsrdb_stored_dtype``. :func:`migrate_float32` converts a store written with
+  the earlier integer-plus-CF-attributes encoding, in place.
 * **One commit per year.** A reader never sees half a year. When a year's
   references are too many to hold in one change set, the year is committed in
   pieces to a scratch branch ``ingest-<year>`` and ``main`` is then reset to
@@ -486,14 +492,9 @@ class VarInfo:
         """NSRDB scale factor: physical = stored / scale_factor."""
         return float(self.attrs.get("scale_factor", 1.0))
 
-    @property
-    def fill_value(self) -> Any:
-        """The sentinel absent chunks read as. See :func:`_fill_sentinel`."""
-        return _fill_sentinel(np.dtype(self.dtype))
-
     def signature(self) -> tuple[Any, ...]:
         """What must agree for two years to share this variable's array."""
-        return _signature(self.chunks[1], self.dtype, self.scale_factor, self.fill_value)
+        return _signature(self.chunks[1], self.dtype, self.scale_factor)
 
 
 @dataclass(frozen=True)
@@ -509,25 +510,31 @@ class FileInfo:
     variables: tuple[VarInfo, ...]
 
 
-def _signature(gid_chunk: int, dtype: Any, scale_factor: float, fill: Any) -> tuple[Any, ...]:
-    fill_key = "nan" if isinstance(fill, float) and math.isnan(fill) else fill
-    return (int(gid_chunk), np.dtype(dtype).str, float(scale_factor), fill_key)
+def _signature(gid_chunk: int, stored_dtype: Any, scale_factor: float) -> tuple[Any, ...]:
+    return (int(gid_chunk), np.dtype(stored_dtype).str, float(scale_factor))
 
 
-def _fill_sentinel(dtype: np.dtype) -> Any:
-    """The fill value absent chunks decode as.
+def _scale_codec(stored_dtype: Any, scale_factor: float) -> dict[str, Any]:
+    """The codec that turns NREL's stored integers into float32 physical values.
 
-    The HDF5 fill value is 0, which is a legitimate reading for most NSRDB
-    variables (night-time GHI, clear-sky cloud type), so it cannot be used as
-    a mask. The dtype's extreme is outside every variable's physical range.
+    ``numcodecs.fixedscaleoffset`` decodes ``stored / scale + offset`` and casts
+    to ``dtype``, which is NREL's convention exactly. Absent chunks are not
+    decoded at all and read as the array's NaN fill, so no sentinel is needed;
+    the HDF5 fill of 0 is a legitimate reading (night-time GHI, clear-sky cloud
+    type) and could not have served as one.
     """
-    if dtype.kind == "i":
-        return int(np.iinfo(dtype).min)
-    if dtype.kind == "u":
-        return int(np.iinfo(dtype).max)
-    if dtype.kind == "f":
-        return float("nan")
-    raise UnsupportedLayout(f"unsupported variable dtype {dtype}")
+    stored = np.dtype(stored_dtype)
+    if stored.kind not in "iu" and stored != np.float32:
+        raise UnsupportedLayout(f"unsupported variable dtype {stored}")
+    return {
+        "name": "numcodecs.fixedscaleoffset",
+        "configuration": {
+            "offset": 0,
+            "scale": float(scale_factor),
+            "dtype": "<f4",
+            "astype": stored.newbyteorder("<").str,
+        },
+    }
 
 
 def _sanitize_attr(value: Any) -> Any:
@@ -938,15 +945,11 @@ def index_variables(
 # Virtual arrays
 # =============================================================================
 def _array_attrs(var: VarInfo) -> dict[str, Any]:
-    """Zarr attributes of a data variable: NREL's plus the CF decoding."""
-    attrs = {k: v for k, v in var.attrs.items() if k != "scale_factor"}
-    sf = var.scale_factor
-    attrs["nsrdb_scale_factor"] = sf
+    """Zarr attributes of a data variable: NREL's, minus what the codec now applies."""
+    attrs = {k: v for k, v in var.attrs.items() if k not in ("scale_factor", "_FillValue")}
+    attrs["nsrdb_scale_factor"] = var.scale_factor
+    attrs["nsrdb_stored_dtype"] = np.dtype(var.dtype).str
     attrs["nsrdb_group"] = var.group
-    attrs["scale_factor"] = 1.0 / sf
-    fill = var.fill_value
-    if not (isinstance(fill, float) and math.isnan(fill)):
-        attrs["_FillValue"] = fill
     return attrs
 
 
@@ -976,11 +979,15 @@ def _manifest_array(var: VarInfo, n_rows: int, index: Any | None) -> Any:
     )
     metadata = create_v3_array_metadata(
         shape=(n_rows, var.shape[1]),
-        data_type=np.dtype(var.dtype),
+        data_type=np.dtype(np.float32),
         chunk_shape=var.chunks,
-        fill_value=var.fill_value,
-        # Raw little-endian bytes and nothing else: the HDF5 chunks are unfiltered.
-        codecs=[{"name": "bytes", "configuration": {"endian": "little"}}],
+        fill_value=float("nan"),
+        # The HDF5 chunks are unfiltered little-endian integers; the scale codec
+        # turns them into float32 physical values on read.
+        codecs=[
+            _scale_codec(var.dtype, var.scale_factor),
+            {"name": "bytes", "configuration": {"endian": "little"}},
+        ],
         dimension_names=("time", "gid"),
     )
     return ManifestArray(metadata=metadata, chunkmanifest=manifest)
@@ -1115,9 +1122,8 @@ def _group_state(group: "zarr.Group", path: str) -> _GroupState:
             continue
         signatures[name] = _signature(
             arr.chunks[1],
-            arr.dtype,
+            arr.attrs.get("nsrdb_stored_dtype", arr.dtype),
             arr.attrs.get("nsrdb_scale_factor", 1.0),
-            arr.metadata.fill_value if arr.dtype.kind != "f" else float("nan"),
         )
     return _GroupState(
         path, int(time_arr.shape[0]), int(time_arr.chunks[0]), signatures, year_rows, times
@@ -1863,8 +1869,16 @@ def _layout_groups(store: Any) -> list[str]:
 
 
 def _decode_variable(da: xr.DataArray) -> xr.DataArray:
-    """NSRDB decoding: stored / scale_factor as float32, fill as NaN."""
+    """NSRDB decoding: stored / scale_factor as float32, fill as NaN.
+
+    Arrays written with the scale codec are float32 already. Integer arrays come
+    from a store still in the earlier encoding (see :func:`migrate_float32`).
+    """
     attrs = {k: v for k, v in da.attrs.items() if k not in ("scale_factor", "_FillValue")}
+    if da.dtype == np.float32:
+        out = da.copy(deep=False)
+        out.attrs = attrs
+        return out
     fill = da.attrs.get("_FillValue")
     out = da.astype(np.float32)
     if fill is not None:
@@ -2013,6 +2027,80 @@ def describe(
     }
 
 
+def _float32_metadata(arr: "zarr.Array") -> dict[str, Any] | None:
+    """``zarr.json`` for an integer-encoded data variable as a float32 scale-codec array.
+
+    Returns None for an array already in the float32 encoding, or one that is
+    not an NSRDB data variable.
+    """
+    if arr.ndim != 2 or arr.dtype.kind not in "iu" or "nsrdb_scale_factor" not in arr.attrs:
+        return None
+    meta = arr.metadata.to_dict()
+    attrs = {k: v for k, v in arr.attrs.items() if k not in ("scale_factor", "_FillValue")}
+    attrs["nsrdb_stored_dtype"] = arr.dtype.str
+    meta.update(
+        data_type="float32",
+        fill_value="NaN",
+        codecs=[
+            _scale_codec(arr.dtype, float(arr.attrs["nsrdb_scale_factor"])),
+            {"name": "bytes", "configuration": {"endian": "little"}},
+        ],
+        attributes=attrs,
+    )
+    return meta
+
+
+def migrate_float32(
+    key: str,
+    *,
+    branch: str = "main",
+    config: Config | None = None,
+    source: Source | None = None,
+) -> int:
+    """Rewrite a store's integer data variables as float32 scale-codec arrays.
+
+    Stores written before the scale codec hold each variable as NREL's integer
+    dtype with CF ``scale_factor``/``_FillValue`` attributes, which xarray
+    decodes to float64. Only each array's ``zarr.json`` changes: the chunk
+    references, shapes and chunking stay as they are, so this is one small
+    commit, and the earlier encoding remains in the snapshot history.
+
+    Args:
+        key: Catalog key.
+        branch: Branch to migrate.
+        config: Override configuration; defaults to the process-wide one.
+        source: Source bucket; defaults to NREL's.
+
+    Returns:
+        The number of arrays rewritten; 0 when the store is already migrated.
+    """
+    import json
+
+    import zarr
+    from zarr.core.buffer import default_buffer_prototype
+
+    repo = open_repo(key, source=source, config=config, create=False)
+    session = repo.writable_session(branch)
+    store = session.store
+    root = zarr.open_group(store, mode="r", zarr_format=3)
+    rewritten = 0
+    for path in ["", *_layout_groups(store)]:
+        group = root if not path else root[path]
+        for name, arr in _time_arrays(group).items():
+            meta = _float32_metadata(arr)
+            if meta is None:
+                continue
+            key_path = f"{path}/{name}/zarr.json" if path else f"{name}/zarr.json"
+            payload = json.dumps(meta, allow_nan=False).encode()
+            buf = default_buffer_prototype().buffer.from_bytes(payload)
+            zarr.core.sync.sync(store.set(key_path, buf))
+            rewritten += 1
+    if rewritten:
+        session.commit(f"{key}: data variables as float32 via the scale codec ({rewritten} arrays)")
+    logger.info(f"{key}: migrated {rewritten} array(s) to float32")
+    return rewritten
+
+
 # =============================================================================
 # CLI
 # =============================================================================
@@ -2062,6 +2150,12 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_migrate(args: argparse.Namespace) -> int:
+    for key in args.dataset or list(DATASETS):
+        migrate_float32(key)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point. Returns the process exit code."""
     parser = argparse.ArgumentParser(
@@ -2076,6 +2170,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     p_check = sub.add_parser("check", help="describe each store")
     p_check.add_argument("--dataset", nargs="*", choices=list(DATASETS))
     p_check.set_defaults(func=_cmd_check)
+
+    p_migrate = sub.add_parser(
+        "migrate-float32", help="rewrite integer-encoded variables as float32 arrays"
+    )
+    p_migrate.add_argument("--dataset", nargs="*", choices=list(DATASETS))
+    p_migrate.set_defaults(func=_cmd_migrate)
 
     p_ingest = sub.add_parser("ingest", help="ingest missing years into a dataset's store")
     p_ingest.add_argument("--dataset", required=True, choices=list(DATASETS))
