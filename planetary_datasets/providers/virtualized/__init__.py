@@ -8,4 +8,6 @@ that costs kilobytes per scene to publish.
 The heavy lifting — era detection, batched commits, codec validation, resume —
 lives in :mod:`goes_radf_common`. Each satellite module supplies only the parts
 that differ: bucket layout, filename grammar, preprocess and expected codecs.
+
+:mod:`nsrdb` applies the same idea to NREL's NSRDB HDF5 archive, one store per dataset.
 """
