@@ -60,6 +60,19 @@ if [ "${1:-}" = "append" ]; then
         --append-latest \
         "$@"
       ;;
+    gk2a)
+      # GK-2A's CLI names them bands; the contract calls them channels.
+      append_writer_env
+      gk2a_args=()
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --channels) gk2a_args+=(--bands "${2:?--channels needs a value}"); shift 2 ;;
+          --channels=*) gk2a_args+=(--bands "${1#--channels=}"); shift ;;
+          *) gk2a_args+=("$1"); shift ;;
+        esac
+      done
+      exec $GK2A_CMD --append-latest --store-base "${APPEND_PREFIX_ROOT}/gk2a_ami_fd" ${gk2a_args[@]+"${gk2a_args[@]}"}
+      ;;
   esac
   echo "append: unsupported satellite '$append_sat'" >&2
   exit 2

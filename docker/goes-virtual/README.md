@@ -197,6 +197,44 @@ and deliberately not the task's own `AWS_REGION`. NOAA reads are anonymous.
 Set `ICECHUNK_LOCAL_PATH` to append to local stores instead. The same mode is
 `--append-latest --lookback-minutes N` on the GOES CLI.
 
+### GK-2A live append
+
+`append <satellite>` keeps the live (un-suffixed) stores current between
+backfills. It is what the operational Dagster schedule runs every 30 minutes:
+
+```bash
+docker run --rm \
+  -e SC_ACCESS_KEY_ID=<source-coop-key> -e SC_SECRET_ACCESS_KEY=<source-coop-secret> \
+  $REGISTRY/goes-virtual-ingest:latest \
+  append gk2a --channels all --lookback-minutes 180
+```
+
+- `--channels` takes AMI band names, comma-separated (`ir105,wv063`), or `all`
+  for all 16 including `vi006`. `vi006` can run on its own (`--channels vi006`).
+- For each band it reads the newest committed `t` from
+  `$SC_PREFIX_ROOT/gk2a_ami_fd_<band>.icechunk` (root group), lists only the
+  `AMI/L1B/FD/YYYYMM/DD/HH/` directories from there (no further back than the
+  lookback) to now, across midnight if need be, and appends the strictly newer
+  scans in one commit. The codec check, the uncompressed-file filter and the
+  codec-outlier repair are the backfill's; a codec change fails the band
+  rather than mixing eras in one store.
+- A commit that loses a race with another writer is retried from a fresh
+  session (three attempts).
+- A store whose last `t` is older than the lookback is still appended to
+  from the window on, but the skipped stretch is reported as
+  `"gap": {"from": ..., "to": ...}` in that band's entry (and logged as a
+  warning): the store only appends along `t`, so it cannot be filled later.
+- A missing live store fails that band: seeding one from a few hours of data
+  would block the backfill. Pass `--create-missing` to start one anyway.
+- The last stdout line is a JSON summary:
+  `{"satellite": "gk2a", "channels": {"ir105": {"appended": 3, "last": "2026-10-06T13:40:32"}, ...}, "errors": {}}`.
+  A failed band carries an `error` in its entry and in `errors`; the others
+  still run. The exit status is non-zero only when every band failed, and 0
+  when there was simply nothing new.
+- Credentials and destination come from the same `SC_*` / `AWS_*` /
+  `ICECHUNK_BUCKET` fallbacks as the orchestrated mode. NOAA is read
+  anonymously. `ICECHUNK_LOCAL_PATH` sends the writes to local disk instead.
+
 ## Monitoring
 
 ```bash

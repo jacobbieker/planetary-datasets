@@ -21,12 +21,18 @@ passed on the command line::
 
     # The configured bucket, every band except the half-kilometre vi006
     python -m planetary_datasets.providers.virtualized.ingest_gk2a_fd --by-year
+
+    # Keep the live stores current: append each band's scans newer than its
+    # last `t`, looking back at most three hours. Prints a JSON summary last.
+    python -m planetary_datasets.providers.virtualized.ingest_gk2a_fd \
+        --append-latest --bands all --lookback-minutes 180
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import sys
 
 from loguru import logger
@@ -126,8 +132,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Single AMI band. Mutually exclusive with --bands.",
     )
     p.add_argument(
-        "--bands", nargs="+", default=None, choices=mod.BANDS,
-        help="Several AMI bands, ingested in turn.",
+        "--bands", nargs="+", default=None,
+        help="Several AMI bands, ingested in turn: space- or comma-separated, "
+             "or `all` for all 16 including vi006.",
+    )
+    p.add_argument(
+        "--append-latest", action="store_true",
+        help="Append, per band, every scan newer than the live store's last "
+             "`t` and within --lookback-minutes, then print a JSON summary as "
+             "the last line of stdout. Exits non-zero only if every band fails.",
+    )
+    p.add_argument(
+        "--lookback-minutes", type=int, default=mod.DEFAULT_APPEND_LOOKBACK_MINUTES,
+        help="With --append-latest: how far back from now to look for scans "
+             f"(default {mod.DEFAULT_APPEND_LOOKBACK_MINUTES}).",
+    )
+    p.add_argument(
+        "--create-missing", action="store_true",
+        help="With --append-latest: start a band's live store if it does not "
+             "exist, instead of failing that band.",
     )
     p.add_argument(
         "--store-base", default=mod.DEFAULT_STORE_BASE,
@@ -199,7 +222,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error(f"--max-eras must be >= 1, got {args.max_eras}")
     if args.band and args.bands:
         p.error("--band and --bands are mutually exclusive")
+    if args.bands is not None:
+        try:
+            args.bands = parse_bands(args.bands)
+        except ValueError as exc:
+            p.error(str(exc))
+    if args.lookback_minutes < 1:
+        p.error(f"--lookback-minutes must be >= 1, got {args.lookback_minutes}")
     return args
+
+
+def parse_bands(tokens: list[str]) -> list[str]:
+    """Resolve ``--bands`` tokens: names, comma lists, or ``all``, in order, deduplicated."""
+    out: list[str] = []
+    for token in tokens:
+        for name in (s.strip().lower() for s in token.split(",")):
+            if not name:
+                continue
+            names = list(mod.BANDS) if name == "all" else [name]
+            for band in names:
+                if band not in mod.BANDS:
+                    raise ValueError(
+                        f"unknown band {band!r}; choose from {', '.join(mod.BANDS)} or all"
+                    )
+                if band not in out:
+                    out.append(band)
+    if not out:
+        raise ValueError("--bands needs at least one band")
+    return out
 
 
 def selected_bands(args: argparse.Namespace) -> list[str]:
@@ -213,6 +263,68 @@ def selected_bands(args: argparse.Namespace) -> list[str]:
     return [b for b in mod.BANDS if b != mod.HIGH_RES_BAND]
 
 
+def append_band(args: argparse.Namespace, band: str) -> dict:
+    """Append one band's newest scans. Top-level so ``ProcessPoolExecutor`` can pickle it."""
+    return mod.append_latest(
+        band,
+        lookback_minutes=args.lookback_minutes,
+        base=args.store_base,
+        branch=args.branch,
+        create=args.create_missing,
+        zarr_async_concurrency=args.zarr_async_concurrency,
+        log_dir=args.log_dir,
+    )
+
+
+def append_latest(args: argparse.Namespace) -> int:
+    """Run ``--append-latest`` over every selected band and print the JSON summary.
+
+    One band failing does not stop the others: its error goes into the
+    summary, and the exit status is non-zero only when every band failed.
+    The summary is the last line written to stdout, for the caller to parse.
+    """
+    # An explicit band list (or `all`) is honoured as given, so vi006 can run
+    # alone or with the rest; with no selection it is left out, as for a backfill.
+    band_list = selected_bands(args)
+    logger.info(
+        f"{mod.SATELLITE_NAME}: appending bands {band_list}, "
+        f"looking back {args.lookback_minutes} min"
+    )
+
+    results: dict[str, dict] = {}
+    errors: dict[str, str] = {}
+
+    def record(band: str, fn) -> None:
+        try:
+            results[band] = fn()
+        except Exception as exc:  # noqa: BLE001 - one band must not stop the rest
+            message = f"{type(exc).__name__}: {exc}"
+            logger.error(f"{band}: FAILED — {message}")
+            errors[band] = message
+            results[band] = {"appended": 0, "last": None, "error": message}
+
+    if args.parallel and len(band_list) > 1:
+        from concurrent.futures import ProcessPoolExecutor
+
+        max_workers = args.max_workers or len(band_list)
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {band: executor.submit(append_band, args, band) for band in band_list}
+            for band, future in futures.items():
+                record(band, future.result)
+    else:
+        for band in band_list:
+            record(band, lambda b=band: append_band(args, b))
+
+    summary = {
+        "satellite": mod.SATELLITE,
+        "channels": {band: results[band] for band in band_list},
+        "errors": errors,
+    }
+    sys.stdout.flush()
+    print(json.dumps(summary), flush=True)
+    return 1 if band_list and len(errors) == len(band_list) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments and run the GK-2A ingest."""
     args = parse_args(argv)
@@ -220,6 +332,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.smoke_test:
         logger.info(mod.smoke_test(band=args.band or "ir087"))
         return 0
+
+    if args.append_latest:
+        return append_latest(args)
 
     band_list = selected_bands(args)
     direction = (
