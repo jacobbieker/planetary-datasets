@@ -23,6 +23,48 @@ GK2A_CMD="python -u -m planetary_datasets.providers.virtualized.ingest_gk2a_fd"
 HIMA_CMD="python -u -m planetary_datasets.providers.virtualized.ingest_himawari_isatss"
 WATCHDOG="python -u /usr/local/bin/memory_watchdog.py"
 
+# --- live append ---------------------------------------------------------------
+# `append <satellite> --channels <C01,..|all> --lookback-minutes <N>` appends,
+# per channel, every scan newer than the live store's last commit (and within
+# the lookback), one commit per channel. It exits 0 when nothing is new, and
+# non-zero only when every channel failed; its last stdout line is the JSON
+# summary {"satellite": ..., "channels": {"C13": {"appended": n, "last": ...}}}.
+#
+# The job runs next to the NOAA buckets (us-east-1) while the stores live in
+# us-west-2, so the store region is SC_REGION or us-west-2 and never the task's
+# own AWS_REGION. NOAA reads are anonymous and use GOES_SOURCE_REGION.
+append_writer_env() {
+  local key=${SC_ACCESS_KEY_ID:-${AWS_ACCESS_KEY_ID:-}}
+  local secret=${SC_SECRET_ACCESS_KEY:-${AWS_SECRET_ACCESS_KEY:-}}
+  if [ -n "$key" ]; then export AWS_ACCESS_KEY_ID="$key"; fi
+  if [ -n "$secret" ]; then export AWS_SECRET_ACCESS_KEY="$secret"; fi
+  export ICECHUNK_BUCKET="${SC_BUCKET:-${ICECHUNK_BUCKET:-us-west-2.opendata.source.coop}}"
+  export AWS_REGION="${SC_REGION:-us-west-2}"
+  APPEND_PREFIX_ROOT=${SC_PREFIX_ROOT:-${GOES_STORE_ROOT:-bkr/geo/virtualized}}
+}
+
+if [ "${1:-}" = "append" ]; then
+  if [ "$#" -lt 2 ]; then
+    echo "usage: append <satellite> --channels <C01,..|all> --lookback-minutes <N>" >&2
+    exit 2
+  fi
+  append_sat=$2
+  shift 2
+  case "$append_sat" in
+    goes16|goes17|goes18|goes19)
+      append_writer_env
+      exec $RUN \
+        --satellite "$append_sat" \
+        --storage config \
+        --prefix "${APPEND_PREFIX_ROOT}/${append_sat}_radf.icechunk" \
+        --append-latest \
+        "$@"
+      ;;
+  esac
+  echo "append: unsupported satellite '$append_sat'" >&2
+  exit 2
+fi
+
 # --- pass-through mode -------------------------------------------------------
 if [ "$#" -gt 0 ]; then
   if [ "$1" = "gk2a" ]; then
