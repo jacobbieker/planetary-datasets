@@ -80,6 +80,9 @@ EPOCH_THRESHOLD = np.datetime64("2023-01-01", "ns")
 #: `observation_start_time` / `observation_end_time` are seconds since J2000.
 GK2A_EPOCH = np.datetime64("2000-01-01T12:00:00", "ns")
 
+#: On-disk encoding for `t` and `t_end`: exact at nanosecond resolution.
+_TIME_ENCODING = {"units": "nanoseconds since 2000-01-01T12:00:00", "dtype": "int64"}
+
 #: How far the reconstructed `t` may sit from the filename's nominal slot.
 #: A full-disk scan takes about nine minutes, and `t` is its start.
 _MAX_T_VS_SLOT_DRIFT = np.timedelta64(20, "m")
@@ -334,6 +337,12 @@ def add_time_and_navigation(ds: xr.Dataset) -> xr.Dataset:
         "long_name": "observation start time",
         "standard_name": "time",
     })
+    # Fix the time units. Left to xarray, a store started from a single scan
+    # gets "days since <t>", and every later append is then serialised in
+    # finer units under those unchanged attrs, corrupting `t`. Only a store's
+    # first write sets these; an append reuses whatever the store already has.
+    for name in ("t", "t_end"):
+        new_ds[name].encoding.update(_TIME_ENCODING)
     new_ds.attrs.update(attrs)
     return new_ds
 
@@ -432,6 +441,17 @@ def list_day_files(
     band = _band_label(channel)
     date = common._date_from_doy(year, doy)
     day_prefix = f"{product}{date.year}{date.month:02d}/{date.day:02d}/"
+    return _list_band_files(store, [day_prefix], band, bucket, date.isoformat())
+
+
+def _list_band_files(
+    store,
+    prefixes: Iterable[str],
+    band: str,
+    bucket: str,
+    label: str,
+) -> list[str]:
+    """One band's file URLs under each listed prefix, deduplicated and in slot order."""
     stem = f"gk2a_ami_le1b_{band}_fd"
 
     # A couple of files a day are written with the image array uncompressed
@@ -444,20 +464,21 @@ def list_day_files(
 
     urls: list[str] = []
     oversized: list[str] = []
-    for page in obs.list(store, prefix=day_prefix):
-        for o in page:
-            path = o["path"]
-            if not path.endswith(".nc"):
-                continue
-            if not _filename(path).startswith(stem):
-                continue
-            if o["size"] >= size_cutoff:
-                oversized.append(_filename(path))
-                continue
-            urls.append(f"{bucket}/{path}")
+    for prefix in prefixes:
+        for page in obs.list(store, prefix=prefix):
+            for o in page:
+                path = o["path"]
+                if not path.endswith(".nc"):
+                    continue
+                if not _filename(path).startswith(stem):
+                    continue
+                if o["size"] >= size_cutoff:
+                    oversized.append(_filename(path))
+                    continue
+                urls.append(f"{bucket}/{path}")
     if oversized:
         logger.info(
-            f"{date.isoformat()} {band}: skipping {len(oversized)} "
+            f"{label} {band}: skipping {len(oversized)} "
             f"uncompressed file(s) (>= {size_cutoff / 1e6:.0f}MB): "
             f"{oversized[:3]}{'...' if len(oversized) > 3 else ''}"
         )
@@ -471,6 +492,49 @@ def list_day_files(
             seen.add(tok)
             deduped.append(u)
     return deduped
+
+
+def _hour_prefixes(
+    start: datetime.datetime, end: datetime.datetime, product: str = PRODUCT
+) -> list[str]:
+    """Every ``YYYYMM/DD/HH/`` directory from ``start``'s hour through ``end``'s.
+
+    Walking hours rather than days is what lets a window cross midnight (or a
+    month end) without listing either whole day.
+    """
+    hour = start.replace(minute=0, second=0, microsecond=0)
+    out: list[str] = []
+    while hour <= end:
+        out.append(f"{product}{hour:%Y%m}/{hour:%d}/{hour:%H}/")
+        hour += datetime.timedelta(hours=1)
+    return out
+
+
+def list_recent_files(
+    band: str,
+    since: datetime.datetime,
+    until: datetime.datetime,
+    store=None,
+    bucket: str = BUCKET,
+) -> list[str]:
+    """One band's file URLs whose slot lies in ``(since, until]``, in slot order.
+
+    Both bounds are naive UTC. Only the hour directories the window touches
+    are listed, so a 30-minute append lists one or two prefixes, not a day.
+    """
+    if since >= until:
+        return []
+    store = store if store is not None else _store()
+    band = _band_label(band)
+    urls = _list_band_files(
+        store,
+        _hour_prefixes(since, until),
+        band,
+        bucket,
+        f"{since:%Y-%m-%dT%H:%M}..{until:%Y-%m-%dT%H:%M}",
+    )
+    lo, hi = np.datetime64(since, "ns"), np.datetime64(until, "ns")
+    return [u for u in urls if lo < parse_slot_to_datetime(u) <= hi]
 
 
 def days_to_ingest(
@@ -588,13 +652,18 @@ def open_repo(
     *,
     base: str = DEFAULT_STORE_BASE,
     config: Config | None = None,
+    create: bool = True,
 ) -> "icechunk.Repository":
-    """Open or create the store for one GK-2A band, resolved through the config."""
+    """Open or create the store for one GK-2A band, resolved through the config.
+
+    ``create=False`` opens an existing store only, raising when there is none.
+    """
     return virtual_repo.open_virtual_repo(
         store_prefix_for(band, era, base),
         virtual_buckets=BUCKET,
         split_size=SLOTS_PER_DAY,
         config=config,
+        create=create,
     )
 
 
@@ -762,3 +831,360 @@ def ingest_backwards(
         batch_repair_fn=drop_codec_outliers,
         scan_start_fn=parse_slot_to_datetime,
     )
+
+
+# =============================================================================
+# Live append
+# =============================================================================
+#: Default window an append looks back over. Long enough to ride out a missed
+#: run or two of a 30-minute schedule, short enough to list in a few requests.
+DEFAULT_APPEND_LOOKBACK_MINUTES = 180
+
+#: Attempts per band when a commit loses a race with another writer.
+APPEND_MAX_ATTEMPTS = 3
+
+
+def _utcnow() -> datetime.datetime:
+    """The current time as naive UTC, matching the archive's slot tokens."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
+
+def last_committed_time(
+    repo: "icechunk.Repository",
+    *,
+    branch: str = "main",
+    group: str | None = "",
+) -> np.datetime64 | None:
+    """The newest `t` committed to ``group``, or None for an empty store.
+
+    Refuses a store whose `t` is not strictly increasing, as the resume does:
+    appending after max(t) would otherwise hide whatever is out of order.
+    """
+    if not common._schema_exists(repo, branch, group):
+        return None
+    info = common._last_committed_day(repo, branch, group)
+    return None if info is None else info[1]
+
+
+def check_time_units(
+    repo: "icechunk.Repository", *, branch: str = "main", group: str | None = ""
+) -> None:
+    """Refuse a store whose `t` units cannot hold a scan start exactly.
+
+    An append reuses the store's units. `t` carries nanoseconds, so anything
+    coarser has xarray serialise the new values in other units under the old
+    attrs, which silently corrupts `t` — the fate of a store started from a
+    single scan before the preprocess pinned its units.
+    """
+    import zarr
+
+    arr = zarr.open_array(
+        store=repo.readonly_session(branch=branch).store,
+        path=f"{group}/t" if group else "t",
+        mode="r",
+    )
+    units = str(arr.attrs.get("units", ""))
+    if not units.startswith("nanoseconds since"):
+        raise ValueError(
+            f"the store's `t` is encoded as {units!r}; appending would corrupt it. "
+            "Only stores with nanosecond `t` units can be appended to."
+        )
+
+
+class StaleSession(RuntimeError):
+    """The branch moved between reading the store's last `t` and writing."""
+
+
+class _ConflictWatch:
+    """Wraps a repository so a lost commit race is noticed, and so is a won one.
+
+    The shared engine logs and swallows a failed commit, so this is how the
+    append tells a conflict, which is worth retrying, from anything else.
+
+    It also refuses a session that does not start from ``expected_snapshot``,
+    the snapshot the store's last `t` was read from. Another writer committing
+    in between would otherwise go unnoticed: the session would start from
+    their snapshot, the commit would not conflict, and the same scans would be
+    appended twice.
+    """
+
+    def __init__(self, repo: "icechunk.Repository", expected_snapshot: str):
+        self._repo = repo
+        self._expected_snapshot = expected_snapshot
+        self.conflicted = False
+        #: The snapshot id of a successful commit, if there was one.
+        self.committed: str | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._repo, name)
+
+    def writable_session(self, *args: Any, **kwargs: Any) -> "_SessionWatch":
+        session = self._repo.writable_session(*args, **kwargs)
+        if session.snapshot_id != self._expected_snapshot:
+            self.conflicted = True
+            raise StaleSession(
+                f"branch moved from {self._expected_snapshot} to "
+                f"{session.snapshot_id} since the store's last `t` was read"
+            )
+        return _SessionWatch(session, self)
+
+
+class _SessionWatch:
+    def __init__(self, session: Any, owner: _ConflictWatch):
+        self._session = session
+        self._owner = owner
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._session, name)
+
+    def commit(self, *args: Any, **kwargs: Any) -> Any:
+        import icechunk
+
+        try:
+            out = self._session.commit(*args, **kwargs)
+        except (icechunk.ConflictError, icechunk.RebaseFailedError):
+            self._owner.conflicted = True
+            raise
+        self._owner.committed = out
+        return out
+
+
+def _times_in_snapshot(
+    repo: "icechunk.Repository", snapshot_id: str, group: str | None
+) -> np.ndarray:
+    """The `t` values stored in ``group`` as of one snapshot."""
+    ds = xr.open_zarr(
+        repo.readonly_session(snapshot_id=snapshot_id).store,
+        group=group or None,
+        consolidated=False,
+        decode_timedelta=True,
+    )
+    return ds["t"].values
+
+
+class NothingNewer(RuntimeError):
+    """Every candidate scan's `t` turned out to be at or before the store's last."""
+
+
+class _NewerThanOpener:
+    """A batch opener that keeps only scans whose `t` is strictly after ``last``.
+
+    The listing is filtered by slot (``slot > last``), which is right for the
+    usual few-seconds offset of `t` from its slot. But the preprocess accepts
+    `t` up to ``_MAX_T_VS_SLOT_DRIFT`` either side of the slot, so the slot
+    filter can let through a scan the store already holds. When the combined
+    batch does not start after ``last``, each file is opened on its own and
+    those that do not advance `t` are dropped, so a mis-stamped file neither
+    duplicates a timestep nor fails the scans queued behind it.
+    """
+
+    def __init__(self, last: np.datetime64 | None):
+        self.last = last
+        self.nothing_newer = False
+
+    def __call__(self, urls: list[str], **kwargs: Any) -> xr.Dataset:
+        vds = common.open_virtual_batch(urls, **kwargs)
+        if self.last is None or _first_t(vds) > self.last:
+            return vds
+        keep = [u for u in urls if _first_t(common.open_virtual_batch([u], **kwargs)) > self.last]
+        logger.warning(
+            f"{len(urls) - len(keep)} file(s) do not advance `t` past {self.last}; "
+            f"dropped: {[_filename(u) for u in urls if u not in keep]}"
+        )
+        if not keep:
+            self.nothing_newer = True
+            raise NothingNewer(f"no scan's `t` is after the store's last ({self.last})")
+        return common.open_virtual_batch(keep, **kwargs)
+
+
+def _first_t(vds: xr.Dataset) -> np.datetime64:
+    return np.datetime64(vds.indexes["t"].min(), "ns")
+
+
+def _group_by_day(urls: list[str]) -> list[tuple[tuple[int, int], list[str]]]:
+    """Slot-ordered URLs grouped into the engine's ((year, doy), urls) days."""
+    days: dict[tuple[int, int], list[str]] = {}
+    for u in urls:
+        date = parse_slot_to_datetime(u).astype("datetime64[D]").item()
+        days.setdefault((date.year, date.timetuple().tm_yday), []).append(u)
+    return sorted(days.items())
+
+
+def _read_new_errors(log_path: Any, offset: int) -> str | None:
+    """The newest ERROR/STOPPED reason the engine logged past ``offset``."""
+    try:
+        with open(log_path) as f:
+            f.seek(offset)
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    reasons = []
+    for line in lines:
+        fields = line.split(" | ", 3)
+        if len(fields) == 4 and fields[2] in ("ERROR", "STOPPED"):
+            reasons.append(fields[3])
+    return reasons[-1] if reasons else None
+
+
+def append_latest(
+    band: str,
+    *,
+    lookback_minutes: int = DEFAULT_APPEND_LOOKBACK_MINUTES,
+    now: datetime.datetime | None = None,
+    repo: icechunk.Repository | None = None,
+    base: str = DEFAULT_STORE_BASE,
+    config: Config | None = None,
+    group: str | None = "",
+    branch: str = "main",
+    create: bool = False,
+    max_attempts: int = APPEND_MAX_ATTEMPTS,
+    log_dir: str | None = None,
+    store=None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Append every scan newer than the live store's last `t`, within the lookback.
+
+    The sub-day counterpart to :func:`ingest_day`. A whole day is no use here:
+    ``guard_append_order`` skips any day the store already has data for. This
+    instead lists only the hour directories between the store's newest `t`
+    (bounded by ``lookback_minutes`` before ``now``) and ``now``, crossing day
+    boundaries, and appends the strictly newer scans in one commit. The strict
+    codec preprocess, the uncompressed-file filter and the codec-outlier repair
+    all still apply, so a codec change fails the band rather than mixing two
+    eras in one store.
+
+    A commit that loses a race with another writer is retried from a fresh
+    session, re-reading the store's last `t` first.
+
+    ``group`` defaults to the root, which is where the CLI and the Dagster
+    assets write the live stores. ``create`` allows a missing store to be
+    started; by default a missing store is an error, since seeding the live
+    store with a few hours of data would block the backfill behind it.
+
+    Returns:
+        ``{"appended": n, "last": iso-or-None}``, where ``last`` is the
+        store's newest `t` after the append.
+
+    Raises:
+        NothingCommitted: when there were newer scans but none could be
+            committed, carrying the engine's logged reason where there is one.
+    """
+    import tempfile
+
+    from planetary_datasets.common.paths import safe_component, safe_join
+
+    band = _band_label(band)
+    if band not in BAND_RESOLUTION:
+        raise ValueError(f"Unknown GK-2A band {band!r}; expected one of {BANDS}.")
+    if lookback_minutes <= 0:
+        raise ValueError(f"lookback_minutes must be positive, got {lookback_minutes}")
+    now = now if now is not None else _utcnow()
+    floor = now - datetime.timedelta(minutes=lookback_minutes)
+    what = f"GK-2A {band}"
+    store = store if store is not None else _store()
+
+    # The engine reports a failed batch only through its event log, so one is
+    # always kept, in a scratch directory if the caller did not ask for one.
+    tmp = tempfile.TemporaryDirectory() if log_dir is None else None
+    log_dir = tmp.name if tmp is not None else log_dir
+    log_path = safe_join(
+        log_dir, f"{safe_component(SATELLITE)}_{safe_component(band)}_ingest.log"
+    )
+
+    try:
+        for attempt in range(1, max(1, max_attempts) + 1):
+            live = repo if repo is not None else open_repo(
+                band, base=base, config=config, create=create
+            )
+            # Read before `last`: if the branch moves in between, the session
+            # check sees a mismatch and retries, rather than the reverse.
+            base_snapshot = live.lookup_branch(branch)
+            last = last_committed_time(live, branch=branch, group=group)
+            last_iso = None if last is None else str(last.astype("datetime64[s]"))
+            since = floor
+            extra: dict[str, Any] = {}
+            if last is not None:
+                last_dt = last.astype("datetime64[us]").item()
+                since = max(floor, last_dt)
+                if last_dt < floor:
+                    # The lookback bounds the work, but the store only appends
+                    # along `t`: scans between its last `t` and the window are
+                    # skipped for good once newer ones land. Say so loudly.
+                    extra["gap"] = {"from": last_iso, "to": f"{floor:%Y-%m-%dT%H:%M:%S}"}
+                    logger.warning(
+                        f"{what}: the store's last `t` ({last_iso}) is older than the "
+                        f"{lookback_minutes}-minute lookback; scans from then until "
+                        f"{floor:%Y-%m-%dT%H:%M} will not be appended"
+                    )
+            urls = list_recent_files(band, since, now, store=store)
+            if last is not None:
+                # Slot after `t`, so the scan already stored (whose `t` sits
+                # just after its own slot) is left out; the opener catches a
+                # file whose `t` drifted the other way.
+                urls = [u for u in urls if parse_slot_to_datetime(u) > last]
+            if not urls:
+                logger.info(
+                    f"{what}: nothing newer than {last_iso} "
+                    f"since {floor:%Y-%m-%dT%H:%M}"
+                )
+                return {"appended": 0, "last": last_iso, **extra}
+
+            if last is not None:
+                check_time_units(live, branch=branch, group=group)
+            all_days = _group_by_day(urls)
+            logger.info(
+                f"{what}: appending {len(urls)} scan(s) after {last_iso} "
+                f"({_filename(urls[0])} .. {_filename(urls[-1])})"
+                + (f", attempt {attempt}/{max_attempts}" if attempt > 1 else "")
+            )
+            try:
+                offset = log_path.stat().st_size
+            except OSError:
+                offset = 0
+
+            watched = _ConflictWatch(live, base_snapshot)
+            opener = _NewerThanOpener(last)
+            ingest_all_days(
+                watched,
+                band,
+                all_days=all_days,
+                branch=branch,
+                group=group,
+                # One commit for the whole window, even across midnight.
+                batch_size=len(all_days),
+                # The engine's resume skips whole days at or before the store's
+                # last one, which is every sub-day append. The filtering is
+                # done above instead, and re-checked by the opener.
+                resume=False,
+                open_batch_fn=opener,
+                log_dir=log_dir,
+                **kwargs,
+            )
+
+            if watched.committed is not None:
+                # Counted in the snapshot this append committed, not at the
+                # branch tip, which may already hold another writer's scans.
+                times = _times_in_snapshot(live, watched.committed, group)
+                appended = int(times.size if last is None else (times > last).sum())
+                newest = str(times.max().astype("datetime64[s]")) if times.size else last_iso
+                logger.info(f"{what}: appended {appended} scan(s), last {newest}")
+                return {"appended": appended, "last": newest, **extra}
+            if opener.nothing_newer:
+                logger.info(f"{what}: no candidate's `t` is after {last_iso}")
+                return {"appended": 0, "last": last_iso, **extra}
+            if watched.conflicted and attempt < max_attempts:
+                logger.warning(
+                    f"{what}: commit conflicted with another writer; retrying "
+                    f"from a fresh session ({attempt}/{max_attempts})"
+                )
+                continue
+            reason = _read_new_errors(log_path, offset)
+            raise virtual_repo.NothingCommitted(
+                f"{what}: {len(urls)} newer scan(s) found but none committed"
+                + (" (commit conflicted on every attempt)" if watched.conflicted else "")
+                + (f": {reason}" if reason else "")
+            )
+        raise AssertionError("unreachable")  # pragma: no cover
+    finally:
+        if tmp is not None:
+            tmp.cleanup()

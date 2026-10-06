@@ -23,6 +23,47 @@ GK2A_CMD="python -u -m planetary_datasets.providers.virtualized.ingest_gk2a_fd"
 HIMA_CMD="python -u -m planetary_datasets.providers.virtualized.ingest_himawari_isatss"
 WATCHDOG="python -u /usr/local/bin/memory_watchdog.py"
 
+# --- live append mode --------------------------------------------------------
+#   run_goes_virtual.sh append <satellite> --channels <C01,..|all> --lookback-minutes <N>
+#
+# Appends, per channel, every scan newer than the live store's last `t` and
+# within the lookback, committing per channel. The last stdout line is a JSON
+# summary; the exit status is non-zero only when every channel failed.
+if [ "$#" -gt 0 ] && [ "$1" = "append" ]; then
+  shift
+  APPEND_SAT=${1:-}
+  [ "$#" -gt 0 ] && shift
+  case "$APPEND_SAT" in
+    gk2a)
+      # The same destination/credential fallbacks as the orchestrated mode, so
+      # the job definition's SC_* (or source.coop-scoped AWS_*) secrets work.
+      # ICECHUNK_LOCAL_PATH, when set, still sends the writes to local disk.
+      export AWS_ACCESS_KEY_ID=${SC_ACCESS_KEY_ID:-${AWS_ACCESS_KEY_ID:-}}
+      export AWS_SECRET_ACCESS_KEY=${SC_SECRET_ACCESS_KEY:-${AWS_SECRET_ACCESS_KEY:-}}
+      export ICECHUNK_BUCKET=${SC_BUCKET:-${ICECHUNK_BUCKET:-us-west-2.opendata.source.coop}}
+      export AWS_REGION=${SC_REGION:-${AWS_REGION:-us-west-2}}
+      gk2a_root=${SC_PREFIX_ROOT:-${GOES_STORE_ROOT:-bkr/geo/virtualized}}
+      gk2a_args=()
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --channels) gk2a_args+=(--bands "${2:?--channels needs a value}"); shift 2 ;;
+          --channels=*) gk2a_args+=(--bands "${1#--channels=}"); shift ;;
+          *) gk2a_args+=("$1"); shift ;;
+        esac
+      done
+      exec $GK2A_CMD --append-latest --store-base "${gk2a_root}/gk2a_ami_fd" ${gk2a_args[@]+"${gk2a_args[@]}"}
+      ;;
+    "")
+      echo "usage: $0 append <satellite> --channels <list|all> --lookback-minutes <N>" >&2
+      exit 2
+      ;;
+    *)
+      echo "append: unknown satellite '$APPEND_SAT'" >&2
+      exit 2
+      ;;
+  esac
+fi
+
 # --- pass-through mode -------------------------------------------------------
 if [ "$#" -gt 0 ]; then
   if [ "$1" = "gk2a" ]; then
