@@ -344,7 +344,6 @@ def test_plain_open_zarr_decodes_to_float32(bucket, source, local_config, four_y
 
     run(source, years=[2001])
     repo = nsrdb.open_repo(KEY, source=source, config=local_config, create=False)
-    # decode_times=False: numpy 2.5 with xarray 2025.12 cannot decode NaT at all.
     store = repo.readonly_session("main").store
     ds = xr.open_zarr(store, consolidated=False, decode_times=False)
     expected = h5_physical(bucket, 2001, "clouds", "cld_opd_dcomp")
@@ -352,9 +351,63 @@ def test_plain_open_zarr_decodes_to_float32(bucket, source, local_config, four_y
     np.testing.assert_array_equal(ds["cld_opd_dcomp"].values[:365], expected)
     assert ds["valid"].values[:365].all() and not ds["valid"].values[365:].any()
     raw = ds["time"].values
-    assert raw[0] == 978307200 and (raw[365:] == np.iinfo(np.int64).min).all()
+    assert raw.dtype == np.float64
+    assert raw[0] == 978307200 and np.isnan(raw[365:]).all()
     assert ds["time"].attrs["units"] == "seconds since 1970-01-01"
     assert "latitude" in ds.coords
+
+
+def test_plain_open_zarr_decodes_the_padded_time_axis(source, local_config, four_years):
+    """xarray decodes NaN seconds as NaT; it cannot decode a masked integer time axis."""
+    import xarray as xr
+
+    run(source, years=[2001, 2002])
+    repo = nsrdb.open_repo(KEY, source=source, config=local_config, create=False)
+    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    times, valid = ds["time"].values, ds["valid"].values
+    assert times.dtype.kind == "M"
+    assert np.isnat(times[~valid]).all() and not np.isnat(times[valid]).any()
+    assert times[valid][0] == np.datetime64("2001-01-01T00:00")
+    assert times[valid][-1] == np.datetime64("2002-12-31T00:00")
+
+
+def test_migrate_time_float64_converts_an_int64_time_axis(source, local_config, four_years):
+    run(source)
+    repo = nsrdb.open_repo(KEY, source=source, config=local_config, create=False)
+    session = repo.writable_session("main")
+    root = zarr.open_group(session.store, mode="a")
+    expected = {}
+    for path in ["", "layout_8x9"]:
+        group = root if not path else root[path]
+        old = group["time"]
+        times = nsrdb._decode_time(old[:])
+        expected[path] = times
+        attrs, chunks = dict(old.attrs), old.chunks
+        del group["time"]
+        legacy = group.create_array(
+            "time",
+            shape=times.shape,
+            chunks=chunks,
+            dtype=np.int64,
+            fill_value=np.iinfo(np.int64).min,
+            dimension_names=("time",),
+            attributes=attrs,
+        )
+        legacy[:] = nsrdb._encode_time(times, np.int64)
+    session.commit("legacy int64 time")
+    before = nsrdb.open_nsrdb(KEY, source=source, config=local_config)
+
+    assert nsrdb.migrate_time_float64(KEY, source=source, config=local_config) == 2
+    assert nsrdb.migrate_time_float64(KEY, source=source, config=local_config) == 0
+
+    root = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    for path, times in expected.items():
+        group = root if not path else root[path]
+        assert group["time"].dtype == np.float64
+        np.testing.assert_array_equal(nsrdb._decode_time(group["time"][:]), times)
+    after = nsrdb.open_nsrdb(KEY, source=source, config=local_config)
+    np.testing.assert_array_equal(after["time"].values, before["time"].values)
+    assert run(source).written == []
 
 
 def _write_legacy_encoding(store) -> None:
@@ -399,7 +452,7 @@ def test_migrate_float32_converts_an_integer_encoded_store(
 
     def plain():
         store = repo.readonly_session("main").store
-        return xr.open_zarr(store, consolidated=False, decode_times=False)
+        return xr.open_zarr(store, consolidated=False)
 
     assert plain()["ghi"].dtype == np.float64
     legacy = nsrdb.open_nsrdb(KEY, source=source, config=local_config)

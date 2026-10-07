@@ -21,9 +21,12 @@ Why the store looks the way it does:
   HDF5 stores the edge chunk at full size, so padding each year to
   ``ceil(n_time / chunk_t) * chunk_t`` rows makes it exactly whole chunks and
   years concatenate by reference. Pad rows have ``time = NaT`` and
-  ``valid = False``; :func:`open_nsrdb` drops them. (numpy 2.5 with xarray
-  2025.12 cannot decode a NaT time at all; open such a store there with
-  ``decode_times=False``, or through :func:`open_nsrdb`, which decodes itself.)
+  ``valid = False``; :func:`open_nsrdb` drops them. ``time`` is float64
+  seconds with NaN on pad rows: xarray 2025.12 with numpy 2.5 cannot decode an
+  integer time axis holding any missing value (not even the int64-minimum NaT
+  it writes itself), but decodes NaN seconds as NaT everywhere. float64 holds
+  whole seconds exactly. :func:`migrate_time_float64` converts a store written
+  with the earlier int64 encoding.
 * **A year with a different chunk shape goes into a layout group.** Himawari-7
   leap years are chunked ``(1348, 742)`` instead of ``(1344, 745)``, which
   cannot share an array with the other years. Such a year is written to a
@@ -179,8 +182,9 @@ NON_VARIABLE_DATASETS = frozenset({"meta", "time_index", "coordinates"})
 #: chunking, which is not the chunking of the file and would only mislead.
 DROPPED_VARIABLE_ATTRS = frozenset({"chunks"})
 
-#: ``time`` is encoded as int64 seconds; pad rows are NaT.
+#: ``time`` is encoded as float64 seconds; pad rows are NaN, which decode as NaT.
 TIME_UNITS = "seconds since 1970-01-01"
+#: How the earlier int64 encoding marked a pad row.
 _NAT_INT64 = np.iinfo(np.int64).min
 
 LAYOUT_PREFIX = "layout_"
@@ -1010,25 +1014,23 @@ def _write_time(store: Any, path: str, plan: YearPlan, old_len: int) -> None:
     """Append the year's ``time`` and ``valid`` rows, creating them on a group's first year.
 
     Written with Zarr rather than through VirtualiZarr, which hands non-virtual
-    variables to xarray's ``to_zarr``. An append there decodes the stored
-    ``time`` first, and some numpy/xarray combinations (numpy 2.5 with xarray
-    2025.12) cannot decode the NaT pad rows at all, so every append after the
-    first year would fail. The encoding is exactly what xarray writes: int64
-    seconds since 1970 with NaT as the int64 minimum.
+    variables to xarray's ``to_zarr``, and an append there decodes the stored
+    ``time`` first. Seconds are float64 with NaN on pad rows (see the module
+    docstring); a group still in the earlier int64 encoding keeps it, so its
+    rows stay consistent until :func:`migrate_time_float64` converts it.
     """
     import zarr
 
     group = zarr.open_group(store, path=path, mode="a", zarr_format=3)
     times, valid = plan.padded_times()
-    raw = times.astype("datetime64[s]").astype(np.int64)
     new_len = old_len + plan.n_pad
     if old_len == 0:
         time_arr = group.create_array(
             "time",
             shape=(new_len,),
             chunks=(plan.t_chunk,),
-            dtype=np.int64,
-            fill_value=_NAT_INT64,
+            dtype=np.float64,
+            fill_value=np.nan,
             dimension_names=("time",),
             attributes={
                 "standard_name": "time",
@@ -1050,7 +1052,7 @@ def _write_time(store: Any, path: str, plan: YearPlan, old_len: int) -> None:
         time_arr, valid_arr = group["time"], group["valid"]
         time_arr.resize((new_len,))
         valid_arr.resize((new_len,))
-    time_arr[old_len:new_len] = raw
+    time_arr[old_len:new_len] = _encode_time(times, time_arr.dtype)
     valid_arr[old_len:new_len] = valid
 
 
@@ -1088,9 +1090,29 @@ class _StoreState:
         return set(GROUPS) if recorded is None else set(recorded)
 
 
+def _encode_time(times: np.ndarray, dtype: Any) -> np.ndarray:
+    """Seconds since 1970 in ``dtype``: NaN pad rows as float64, int64-minimum as int64."""
+    seconds = times.astype("datetime64[s]")
+    missing = np.isnat(seconds)
+    if np.dtype(dtype).kind == "f":
+        out = seconds.astype(np.int64).astype(np.float64)
+        out[missing] = np.nan
+        return out
+    out = seconds.astype(np.int64)
+    out[missing] = _NAT_INT64
+    return out
+
+
 def _decode_time(raw: np.ndarray) -> np.ndarray:
-    times = raw.astype("datetime64[s]")
-    times[raw == _NAT_INT64] = np.datetime64("NaT")
+    """Stored seconds back to ``datetime64[s]``, from either encoding."""
+    raw = np.asarray(raw)
+    if raw.dtype.kind == "f":
+        missing = np.isnan(raw)
+        times = np.where(missing, 0, raw).astype(np.int64).astype("datetime64[s]")
+    else:
+        missing = raw == _NAT_INT64
+        times = raw.astype("datetime64[s]")
+    times[missing] = np.datetime64("NaT")
     return times
 
 
@@ -1899,8 +1921,8 @@ def _open_group(store: Any, path: str, chunks: Mapping[str, int] | None) -> xr.D
         t_chunk = int(group["time"].chunks[0])
         g_chunk = max((int(a.chunks[1]) for a in data), default=META_SLICE_ROWS)
         chunks = {"time": t_chunk, "gid": g_chunk * 16}
-    # Times are decoded here rather than by xarray, which in some numpy/xarray
-    # combinations cannot decode the NaT pad rows; see _write_time.
+    # Times are decoded here rather than by xarray, so a store still in the
+    # earlier int64 encoding opens too; see the module docstring.
     ds = xr.open_zarr(
         store,
         group=path or None,
@@ -2101,6 +2123,60 @@ def migrate_float32(
     return rewritten
 
 
+def migrate_time_float64(
+    key: str,
+    *,
+    branch: str = "main",
+    config: Config | None = None,
+    source: Source | None = None,
+) -> int:
+    """Rewrite each group's int64 ``time`` as float64 seconds with NaN pad rows.
+
+    Stores written before this encoding keep ``time`` as int64 seconds with the
+    int64 minimum on pad rows, which xarray 2025.12 with numpy 2.5 cannot
+    decode, so a plain ``xr.open_zarr`` fails. ``time`` is materialised and
+    small, so it is rewritten whole in one commit; no chunk reference changes.
+
+    Args:
+        key: Catalog key.
+        branch: Branch to migrate.
+        config: Override configuration; defaults to the process-wide one.
+        source: Source bucket; defaults to NREL's.
+
+    Returns:
+        The number of ``time`` arrays rewritten; 0 when already migrated.
+    """
+    import zarr
+
+    repo = open_repo(key, source=source, config=config, create=False)
+    session = repo.writable_session(branch)
+    root = zarr.open_group(session.store, mode="a", zarr_format=3)
+    rewritten = 0
+    for path in ["", *_layout_groups(session.store)]:
+        group = root if not path else root[path]
+        if "time" not in group or group["time"].dtype.kind == "f":
+            continue
+        old = group["time"]
+        times = _decode_time(np.asarray(old[:]))
+        attrs, chunks = dict(old.attrs), old.chunks
+        del group["time"]
+        new = group.create_array(
+            "time",
+            shape=times.shape,
+            chunks=chunks,
+            dtype=np.float64,
+            fill_value=np.nan,
+            dimension_names=("time",),
+            attributes=attrs,
+        )
+        new[:] = _encode_time(times, np.float64)
+        rewritten += 1
+    if rewritten:
+        session.commit(f"{key}: time as float64 seconds with NaN pad rows ({rewritten} groups)")
+    logger.info(f"{key}: migrated {rewritten} time array(s) to float64")
+    return rewritten
+
+
 # =============================================================================
 # CLI
 # =============================================================================
@@ -2156,6 +2232,12 @@ def _cmd_migrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_migrate_time(args: argparse.Namespace) -> int:
+    for key in args.dataset or list(DATASETS):
+        migrate_time_float64(key)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point. Returns the process exit code."""
     parser = argparse.ArgumentParser(
@@ -2176,6 +2258,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     p_migrate.add_argument("--dataset", nargs="*", choices=list(DATASETS))
     p_migrate.set_defaults(func=_cmd_migrate)
+
+    p_migrate_time = sub.add_parser(
+        "migrate-time", help="rewrite int64 time axes as float64 seconds with NaN pad rows"
+    )
+    p_migrate_time.add_argument("--dataset", nargs="*", choices=list(DATASETS))
+    p_migrate_time.set_defaults(func=_cmd_migrate_time)
 
     p_ingest = sub.add_parser("ingest", help="ingest missing years into a dataset's store")
     p_ingest.add_argument("--dataset", required=True, choices=list(DATASETS))
