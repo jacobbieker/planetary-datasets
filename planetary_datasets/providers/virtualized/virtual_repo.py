@@ -20,7 +20,7 @@ filesystem exactly as it does for every other provider.
 from __future__ import annotations
 
 import datetime
-from typing import TYPE_CHECKING, Iterable, Sequence
+from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
 import numpy as np
 from loguru import logger
@@ -101,6 +101,7 @@ def open_virtual_repo(
     source_region: str = DEFAULT_SOURCE_REGION,
     config: Config | None = None,
     create: bool = True,
+    extra_splits: Mapping[str, int] | None = None,
 ) -> "icechunk.Repository":
     """Open or create the virtual-reference store at ``prefix``.
 
@@ -120,6 +121,11 @@ def open_virtual_repo(
             manifest and container config onto it. Pass False to inspect an
             existing store without bringing one into being or rewriting its
             splitting config.
+        extra_splits: Further manifest splits as ``{dimension: chunks per
+            split}``, applied alongside ``split_dim``. A store whose arrays are
+            wide in a second dimension needs this to keep each manifest small,
+            e.g. ``{"gid": 3700}`` for millions of sites. Sizes count chunks,
+            not elements, as ``split_size`` does.
 
     Returns:
         An open repository, ready to append to.
@@ -141,12 +147,11 @@ def open_virtual_repo(
 
     storage = cfg.icechunk_storage(prefix)
 
+    dim_splits = {icechunk.config.ManifestSplitDimCondition.DimensionName(split_dim): split_size}
+    for dim, size in (extra_splits or {}).items():
+        dim_splits[icechunk.config.ManifestSplitDimCondition.DimensionName(dim)] = size
     split_config = icechunk.config.ManifestSplittingConfig.from_dict(
-        {
-            icechunk.config.ManifestSplitCondition.AnyArray(): {
-                icechunk.config.ManifestSplitDimCondition.DimensionName(split_dim): split_size
-            }
-        }
+        {icechunk.config.ManifestSplitCondition.AnyArray(): dim_splits}
     )
     repo_config = icechunk.RepositoryConfig(
         manifest=icechunk.config.ManifestConfig(splitting=split_config)
