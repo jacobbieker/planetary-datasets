@@ -59,7 +59,12 @@ def _surface_subset(**coords) -> xr.Dataset:
 
 def _alaska_step(step_hours: int) -> xr.Dataset:
     return xr.Dataset(
-        {"temperature_at_surface": (("isobaricInhPa", "y", "x"), np.ones((2, 2, 3), dtype="float32"))},
+        {
+            "temperature_at_surface": (
+                ("isobaricInhPa", "y", "x"),
+                np.ones((2, 2, 3), dtype="float32"),
+            )
+        },
         coords={
             "isobaricInhPa": np.array([500.0, 1000.0]),
             "y": np.arange(2),
@@ -73,8 +78,14 @@ def _alaska_step(step_hours: int) -> xr.Dataset:
 def _hawaii_step(valid_time: str) -> xr.Dataset:
     return xr.Dataset(
         {
-            "temperature_at_surface": (("isobaricInhPa", "values"), np.ones((2, 3), dtype="float32")),
-            "soil_temperature": (("depthBelowLandLayer", "values"), np.ones((2, 3), dtype="float32")),
+            "temperature_at_surface": (
+                ("isobaricInhPa", "values"),
+                np.ones((2, 3), dtype="float32"),
+            ),
+            "soil_temperature": (
+                ("depthBelowLandLayer", "values"),
+                np.ones((2, 3), dtype="float32"),
+            ),
         },
         coords={
             "isobaricInhPa": np.array([500.0, 1000.0]),
@@ -95,11 +106,14 @@ def _hawaii_step(valid_time: str) -> xr.Dataset:
         (dmi.DMIHarmonieModelLevelProvider, "bkr/dmi/harmonie_greenland_iceland_model_level.icechunk"),
         (hrrr_alaska.AlaskaHRRRProvider, "bkr/dmi/alaska_hrrr.icechunk"),
         (hawaii_nam.HawaiiNAMProvider, "bkr/dmi/hawaii_nams.icechunk"),
-        # The KENDA prefixes are the ones the original scripts wrote to.
-        (kenda.KENDAAnalysisProvider, "bkr/dmi/kenda_switzerland.icechunk"),
-        (kenda.KENDAForecastProvider, "bkr/dmi/kenda_forecast_switzerland.icechunk"),
+        # KENDA reports the store of its current era; see the era tests below.
+        (kenda.KENDAAnalysisProvider, "bkr/dmi/kenda_switzerland_20260721T1100.icechunk"),
+        (
+            kenda.KENDAForecastProvider,
+            "bkr/dmi/kenda_forecast_switzerland_20260721T1100.icechunk",
+        ),
         # The old name still resolves to the analysis store.
-        (kenda.KENDAProvider, "bkr/dmi/kenda_switzerland.icechunk"),
+        (kenda.KENDAProvider, "bkr/dmi/kenda_switzerland_20260721T1100.icechunk"),
     ],
     ids=[
         "harmonie", "harmonie-model-level", "alaska-hrrr", "hawaii-nam",
@@ -145,8 +159,7 @@ def test_hawaii_urls_cover_six_forecast_hours():
     urls = hawaii_nam.HawaiiNAMProvider().expected_urls(pd.Timestamp("2025-05-17T06:00"))
     assert len(urls) == 6
     assert urls[0] == (
-        "https://noaa-nam-pds.s3.amazonaws.com/nam.20250517/"
-        "nam.t06z.hawaiinest.hiresf00.tm00.grib2"
+        "https://noaa-nam-pds.s3.amazonaws.com/nam.20250517/nam.t06z.hawaiinest.hiresf00.tm00.grib2"
     )
     assert urls[-1].endswith("hiresf05.tm00.grib2")
 
@@ -191,9 +204,7 @@ HAWAII_FLUX_BLOCK = {
     ("subset", "spec"),
     [
         pytest.param(_surface_subset(tropopause=0.0), GribMergeSpec(), id="tropopause-level"),
-        pytest.param(
-            _surface_subset(potentialVorticity=2e-6), GribMergeSpec(), id="pv-level"
-        ),
+        pytest.param(_surface_subset(potentialVorticity=2e-6), GribMergeSpec(), id="pv-level"),
         pytest.param(
             _subset({"t": None}, level=("heightAboveGround", [2.0, 10.0])),
             GribMergeSpec(),
@@ -366,7 +377,9 @@ def test_chunk_present_ignores_dimensions_that_are_not_there():
 
 def test_harmonie_surface_height_split_keeps_the_unsuffixed_pressure_name():
     ds = _subset({"pres": None}, heightAboveGround=0.0)
-    split = dmi._split_by_height(ds, "heightAboveGround", "height_above_ground", rename_scalar=False)
+    split = dmi._split_by_height(
+        ds, "heightAboveGround", "height_above_ground", rename_scalar=False
+    )
     assert list(split.data_vars) == ["pres"]
     assert "heightAboveGround" not in split.coords
 
@@ -387,10 +400,13 @@ def test_harmonie_surface_height_split_fans_out_a_height_stack():
 KENDA_IT = pd.Timestamp("2026-06-20T02:00")
 
 
-def _write_kenda(root, steps=(0,), constants=True):
-    """Empty stand-ins for one init time's files: a ``t`` field per step, and the constants."""
+def _write_kenda(root, steps=(0,), constants=True, it=KENDA_IT, variables=None):
+    """Empty stand-ins for one init time's files: each field of its era, and the constants."""
     for step in steps:
-        (root / f"kenda-ch1-{KENDA_IT:%Y%m%d%H00}-{step}-t-ctrl.grib2").write_bytes(b"")
+        provider = kenda.KENDAAnalysisProvider if step == 0 else kenda.KENDAForecastProvider
+        names = variables if variables is not None else provider().era_for(it).variables
+        for name in names:
+            (root / f"kenda-ch1-{it:%Y%m%d%H00}-{step}-{name}-ctrl.grib2").write_bytes(b"")
     if constants:
         (root / kenda.HORIZONTAL_CONSTANTS).write_bytes(b"")
         (root / kenda.VERTICAL_CONSTANTS).write_bytes(b"")
@@ -409,8 +425,68 @@ def test_kenda_fetch_requires_the_data_and_the_constants(tmp_path):
 
     _write_kenda(tmp_path)
     found = provider.fetch(KENDA_IT)
-    assert len(found) == 3
+    assert len(found) == len(kenda.ANALYSIS_VARIABLES) + 2
     assert sum("constants" in f for f in found) == 2
+
+
+def test_kenda_fetch_skips_an_incomplete_hour(tmp_path):
+    # A half-delivered hour once got appended with two fields missing, leaving the store's
+    # variables at different lengths and every later append failing.
+    _write_kenda(tmp_path, variables=sorted(kenda.ANALYSIS_VARIABLES - {"p", "qv"}))
+    assert kenda.KENDAAnalysisProvider(archive_path=tmp_path).fetch(KENDA_IT) == []
+
+
+def test_kenda_fetch_raises_on_fields_its_era_does_not_know(tmp_path):
+    _write_kenda(tmp_path, variables=sorted(kenda.ANALYSIS_VARIABLES | {"new_field"}))
+    with pytest.raises(kenda.KENDASchemaChanged):
+        kenda.KENDAAnalysisProvider(archive_path=tmp_path).fetch(KENDA_IT)
+
+
+@pytest.mark.parametrize(
+    ("provider_cls", "it", "store_prefix"),
+    [
+        (kenda.KENDAAnalysisProvider, "2026-07-21T10:00", "bkr/dmi/kenda_switzerland.icechunk"),
+        (
+            kenda.KENDAAnalysisProvider,
+            "2026-07-21T11:00",
+            "bkr/dmi/kenda_switzerland_20260721T1100.icechunk",
+        ),
+        (
+            kenda.KENDAForecastProvider,
+            "2026-07-21T08:00",
+            "bkr/dmi/kenda_forecast_switzerland.icechunk",
+        ),
+        # The forecast widened at 09:00, two hours before the new store's first hour.
+        (
+            kenda.KENDAForecastProvider,
+            "2026-07-21T09:00",
+            "bkr/dmi/kenda_forecast_switzerland_20260721T1100.icechunk",
+        ),
+    ],
+)
+def test_kenda_routes_each_hour_to_its_era(provider_cls, it, store_prefix):
+    assert provider_cls().era_for(pd.Timestamp(it)).store_prefix == store_prefix
+
+
+def test_kenda_forecast_eras_differ_in_fields(tmp_path):
+    early, late = pd.Timestamp("2026-07-21T08:00"), pd.Timestamp("2026-07-21T09:00")
+    provider = kenda.KENDAForecastProvider(archive_path=tmp_path)
+    _write_kenda(tmp_path, steps=(1,), it=early)
+    _write_kenda(tmp_path, steps=(1,), it=late)
+    assert len(provider.fetch(early)) == len(kenda.FORECAST_VARIABLES_V1) + 2
+    assert len(provider.fetch(late)) == len(kenda.FORECAST_VARIABLES_V2) + 2
+
+    # The narrow set is incomplete for the later era, not a new one.
+    for path in tmp_path.glob(f"kenda-ch1-{late:%Y%m%d%H00}-1-tq*-ctrl.grib2"):
+        path.unlink()
+    assert provider.fetch(late) == []
+
+
+def test_kenda_missing_timesteps_asks_each_era_its_own_store(local_config):
+    provider = kenda.KENDAAnalysisProvider()
+    times = pd.DatetimeIndex(["2026-07-21T10:00", "2026-07-21T11:00"])
+    assert provider.missing_timesteps(times) == list(times)
+    assert set(provider._repos) == {era.store_prefix for era in kenda.ANALYSIS_ERAS}
 
 
 def test_kenda_analysis_and_forecast_read_different_steps(tmp_path):
