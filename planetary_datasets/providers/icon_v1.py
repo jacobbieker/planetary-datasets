@@ -848,20 +848,17 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
                     raise ValueError(
                         f"{uri} is on grid {info.grid_number}, not the model's {grid_number}"
                     )
-            if row.dtype == np.float16:
-                # Decoding casts to the row's dtype; a value beyond float16's range
-                # becomes inf, which no GRIB field holds.
-                with np.errstate(over="ignore"):
-                    decode_grib_field(data, out=row)
-                if np.isinf(row).any():
-                    peak = float(np.nanmax(np.abs(decode_grib_field(data, dtype=np.float32))))
-                    raise PrecisionOverflow(
-                        f"{_param_of(uri)} is stored as float16 but {uri} reaches {peak:g}, "
-                        "beyond float16's 65504; reclassify it in the schema "
-                        "(icon_v1_catalog precision)"
-                    )
-            else:
+            # Decoding casts to the row's dtype; in a float16 row a value beyond float16's
+            # range becomes inf, which no GRIB field holds.
+            with np.errstate(over="ignore"):
                 decode_grib_field(data, out=row)
+            if row.dtype == np.float16 and np.isinf(row).any():
+                peak = float(np.nanmax(np.abs(decode_grib_field(data, dtype=np.float32))))
+                raise PrecisionOverflow(
+                    f"{param} is stored as float16 but {uri} reaches {peak:g}, beyond "
+                    "float16's 65504; reclassify it in the schema (icon_v1_catalog precision) "
+                    "and start a new store for it"
+                )
             progress.record(True)
             return True
 

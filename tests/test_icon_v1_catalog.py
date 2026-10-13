@@ -667,8 +667,10 @@ def test_precision_stats_measure_range_underflow_and_fp16_error():
     [
         ("T_2M", [[230.0, 310.5]], ("float16", "fits")),
         ("U_10M", [[-30.0, 0.0, 0.0, 12.5]], ("float16", "fits")),
-        # Above 65504 / 4: pressure-like ranges, even under a name not on the list.
-        ("RUNOFF_G", [[0.0, 20540.0]], ("float32", "range")),
+        # Above 65504 / 4, even under a name not on the list.
+        ("VIS", [[0.0, 79770.0]], ("float32", "range")),
+        # No evidence of the range at all.
+        ("FR_ICE", [[0.0, 0.0, np.nan]], ("float32", "no non-zero values sampled")),
         # More than 0.1% of the non-zero values below float16's smallest normal.
         ("W", [[0.5] * 998 + [1e-6, 2e-6]], ("float32", "underflow")),
         # One in a thousand is allowed.
@@ -681,6 +683,10 @@ def test_precision_stats_measure_range_underflow_and_fp16_error():
         ("ACCDRYDEPO_DUSTA", [[1.0]], ("float32", "full-precision list")),
         ("CEIL_BSC_DUST", [[1.0]], ("float32", "full-precision list")),
         ("CLAT", [[1.0]], ("float32", "full-precision list")),
+        # Accumulated or averaged since the start of the run: differenced downstream.
+        ("TOT_PREC", [[0.0, 3.5]], ("float32", "full-precision list")),
+        ("ASOB_S", [[0.0, 300.0]], ("float32", "full-precision list")),
+        ("RUNOFF_G", [[0.0, 300.0]], ("float32", "full-precision list")),
     ],
 )
 def test_classify_precision(param, fields, expected):
@@ -697,7 +703,8 @@ def test_full_precision_list_covers_the_committed_families():
     full = {p for p in params if cat.is_full_precision(p)}
     assert {"QV", "QC", "QI", "QV_S", "TQV", "TQC_DIA", "FI", "HHL", "HSURF", "P", "PS"} <= full
     assert {p for p in params if "DUST" in p} <= full
-    assert not {"T_2M", "U_10M", "CLCT", "TOT_PREC"} & full
+    assert {"TOT_PREC", "RAIN_GSP", "ASOB_S", "ATHB_T", "ALHFL_BS", "AVMFL_S"} <= full
+    assert not {"T_2M", "U_10M", "CLCT", "T", "U", "V", "ALB_RAD", "SOILTYP"} & full
 
 
 def test_a_missing_dtype_means_float32(fake_tree):
@@ -729,6 +736,7 @@ def test_measure_and_apply_precision_sample_each_variable(fake_tree):
     # step, in each of the two runs.
     assert results[("T", 150, None)].samples == 3 * 3 * 2
     assert results[("HSURF", None, None)].samples == 0
+    assert results[("HSURF", None, None)].missing == 2
     assert not any("/r/2026-10-11T06:00/" in u for u in read)
 
     updated = cat.apply_precision(data, results)
@@ -755,3 +763,29 @@ def test_committed_schemas_carry_a_dtype_for_every_variable(model):
             assert v.dtype == "float32", v
     assert schema.variable("T_2M", None).dtype == "float16"
     assert schema.variable("QV", 150).dtype == "float32"
+
+
+def test_one_parameter_gets_one_dtype_across_wavelengths_and_models():
+    fits = stats_of([0.5, 1.0])
+    tiny = stats_of([1e-7, 1e-7, 1.0])
+    # Pooled over the wavelengths of one model...
+    pooled = cat.pool_precision({("BSC", 150, 532): fits, ("BSC", 150, 1064): tiny})
+    assert cat.classify_precision("BSC", pooled[("BSC", 150)])[0] == "float32"
+    # ... and over models: float16 in one sample does not win over float32 in another.
+    pooled = cat.pool_precision({("W", 150, None): fits}, {("W", 150, None): tiny})
+    data = {"variables": [{"param": "W", "level_type": 150, "levels": ["1"]}]}
+    entry = cat.apply_precision(data, {("W", 150, None): fits}, pooled)["variables"][0]
+    assert entry["dtype"] == "float32" and entry["precision"]["reason"] == "underflow"
+    # The entry keeps its own model's statistics.
+    assert entry["precision"]["subnormal_fraction"] == 0.0
+
+
+def test_precision_runs_are_the_newest_settled_00z_and_12z():
+    runs = [pd.Timestamp(t) for t in pd.date_range("2026-10-12T18:00", periods=5, freq="6h")]
+    now = pd.Timestamp("2026-10-13T19:00")
+    assert cat.precision_runs(runs, now, pd.Timedelta(6, "h")) == [
+        pd.Timestamp("2026-10-13T00:00"),
+        pd.Timestamp("2026-10-13T12:00"),
+    ]
+    with pytest.raises(ValueError, match="12Z"):
+        cat.precision_runs(runs, now, pd.Timedelta(8, "h"))

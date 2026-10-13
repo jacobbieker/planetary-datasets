@@ -28,7 +28,7 @@ Each variable also records the precision it is stored at, ``float16`` or ``float
 by sampling real fields (:func:`measure_precision`, :func:`classify_precision`) and kept
 across rediscovery. Record or refresh it with::
 
-    python -m planetary_datasets.providers.icon_v1_catalog precision icon --source live
+    python -m planetary_datasets.providers.icon_v1_catalog precision icon icon-art icon-art-eu
 
 The committed schemas come from the four runs on the live server, one per cycle hour. The
 archive mirror often lacks whole parameters or levels of a run (ICON-Global especially),
@@ -1285,8 +1285,8 @@ FLOAT32 = "float32"
 #: The dtypes a variable may be stored as.
 STORAGE_DTYPES: tuple[str, str] = (FLOAT16, FLOAT32)
 
-#: Largest finite float16.
-FLOAT16_MAX = 65504.0
+#: Largest finite float16, 65504.
+FLOAT16_MAX = float(np.finfo(np.float16).max)
 
 #: How far inside :data:`FLOAT16_MAX` the largest sampled value must stay: a few runs do
 #: not see a variable's extremes, and a value that overflows is stored as inf.
@@ -1314,6 +1314,12 @@ FLOAT16_MAX_SUBNORMAL_FRACTION = 1e-3
 #:   freezing level, ceiling, subgrid orography). Large offsets, where float16's
 #:   relative precision is metres to tens of metres, and level heights are differenced.
 #: * Pressure (``P``, ``PS``, ``PMSL``): about 1e5 Pa, beyond float16's range entirely.
+#: * Accumulations and averages since the start of the run (``TOT_PREC``, the rain, snow
+#:   and runoff sums, and the time-averaged fluxes ``ASOB_*``, ``ATHB_*``, ``ASHFL_S``,
+#:   ``ALHFL_*``, ``ASWD*``, ``AUMFL_S``, ``AVMFL_S``). Their per-step values are recovered
+#:   by differencing consecutive steps, and de-averaging multiplies the stored error by the
+#:   lead time: float16's eighth of a W/m2 at step 120 becomes tens of W/m2 in an hourly
+#:   mean.
 #: * Every ICON-ART dust, aerosol and deposition field (anything containing ``DUST``,
 #:   ``AER_*``, ``TAOD*``, the ``ACC*`` accumulations): concentrations and fluxes many
 #:   orders of magnitude apart, mostly far below float16's normal range.
@@ -1337,6 +1343,19 @@ FULL_PRECISION_PARAMS: frozenset[str] = frozenset(
         "P",
         "PS",
         "PMSL",
+        # Accumulated since the start of the run.
+        "TOT_PREC",
+        "RAIN_CON",
+        "RAIN_GSP",
+        "SNOW_CON",
+        "SNOW_GSP",
+        "GRAU_GSP",
+        "PREC_CON",
+        "PREC_GSP",
+        "RUNOFF_G",
+        "RUNOFF_S",
+        "EVAP_PL",
+        "DURSUN",
         # Coordinates.
         "CLAT",
         "CLON",
@@ -1344,7 +1363,24 @@ FULL_PRECISION_PARAMS: frozenset[str] = frozenset(
 )
 
 #: Parameter name prefixes always stored at full precision; see :data:`FULL_PRECISION_PARAMS`.
-FULL_PRECISION_PREFIXES: tuple[str, ...] = ("Q", "TQ", "AER_", "TAOD", "ACC")
+FULL_PRECISION_PREFIXES: tuple[str, ...] = (
+    # Moisture.
+    "Q",
+    "TQ",
+    # ICON-ART aerosol.
+    "AER_",
+    "TAOD",
+    "ACC",
+    # Averaged since the start of the run.
+    "ASOB",
+    "ATHB",
+    "ASHFL",
+    "ALHFL",
+    "ASWD",
+    "ASOD",
+    "AUMFL",
+    "AVMFL",
+)
 
 #: Substrings that mark a parameter as always full precision.
 FULL_PRECISION_SUBSTRINGS: tuple[str, ...] = ("DUST",)
@@ -1370,6 +1406,7 @@ class PrecisionStats:
 
     Attributes:
         samples: Fields decoded.
+        missing: Fields that were to be sampled but are missing at the source.
         max_abs: Largest finite absolute value.
         nonzero: Finite non-zero values seen.
         below_normal: Of those, how many are smaller in magnitude than float16's smallest
@@ -1381,6 +1418,7 @@ class PrecisionStats:
     """
 
     samples: int = 0
+    missing: int = 0
     max_abs: float = 0.0
     nonzero: int = 0
     below_normal: int = 0
@@ -1419,6 +1457,7 @@ class PrecisionStats:
         """Combine two sets of statistics."""
         return PrecisionStats(
             samples=self.samples + other.samples,
+            missing=self.missing + other.missing,
             max_abs=max(self.max_abs, other.max_abs),
             nonzero=self.nonzero + other.nonzero,
             below_normal=self.below_normal + other.below_normal,
@@ -1434,6 +1473,7 @@ class PrecisionStats:
 
         return {
             "samples": self.samples,
+            "missing": self.missing,
             "max_abs": short(self.max_abs),
             "subnormal_fraction": short(self.subnormal_fraction),
             "fp16_max_abs_error": short(self.fp16_max_abs_error),
@@ -1447,7 +1487,7 @@ def classify_precision(param: str, stats: PrecisionStats | None) -> tuple[str, s
     float16 only when every one of these holds; float32 otherwise:
 
     1. ``param`` is not always full precision (:func:`is_full_precision`);
-    2. it was sampled at all;
+    2. some sampled value was finite and non-zero, so there is evidence of its range;
     3. its largest sampled magnitude is at most :data:`FLOAT16_MAX` /
        :data:`FLOAT16_HEADROOM`, so extremes the sample missed still fit;
     4. at most :data:`FLOAT16_MAX_SUBNORMAL_FRACTION` of its non-zero values are below
@@ -1464,6 +1504,8 @@ def classify_precision(param: str, stats: PrecisionStats | None) -> tuple[str, s
         return FLOAT32, "full-precision list"
     if stats is None or stats.samples == 0:
         return FLOAT32, "not sampled"
+    if stats.nonzero == 0:
+        return FLOAT32, "no non-zero values sampled"
     if stats.max_abs > FLOAT16_MAX / FLOAT16_HEADROOM:
         return FLOAT32, "range"
     if stats.subnormal_fraction > FLOAT16_MAX_SUBNORMAL_FRACTION:
@@ -1560,7 +1602,9 @@ def measure_precision(
         variable, key, run = job
         stats = PrecisionStats()
         values = reader(field_uri(model, key, run, source))
-        if values is not None:
+        if values is None:
+            stats.missing += 1
+        else:
             stats.add(values)
         return variable, stats
 
@@ -1568,26 +1612,59 @@ def measure_precision(
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for variable, stats in pool.map(one, jobs):
             results[variable] = results[variable].merge(stats)
+    for variable, stats in results.items():
+        if stats.missing:
+            logger.warning(
+                f"{model} {variable}: {stats.missing} of {stats.missing + stats.samples} "
+                "sampled fields missing at the source; its range may be underestimated"
+            )
     return results
 
 
+def pool_precision(
+    *results: Mapping[VariableKey, PrecisionStats],
+) -> dict[tuple[str, int | None], PrecisionStats]:
+    """Merge statistics per (param, level_type): across wavelengths and across models.
+
+    One parameter is stored at one precision: the wavelengths of a parameter share one
+    dataset variable, and the same field in ICON-Global and ICON-ART should not be float16
+    in one store and float32 in the other because one day's sample differed.
+    """
+    pooled: dict[tuple[str, int | None], PrecisionStats] = {}
+    for result in results:
+        for (param, level_type, _), stats in result.items():
+            key = (param, level_type)
+            pooled[key] = pooled.get(key, PrecisionStats()).merge(stats)
+    return pooled
+
+
 def apply_precision(
-    data: Mapping[str, Any], results: Mapping[VariableKey, PrecisionStats]
+    data: Mapping[str, Any],
+    results: Mapping[VariableKey, PrecisionStats],
+    pooled: Mapping[tuple[str, int | None], PrecisionStats] | None = None,
 ) -> dict[str, Any]:
     """Record each variable's dtype and its statistics in a schema's JSON data.
 
+    The dtype is decided on statistics pooled per (param, level_type)
+    (:func:`pool_precision`); each entry's ``precision`` keeps its own statistics.
+
     Args:
         data: Schema JSON, as :func:`discover_schema` returns it.
-        results: Output of :func:`measure_precision`.
+        results: This model's output of :func:`measure_precision`.
+        pooled: Statistics to decide on, e.g. pooled over several models. Defaults to
+            ``results`` pooled over wavelengths.
 
     Returns:
         A copy of ``data`` whose variable entries carry ``dtype`` and ``precision``.
     """
+    pooled = pooled if pooled is not None else pool_precision(results)
     out = json.loads(json.dumps(data))
     for entry in out["variables"]:
         key = _variable_key(entry["param"], entry["level_type"], entry.get("wavelength"))
         stats = results.get(key)
-        dtype, reason = classify_precision(entry["param"], stats)
+        dtype, reason = classify_precision(
+            entry["param"], pooled.get((entry["param"], entry["level_type"]))
+        )
         entry["dtype"] = dtype
         entry["precision"] = {**(stats or PrecisionStats()).as_json(), "reason": reason}
     return out
@@ -1672,25 +1749,62 @@ def _summarise_runs(model: str, source: Source) -> str:
     return f"{model} {source}: {len(runs)} runs, {runs[0]} -> {runs[-1]}"
 
 
+#: How old a live run must be before ``precision`` samples it by default: old enough that
+#: its last steps, which bound the accumulations, are published.
+PRECISION_MIN_AGE = pd.Timedelta(6, "h")
+
+
+def precision_runs(
+    runs: Sequence[pd.Timestamp], now: pd.Timestamp, min_age: pd.Timedelta
+) -> list[pd.Timestamp]:
+    """The newest 00Z and the newest 12Z run at least ``min_age`` old.
+
+    Raises:
+        ValueError: If either hour has no run that old.
+    """
+    chosen = []
+    for hour in (0, 12):
+        candidates = [r for r in runs if r.hour == hour and r <= now - min_age]
+        if not candidates:
+            raise ValueError(f"no {hour:02d}Z run older than {min_age}")
+        chosen.append(max(candidates))
+    return chosen
+
+
 def _precision_command(
-    model: str, runs: Sequence[pd.Timestamp], source: Source, output: pathlib.Path, workers: int
+    models: Sequence[str],
+    runs: Sequence[pd.Timestamp] | None,
+    source: Source,
+    min_age: pd.Timedelta,
+    workers: int,
 ) -> int:
-    """Measure, classify and record every variable's storage dtype in ``output``."""
-    data = json.loads(output.read_text(encoding="utf-8"))
-    schema = ICONSchema(data)
-    results = measure_precision(model, runs, source, schema=schema, max_workers=workers)
-    updated = apply_precision(data, results)
-    ICONSchema(updated)
-    output.write_text(dump_schema(updated), encoding="utf-8")
-    by_dtype: dict[str, list[str]] = {FLOAT16: [], FLOAT32: []}
-    for entry in updated["variables"]:
-        name = entry["param"] + (f"@{entry['level_type']}" if entry["level_type"] else "")
-        if entry.get("wavelength"):
-            name += f"@{entry['wavelength']}nm"
-        by_dtype[entry["dtype"]].append(f"{name}({entry['precision']['reason']})")
-    for dtype, names in by_dtype.items():
-        logger.info(f"{model} {dtype} ({len(names)}): {', '.join(names)}")
-    logger.info(f"wrote {output}")
+    """Measure every model, decide dtypes on the pooled statistics, and write each JSON."""
+    now = pd.Timestamp.now("UTC").tz_localize(None)
+    measured = {}
+    for model in models:
+        if runs:
+            model_runs = list(runs)
+        else:
+            model_runs = precision_runs(list_runs(model, source), now, min_age)
+        data = json.loads(schema_path(model).read_text(encoding="utf-8"))
+        schema = ICONSchema(data)
+        results = measure_precision(model, model_runs, source, schema=schema, max_workers=workers)
+        measured[model] = (data, results)
+    pooled = pool_precision(*(results for _, results in measured.values()))
+    for model, (data, results) in measured.items():
+        updated = apply_precision(data, results, pooled)
+        ICONSchema(updated)
+        output = schema_path(model)
+        output.write_text(dump_schema(updated), encoding="utf-8")
+        by_dtype: dict[str, list[str]] = {FLOAT16: [], FLOAT32: []}
+        for entry in updated["variables"]:
+            name = entry["param"] + (f"@{entry['level_type']}" if entry["level_type"] else "")
+            if entry.get("wavelength"):
+                name += f"@{entry['wavelength']}nm"
+            by_dtype[entry["dtype"]].append(f"{name}({entry['precision']['reason']})")
+        for dtype, names in by_dtype.items():
+            logger.info(f"{model} {dtype} ({len(names)}): {', '.join(names)}")
+        logger.info(f"wrote {output}")
     return 0
 
 
@@ -1725,13 +1839,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     precision_cmd = sub.add_parser(
         "precision", help="sample real fields and record each variable's storage dtype"
     )
-    precision_cmd.add_argument("model", choices=sorted(MODELS))
+    precision_cmd.add_argument(
+        "models",
+        nargs="+",
+        choices=sorted(MODELS),
+        help="models to measure together; a parameter they share gets one dtype",
+    )
     precision_cmd.add_argument("--source", choices=("archive", "live"), default="live")
     precision_cmd.add_argument(
         "--runs", nargs="+", help="runs to sample; defaults to the newest 00Z and 12Z"
     )
-    precision_cmd.add_argument("--min-age-hours", type=float, default=None)
-    precision_cmd.add_argument("--output", type=pathlib.Path, help="defaults to the package JSON")
+    precision_cmd.add_argument(
+        "--min-age-hours",
+        type=float,
+        default=PRECISION_MIN_AGE / pd.Timedelta(1, "h"),
+        help="age of automatically chosen runs",
+    )
     precision_cmd.add_argument("--max-workers", type=int, default=MAX_LISTING_WORKERS)
 
     runs_cmd = sub.add_parser("runs", help="summarise the runs each source holds")
@@ -1745,6 +1868,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 logger.info(_summarise_runs(model, source))
         return 0
 
+    if args.command == "precision":
+        runs = [_normalize_init_time(r) for r in args.runs] if args.runs else None
+        return _precision_command(
+            args.models,
+            runs,
+            args.source,
+            pd.Timedelta(args.min_age_hours, "h"),
+            args.max_workers,
+        )
+
     if args.runs:
         runs = [_normalize_init_time(r) for r in args.runs]
     else:
@@ -1756,10 +1889,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             list_runs(args.model, args.source), now, pd.Timedelta(hours, "h")
         )
     output = args.output or schema_path(args.model)
-    if args.command == "precision":
-        if not args.runs:
-            runs = [r for r in runs if r.hour in (0, 12)]
-        return _precision_command(args.model, runs, args.source, output, args.max_workers)
 
     logger.info(f"discovering {args.model} from {args.source} runs {[str(r) for r in runs]}")
     schema = discover_schema(
