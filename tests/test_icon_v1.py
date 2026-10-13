@@ -9,6 +9,7 @@ store is local.
 from __future__ import annotations
 
 import contextlib
+import re
 import types
 import zlib
 
@@ -30,15 +31,27 @@ RUN_06 = pd.Timestamp("2026-10-11T06:00")
 LATITUDE = np.linspace(-60, 60, N_CELLS).astype(np.float32)
 LONGITUDE = np.linspace(-170, 170, N_CELLS).astype(np.float32)
 
+#: The older, coarser grid ICON-ART and ICON-ART-EU used before 2026-10-06, in miniature.
+OLD_CELLS = 4
+OLD_RUN = pd.Timestamp("2026-01-07T00:00")
+OLD_LATITUDE = np.linspace(-40, 40, OLD_CELLS).astype(np.float32)
+OLD_LONGITUDE = np.linspace(-100, 100, OLD_CELLS).astype(np.float32)
 
-def schema_data(model: str) -> dict:
+
+def is_current(model: str, era: cat.ICONEra) -> bool:
+    return era == cat.current_era(model)
+
+
+def schema_data(model: str, era: cat.ICONEra | None = None) -> dict:
     """A miniature schema with one variable of every kind the provider handles.
 
     00/12Z runs go to step 3, 06/18Z runs to step 2. ``T_2M`` is stored as float16, the
     rest as float32 (no ``dtype`` key). ``CEIL_BSC_DUST`` is wavelength
     resolved on a subset (2-3) of the full model levels (1-3); ``W`` and ``HHL`` are on
-    the half levels (1-4); ``HHL`` and ``HSURF`` are published at step 0 only.
+    the half levels (1-4); ``HHL`` and ``HSURF`` are published at step 0 only. An older
+    era has the same fields on a grid of :data:`OLD_CELLS` cells.
     """
+    era = era or cat.current_era(model)
     long, short = "s0", "s1"
     every = {"00": long, "06": short, "12": long, "18": short}
     variables = [
@@ -73,8 +86,8 @@ def schema_data(model: str) -> dict:
     return {
         "format_version": 1,
         "model": model,
-        "n_cells": N_CELLS,
-        "grid_number": cat.MODELS[model].grid_number,
+        "n_cells": N_CELLS if is_current(model, era) else OLD_CELLS,
+        "grid_number": era.grid_number,
         "source": "live",
         "reference_runs": [],
         "generated_at": "2026-10-13T00:00:00Z",
@@ -86,40 +99,66 @@ def schema_data(model: str) -> dict:
     }
 
 
+_URI = re.compile(r"/bkr/icon/(?P<model>[^/]+)/|/v1/m/(?P<live>[^/]+)/")
+_RUN = re.compile(r"/r/(\d{4}-\d{2}-\d{2}T\d{2})(?::|%3A)(\d{2})/")
+
+
+def era_of(uri: str) -> tuple[str, cat.ICONEra]:
+    """The model and grid era a field URI belongs to."""
+    match = _URI.search(uri)
+    model = match.group("model") or match.group("live")
+    hour, minute = _RUN.search(uri).groups()
+    return model, cat.era_for(model, pd.Timestamp(f"{hour}:{minute}"))
+
+
 def field_value(uri: str) -> np.ndarray:
-    """The deterministic field the fake source holds at ``uri``."""
+    """The deterministic field the fake source holds at ``uri``, on its era's grid."""
+    model, era = era_of(uri)
+    cells = N_CELLS if is_current(model, era) else OLD_CELLS
     base = zlib.crc32(uri.encode()) % 1000
-    return (base + np.arange(N_CELLS) / 10).astype(np.float32)
+    return (base + np.arange(cells) / 10).astype(np.float32)
 
 
 class FakeSource:
-    """Stands in for the archive: ``read_bytes`` returns the URI, decoding derives values.
+    """Stands in for the archive: listings and reads come from the miniature schemas.
+
+    ``read_bytes`` returns the URI itself, which decoding turns back into values.
 
     Attributes:
-        missing: URIs that read as permanently absent.
+        missing: URIs absent from the source: not listed, and never read.
+        unreadable: URIs that are listed but read as permanently absent.
         reads: Every URI read, in order.
-        latitude: The CLAT field served, so a test can move the grid.
+        listings: Every directory listed.
+        latitude: The current era's CLAT field, so a test can move the grid.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, schemas: dict) -> None:
+        self.schemas = schemas
         self.missing: set[str] = set()
+        self.unreadable: set[str] = set()
         self.reads: list[str] = []
+        self.listings: list[str] = []
         self.latitude = LATITUDE.copy()
         self.num_workers_seen: set = set()
+
+    def load_era_schema(self, model: str, era: cat.ICONEra) -> cat.ICONSchema:
+        return self.schemas[(model, era.grid_number)]
 
     def read_bytes(self, uri: str, **kwargs) -> bytes | None:
         self.reads.append(uri)
         self.num_workers_seen.add(dask.config.get("num_workers", None))
-        if uri in self.missing:
+        if uri in self.missing or uri in self.unreadable:
             return None
         return uri.encode()
 
     def decode(self, data: bytes, dtype=np.float32, out=None) -> np.ndarray:
         uri = data.decode()
+        model, era = era_of(uri)
+        current = is_current(model, era)
         if "/p/CLAT/" in uri:
-            values = self.latitude
+            values = self.latitude if current else OLD_LATITUDE
         elif "/p/CLON/" in uri:
-            values = LONGITUDE
+            values = LONGITUDE if current else OLD_LONGITUDE
         else:
             values = field_value(uri)
         if out is None:
@@ -127,23 +166,49 @@ class FakeSource:
         out[...] = values
         return out
 
-    @staticmethod
-    def info(data: bytes, model: str = "icon-art-eu") -> types.SimpleNamespace:
+    def info(self, data: bytes) -> types.SimpleNamespace:
+        model, era = era_of(data.decode())
         return types.SimpleNamespace(
-            number_of_values=N_CELLS, grid_number=cat.MODELS[model].grid_number
+            number_of_values=self.schemas[(model, era.grid_number)].n_cells,
+            grid_number=era.grid_number,
         )
+
+    def lister(self, model: str, src: str):
+        """A lister over every field of the miniature schemas not in :attr:`missing`."""
+
+        def ls(directory: str) -> list[str]:
+            self.listings.append(directory)
+            hour, minute = _RUN.search(f"/{directory}/").groups()
+            run = pd.Timestamp(f"{hour}:{minute}")
+            schema = self.schemas[(model, cat.era_for(model, run).grid_number)]
+            names = []
+            for key in schema.expected_fields(run) + schema.coordinate_fields():
+                path = cat.field_path(model, key, run)
+                if path.rpartition("/")[0] == directory:
+                    if cat.field_uri(model, key, run, src) not in self.missing:
+                        names.append(path.rpartition("/")[2])
+            if not names:
+                raise FileNotFoundError(directory)
+            return names
+
+        return ls
 
 
 @pytest.fixture
 def source(monkeypatch, local_config):
-    """Fake schema, source choice and GRIB reads for every model; local stores."""
-    schemas = {model: cat.ICONSchema(schema_data(model)) for model in cat.MODELS}
-    fake = FakeSource()
-    monkeypatch.setattr(icon_v1, "load_schema", lambda model: schemas[model])
+    """Fake schemas per era, source choice, listings and GRIB reads; local stores."""
+    schemas = {
+        (model, era.grid_number): cat.ICONSchema(schema_data(model, era))
+        for model in cat.MODELS
+        for era in cat.ERAS[model]
+    }
+    fake = FakeSource(schemas)
+    monkeypatch.setattr(icon_v1, "load_era_schema", fake.load_era_schema)
     monkeypatch.setattr(icon_v1, "choose_source", lambda model, it: "archive")
     monkeypatch.setattr(icon_v1, "read_bytes", fake.read_bytes)
     monkeypatch.setattr(icon_v1, "decode_grib_field", fake.decode)
     monkeypatch.setattr(icon_v1, "grib_field_info", fake.info)
+    monkeypatch.setattr(icon_v1, "get_lister", fake.lister)
     return fake
 
 
@@ -161,7 +226,7 @@ def open_store(config, prefix: str) -> xr.Dataset:
 
 
 def test_layout_names_every_level_kind(source):
-    layout = plan_variables(icon_v1.load_schema("icon-art-eu"))
+    layout = plan_variables(cat.ICONSchema(schema_data("icon-art-eu")))
     dims = {v.name: v.dims for v in layout.variables}
     assert dims == {
         "ceil_bsc_dust_ml": ("init_time", "step", "wavelength", "model_level_2_3", "values"),
@@ -217,7 +282,7 @@ def test_unknown_params_and_variants_are_refused(source):
 def test_fetch_lists_the_expected_fields_without_reading(source):
     files = ICONV1Provider("eu_art").fetch(RUN_06)
     assert not source.reads
-    schema = icon_v1.load_schema("icon-art-eu")
+    schema = ICONV1Provider("eu_art").schema
     assert len(files) == len(schema.expected_fields(RUN_06)) + 2
     assert uri("CLAT", None, None, 0, RUN_06) in files
     assert uri("T_2M", None, None, 2, RUN_06) in files
@@ -242,37 +307,60 @@ def young_live_run() -> pd.Timestamp:
     return pd.Timestamp.now("UTC").tz_localize(None).floor("6h")
 
 
+def every_field(provider: ICONV1Provider, it: pd.Timestamp, src: str = "archive") -> set[str]:
+    schema = provider.plan_for(it).schema
+    return {
+        cat.field_uri(provider.model, key, it, src)
+        for key in schema.expected_fields(it) + schema.coordinate_fields()
+    }
+
+
 def test_a_young_live_run_still_arriving_is_refused(source, monkeypatch):
     it = young_live_run()
     monkeypatch.setattr(icon_v1, "choose_source", lambda model, it: "live")
-    published: set[str] = set()
-
-    def lister(directory):
-        return [n.rpartition("/")[2] for n in published if n.startswith(directory + "/")]
-
-    monkeypatch.setattr(icon_v1, "get_lister", lambda model, src: lister)
     provider = ICONV1Provider("eu_art")
+    source.missing |= every_field(provider, it, "live")
     with pytest.raises(IncompleteRun, match="not fully published"):
         provider.fetch(it)
 
-    # Once the last step of every probed variable is there, the run is taken.
-    for key in provider._probe_fields(it):
-        published.add(cat.field_path("icon-art-eu", key, it))
+    # The probed last steps are there but most of the run is not: still too young.
+    probes = {cat.field_uri("icon-art-eu", k, it, "live") for k in provider._probe_fields(it)}
+    source.missing -= probes
+    with pytest.raises(IncompleteRun, match="still being published"):
+        provider.fetch(it)
+
+    # Once everything is listed, the run is taken.
+    source.missing.clear()
     files = provider.fetch(it)
     assert files and all(f.startswith(cat.LIVE_ROOT) for f in files)
 
 
 def test_archive_runs_are_never_probed_and_late_live_runs_are(source, monkeypatch):
-    def lister(directory):
-        raise FileNotFoundError(directory)
-
-    monkeypatch.setattr(icon_v1, "get_lister", lambda model, src: lister)
-    assert ICONV1Provider("eu_art").fetch(young_live_run())  # archive: nothing listed
+    provider = ICONV1Provider("eu_art", min_completeness=0.5)
+    young = young_live_run()
+    probes = {
+        cat.field_uri("icon-art-eu", k, young, "archive") for k in provider._probe_fields(young)
+    }
+    source.missing |= probes
+    # An archive run with its probe files missing is not "still publishing": it is written.
+    assert provider.fetch(young)
     # A scheduled partition runs once its six hours are up; a run DWD is late with is
     # still refused rather than written with NaN where the late fields belong.
     monkeypatch.setattr(icon_v1, "choose_source", lambda model, it: "live")
+    late = young - pd.Timedelta(12, "h")
+    source.missing |= every_field(provider, late, "live")
     with pytest.raises(IncompleteRun):
-        ICONV1Provider("eu_art").fetch(young_live_run() - pd.Timedelta(12, "h"))
+        provider.fetch(late)
+
+
+def test_a_settled_live_run_below_the_threshold_is_skipped(source, monkeypatch):
+    monkeypatch.setattr(icon_v1, "choose_source", lambda model, it: "live")
+    provider = ICONV1Provider("eu_art")
+    settled = young_live_run() - pd.Timedelta(12, "h")
+    tot_prec = {f for f in every_field(provider, settled, "live") if "/p/TOT_PREC/" in f}
+    source.missing |= tot_prec
+    assert provider.fetch(settled) == []
+    assert provider.completeness[settled].missing_by_param == {"TOT_PREC": len(tot_prec)}
 
 
 # -- process and write -------------------------------------------------------------------
@@ -343,11 +431,15 @@ def test_06z_steps_beyond_the_horizon_are_nan(source, local_config):
 
 def test_archive_gaps_are_nan_and_counted(source, local_config):
     gaps = {uri("T_2M", None, None, 1, RUN_00)} | {
-        uri("T", 150, level, 2, RUN_00) for level in ("1", "2", "3")
+        uri("T", 150, level, 2, RUN_00) for level in ("1", "2")
     }
     source.missing |= gaps
+    # Listed, but gone by the time it is read.
+    source.unreadable.add(uri("T", 150, "3", 2, RUN_00))
     provider = ICONV1Provider("eu_art")
     assert provider.run_partition(RUN_00) is True
+    # The unlisted fields were never requested.
+    assert not gaps & set(source.reads)
     ds = open_store(local_config, provider.store_prefix)
     assert np.isnan(ds["t_2m"].isel(init_time=0, step=1).values).all()
     assert np.isfinite(ds["t_2m"].isel(init_time=0, step=2).values).all()
@@ -357,6 +449,8 @@ def test_archive_gaps_are_nan_and_counted(source, local_config):
     commit = next(iter(repo.ancestry(branch="main")))
     assert "4 of" in commit.message and "missing at the source" in commit.message
     assert commit.metadata["fields_missing"] == 4
+    assert commit.metadata["fields_unreadable"] == 1
+    assert commit.metadata["fields_listed"] == commit.metadata["fields_expected"] - 3
     assert commit.metadata["source"] == "archive"
 
 
@@ -428,9 +522,6 @@ def write_old_icon_global(config, init_time=pd.Timestamp("2026-01-31T18:00")) ->
 
 
 def test_global_starts_a_dated_generation_beside_the_old_store(source, monkeypatch, local_config):
-    monkeypatch.setattr(
-        icon_v1, "grib_field_info", lambda data: FakeSource.info(data, model="icon")
-    )
     write_old_icon_global(local_config)
     provider = ICONV1Provider("global")
     assert provider.run_partition(RUN_06) is True
@@ -453,9 +544,6 @@ def test_global_starts_a_dated_generation_beside_the_old_store(source, monkeypat
 
 
 def test_runs_in_other_layouts_do_not_count_as_stored(source, monkeypatch, local_config):
-    monkeypatch.setattr(
-        icon_v1, "grib_field_info", lambda data: FakeSource.info(data, model="icon")
-    )
     # The original store and a test subset both hold RUN_06; the full store does not.
     write_old_icon_global(local_config, init_time=RUN_06)
     subset = ICONV1Provider("global", params=["T_2M"])
@@ -644,6 +732,117 @@ def test_a_change_of_precision_is_refused_on_append(source, monkeypatch, local_c
     data = schema_data("icon-art-eu")
     for entry in data["variables"]:
         entry.pop("dtype", None)
-    monkeypatch.setattr(icon_v1, "load_schema", lambda model: cat.ICONSchema(data))
+    monkeypatch.setattr(icon_v1, "load_era_schema", lambda model, era: cat.ICONSchema(data))
     with pytest.raises(ValueError, match="dtype differs"):
         ICONV1Provider("eu_art").run_partition(RUN_06)
+
+
+# -- grid eras ---------------------------------------------------------------------------
+
+
+def test_runs_follow_their_grid_era(source):
+    provider = ICONV1Provider("eu_art")
+    last_old, first_new = pd.Timestamp("2026-10-05T18:00"), pd.Timestamp("2026-10-06T00:00")
+    assert provider.plan_for(last_old).era.grid_number == 51
+    assert provider.plan_for(last_old).n_cells == OLD_CELLS
+    assert provider.plan_for(first_new).era.grid_number == 61
+    assert provider.plan_for(first_new).n_cells == N_CELLS
+    old = provider.process(provider.fetch(last_old), last_old)
+    assert old.sizes["values"] == OLD_CELLS
+    np.testing.assert_array_equal(old["latitude"].values, OLD_LATITUDE)
+
+
+def test_old_and_new_grid_runs_go_to_different_generations(source, local_config):
+    provider = ICONV1Provider("eu_art")
+    assert provider.run_partition(OLD_RUN) is True
+    assert provider.store_prefix == "bkr/icon/icon_eu_art.icechunk"
+    assert provider.run_partition(RUN_00) is True
+    assert provider.store_prefix == "bkr/icon/icon_eu_art_11102026.icechunk"
+    # Both grids stay cached for runs that lack CLAT/CLON.
+    assert set(provider._grids) == {51, 61}
+
+    old = open_store(local_config, "bkr/icon/icon_eu_art.icechunk")
+    new = open_store(local_config, "bkr/icon/icon_eu_art_11102026.icechunk")
+    assert old.sizes["values"] == OLD_CELLS and new.sizes["values"] == N_CELLS
+    assert old.attrs["icon_v1_grid_number"] == 51 and new.attrs["icon_v1_grid_number"] == 61
+    assert set(old.data_vars) == set(new.data_vars)
+
+    # Each era's next run finds its own store, and both count as stored.
+    later = ICONV1Provider("eu_art")
+    assert later.generations() == [
+        "bkr/icon/icon_eu_art.icechunk",
+        "bkr/icon/icon_eu_art_11102026.icechunk",
+    ]
+    assert later.missing_timesteps(pd.DatetimeIndex([OLD_RUN, RUN_00])) == []
+    assert later.run_partition(OLD_RUN + pd.Timedelta(6, "h")) is True
+    assert later.store_prefix == "bkr/icon/icon_eu_art.icechunk"
+    assert open_store(local_config, later.store_prefix).sizes["init_time"] == 2
+
+
+# -- completeness ------------------------------------------------------------------------
+
+
+def test_a_run_below_the_threshold_is_skipped_without_a_read(source, local_config):
+    provider = ICONV1Provider("eu_art")
+    t_ml = {f for f in every_field(provider, RUN_00) if "/p/T/lvt1/150/" in f}
+    source.missing |= t_ml
+    assert provider.run_partition(RUN_00) is False
+    assert not source.reads
+    listed = provider.completeness[RUN_00]
+    assert listed.fraction < icon_v1.DEFAULT_MIN_COMPLETENESS
+    assert listed.missing_by_param == {"T": len(t_ml)}
+    assert provider.missing_timesteps(pd.DatetimeIndex([RUN_00])) == [RUN_00]
+
+    # At a lower threshold it is written, NaN where the fields are absent, none of which
+    # is requested.
+    lenient = ICONV1Provider("eu_art", min_completeness=0.5)
+    assert lenient.run_partition(RUN_00) is True
+    assert not t_ml & set(source.reads)
+    ds = open_store(local_config, lenient.store_prefix)
+    assert np.isnan(ds["t_ml"].values).all()
+    assert np.isfinite(ds["t"].isel(step=0).values).all()
+
+
+def test_listing_covers_every_directory_once(source):
+    provider = ICONV1Provider("eu_art")
+    present, listed = provider.list_run(RUN_00, "archive")
+    schema = provider.plan_for(RUN_00).schema
+    keys = schema.expected_fields(RUN_00) + schema.coordinate_fields()
+    directories = {cat.field_path("icon-art-eu", k, RUN_00).rpartition("/")[0] for k in keys}
+    assert sorted(source.listings) == sorted(directories)
+    assert listed.fraction == 1.0 and len(present) == len(keys)
+
+
+# -- backfill preflight and skipped runs -------------------------------------------------
+
+
+def test_backfill_refuses_to_start_beside_an_empty_generation(source, monkeypatch, local_config):
+    script = load_backfill_script()
+    monkeypatch.setattr(script, "list_runs", lambda model, src: [RUN_00])
+    # What an interrupted first write leaves: a dated repository with nothing committed.
+    local_config.icechunk_repo("bkr/icon/icon_global_25082026.icechunk")
+    provider = ICONV1Provider("global")
+    assert provider.empty_generations() == ["bkr/icon/icon_global_25082026.icechunk"]
+    assert script.main(["global"]) == 2
+    assert not source.reads
+    # An empty base store is not a problem: the first run claims it whatever its date.
+    local_config.icechunk_repo("bkr/icon/icon_eu_art.icechunk")
+    assert ICONV1Provider("eu_art").empty_generations() == []
+
+
+def test_backfill_records_skipped_runs(source, monkeypatch, local_config, tmp_path):
+    script = load_backfill_script()
+    monkeypatch.setattr(script, "list_runs", lambda model, src: [RUN_00, RUN_06])
+    provider = ICONV1Provider("eu_art")
+    source.missing |= {f for f in every_field(provider, RUN_00) if "/p/T/lvt1/150/" in f}
+    log = tmp_path / "skipped.tsv"
+
+    assert script.main(["eu_art", "--dry-run", "--skipped-log", str(log)]) == 0
+    assert not source.reads and not log.exists()
+
+    assert script.main(["eu_art", "--skipped-log", str(log)]) == 0
+    rows = log.read_text().splitlines()
+    assert rows[0].split("\t") == list(script.SKIPPED_COLUMNS)
+    assert len(rows) == 2 and rows[1].split("\t")[1] == RUN_00.isoformat()
+    ds = open_store(local_config, "bkr/icon/icon_eu_art.icechunk")
+    assert pd.DatetimeIndex(ds["init_time"].values).tolist() == [RUN_06]

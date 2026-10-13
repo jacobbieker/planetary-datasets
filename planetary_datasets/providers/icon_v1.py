@@ -93,6 +93,23 @@ is different, so its first run here starts a dated generation
 which no store occupies yet; one of another layout there would push them to a dated
 generation in the same way.
 
+ICON-ART and ICON-ART-EU changed grids with the 2026-10-06T00 run
+(:data:`~planetary_datasets.providers.icon_v1_catalog.ERAS`). Each run is laid out by its
+own era's schema and decoded against that era's grid; the two grids' cell coordinates
+differ, so the fingerprint sends them to different generations. Backfilled oldest first,
+the old-grid runs fill ``icon_global_art.icechunk`` / ``icon_eu_art.icechunk`` and the
+2026-10-06T00 run starts ``..._06102026.icechunk``.
+
+Incomplete runs
+---------------
+
+:meth:`ICONV1Provider.fetch` lists each of a run's ``.../r/<run>/s/`` directories before
+anything is read (about 1,500 for an ICON-Global run, 16 at a time). A run holding less
+than :attr:`ICONV1Provider.min_completeness` of its expected fields (95% by default) is
+skipped, so it can be written once the archive mirror fills in. A run above the threshold
+is written with NaN for its gaps, and only listed fields are requested, so a gap costs no
+404s.
+
 Only generations with this provider's variables on its dimensions count when deciding
 whether a run is already stored (:meth:`ICONV1Provider.generations`). A run held only by
 the original ``icon_global.icechunk``, or by a generation a ``params`` subset wrote, is
@@ -107,9 +124,11 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
+import re
 import threading
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Iterable, List, Sequence
 
 import icechunk
@@ -159,18 +178,21 @@ from planetary_datasets.providers._timestamps import to_naive_utc
 from planetary_datasets.providers.icon import IncompleteRun
 from planetary_datasets.providers.icon_v1_catalog import (
     ARCHIVE_ROOT,
+    ERAS,
     LIVE_ROOT,
     MODELS,
     FieldKey,
+    ICONEra,
     ICONSchema,
     Source,
     VariableSpec,
     choose_source,
     clean_names,
+    era_for,
     field_path,
     field_uri,
     get_lister,
-    load_schema,
+    load_era_schema,
     storage_options,
 )
 
@@ -183,6 +205,7 @@ __all__ = [
     "ICONV1Provider",
     "IncompleteRun",
     "MissingGridError",
+    "RunCompleteness",
     "PrecisionOverflow",
     "plan_variables",
 ]
@@ -228,6 +251,19 @@ CHUNK_TARGET_MB = 150.0
 
 #: How many variables to name in the missing-field summary of a run.
 REPORT_TOP_N = 10
+
+#: Fraction of a run's expected fields that must be listed at the source for it to be
+#: written. Below it the run is skipped, not failed: the archive mirror fills in over
+#: time, and a run written with large holes cannot be rewritten without a rebuild.
+DEFAULT_MIN_COMPLETENESS = 0.95
+
+#: Concurrent directory listings when checking what a run holds.
+LISTING_WORKERS = 16
+
+#: How long after its init time a live run is assumed to be fully published. A younger
+#: one below the completeness threshold is retried (:class:`IncompleteRun`), an older one
+#: is skipped like an archive run.
+LIVE_SETTLE = pd.Timedelta(6, "h")
 
 #: Dimension name for each level type with a base of its own. Level types not listed get
 #: ``level_<type>``.
@@ -505,6 +541,37 @@ def _source_of(uris: Sequence[str]) -> Source:
     raise ValueError(f"{first} is in neither {ARCHIVE_ROOT} nor {LIVE_ROOT}")
 
 
+@dataclasses.dataclass(frozen=True)
+class RunCompleteness:
+    """How much of a run a source holds, from listing its directories.
+
+    Attributes:
+        init_time: The run.
+        source: Where it was listed.
+        expected: Data fields the schema expects of the run (of the selected parameters).
+        present: Of those, how many the source lists.
+        missing_by_param: Expected but unlisted fields, per DWD parameter.
+        seconds: How long the listing took.
+    """
+
+    init_time: pd.Timestamp
+    source: Source
+    expected: int
+    present: int
+    missing_by_param: dict[str, int]
+    seconds: float
+
+    @property
+    def fraction(self) -> float:
+        """Present over expected; 1.0 for a run that expects nothing."""
+        return self.present / self.expected if self.expected else 1.0
+
+    def most_missing(self, n: int = REPORT_TOP_N) -> str:
+        """The parameters missing the most fields, for a log line."""
+        top = Counter(self.missing_by_param).most_common(n)
+        return ", ".join(f"{param} {count:,}" for param, count in top) or "none"
+
+
 @dataclasses.dataclass
 class _RunState:
     """What :meth:`ICONV1Provider.process` learnt about a run, for the write."""
@@ -512,6 +579,25 @@ class _RunState:
     source: Source
     expected: int
     progress: _Progress
+    listed: RunCompleteness | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class _EraPlan:
+    """One grid era of a model: its schema, and the layout of the selected parameters."""
+
+    era: ICONEra
+    schema: ICONSchema
+    layout: Layout
+
+    @property
+    def n_cells(self) -> int:
+        return self.schema.n_cells
+
+    @property
+    def step_chunk(self) -> int:
+        """Lead times per chunk. Fixed per era: every append must match the store."""
+        return choose_step_chunk(self.n_cells, 4, len(self.schema.step_axis), CHUNK_TARGET_MB)
 
 
 # ---------------------------------------------------------------------------------------
@@ -535,12 +621,23 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         fetch_workers: Concurrent reads per block from the archive.
         live_fetch_workers: Concurrent reads per block from DWD's live server.
         max_workers: Upper bound on blocks in flight; fewer if the ceiling requires it.
+        min_completeness: Fraction of a run's expected fields the source must list for the
+            run to be written; below it the run is skipped. See
+            :data:`DEFAULT_MIN_COMPLETENESS`.
+
+    Each run is laid out by the schema of its grid era
+    (:func:`~planetary_datasets.providers.icon_v1_catalog.era_for`). Runs of different
+    grids have different ``latitude``/``longitude`` axes, so the generation fingerprint
+    sends them to different stores.
     """
 
     append_dim = "init_time"
 
     #: Variables probed for a live run's last step: the first, middle and last selected.
     probe_count: int = 3
+
+    #: See :data:`LIVE_SETTLE`.
+    settle_after: pd.Timedelta = LIVE_SETTLE
 
     def __init__(
         self,
@@ -552,6 +649,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         fetch_workers: int = 8,
         live_fetch_workers: int = 4,
         max_workers: int = 4,
+        min_completeness: float = DEFAULT_MIN_COMPLETENESS,
     ) -> None:
         """Build a provider for one variant; see the class docstring for the arguments."""
         super().__init__(config)
@@ -561,46 +659,72 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             )
         if min(fetch_workers, live_fetch_workers, max_workers) < 1:
             raise ValueError("fetch_workers, live_fetch_workers and max_workers must be >= 1")
+        if not 0.0 <= min_completeness <= 1.0:
+            raise ValueError(f"min_completeness must be in [0, 1], got {min_completeness}")
         self.variant = variant
         self.model = VARIANT_MODELS[variant]
         self.name = f"icon_v1_{variant}"
         self.base_store_prefix = STORE_PREFIXES[variant]
-        self.schema = load_schema(self.model)
-        layout = plan_variables(self.schema)
-
+        schemas = {era: load_era_schema(self.model, era) for era in ERAS[self.model]}
         self.params: tuple[str, ...] | None = None
         if params is not None:
-            known = {v.param for v in self.schema.variables} | set(self.schema.coordinate_params)
+            known = set()
+            for schema in schemas.values():
+                known |= {v.param for v in schema.variables} | set(schema.coordinate_params)
             unknown = sorted(set(params) - known)
             if unknown:
                 raise ValueError(f"{self.model} has no parameters {unknown}")
-            self.params = tuple(sorted(set(params) - set(self.schema.coordinate_params)))
+            coordinates = {p for schema in schemas.values() for p in schema.coordinate_params}
+            self.params = tuple(sorted(set(params) - coordinates))
             if not self.params:
                 raise ValueError("params selects no data variables")
-        self.layout = layout.select(self.params)
+        self._plans: dict[ICONEra, _EraPlan] = {
+            era: _EraPlan(era, schema, plan_variables(schema).select(self.params))
+            for era, schema in schemas.items()
+        }
+        self.min_completeness = min_completeness
         self._ceiling_gb = ceiling_gb
         self.fetch_workers = fetch_workers
         self.live_fetch_workers = live_fetch_workers
         self.max_workers = max_workers
-        self._grid: tuple[np.ndarray, np.ndarray] | None = None
+        #: Cell coordinates per grid number, as decoded or adopted from a store.
+        self._grids: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         self._runs: dict[pd.Timestamp, _RunState] = {}
+        #: What :meth:`fetch` found each run to hold, for reports such as the backfill's.
+        self.completeness: dict[pd.Timestamp, RunCompleteness] = {}
 
     # -- configuration ------------------------------------------------------------------
 
+    def plan_for(self, it: pd.Timestamp | None = None) -> _EraPlan:
+        """The era plan a run follows; the current era's for None."""
+        era = ERAS[self.model][-1] if it is None else era_for(self.model, it)
+        return self._plans[era]
+
+    @property
+    def schema(self) -> ICONSchema:
+        """The current era's schema."""
+        return self.plan_for().schema
+
+    @property
+    def layout(self) -> Layout:
+        """The current era's layout of the selected parameters."""
+        return self.plan_for().layout
+
     @property
     def n_cells(self) -> int:
-        """Cells in one field."""
-        return self.schema.n_cells
+        """Cells in one field of the current era."""
+        return self.plan_for().n_cells
 
     @property
     def step_chunk(self) -> int:
-        """Lead times per chunk. Fixed per model: every append must match the store."""
-        return choose_step_chunk(self.n_cells, 4, len(self.schema.step_axis), CHUNK_TARGET_MB)
+        """Lead times per chunk in the current era."""
+        return self.plan_for().step_chunk
 
     @property
     def alignment_coords(self) -> tuple[str, ...]:  # type: ignore[override]
         """Coordinates an append must match exactly: the grid, steps and every level axis."""
-        return ("latitude", "longitude", "step", *sorted(self.layout.level_coords))
+        dims = sorted({d for plan in self._plans.values() for d in plan.layout.level_coords})
+        return ("latitude", "longitude", "step", *dims)
 
     @property
     def ceiling_gb(self) -> float:
@@ -619,36 +743,106 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         return [k for k in keys if k.param in wanted]
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
-        """Return the URIs of every field the run at ``it`` should have. Nothing is read.
+        """Return the URIs of the fields the source holds for the run at ``it``.
 
-        The source is chosen by :func:`~planetary_datasets.providers.icon_v1_catalog.choose_source`.
-        Whether each file exists is not checked here — that would be one request per file —
-        so a field missing at the source is discovered when it is read, and stored as NaN.
+        The source is chosen by :func:`~planetary_datasets.providers.icon_v1_catalog.choose_source`,
+        and each of the run's directories is listed (:meth:`list_run`) rather than each file
+        requested, so absent fields are known before anything is read and cost no GETs. A run
+        holding less than :attr:`min_completeness` of its expected fields is skipped: an
+        empty list, logged as a warning, and recorded in :attr:`completeness`.
 
         Raises:
-            IncompleteRun: The run is read from the live server and the last files of
-                the probed variables are not there yet.
-            ListingError: A source that could hold the run could not be listed.
+            IncompleteRun: The run is read from the live server and is still being
+                published: the last files of the probed variables are absent, or it is
+                younger than :attr:`settle_after` and below the threshold.
+            ListingError: A source could not be listed.
         """
         it = to_naive_utc(it)
         source = choose_source(self.model, it)
         if source is None:
             logger.info(f"{self.name}: run {it} is in neither the archive nor the live server")
             return []
+        present, listed = self.list_run(it, source)
         if source == "live":
-            self._require_published(it)
-        keys = self._selected(self.schema.expected_fields(it))
-        keys += self.schema.coordinate_fields()
-        logger.info(f"{self.name}: run {it} from {source}, {len(keys):,} fields")
-        return [field_uri(self.model, key, it, source) for key in keys]
+            self._require_published(it, present)
+        if listed.fraction < self.min_completeness:
+            if (
+                source == "live"
+                and pd.Timestamp.now("UTC").tz_localize(None) - it < self.settle_after
+            ):
+                raise IncompleteRun(
+                    f"{self.name}: live run {it} lists {listed.fraction:.1%} of its fields; "
+                    "still being published, retry later"
+                )
+            logger.warning(
+                f"{self.name}: skipping run {it}: the {source} lists {listed.present:,} of "
+                f"{listed.expected:,} expected fields ({listed.fraction:.1%}), below "
+                f"{self.min_completeness:.0%}. Most missing: {listed.most_missing()}"
+            )
+            return []
+        logger.info(
+            f"{self.name}: run {it} from {source}, {listed.present:,} of {listed.expected:,} "
+            f"fields listed ({listed.fraction:.1%}) in {listed.seconds:.1f}s"
+        )
+        return [field_uri(self.model, key, it, source) for key in present]
+
+    def list_run(self, it: pd.Timestamp, source: Source) -> tuple[list[FieldKey], RunCompleteness]:
+        """List which of a run's expected fields, and of its CLAT/CLON, ``source`` holds.
+
+        One listing per ``.../r/<run>/s/`` directory, up to :data:`LISTING_WORKERS` at
+        once. The result is also kept in :attr:`completeness`.
+
+        Returns:
+            The present fields, data and coordinates, in schema order; and the run's
+            completeness over its data fields.
+
+        Raises:
+            ListingError: A directory could not be listed.
+        """
+        it = to_naive_utc(it)
+        plan = self.plan_for(it)
+        data_keys = self._selected(plan.schema.expected_fields(it))
+        keys = data_keys + plan.schema.coordinate_fields()
+        paths = {key: field_path(self.model, key, it) for key in keys}
+        directories = sorted({path.rpartition("/")[0] for path in paths.values()})
+        lister = get_lister(self.model, source)
+
+        def names(directory: str) -> set[str]:
+            try:
+                return {f"{directory}/{name}" for name in clean_names(lister(directory))}
+            except FileNotFoundError:
+                return set()
+
+        started = time.monotonic()
+        listed: set[str] = set()
+        with ThreadPoolExecutor(max_workers=min(LISTING_WORKERS, len(directories))) as pool:
+            for found in pool.map(names, directories):
+                listed |= found
+        seconds = time.monotonic() - started
+        present = [key for key in keys if paths[key] in listed]
+        missing = Counter(key.param for key in data_keys if paths[key] not in listed)
+        completeness = RunCompleteness(
+            init_time=it,
+            source=source,
+            expected=len(data_keys),
+            present=len(data_keys) - sum(missing.values()),
+            missing_by_param=dict(missing),
+            seconds=seconds,
+        )
+        self.completeness[it] = completeness
+        logger.debug(
+            f"{self.name}: listed {len(directories)} directories of {it} in {seconds:.1f}s"
+        )
+        return present, completeness
 
     def _probe_fields(self, it: pd.Timestamp) -> list[FieldKey]:
         """The last expected file of the first, middle and last selected variables."""
         hour = it.hour
+        plan = self.plan_for(it)
         candidates = []
-        for plan in self.layout.variables:
-            for spec in plan.specs:
-                steps = self.schema.steps_for_cycle(
+        for variable in plan.layout.variables:
+            for spec in variable.specs:
+                steps = plan.schema.steps_for_cycle(
                     spec.param, spec.level_type, hour, spec.wavelength
                 )
                 if steps:
@@ -661,25 +855,23 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         picks = np.linspace(0, len(candidates) - 1, self.probe_count).round().astype(int)
         return [candidates[i] for i in sorted(set(picks.tolist()))]
 
-    def _require_published(self, it: pd.Timestamp) -> None:
+    def _require_published(self, it: pd.Timestamp, present: Iterable[FieldKey]) -> None:
         """Raise :class:`IncompleteRun` if a live run's last files are not there yet.
 
         Asked of every live run, whatever its age: a scheduled partition runs once its
         six-hour window has closed, by when DWD has normally finished, so the age alone
         would never trigger the check in exactly the case it is for, a late run. Every
         field still missing when the run is written would be stored as NaN for good.
+
+        Args:
+            it: The run.
+            present: The fields :meth:`list_run` found.
         """
         age = pd.Timestamp.now("UTC").tz_localize(None) - it
-        lister = get_lister(self.model, "live")
-        absent = []
-        for key in self._probe_fields(it):
-            directory, _, name = field_path(self.model, key, it).rpartition("/")
-            try:
-                names = clean_names(lister(directory))
-            except FileNotFoundError:
-                names = []
-            if name not in names:
-                absent.append(f"{directory}/{name}")
+        listed = set(present)
+        absent = [
+            field_path(self.model, key, it) for key in self._probe_fields(it) if key not in listed
+        ]
         if absent:
             raise IncompleteRun(
                 f"{self.name}: live run {it} is {age} old and not fully published; "
@@ -707,26 +899,28 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         it = to_naive_utc(it)
         source = _source_of(input_files)
         available = frozenset(input_files)
+        era_plan = self.plan_for(it)
         latitude, longitude = self._grid_coords(it, source, available)
 
         hour = it.hour
-        step_axis = self.schema.step_axis
+        step_axis = era_plan.schema.step_axis
         n_steps = len(step_axis)
+        n_cells = era_plan.n_cells
         variables = []
-        for plan in self.layout.variables:
+        for plan in era_plan.layout.variables:
             shape: list[int] = [1]
             chunks: list[int] = [1]
             if not plan.invariant:
                 shape.append(n_steps)
-                chunks.append(self.step_chunk)
+                chunks.append(era_plan.step_chunk)
             if plan.wavelengths:
                 shape.append(len(plan.wavelengths))
                 chunks.append(1)
             if plan.level_dim is not None:
                 shape.append(len(plan.levels))
                 chunks.append(1)
-            shape.append(self.n_cells)
-            chunks.append(self.n_cells)
+            shape.append(n_cells)
+            chunks.append(n_cells)
             attrs = {"dwd_param": plan.param}
             if plan.level_type is not None:
                 attrs["dwd_level_type"] = plan.level_type
@@ -748,28 +942,30 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             "latitude": ("values", latitude, {"units": "degrees_north"}),
             "longitude": ("values", longitude, {"units": "degrees_east"}),
         }
-        for dim, values in self.layout.level_coords.items():
+        for dim, values in era_plan.layout.level_coords.items():
             coords[dim] = (dim, values, _level_attrs(dim))
 
         expected = sum(
-            1 for uri in input_files if _param_of(uri) not in self.schema.coordinate_params
+            1 for uri in input_files if _param_of(uri) not in era_plan.schema.coordinate_params
         )
         progress = _Progress(f"{self.name} {it:%Y-%m-%dT%H}", expected)
         workers = self.live_fetch_workers if source == "live" else self.fetch_workers
         ds = lazy_field_dataset(
             variables,
             coords,
-            self._reader(source, progress),
+            self._reader(source, progress, era_plan.era.grid_number),
             fetch_workers=workers,
             attrs={
                 "title": f"DWD {self.model} forecasts",
                 "source": f"{ARCHIVE_ROOT}/{self.model} and {LIVE_ROOT}/{self.model}",
                 "icon_v1_model": self.model,
-                "icon_v1_schema_generated_at": self.schema.generated_at or "unknown",
+                "icon_v1_schema_generated_at": era_plan.schema.generated_at or "unknown",
+                "icon_v1_grid_number": era_plan.era.grid_number,
             },
             token=f"{self.model}:{it.isoformat()}:{source}",
         )
-        self._runs[it] = _RunState(source, expected, progress)
+        listed = self.completeness.get(it)
+        self._runs[it] = _RunState(source, expected, progress, listed)
         return ds
 
     def _uri_for(
@@ -781,10 +977,11 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         available: frozenset[str],
     ) -> Callable[[tuple[int, ...]], str | None]:
         """Map a block index of ``plan`` to its field's URI, or None if it has none."""
-        step_axis = self.schema.step_axis
+        schema = self.plan_for(it).schema
+        step_axis = schema.step_axis
         by_wavelength = {
             spec.wavelength: frozenset(
-                self.schema.steps_for_cycle(spec.param, spec.level_type, hour, spec.wavelength)
+                schema.steps_for_cycle(spec.param, spec.level_type, hour, spec.wavelength)
             )
             for spec in plan.specs
         }
@@ -822,16 +1019,15 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
 
         return uri_for
 
-    def _reader(self, source: Source, progress: _Progress) -> Reader:
+    def _reader(self, source: Source, progress: _Progress, grid_number: int) -> Reader:
         """A reader that GETs a field and decodes it into its row.
 
-        The first field of each parameter also has its header checked against the model's
-        grid; every field's length is checked by the decoder.
+        The first field of each parameter also has its header checked against the run's
+        era's grid; every field's length is checked by the decoder.
         """
         options = storage_options(source)
         checked: set[str] = set()
         lock = threading.Lock()
-        grid_number = self.schema.grid_number
 
         def read(uri: str, row: np.ndarray) -> bool:
             data = read_bytes(uri, storage_options=options)
@@ -846,7 +1042,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
                 info = grib_field_info(data)
                 if info.grid_number is not None and info.grid_number != grid_number:
                     raise ValueError(
-                        f"{uri} is on grid {info.grid_number}, not the model's {grid_number}"
+                        f"{uri} is on grid {info.grid_number}, not the era's {grid_number}"
                     )
             # Decoding casts to the row's dtype; in a float16 row a value beyond float16's
             # range becomes inf, which no GRIB field holds.
@@ -869,45 +1065,51 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
     def _grid_coords(
         self, it: pd.Timestamp, source: Source, available: frozenset[str]
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Latitude and longitude of the cells: cached, decoded from the run, or stored."""
-        if self._grid is not None:
-            return self._grid
+        """Latitude and longitude of the cells: cached, decoded from the run, or stored.
+
+        Cached per grid number, so a backfill crossing a grid change keeps both.
+        """
+        era = self.plan_for(it).era
+        if era.grid_number in self._grids:
+            return self._grids[era.grid_number]
         decoded = self._decode_grid(it, source, available)
         if decoded is None:
-            decoded = self._stored_grid()
+            decoded = self._stored_grid(self.plan_for(it).n_cells)
         if decoded is None:
             raise MissingGridError(
                 f"{self.name}: run {it} has no readable CLAT/CLON in the {source} and no "
-                f"store of {self.base_store_prefix} holds the grid; process a run that has "
-                "them first"
+                f"store of {self.base_store_prefix} holds grid {era.grid_number}; process a "
+                "run of that grid that has them first"
             )
-        self._grid = decoded
+        self._grids[era.grid_number] = decoded
         return decoded
 
     def _decode_grid(
         self, it: pd.Timestamp, source: Source, available: frozenset[str]
     ) -> tuple[np.ndarray, np.ndarray] | None:
         options = storage_options(source)
+        plan = self.plan_for(it)
         arrays = []
-        for key in self.schema.coordinate_fields():
+        for key in plan.schema.coordinate_fields():
             uri = field_uri(self.model, key, it, source)
             data = read_bytes(uri, storage_options=options) if uri in available else None
             if data is None:
                 logger.warning(f"{self.name}: no {key.param} in run {it} ({source})")
                 return None
             info = grib_field_info(data)
-            if info.number_of_values != self.n_cells or (
-                info.grid_number is not None and info.grid_number != self.schema.grid_number
+            if info.number_of_values != plan.n_cells or (
+                info.grid_number is not None and info.grid_number != plan.era.grid_number
             ):
                 raise ValueError(
-                    f"{uri}: {info.number_of_values} cells on grid {info.grid_number}, the "
-                    f"model has {self.n_cells} on grid {self.schema.grid_number}"
+                    f"{uri}: {info.number_of_values} cells on grid {info.grid_number}, but "
+                    f"{self.model} runs from {plan.era.start or 'the start'} have "
+                    f"{plan.n_cells} on grid {plan.era.grid_number}"
                 )
             arrays.append(decode_grib_field(data, dtype=np.float32))
         return arrays[0], arrays[1]
 
-    def _stored_grid(self) -> tuple[np.ndarray, np.ndarray] | None:
-        """The grid of the newest generation that has one of the right size."""
+    def _stored_grid(self, n_cells: int) -> tuple[np.ndarray, np.ndarray] | None:
+        """The grid of the newest generation that has one of ``n_cells`` cells."""
         for prefix in reversed(self.generations()):
             try:
                 stored = xr.open_zarr(
@@ -917,7 +1119,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             except STORE_READ_ERRORS as exc:
                 logger.debug(f"{prefix}: no grid ({type(exc).__name__})")
                 continue
-            if "latitude" in stored.coords and stored.sizes.get("values") == self.n_cells:
+            if "latitude" in stored.coords and stored.sizes.get("values") == n_cells:
                 logger.info(f"{self.name}: using the grid stored in {prefix}")
                 return (
                     np.asarray(stored["latitude"].values, dtype=np.float32),
@@ -934,9 +1136,10 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         check and the grid fallback consult. ICON-Global's base prefix is also the original
         ``icon_global.icechunk``, holding a few hand-picked fields, and a ``params`` subset
         is written to a generation of its own; a run in either is not a run in this store,
-        and counting it as one would leave a permanent hole in the full store.
+        and counting it as one would leave a permanent hole in the full store. A store of
+        any of the model's grid eras counts.
         """
-        wanted = {v.name: v.dims for v in self.layout.variables}
+        layouts = [{v.name: v.dims for v in plan.layout.variables} for plan in self._plans.values()]
         own = []
         for prefix in super().generations():
             try:
@@ -948,11 +1151,43 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
                 logger.debug(f"{prefix}: unreadable ({type(exc).__name__}), not ours")
                 continue
             found = {str(n): tuple(map(str, stored[n].dims)) for n in stored.data_vars}
-            if found == wanted:
+            if found in layouts:
                 own.append(prefix)
             else:
                 logger.debug(f"{prefix}: a different layout, not consulted for {self.name}")
         return own
+
+    def empty_generations(self) -> list[str]:
+        """Dated generations that exist but hold no committed data.
+
+        An interrupted first write leaves one behind: a repository named for the day of the
+        run it was writing, with nothing on ``main``. ``resolve_generation`` skips an empty
+        dated store unless the schema change it is placing happens on that very day, in
+        which case it claims it - so a later run of that day would be written into a
+        repository still holding the dead write's orphaned chunks. Nothing here deletes
+        one; an operator should, once sure nothing is writing to it.
+
+        Only dated names are reported. An empty base store is claimed by whichever run
+        comes first, which is what it is for, and the numbered ``_2``.. names are never
+        chosen for a new generation (``existing_generations`` even creates them, empty,
+        when it probes a store root it cannot list).
+        """
+        from planetary_datasets.common.generations import existing_generations
+
+        stem = self.base_store_prefix.removesuffix(".icechunk")
+        dated = re.compile(rf"^{re.escape(stem)}_\d{{8}}(?:_\d+)?\.icechunk$")
+        empty = []
+        for prefix in existing_generations(self.config, self.base_store_prefix):
+            if not dated.match(prefix):
+                continue
+            try:
+                committed = has_committed_data(self.config.icechunk_repo(prefix))
+            except Exception as exc:  # noqa: BLE001 - an unopenable store is reported too
+                logger.warning(f"{prefix}: could not be opened ({type(exc).__name__}: {exc})")
+                committed = False
+            if not committed:
+                empty.append(prefix)
+        return empty
 
     # -- write --------------------------------------------------------------------------
 
@@ -993,7 +1228,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         """
         resident = process_tree_rss_gb()
         budget = self.ceiling_gb - resident - HEADROOM_GB
-        reader_bytes = self.n_cells * READER_BYTES_PER_CELL
+        reader_bytes = int(processed.sizes["values"]) * READER_BYTES_PER_CELL
         for workers in range(self.max_workers, 0, -1):
             peak = estimate_peak_bytes(processed, workers, reader_bytes=reader_bytes) / BYTES_PER_GB
             if peak <= budget:
@@ -1089,11 +1324,13 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         ok, bad = coords_match(stored, ds, self.alignment_coords)
         if not ok:
             raise ValueError(f"{self.name}: coordinate {bad!r} does not match the store")
-        # Later runs that lack CLAT/CLON reuse the store's spelling of the grid.
-        self._grid = (
-            np.asarray(ds["latitude"].values, dtype=np.float32),
-            np.asarray(ds["longitude"].values, dtype=np.float32),
-        )
+        # Later runs of this grid that lack CLAT/CLON reuse the store's spelling of it.
+        grid_number = ds.attrs.get("icon_v1_grid_number")
+        if grid_number is not None:
+            self._grids[int(grid_number)] = (
+                np.asarray(ds["latitude"].values, dtype=np.float32),
+                np.asarray(ds["longitude"].values, dtype=np.float32),
+            )
         return ds
 
     def _write_run(
@@ -1131,17 +1368,23 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             after = read_failures(ds)
             missing = {name: after[name] - before.get(name, 0) for name in after}
             total = sum(missing.values())
-            expected = state.expected if state is not None else None
+            listed = state.listed if state is not None else None
+            read = state.expected if state is not None else None
+            expected = listed.expected if listed is not None else read
+            absent = listed.expected - listed.present if listed is not None else 0
             source = state.source if state is not None else "unknown"
             message = (
-                f"{self.name}: {it:%Y-%m-%dT%H:%M} from {source}; {total} of "
-                f"{expected if expected is not None else '?'} fields missing at the source"
+                f"{self.name}: {it:%Y-%m-%dT%H:%M} from {source}; {absent + total} of "
+                f"{expected if expected is not None else '?'} fields missing at the source "
+                f"({absent} unlisted, {total} unreadable)"
             )
             metadata = {
                 "init_time": it.isoformat(),
                 "source": source,
                 "fields_expected": expected,
-                "fields_missing": total,
+                "fields_listed": listed.present if listed is not None else None,
+                "fields_unreadable": total,
+                "fields_missing": absent + total,
             }
             try:
                 session.commit(message, metadata=metadata, **commit_kwargs)
@@ -1154,7 +1397,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
                 before = after
                 time.sleep(min(2**attempt, 30))
                 continue
-            self._log_missing(it, missing, expected, ds)
+            self._log_missing(it, missing, read, ds, listed)
             return True
         raise RuntimeError("unreachable")
 
@@ -1162,16 +1405,21 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         self,
         it: pd.Timestamp,
         missing: dict[str, int],
-        expected: int | None,
+        read: int | None,
         ds: xr.Dataset,
+        listed: RunCompleteness | None,
     ) -> None:
         """Summarise the fields of a run that were missing at the source."""
         total = sum(missing.values())
-        unpublished = sum(missing_report(ds).values())
+        absent = listed.expected - listed.present if listed is not None else 0
+        unpublished = sum(missing_report(ds).values()) - absent
         logger.info(
-            f"{self.name}: run {it} committed; {total:,} of {expected or 0:,} fields missing at "
-            f"the source, {unpublished:,} slots with no field in this cycle (NaN by design)"
+            f"{self.name}: run {it} committed; {absent:,} expected fields not listed at the "
+            f"source, {total:,} of {read or 0:,} listed fields unreadable, {unpublished:,} "
+            "slots with no field in this cycle (NaN by design)"
         )
+        if absent and listed is not None:
+            logger.warning(f"{self.name}: run {it} unlisted fields: {listed.most_missing()}")
         if total:
             top = Counter(missing).most_common(REPORT_TOP_N)
             listed = ", ".join(f"{name} {count:,}" for name, count in top if count)
