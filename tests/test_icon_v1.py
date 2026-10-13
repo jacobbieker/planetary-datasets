@@ -545,6 +545,19 @@ def test_dagster_assets_have_their_own_pools_and_memory_tags():
     assert "icon_global_art_analysis" in by_name
 
 
+def test_dagster_assets_stay_off_the_schedules_while_backfilling():
+    from dags.assets import icon as icon_assets
+    from dags.factory import SCHEDULE_TAG
+
+    by_name = {a.key.to_user_string(): a for a in icon_assets.icon_assets}
+    for variant, name in icon_assets.ICON_V1_ASSETS.items():
+        spec = next(iter(by_name[name].specs))
+        if variant in icon_assets.ICON_V1_BACKFILLING:
+            assert spec.tags[SCHEDULE_TAG] == "manual"
+        else:
+            assert SCHEDULE_TAG not in spec.tags
+
+
 # -- backfill script ---------------------------------------------------------------------
 
 
