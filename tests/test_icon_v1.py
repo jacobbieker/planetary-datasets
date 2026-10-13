@@ -474,7 +474,7 @@ def test_compute_workers_fit_the_ceiling(source, monkeypatch):
     gb = 1024**3
     monkeypatch.setattr(icon_v1, "process_tree_rss_gb", lambda: 0.5)
     monkeypatch.setattr(icon_v1, "estimate_peak_bytes", lambda ds, n, reader_bytes: n * gb // 2)
-    # 4.0 - 0.5 resident - 0.25 headroom leaves 3.25 GB: six half-GB blocks.
+    # 4.0 - 0.5 resident - 0.5 headroom leaves 3.0 GB: six half-GB blocks.
     assert provider.compute_workers(ds) == 6
     monkeypatch.setattr(icon_v1, "estimate_peak_bytes", lambda ds, n, reader_bytes: n * 4 * gb)
     with pytest.raises(MemoryLimitExceeded):

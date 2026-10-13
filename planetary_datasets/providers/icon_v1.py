@@ -187,9 +187,10 @@ ARCHIVE_STARTS: dict[str, pd.Timestamp] = {
 #: Memory ceiling a write is held to unless the constructor says otherwise, in GB.
 DEFAULT_CEILING_GB = 4.0
 
-#: Resident memory kept free on top of the write estimate, for allocator slack: decoding
-#: fields in a loop grows RSS by about 140 MiB before it levels off.
-HEADROOM_GB = 0.25
+#: Resident memory kept free on top of the write estimate, for allocator slack. Decoding
+#: fields in a loop grows RSS by about 140 MiB before it levels off, and a 10-parameter
+#: ICON-ART-EU write peaked about 0.6 GB above estimate_peak_bytes plus the resident set.
+HEADROOM_GB = 0.5
 
 #: Bytes one in-flight read holds per grid cell: the compressed GRIB (up to ~3 bytes a
 #: cell), eccodes' copy of it and its unpacking scratch, and the decoded float32 field
