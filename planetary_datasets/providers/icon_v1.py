@@ -104,11 +104,13 @@ Incomplete runs
 ---------------
 
 :meth:`ICONV1Provider.fetch` lists each of a run's ``.../r/<run>/s/`` directories before
-anything is read (about 1,500 for an ICON-Global run, 16 at a time). A run holding less
-than :attr:`ICONV1Provider.min_completeness` of its expected fields (95% by default) is
-skipped, so it can be written once the archive mirror fills in. A run above the threshold
-is written with NaN for its gaps, and only listed fields are requested, so a gap costs no
-404s.
+anything is read (about 1,500 for an ICON-Global run, 16 at a time; about 30 s). An
+archive run holding less than :attr:`ICONV1Provider.min_completeness` of its expected
+fields (95% by default) is skipped, so it can be written once the archive mirror fills
+in; the Dagster asset marks such a partition failed rather than green. A live run below
+the threshold is still being published and raises :class:`IncompleteRun` to be retried. A
+run above the threshold is written with NaN for its gaps, and only listed fields are
+requested, so a gap costs no 404s.
 
 Only generations with this provider's variables on its dimensions count when deciding
 whether a run is already stored (:meth:`ICONV1Provider.generations`). A run held only by
@@ -188,6 +190,7 @@ from planetary_datasets.providers.icon_v1_catalog import (
     VariableSpec,
     choose_source,
     clean_names,
+    current_era,
     era_for,
     field_path,
     field_uri,
@@ -253,17 +256,14 @@ CHUNK_TARGET_MB = 150.0
 REPORT_TOP_N = 10
 
 #: Fraction of a run's expected fields that must be listed at the source for it to be
-#: written. Below it the run is skipped, not failed: the archive mirror fills in over
-#: time, and a run written with large holes cannot be rewritten without a rebuild.
+#: written. Below it an archive run is skipped, not failed: the archive mirror fills in
+#: over time, and a run written with large holes cannot be rewritten without a rebuild. A
+#: live run below it is retried instead (:class:`IncompleteRun`): DWD is still publishing.
 DEFAULT_MIN_COMPLETENESS = 0.95
 
 #: Concurrent directory listings when checking what a run holds.
 LISTING_WORKERS = 16
 
-#: How long after its init time a live run is assumed to be fully published. A younger
-#: one below the completeness threshold is retried (:class:`IncompleteRun`), an older one
-#: is skipped like an archive run.
-LIVE_SETTLE = pd.Timedelta(6, "h")
 
 #: Dimension name for each level type with a base of its own. Level types not listed get
 #: ``level_<type>``.
@@ -636,9 +636,6 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
     #: Variables probed for a live run's last step: the first, middle and last selected.
     probe_count: int = 3
 
-    #: See :data:`LIVE_SETTLE`.
-    settle_after: pd.Timedelta = LIVE_SETTLE
-
     def __init__(
         self,
         variant: str = "global",
@@ -682,6 +679,12 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             era: _EraPlan(era, schema, plan_variables(schema).select(self.params))
             for era, schema in schemas.items()
         }
+        for era, plan in self._plans.items():
+            if not plan.layout.variables:
+                raise ValueError(
+                    f"params {list(self.params or ())} select no variables of the {self.model} "
+                    f"era on grid {era.grid_number}"
+                )
         self.min_completeness = min_completeness
         self._ceiling_gb = ceiling_gb
         self.fetch_workers = fetch_workers
@@ -697,7 +700,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
 
     def plan_for(self, it: pd.Timestamp | None = None) -> _EraPlan:
         """The era plan a run follows; the current era's for None."""
-        era = ERAS[self.model][-1] if it is None else era_for(self.model, it)
+        era = current_era(self.model) if it is None else era_for(self.model, it)
         return self._plans[era]
 
     @property
@@ -747,18 +750,20 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
 
         The source is chosen by :func:`~planetary_datasets.providers.icon_v1_catalog.choose_source`,
         and each of the run's directories is listed (:meth:`list_run`) rather than each file
-        requested, so absent fields are known before anything is read and cost no GETs. A run
-        holding less than :attr:`min_completeness` of its expected fields is skipped: an
-        empty list, logged as a warning, and recorded in :attr:`completeness`.
+        requested, so absent fields are known before anything is read and cost no GETs. An
+        archive run holding less than :attr:`min_completeness` of its expected fields is
+        skipped: an empty list, logged as a warning, and recorded in :attr:`completeness`.
 
         Raises:
-            IncompleteRun: The run is read from the live server and is still being
-                published: the last files of the probed variables are absent, or it is
-                younger than :attr:`settle_after` and below the threshold.
+            IncompleteRun: The run is read from the live server and is not fully there:
+                the last files of the probed variables are absent, or it is below the
+                threshold. Whatever its age - a scheduled partition is always six hours
+                old - since DWD only ever adds to a run, and the live server keeps it for a
+                day, by when the archive takes over.
             ListingError: A source could not be listed.
         """
         it = to_naive_utc(it)
-        source = choose_source(self.model, it)
+        source = self.source_for(it)
         if source is None:
             logger.info(f"{self.name}: run {it} is in neither the archive nor the live server")
             return []
@@ -766,13 +771,10 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         if source == "live":
             self._require_published(it, present)
         if listed.fraction < self.min_completeness:
-            if (
-                source == "live"
-                and pd.Timestamp.now("UTC").tz_localize(None) - it < self.settle_after
-            ):
+            if source == "live":
                 raise IncompleteRun(
                     f"{self.name}: live run {it} lists {listed.fraction:.1%} of its fields; "
-                    "still being published, retry later"
+                    f"still being published, retry later. Most missing: {listed.most_missing()}"
                 )
             logger.warning(
                 f"{self.name}: skipping run {it}: the {source} lists {listed.present:,} of "
@@ -784,7 +786,37 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             f"{self.name}: run {it} from {source}, {listed.present:,} of {listed.expected:,} "
             f"fields listed ({listed.fraction:.1%}) in {listed.seconds:.1f}s"
         )
-        return [field_uri(self.model, key, it, source) for key in present]
+        return self._uris(present, it, source)
+
+    def _uris(self, keys: Sequence[FieldKey], it: pd.Timestamp, source: Source) -> list[str]:
+        """``field_uri`` of each key, building each directory's URI once."""
+        directories: dict[tuple, str] = {}
+        step_zero = _STEP_FILE.format(step=0)
+        uris = []
+        for key in keys:
+            where = (key.param, key.level_type, key.level, key.wavelength)
+            if where not in directories:
+                zero = dataclasses.replace(key, step=0)
+                directories[where] = field_uri(self.model, zero, it, source).removesuffix(step_zero)
+            uris.append(directories[where] + _STEP_FILE.format(step=key.step))
+        return uris
+
+    def _paths(self, keys: Sequence[FieldKey], it: pd.Timestamp) -> dict[FieldKey, str]:
+        """``field_path`` of each key, building each directory's path once."""
+        directories: dict[tuple, str] = {}
+        step_zero = _STEP_FILE.format(step=0)
+        paths = {}
+        for key in keys:
+            where = (key.param, key.level_type, key.level, key.wavelength)
+            if where not in directories:
+                zero = dataclasses.replace(key, step=0)
+                directories[where] = field_path(self.model, zero, it).removesuffix(step_zero)
+            paths[key] = directories[where] + _STEP_FILE.format(step=key.step)
+        return paths
+
+    def source_for(self, it: pd.Timestamp) -> Source | None:
+        """Where the run at ``it`` would be read from; see ``choose_source``."""
+        return choose_source(self.model, to_naive_utc(it))
 
     def list_run(self, it: pd.Timestamp, source: Source) -> tuple[list[FieldKey], RunCompleteness]:
         """List which of a run's expected fields, and of its CLAT/CLON, ``source`` holds.
@@ -803,7 +835,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         plan = self.plan_for(it)
         data_keys = self._selected(plan.schema.expected_fields(it))
         keys = data_keys + plan.schema.coordinate_fields()
-        paths = {key: field_path(self.model, key, it) for key in keys}
+        paths = self._paths(keys, it)
         directories = sorted({path.rpartition("/")[0] for path in paths.values()})
         lister = get_lister(self.model, source)
 
@@ -1422,8 +1454,8 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             logger.warning(f"{self.name}: run {it} unlisted fields: {listed.most_missing()}")
         if total:
             top = Counter(missing).most_common(REPORT_TOP_N)
-            listed = ", ".join(f"{name} {count:,}" for name, count in top if count)
-            logger.warning(f"{self.name}: run {it} missing fields by variable: {listed}")
+            summary = ", ".join(f"{name} {count:,}" for name, count in top if count)
+            logger.warning(f"{self.name}: run {it} unreadable fields by variable: {summary}")
 
 
 def _level_attrs(dim: str) -> dict[str, str]:

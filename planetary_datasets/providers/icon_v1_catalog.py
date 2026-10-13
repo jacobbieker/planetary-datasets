@@ -171,13 +171,6 @@ class ICONModelSpec:
     archive_start: pd.Timestamp
 
 
-MODELS: dict[str, ICONModelSpec] = {
-    "icon": ICONModelSpec("icon", 2_949_120, 26, pd.Timestamp("2026-08-25T12:00")),
-    "icon-art": ICONModelSpec("icon-art", 1_310_720, 39, pd.Timestamp("2025-09-30T18:00")),
-    "icon-art-eu": ICONModelSpec("icon-art-eu", 1_013_404, 61, pd.Timestamp("2025-09-30T18:00")),
-}
-
-
 @dataclasses.dataclass(frozen=True)
 class ICONEra:
     """A span of runs one model published on one grid, with one frozen schema.
@@ -212,6 +205,19 @@ ERAS: dict[str, tuple[ICONEra, ...]] = {
         ICONEra(None, 51, 571_088, "icon-art-eu_grid51"),
         ICONEra(pd.Timestamp("2026-10-06T00:00"), 61, 1_013_404, "icon-art-eu"),
     ),
+}
+
+#: First run of each model in the Source Cooperative archive.
+ARCHIVE_STARTS: dict[str, pd.Timestamp] = {
+    "icon": pd.Timestamp("2026-08-25T12:00"),
+    "icon-art": pd.Timestamp("2025-09-30T18:00"),
+    "icon-art-eu": pd.Timestamp("2025-09-30T18:00"),
+}
+
+#: Each model as it is now: its current era's grid, from :data:`ERAS`.
+MODELS: dict[str, ICONModelSpec] = {
+    model: ICONModelSpec(model, eras[-1].n_cells, eras[-1].grid_number, ARCHIVE_STARTS[model])
+    for model, eras in ERAS.items()
 }
 
 
@@ -1830,8 +1836,9 @@ def inherit_precision(
     """Give an era's variables the dtype the same parameter has in other schemas.
 
     One parameter is stored at one precision everywhere, so an older era's variables take
-    the dtype already decided for the current eras. Matched on (param, level_type), then
-    on param alone when every level type of it agrees.
+    the dtype already decided for the current eras, matched on (param, level_type). A
+    parameter on a level type the references do not have is left to be measured: its
+    range there is not known.
 
     Args:
         data: Schema JSON to update.
@@ -1842,17 +1849,15 @@ def inherit_precision(
         measuring.
     """
     by_level: dict[tuple[str, int | None], set[str]] = {}
-    by_param: dict[str, set[str]] = {}
     for reference in references:
         for entry in reference["variables"]:
             if "dtype" not in entry:
                 continue
             by_level.setdefault((entry["param"], entry["level_type"]), set()).add(entry["dtype"])
-            by_param.setdefault(entry["param"], set()).add(entry["dtype"])
     out = json.loads(json.dumps(data))
     unmatched: list[VariableKey] = []
     for entry in out["variables"]:
-        found = by_level.get((entry["param"], entry["level_type"])) or by_param.get(entry["param"])
+        found = by_level.get((entry["param"], entry["level_type"]))
         if found and len(found) == 1:
             entry["dtype"] = next(iter(found))
             entry["precision"] = {"reason": "inherited from the current era"}
@@ -2133,7 +2138,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         choices=sorted(MODELS),
         help="models to measure together; a parameter they share gets one dtype",
     )
-    precision_cmd.add_argument("--source", choices=("archive", "live"), default="live")
+    precision_cmd.add_argument(
+        "--source",
+        choices=("archive", "live"),
+        default=None,
+        help="default live; archive with --era, as only the current grid is live",
+    )
     precision_cmd.add_argument(
         "--runs", nargs="+", help="runs to sample; defaults to the newest 00Z and 12Z"
     )
@@ -2169,11 +2179,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             if len(args.models) != 1:
                 parser.error("--era takes exactly one model")
             era = era_by_grid(args.models[0], args.era)
-            return _old_era_precision(args.models[0], era, runs, args.source, args.max_workers)
+            source = args.source or "archive"
+            return _old_era_precision(args.models[0], era, runs, source, args.max_workers)
         return _precision_command(
             args.models,
             runs,
-            args.source,
+            args.source or "live",
             pd.Timedelta(args.min_age_hours, "h"),
             args.max_workers,
         )
@@ -2181,6 +2192,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     era = current_era(args.model) if args.era is None else era_by_grid(args.model, args.era)
     if args.runs:
         runs = [_normalize_init_time(r) for r in args.runs]
+        stray = [r for r in runs if era_for(args.model, r) != era]
+        if stray:
+            parser.error(
+                f"runs {[str(r) for r in stray]} are not on grid {era.grid_number}; pass the "
+                "--era of their grid"
+            )
     else:
         hours = args.min_age_hours
         if hours is None:

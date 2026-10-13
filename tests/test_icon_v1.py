@@ -353,13 +353,16 @@ def test_archive_runs_are_never_probed_and_late_live_runs_are(source, monkeypatc
         provider.fetch(late)
 
 
-def test_a_settled_live_run_below_the_threshold_is_skipped(source, monkeypatch):
+def test_a_live_run_below_the_threshold_is_retried_whatever_its_age(source, monkeypatch):
+    # A scheduled partition is six hours old when it runs, so age cannot tell a late run
+    # from a finished one; a live run short of fields is retried, never skipped.
     monkeypatch.setattr(icon_v1, "choose_source", lambda model, it: "live")
     provider = ICONV1Provider("eu_art")
     settled = young_live_run() - pd.Timedelta(12, "h")
     tot_prec = {f for f in every_field(provider, settled, "live") if "/p/TOT_PREC/" in f}
     source.missing |= tot_prec
-    assert provider.fetch(settled) == []
+    with pytest.raises(IncompleteRun, match="TOT_PREC"):
+        provider.fetch(settled)
     assert provider.completeness[settled].missing_by_param == {"TOT_PREC": len(tot_prec)}
 
 
@@ -846,3 +849,33 @@ def test_backfill_records_skipped_runs(source, monkeypatch, local_config, tmp_pa
     assert len(rows) == 2 and rows[1].split("\t")[1] == RUN_00.isoformat()
     ds = open_store(local_config, "bkr/icon/icon_eu_art.icechunk")
     assert pd.DatetimeIndex(ds["init_time"].values).tolist() == [RUN_06]
+
+
+def test_params_must_select_variables_in_every_era(source, monkeypatch):
+    old_era = cat.ERAS["icon-art-eu"][0]
+    data = schema_data("icon-art-eu", old_era)
+    data["variables"] = [v for v in data["variables"] if v["param"] != "TOT_PREC"]
+    schemas = dict(source.schemas)
+    schemas[("icon-art-eu", old_era.grid_number)] = cat.ICONSchema(data)
+    monkeypatch.setattr(
+        icon_v1, "load_era_schema", lambda model, era: schemas[(model, era.grid_number)]
+    )
+    with pytest.raises(ValueError, match="grid 51"):
+        ICONV1Provider("eu_art", params=["TOT_PREC"])
+
+
+def test_dagster_marks_a_skipped_run_and_reports_completeness(source):
+    from dags.assets.icon import completeness_metadata, skipped_as_incomplete
+
+    provider = ICONV1Provider("eu_art")
+    source.missing |= {f for f in every_field(provider, RUN_00) if "/p/T/lvt1/150/" in f}
+    assert provider.run_partition(RUN_00) is False
+    skipped = skipped_as_incomplete(provider, RUN_00, written=False)
+    assert skipped is not None and skipped.fraction < provider.min_completeness
+    metadata = completeness_metadata(provider, RUN_00)
+    assert metadata["fields_listed"].value < metadata["fields_expected"].value
+    # A run written, or skipped as already stored, is not flagged.
+    source.missing.clear()
+    assert provider.run_partition(RUN_00) is True
+    assert skipped_as_incomplete(provider, RUN_00, written=True) is None
+    assert completeness_metadata(provider, RUN_00)["completeness"].value == 1.0

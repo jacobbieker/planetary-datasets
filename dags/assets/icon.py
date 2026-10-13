@@ -37,6 +37,7 @@ from planetary_datasets.providers.icon_v1 import (
     STORE_PREFIXES,
     VARIANT_MODELS,
     ICONV1Provider,
+    RunCompleteness,
 )
 from planetary_datasets.providers.icon_v1_catalog import ARCHIVE_ROOT, LIVE_ROOT
 
@@ -142,6 +143,29 @@ def _forecast_asset(variant: str):
     return _asset
 
 
+def skipped_as_incomplete(
+    provider: ICONV1Provider, it: pd.Timestamp, written: bool
+) -> RunCompleteness | None:
+    """The completeness of a run the provider skipped for holding too little, else None."""
+    listed = provider.completeness.get(it)
+    if written or listed is None or listed.fraction >= provider.min_completeness:
+        return None
+    return listed
+
+
+def completeness_metadata(provider: ICONV1Provider, it: pd.Timestamp) -> dict:
+    """How much of the run the source listed, for the materialisation's metadata."""
+    listed = provider.completeness.get(it)
+    if listed is None:
+        return {}
+    return {
+        "source": dg.MetadataValue.text(listed.source),
+        "fields_expected": dg.MetadataValue.int(listed.expected),
+        "fields_listed": dg.MetadataValue.int(listed.present),
+        "completeness": dg.MetadataValue.float(round(listed.fraction, 4)),
+    }
+
+
 def _v1_partitions(variant: str) -> dg.TimeWindowPartitionsDefinition:
     """Six-hourly runs from the variant's first archived run."""
     return dg.TimeWindowPartitionsDefinition(
@@ -195,13 +219,27 @@ def _v1_asset(variant: str):
                 max_retries=ICON_V1_INCOMPLETE_RETRIES,
                 seconds_to_wait=ICON_V1_RETRY_DELAY_S * 2**context.retry_number,
             ) from exc
-        return dg.MaterializeResult(
-            metadata={
-                "written": dg.MetadataValue.bool(written),
-                "init_time": dg.MetadataValue.text(str(it)),
-                "store": dg.MetadataValue.text(provider.store_prefix),
-            }
-        )
+        metadata = {
+            "written": dg.MetadataValue.bool(written),
+            "init_time": dg.MetadataValue.text(str(it)),
+            "store": dg.MetadataValue.text(provider.store_prefix),
+            **completeness_metadata(provider, it),
+        }
+        skipped = skipped_as_incomplete(provider, it, written)
+        if skipped is not None:
+            # Red rather than green-and-empty: a skipped run is a hole to come back to once
+            # the archive fills in, and a green partition would never be looked at again.
+            raise dg.Failure(
+                description=(
+                    f"{provider.name}: run {it} skipped, the {skipped.source} lists only "
+                    f"{skipped.fraction:.1%} of its fields (threshold "
+                    f"{provider.min_completeness:.0%}); most missing: {skipped.most_missing(5)}. "
+                    "Re-materialise once the archive has it."
+                ),
+                metadata=metadata,
+                allow_retries=False,
+            )
+        return dg.MaterializeResult(metadata=metadata)
 
     return _asset
 

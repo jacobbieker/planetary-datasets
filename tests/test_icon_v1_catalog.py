@@ -876,16 +876,18 @@ def test_an_older_era_inherits_the_current_dtypes():
     data = {
         "variables": [
             {"param": "T_2M", "level_type": None},
-            {"param": "T", "level_type": 106},  # matched on the param alone
+            {"param": "T", "level_type": 106},  # a level type the references lack
             {"param": "QV", "level_type": 150},
             {"param": "NEW_FIELD", "level_type": None},
         ]
     }
     updated, unmatched = cat.inherit_precision(data, [reference])
-    assert [v.get("dtype") for v in updated["variables"]] == [
-        "float16",
-        "float16",
-        "float32",
-        None,
-    ]
-    assert unmatched == [("NEW_FIELD", None, None)]
+    assert [v.get("dtype") for v in updated["variables"]] == ["float16", None, "float32", None]
+    assert unmatched == [("T", 106, None), ("NEW_FIELD", None, None)]
+
+
+def test_the_schema_command_refuses_runs_of_another_era():
+    # Runs of the old grid cannot be written into the current era's schema; nothing is
+    # listed before the refusal.
+    with pytest.raises(SystemExit):
+        cat.main(["schema", "icon-art", "--runs", "2026-10-01T00:00", "2026-10-01T06:00"])

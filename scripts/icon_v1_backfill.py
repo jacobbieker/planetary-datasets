@@ -126,13 +126,20 @@ def log_skipped(path: pathlib.Path, completeness: RunCompleteness) -> None:
 
 
 def report_completeness(provider: ICONV1Provider, runs: list[pd.Timestamp]) -> None:
-    """List each run's directories and log how complete it is. Nothing is read or written."""
+    """List each run's directories and log how complete it is. Nothing is read or written.
+
+    Each run is listed in the source the backfill itself would read it from.
+    """
     for it in runs:
-        _, listed = provider.list_run(it, "archive")
+        source = provider.source_for(it)
+        if source is None:
+            logger.info(f"{provider.name}: {it:%Y-%m-%dT%H:%M} is in no source")
+            continue
+        _, listed = provider.list_run(it, source)
         verdict = "write" if listed.fraction >= provider.min_completeness else "SKIP"
         era = provider.plan_for(it).era
         logger.info(
-            f"{provider.name}: {it:%Y-%m-%dT%H:%M} grid {era.grid_number}: "
+            f"{provider.name}: {it:%Y-%m-%dT%H:%M} grid {era.grid_number}, {source}: "
             f"{listed.present:,}/{listed.expected:,} fields ({listed.fraction:.1%}) "
             f"listed in {listed.seconds:.1f}s -> {verdict}"
             + (f"; most missing: {listed.most_missing(5)}" if listed.fraction < 1 else "")
