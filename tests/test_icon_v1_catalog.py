@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import posixpath
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -99,7 +100,11 @@ def fake_tree() -> list[str]:
         for param in ("HSURF", "CLAT", "CLON", "ELAT", "OFFGRID"):
             files += run_files(f"p/{param}", run, [0])
         files += run_files("p/HHL/lvt1/150/lv1/1", run, [0])
-        files += run_files("p/CEIL_BSC_DUST/wvl1/532/lvt1/150/lv1/120", run, steps)
+        for nm in ("532", "1064"):
+            for level in ("119", "120"):
+                files += run_files(f"p/CEIL_BSC_DUST/wvl1/{nm}/lvt1/150/lv1/{level}", run, steps)
+        # A layout FieldKey cannot address.
+        files += run_files("p/ODD/ens1/1", run, steps)
     # A level directory with no files in either reference run.
     files += run_files("p/T/lvt1/150/lv1/3", pd.Timestamp("2026-09-01T00:00"), [0])
     return files
@@ -330,17 +335,21 @@ def discover(files, runs=(RUN_00, RUN_06), **kwargs):
 def test_discover_schema_builds_variables_per_level_type(fake_tree):
     data = discover(fake_tree)
     json.dumps(data)  # serialisable
-    keys = [(v["param"], v["level_type"]) for v in data["variables"]]
+    keys = [(v["param"], v["level_type"], v.get("wavelength")) for v in data["variables"]]
     assert keys == [
-        ("HHL", 150),
-        ("HSURF", None),
-        ("RSTOM", None),
-        ("T", 100),
-        ("T", 150),
-        ("TMAX_2M", None),
-        ("T_2M", None),
-        ("W_SO", 106),
+        ("CEIL_BSC_DUST", 150, 532),
+        ("CEIL_BSC_DUST", 150, 1064),
+        ("HHL", 150, None),
+        ("HSURF", None, None),
+        ("RSTOM", None, None),
+        ("T", 100, None),
+        ("T", 150, None),
+        ("TMAX_2M", None, None),
+        ("T_2M", None, None),
+        ("W_SO", 106, None),
     ]
+    # Only wavelength-resolved entries carry the key, so other entries are unchanged.
+    assert ["wavelength" in v for v in data["variables"]].count(True) == 2
     by_key = {(v["param"], v["level_type"]): v for v in data["variables"]}
     # Levels sort numerically and keep their path spelling; the empty level 3 is dropped.
     assert by_key[("T", 150)]["levels"] == ["1", "2", "10"]
@@ -352,13 +361,38 @@ def test_discover_schema_builds_variables_per_level_type(fake_tree):
     assert data["coordinate_params"] == ["CLAT", "CLON"]
 
 
-def test_discover_schema_excludes_coordinates_off_grid_and_wavelength_fields(fake_tree):
+def test_field_path_wavelength_levels():
+    key = FieldKey("CEIL_BSC_DUST", 150, "77", 6, wavelength=1064)
+    assert cat.field_path("icon-art", key, RUN_00) == (
+        "p/CEIL_BSC_DUST/wvl1/1064/lvt1/150/lv1/77/r/2026-10-11T00:00/s/PT006H00M.grib2"
+    )
+    # Positional construction without a wavelength still works and means "none".
+    assert FieldKey("T", 150, "77", 6).wavelength is None
+    with pytest.raises(ValueError, match="wavelength"):
+        FieldKey("CEIL_BSC_DUST", 150, "77", 6, wavelength=0)
+
+
+def test_discover_schema_descends_into_wavelengths(fake_tree):
+    schema = cat.ICONSchema(discover(fake_tree, runs=RUNS_4))
+    ceil = [v for v in schema.variables if v.param == "CEIL_BSC_DUST"]
+    assert [(v.level_type, v.wavelength, v.levels) for v in ceil] == [
+        (150, 532, ("119", "120")),
+        (150, 1064, ("119", "120")),
+    ]
+    assert schema.variable("CEIL_BSC_DUST", 150, 1064).steps == (0, 1, 2, 3)
+    assert schema.steps_for_cycle("CEIL_BSC_DUST", 150, 6, 532) == (0, 1, 2)
+    with pytest.raises(KeyError):
+        schema.variable("CEIL_BSC_DUST", 150)
+    assert FieldKey("CEIL_BSC_DUST", 150, "119", 3, 1064) in schema.expected_fields(RUN_00)
+
+
+def test_discover_schema_excludes_coordinates_off_grid_and_unknown_layouts(fake_tree):
     data = discover(fake_tree)
     params = {v["param"] for v in data["variables"]}
-    assert not params & {"CLAT", "CLON", "ELAT", "OFFGRID", "CEIL_BSC_DUST"}
+    assert not params & {"CLAT", "CLON", "ELAT", "OFFGRID", "ODD"}
     excluded = {e["param"]: e["reason"] for e in data["excluded"]}
-    assert set(excluded) == {"CEIL_BSC_DUST", "ELAT", "OFFGRID"}
-    assert "wvl1" in excluded["CEIL_BSC_DUST"]
+    assert set(excluded) == {"ELAT", "OFFGRID", "ODD"}
+    assert "ens1" in excluded["ODD"]
     assert "4423680 points" in excluded["OFFGRID"]
 
 
@@ -463,10 +497,11 @@ def test_discovered_schema_loads_and_is_cycle_aware(fake_tree):
     assert FieldKey("T", 150, "10", 2) in f06
     assert FieldKey("HSURF", None, None, 0) in f06
     # One step more per level of each forecast variable, plus RSTOM's four files.
-    assert len(f00) - len(f06) == (2 + 3 + 2 + 1 + 1) + 4
+    # CEIL_BSC_DUST adds one step at each of its two levels and two wavelengths.
+    assert len(f00) - len(f06) == (2 + 3 + 2 + 1 + 1 + 4) + 4
     assert len(set(f00)) == len(f00)
     # Every expected field of a run exists in the tree, and nothing on the grid is missed.
-    off_schema = ("p/CLAT", "p/CLON", "p/ELAT", "p/OFFGRID", "p/CEIL")
+    off_schema = ("p/CLAT", "p/CLON", "p/ELAT", "p/OFFGRID", "p/ODD")
     tree = set(fake_tree)
     for run, keys in fields.items():
         paths = {cat.field_path("icon", k, run) for k in keys}
@@ -513,8 +548,8 @@ def test_default_reference_runs_picks_the_newest_old_enough_run_per_hour():
 #: stays hourly to the end (global) and the ART-EU dust fields are hourly to 72 h.
 COMMITTED = {
     "icon": (103, 113, 93, 181),
-    "icon-art": (133, 113, 93, 181),
-    "icon-art-eu": (126, 75, 75, 89),
+    "icon-art": (137, 113, 93, 181),
+    "icon-art-eu": (130, 75, 75, 89),
 }
 
 
@@ -541,7 +576,7 @@ def test_committed_schemas_load(model):
     assert schema.variable("HSURF", None).steps == (0,)
     t2m = [schema.steps_for_cycle("T_2M", None, h) for h in cat.CYCLE_HOURS]
     assert [len(s) for s in t2m] == [n_t2m_00, n_t2m_06, n_t2m_00, n_t2m_06]
-    keys = [(v.param, v.level_type) for v in schema.variables]
+    keys = [(v.param, v.level_type, v.wavelength) for v in schema.variables]
     assert len(keys) == len(set(keys))
     for v in schema.variables:
         assert set(v.steps) <= set(schema.step_axis)
@@ -581,4 +616,176 @@ def test_committed_art_schemas_know_the_00z_only_fields(model):
     assert any(k.param == "RSTOM" for k in f00)
     assert not any(k.param == "RSTOM" for k in f12)
     excluded = {e["param"] for e in schema.excluded}
-    assert {"CEIL_BSC_DUST", "SAT_BSC_DUST", "ELAT", "ELON"} <= excluded
+    assert {"ELAT", "ELON"} <= excluded
+    assert not {"CEIL_BSC_DUST", "SAT_BSC_DUST"} & excluded
+
+
+#: The wavelength-resolved backscatter fields: their levels, a subset of the model levels.
+WAVELENGTH_LEVELS = {"icon-art": (77, 120), "icon-art-eu": (31, 74)}
+
+
+@pytest.mark.parametrize("model", sorted(WAVELENGTH_LEVELS))
+def test_committed_art_schemas_carry_the_wavelength_fields(model):
+    schema = cat.load_schema(model)
+    first, last = WAVELENGTH_LEVELS[model]
+    for param in ("CEIL_BSC_DUST", "SAT_BSC_DUST"):
+        specs = [v for v in schema.variables if v.param == param]
+        assert sorted(v.wavelength for v in specs) == [532, 1064]
+        for v in specs:
+            assert v.level_type == 150
+            assert v.levels == tuple(str(lv) for lv in range(first, last + 1))
+            assert v.steps == specs[0].steps
+    assert all(v.wavelength is None for v in schema.variables if "BSC" not in v.param)
+    key = FieldKey("SAT_BSC_DUST", 150, str(last), 0, 532)
+    assert key in schema.expected_fields(pd.Timestamp("2026-10-11T00:00"))
+
+
+# -- storage precision -------------------------------------------------------------------
+
+
+def stats_of(*fields) -> cat.PrecisionStats:
+    stats = cat.PrecisionStats()
+    for values in fields:
+        stats.add(np.asarray(values, dtype=np.float32))
+    return stats
+
+
+def test_precision_stats_measure_range_underflow_and_fp16_error():
+    stats = stats_of([0.0, 1.0, 250.123, -3.0], [1e-6, 2.0, np.nan])
+    assert stats.samples == 2
+    assert stats.max_abs == pytest.approx(250.123, rel=1e-6)
+    assert stats.nonzero == 5 and stats.below_normal == 1
+    assert stats.subnormal_fraction == pytest.approx(0.2)
+    assert 0 < stats.fp16_max_abs_error <= 0.125
+    # Merging is the same as adding everything to one.
+    merged = stats_of([0.0, 1.0, 250.123, -3.0]).merge(stats_of([1e-6, 2.0, np.nan]))
+    assert merged == stats
+
+
+@pytest.mark.parametrize(
+    "param, fields, expected",
+    [
+        ("T_2M", [[230.0, 310.5]], ("float16", "fits")),
+        ("U_10M", [[-30.0, 0.0, 0.0, 12.5]], ("float16", "fits")),
+        # Above 65504 / 4, even under a name not on the list.
+        ("VIS", [[0.0, 79770.0]], ("float32", "range")),
+        # No evidence of the range at all.
+        ("FR_ICE", [[0.0, 0.0, np.nan]], ("float32", "no non-zero values sampled")),
+        # More than 0.1% of the non-zero values below float16's smallest normal.
+        ("W", [[0.5] * 998 + [1e-6, 2e-6]], ("float32", "underflow")),
+        # One in a thousand is allowed.
+        ("W", [[0.5] * 999 + [1e-6]], ("float16", "fits")),
+        # The list beats statistics that would pass.
+        ("QV", [[0.5, 1.0]], ("float32", "full-precision list")),
+        ("tqv", [[0.5, 1.0]], ("float32", "full-precision list")),
+        ("FI", [[10.0]], ("float32", "full-precision list")),
+        ("PS", [[10.0]], ("float32", "full-precision list")),
+        ("ACCDRYDEPO_DUSTA", [[1.0]], ("float32", "full-precision list")),
+        ("CEIL_BSC_DUST", [[1.0]], ("float32", "full-precision list")),
+        ("CLAT", [[1.0]], ("float32", "full-precision list")),
+        # Accumulated or averaged since the start of the run: differenced downstream.
+        ("TOT_PREC", [[0.0, 3.5]], ("float32", "full-precision list")),
+        ("ASOB_S", [[0.0, 300.0]], ("float32", "full-precision list")),
+        ("RUNOFF_G", [[0.0, 300.0]], ("float32", "full-precision list")),
+    ],
+)
+def test_classify_precision(param, fields, expected):
+    assert cat.classify_precision(param, stats_of(*fields)) == expected
+
+
+def test_unsampled_variables_stay_float32():
+    assert cat.classify_precision("T_2M", None) == ("float32", "not sampled")
+    assert cat.classify_precision("T_2M", cat.PrecisionStats()) == ("float32", "not sampled")
+
+
+def test_full_precision_list_covers_the_committed_families():
+    params = {v.param for m in cat.MODELS for v in cat.load_schema(m).variables}
+    full = {p for p in params if cat.is_full_precision(p)}
+    assert {"QV", "QC", "QI", "QV_S", "TQV", "TQC_DIA", "FI", "HHL", "HSURF", "P", "PS"} <= full
+    assert {p for p in params if "DUST" in p} <= full
+    assert {"TOT_PREC", "RAIN_GSP", "ASOB_S", "ATHB_T", "ALHFL_BS", "AVMFL_S"} <= full
+    assert not {"T_2M", "U_10M", "CLCT", "T", "U", "V", "ALB_RAD", "SOILTYP"} & full
+
+
+def test_a_missing_dtype_means_float32(fake_tree):
+    data = discover(fake_tree)
+    assert all("dtype" not in v for v in data["variables"])
+    schema = cat.ICONSchema(data)
+    assert {v.dtype for v in schema.variables} == {"float32"}
+    data["variables"][0]["dtype"] = "float64"
+    with pytest.raises(ValueError, match="dtype"):
+        cat.ICONSchema(data)
+
+
+def test_measure_and_apply_precision_sample_each_variable(fake_tree):
+    data = discover(fake_tree, runs=RUNS_4)
+    schema = cat.ICONSchema(data)
+    read: list[str] = []
+
+    def reader(uri: str):
+        read.append(uri)
+        if "/p/HSURF/" in uri:
+            return None  # missing at the source
+        if "/p/W_SO/" in uri:
+            return np.array([1e-7, 1e-7, 0.3], np.float32)
+        return np.array([280.0, 0.0, 1.5], np.float32)
+
+    runs = [RUN_00, pd.Timestamp("2026-10-11T12:00")]
+    results = cat.measure_precision("icon", runs, "archive", schema=schema, reader=reader)
+    # T on model levels 1, 2, 10: top, middle and bottom level, by first, middle and last
+    # step, in each of the two runs.
+    assert results[("T", 150, None)].samples == 3 * 3 * 2
+    assert results[("HSURF", None, None)].samples == 0
+    assert results[("HSURF", None, None)].missing == 2
+    assert not any("/r/2026-10-11T06:00/" in u for u in read)
+
+    updated = cat.apply_precision(data, results)
+    entries = {(v["param"], v["level_type"], v.get("wavelength")): v for v in updated["variables"]}
+    assert entries[("T_2M", None, None)]["dtype"] == "float16"
+    assert entries[("W_SO", 106, None)]["precision"]["reason"] == "underflow"
+    assert entries[("HSURF", None, None)]["dtype"] == "float32"
+    assert entries[("T_2M", None, None)]["precision"]["samples"] == 6
+    reloaded = cat.ICONSchema(json.loads(cat.dump_schema(updated)))
+    assert reloaded.variable("T_2M", None).dtype == "float16"
+    assert "dtype" not in data["variables"][0]  # the input is not modified
+
+    # Rediscovering keeps the recorded precision of the variables it still has.
+    carried = cat.carry_precision(discover(fake_tree, runs=RUNS_4), updated)
+    assert carried == updated | {"generated_at": carried["generated_at"]}
+
+
+@pytest.mark.parametrize("model", sorted(cat.MODELS))
+def test_committed_schemas_carry_a_dtype_for_every_variable(model):
+    schema = cat.load_schema(model)
+    assert {v.dtype for v in schema.variables} == {"float16", "float32"}
+    for v in schema.variables:
+        if cat.is_full_precision(v.param):
+            assert v.dtype == "float32", v
+    assert schema.variable("T_2M", None).dtype == "float16"
+    assert schema.variable("QV", 150).dtype == "float32"
+
+
+def test_one_parameter_gets_one_dtype_across_wavelengths_and_models():
+    fits = stats_of([0.5, 1.0])
+    tiny = stats_of([1e-7, 1e-7, 1.0])
+    # Pooled over the wavelengths of one model...
+    pooled = cat.pool_precision({("BSC", 150, 532): fits, ("BSC", 150, 1064): tiny})
+    assert cat.classify_precision("BSC", pooled[("BSC", 150)])[0] == "float32"
+    # ... and over models: float16 in one sample does not win over float32 in another.
+    pooled = cat.pool_precision({("W", 150, None): fits}, {("W", 150, None): tiny})
+    data = {"variables": [{"param": "W", "level_type": 150, "levels": ["1"]}]}
+    entry = cat.apply_precision(data, {("W", 150, None): fits}, pooled)["variables"][0]
+    assert entry["dtype"] == "float32" and entry["precision"]["reason"] == "underflow"
+    # The entry keeps its own model's statistics.
+    assert entry["precision"]["subnormal_fraction"] == 0.0
+
+
+def test_precision_runs_are_the_newest_settled_00z_and_12z():
+    runs = [pd.Timestamp(t) for t in pd.date_range("2026-10-12T18:00", periods=5, freq="6h")]
+    now = pd.Timestamp("2026-10-13T19:00")
+    assert cat.precision_runs(runs, now, pd.Timedelta(6, "h")) == [
+        pd.Timestamp("2026-10-13T00:00"),
+        pd.Timestamp("2026-10-13T12:00"),
+    ]
+    with pytest.raises(ValueError, match="12Z"):
+        cat.precision_runs(runs, now, pd.Timedelta(8, "h"))

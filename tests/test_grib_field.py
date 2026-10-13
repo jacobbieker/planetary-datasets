@@ -209,6 +209,24 @@ class TestDecodeGribField:
             decoded[~missing], values[~missing], rtol=0, atol=_packing_tolerance(values)
         )
 
+    @pytest.mark.parametrize("packing", ["grid_simple", "grid_ccsds"])
+    def test_decodes_into_a_float16_row_keeping_missing_points_nan(self, packing):
+        """A float16 row takes the decoded values, with NaN for bitmap points."""
+        values, missing = _with_bitmap()
+        out = np.empty(values.size, dtype=np.float16)
+        assert decode_grib_field(_message(values, packing=packing), out=out) is out
+        np.testing.assert_array_equal(np.isnan(out), missing)
+        # Within float16's half-unit-in-the-last-place at 300 plus the packing error.
+        tolerance = 0.125 + _packing_tolerance(values)
+        np.testing.assert_allclose(out[~missing], values[~missing], rtol=0, atol=tolerance)
+
+    def test_values_beyond_float16_become_inf_in_a_float16_row(self):
+        """Out-of-range values become inf, which callers must check for."""
+        out = np.empty(1000, dtype=np.float16)
+        with np.errstate(over="ignore"):
+            decode_grib_field(_message(np.linspace(1e5, 1.1e5, 1000)), out=out)
+        assert np.isinf(out).all()
+
     def test_complex_packing_missing_values_without_a_bitmap_are_nan(self):
         values, missing = _with_bitmap(496)
         handle = eccodes.codes_grib_new_from_samples("GRIB2")
