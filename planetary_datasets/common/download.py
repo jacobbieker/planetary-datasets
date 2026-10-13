@@ -11,18 +11,91 @@ from __future__ import annotations
 import hashlib
 import os
 import pathlib
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence, TypeVar
 
 import fsspec
+from fsspec.core import split_protocol
+from fsspec.spec import AbstractFileSystem
+from fsspec.utils import tokenize
 from loguru import logger
 
 CHUNK_SIZE = 1024 * 1024
 
-# Failures that will not succeed on a retry. fsspec surfaces HTTP 404 as FileNotFoundError
-# and 401/403 as PermissionError.
+# Failures that will not succeed on a retry. fsspec surfaces HTTP 404 as FileNotFoundError,
+# and s3fs maps S3's 403 (AccessDenied) to PermissionError.
 PERMANENT_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError)
+
+# fsspec's HTTP filesystem raises FileNotFoundError only for a 404; any other error status
+# arrives as aiohttp's ClientResponseError. These statuses will not change on a retry.
+PERMANENT_HTTP_STATUSES = frozenset({401, 403, 404, 410})
+
+_T = TypeVar("_T")
+
+
+def _is_permanent_error(exc: BaseException) -> bool:
+    """Whether a failure is one that will not succeed on a retry."""
+    return isinstance(exc, PERMANENT_ERRORS)
+
+
+def _is_permanent_read_error(exc: BaseException) -> bool:
+    """Like ``_is_permanent_error``, but also recognises permanent HTTP error statuses."""
+    if _is_permanent_error(exc):
+        return True
+    try:
+        from aiohttp import ClientResponseError
+    except ImportError:  # pragma: no cover - aiohttp comes with fsspec's HTTP support
+        return False
+    return isinstance(exc, ClientResponseError) and exc.status in PERMANENT_HTTP_STATUSES
+
+
+def _with_retries(
+    attempt_once: Callable[[], _T],
+    uri: str,
+    *,
+    retries: int,
+    backoff: float,
+    is_permanent: Callable[[BaseException], bool] = _is_permanent_error,
+    on_failure: Callable[[], None] | None = None,
+) -> _T | None:
+    """Call ``attempt_once`` until it succeeds, retrying transient errors with backoff.
+
+    Args:
+        attempt_once: The operation to attempt.
+        uri: What is being fetched, for log messages.
+        retries: Number of attempts before giving up.
+        backoff: Base seconds for exponential backoff between attempts.
+        is_permanent: Classifies an exception as not worth retrying.
+        on_failure: Called after every failed attempt, e.g. to remove a partial file.
+
+    Returns:
+        The operation's result, or None if it failed with a permanent error (or
+        ``retries`` is below 1, so nothing was attempted).
+
+    Raises:
+        Exception: The last transient error, once every attempt has failed.
+    """
+    for attempt in range(1, retries + 1):
+        try:
+            return attempt_once()
+        except Exception as exc:  # noqa: BLE001 - classified below; transient ones retry
+            if on_failure is not None:
+                on_failure()
+            if is_permanent(exc):
+                # A 404 or a denial will not become a success; retrying only burns the
+                # backoff budget. Archives with gaps hit this constantly.
+                logger.debug(f"{uri} unavailable ({type(exc).__name__}), not retrying")
+                return None
+            if attempt == retries:
+                raise
+            sleep = backoff * (2 ** (attempt - 1))
+            logger.debug(
+                f"attempt {attempt}/{retries} for {uri} failed ({exc!r}), retrying in {sleep:.1f}s"
+            )
+            time.sleep(sleep)
+    return None
 
 
 def download_one(
@@ -58,34 +131,32 @@ def download_one(
     part = dest.with_name(dest.name + ".part")
     open_kwargs = {"timeout": timeout} if timeout is not None else {}
 
-    for attempt in range(1, retries + 1):
-        try:
-            with fsspec.open(url, "rb", **open_kwargs) as src, open(part, "wb") as out:
-                while True:
-                    chunk = src.read(chunk_size)
-                    if not chunk:
-                        break
-                    out.write(chunk)
-            # Rename only after a complete read, so a partial file is never mistaken for a
-            # finished download by the skip-if-present check above.
-            os.replace(part, dest)
-            logger.debug(f"downloaded {url}")
-            return dest
-        except PERMANENT_ERRORS as exc:
-            # A 404 or a denial will not become a success; retrying only burns the backoff
-            # budget. Archives with gaps hit this constantly.
-            part.unlink(missing_ok=True)
-            logger.debug(f"{url} unavailable ({type(exc).__name__}), not retrying")
-            return None
-        except Exception as exc:  # noqa: BLE001 - any transport error is worth retrying
-            part.unlink(missing_ok=True)
-            if attempt == retries:
-                logger.warning(f"failed to download {url} after {retries} attempts: {exc}")
-                return None
-            sleep = backoff * (2 ** (attempt - 1))
-            logger.debug(f"attempt {attempt}/{retries} for {url} failed ({exc}), retrying in {sleep:.1f}s")
-            time.sleep(sleep)
-    return None
+    def _attempt() -> pathlib.Path:
+        with fsspec.open(url, "rb", **open_kwargs) as src, open(part, "wb") as out:
+            while True:
+                chunk = src.read(chunk_size)
+                if not chunk:
+                    break
+                out.write(chunk)
+        # Rename only after a complete read, so a partial file is never mistaken for a
+        # finished download by the skip-if-present check above.
+        os.replace(part, dest)
+        return dest
+
+    try:
+        result = _with_retries(
+            _attempt,
+            url,
+            retries=retries,
+            backoff=backoff,
+            on_failure=lambda: part.unlink(missing_ok=True),
+        )
+    except Exception as exc:  # noqa: BLE001 - any transport error is worth retrying
+        logger.warning(f"failed to download {url} after {retries} attempts: {exc}")
+        return None
+    if result is not None:
+        logger.debug(f"downloaded {url}")
+    return result
 
 
 def download_many(
@@ -134,6 +205,113 @@ def download_many(
     if len(paths) != len(urls):
         logger.info(f"downloaded {len(paths)}/{len(urls)} files into {dest_dir}")
     return paths
+
+
+# Async filesystem instances shared by every thread that calls ``read_bytes``, keyed on the
+# protocol and options. See ``read_bytes`` for why sharing them is safe.
+_SHARED_FILESYSTEMS: dict[str, AbstractFileSystem] = {}
+_SHARED_FILESYSTEMS_LOCK = threading.Lock()
+
+
+def _reset_shared_filesystems_after_fork() -> None:
+    """Give a forked child a fresh lock and no inherited filesystems.
+
+    The parent's instances are bound to its IO loop, which does not survive the fork, and a
+    lock held by another parent thread at fork time would never be released in the child.
+    """
+    global _SHARED_FILESYSTEMS_LOCK
+    _SHARED_FILESYSTEMS_LOCK = threading.Lock()
+    _SHARED_FILESYSTEMS.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_shared_filesystems_after_fork)
+
+
+def _filesystem_for(
+    uri: str, storage_options: dict[str, Any] | None
+) -> tuple[AbstractFileSystem, str]:
+    """Return the filesystem that serves ``uri`` and the path within it."""
+    protocol = split_protocol(uri)[0] or "file"
+    cls = fsspec.get_filesystem_class(protocol)
+    options = dict(storage_options or {})
+    if protocol in ("http", "https"):
+        # Send the URL exactly as given. Otherwise yarl re-quotes the path and turns DWD's
+        # ``%3A`` into a literal ``:``, which works only because DWD happens to accept both.
+        options.setdefault("encoded", True)
+    path = cls._strip_protocol(uri)
+    if not cls.async_impl:
+        # fsspec caches instances per thread, so this is cheap after a thread's first call.
+        return cls(**options), path
+    key = tokenize(protocol, options)
+    with _SHARED_FILESYSTEMS_LOCK:
+        fs = _SHARED_FILESYSTEMS.get(key)
+        if fs is None:
+            fs = cls(skip_instance_cache=True, **options)
+            _SHARED_FILESYSTEMS[key] = fs
+    return fs, path
+
+
+def read_bytes(
+    uri: str,
+    *,
+    retries: int = 3,
+    backoff: float = 1.0,
+    timeout: float | None = 60.0,
+    storage_options: dict[str, Any] | None = None,
+) -> bytes | None:
+    """Read a whole object into memory, retrying transient errors with exponential backoff.
+
+    Nothing touches disk, which matters on hosts whose ``/tmp`` is RAM-backed. The object
+    is fetched with one ``cat_file`` call (a single GET) rather than a buffered file handle.
+
+    Safe to call concurrently from threads. An async filesystem (S3, HTTP(S), GCS, ...) is
+    built once per process, protocol and ``storage_options`` and shared by every thread:
+    its blocking methods only submit coroutines to fsspec's single IO-loop thread, which
+    owns the session and its connection pool. fsspec's own instance cache is keyed on the
+    thread id, so relying on it would keep one client alive per thread of every short-lived
+    pool. Other filesystems use fsspec's per-thread instance cache.
+
+    HTTP(S) URIs must already be percent-encoded: they are sent verbatim (``encoded=True``
+    unless ``storage_options`` sets it), so DWD's ``%3A`` is neither decoded nor re-encoded.
+
+    s3fs also retries some throttling errors internally, so a request can be attempted more
+    often than ``retries`` suggests.
+
+    Args:
+        uri: Object to read, e.g. ``s3://bucket/key`` or ``https://host/path``.
+        retries: Number of attempts before giving up; must be at least 1.
+        backoff: Base seconds for exponential backoff between attempts.
+        timeout: Wall-clock seconds allowed per attempt, or None for no limit. Enforced for
+            async filesystems only; a timed-out attempt counts as a transient failure.
+        storage_options: Filesystem options, e.g. ``{"anon": True}`` for a public bucket.
+
+    Returns:
+        The object's bytes, or None if it is permanently unavailable: missing (404,
+        FileNotFoundError), denied (401/403, PermissionError) or gone (410).
+
+    Raises:
+        ValueError: If ``retries`` is less than 1.
+        Exception: The last transient error (timeout, 5xx, connection reset, ...) once
+            every attempt has failed, unchanged.
+    """
+    if retries < 1:
+        raise ValueError(f"retries must be at least 1, got {retries}")
+    fs, path = _filesystem_for(uri, storage_options)
+    # The blocking wrappers of an async filesystem take ``timeout`` as a wall-clock limit on
+    # the whole coroutine, raising FSTimeoutError (a TimeoutError) when it runs out.
+    cat_kwargs = {"timeout": timeout} if timeout and fs.async_impl else {}
+    try:
+        return _with_retries(
+            lambda: fs.cat_file(path, **cat_kwargs),
+            uri,
+            retries=retries,
+            backoff=backoff,
+            is_permanent=_is_permanent_read_error,
+        )
+    except Exception as exc:  # noqa: BLE001 - logged, then re-raised unchanged
+        logger.warning(f"failed to read {uri} after {retries} attempts: {exc!r}")
+        raise
 
 
 def cleanup_files(*paths: str | os.PathLike, missing_ok: bool = True) -> int:
