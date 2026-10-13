@@ -259,6 +259,21 @@ def test_drop_scalar_coords_keeps_time_and_dimensions():
     assert "step" in out.coords
 
 
+@pytest.mark.parametrize("ascending", [True, False])
+def test_sort_along_matches_sortby_without_copying_other_variables(ascending):
+    big = np.arange(12, dtype="float32").reshape(3, 4)
+    ds = xr.Dataset(
+        {
+            "big": (("model_level", "values"), big),
+            "small": (("level", "values"), np.arange(8, dtype="float32").reshape(2, 4)),
+        },
+        coords={"level": [700.0, 500.0], "model_level": [1.0, 2.0, 3.0]},
+    )
+    out = icon._sort_along(ds, "level", ascending=ascending)
+    xr.testing.assert_identical(out, ds.sortby("level", ascending=ascending))
+    assert np.shares_memory(out["big"].values, big)
+
+
 def test_clean_ruc_dataset_renames_valid_time():
     ds = xr.Dataset(
         {"unknown": (("valid_time", "values"), np.zeros((2, 3), dtype="float32"))},
@@ -422,6 +437,48 @@ def test_ruc_fetch_finds_analysis_files_in_the_mirror(tmp_path, local_config):
     assert provider.fetch(pd.Timestamp("2026-09-27T14:00")) == [str(wanted)]
 
 
+def test_ruc_fetch_finds_files_under_level_directories(tmp_path, local_config):
+    mirror = tmp_path / "mirror"
+    wanted = [
+        mirror / "T" / "lvt1" / lvt / "lv1" / lv / "r" / "2026-09-27T14:00" / "s" / name
+        for lvt, lv, name in [
+            ("100", "50000", "PT000H00M.grib2"),
+            ("100", "50000", "PT000H15M.grib2"),
+            ("150", "30", "PT000H00M.grib2"),
+        ]
+    ]
+    for path in wanted:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+
+    provider = icon.ICOND2RUCProvider("60min", config=local_config, grib_dir=mirror)
+    assert provider.fetch(pd.Timestamp("2026-09-27T14:00")) == sorted(str(p) for p in wanted)
+
+
+@pytest.mark.parametrize(
+    "timestep, expected",
+    [("60min", ["_model_level", "_pressure_level"]), ("15min", []), ("5min", [])],
+)
+def test_ruc_level_groups_skips_other_cadences_unopened(
+    local_config, monkeypatch, timestep, expected
+):
+    # T on pressure levels: every level hourly, two of them again every 15 minutes. Only
+    # the hourly time has the full set of levels, so this is an hourly field.
+    pressure = [
+        f"/m/T/lvt1/100/lv1/{lv}/r/x/s/PT000H{m:02d}M.grib2"
+        for lv in (50000, 70000, 85000)
+        for m in ((0, 15, 30, 45) if lv != 85000 else (0,))
+    ]
+    model = [f"/m/T/lvt1/150/lv1/{lv}/r/x/s/PT000H00M.grib2" for lv in (1, 2)]
+    opened = []
+    monkeypatch.setattr(icon, "_open_and_merge_by_valid_time", opened.append)
+
+    provider = icon.ICOND2RUCProvider(timestep, config=local_config)
+    suffixes = [suffix for _, suffix in provider._level_groups(pressure + model)]
+    assert suffixes == expected
+    assert len(opened) == len(expected)
+
+
 def _ruc_dataset(minutes):
     times = pd.Timestamp("2026-09-27T14:00") + pd.to_timedelta(minutes, unit="m")
     return xr.Dataset(
@@ -450,6 +507,29 @@ def _ruc_dataset(minutes):
 def test_ruc_cadence(local_config, timestep, minutes, variable, expected):
     provider = icon.ICOND2RUCProvider(timestep, config=local_config)
     assert provider._matches_cadence(_ruc_dataset(minutes), variable) is expected
+
+
+def test_ruc_append_keeps_the_stores_static_coordinates(local_config):
+    def hour(h):
+        return xr.Dataset(
+            {"tot_prec": (("time", "values"), np.full((1, 3), h, dtype="float32"))},
+            coords={"time": [pd.Timestamp("2026-07-12") + pd.Timedelta(hours=h)]},
+        )
+
+    provider = icon.ICOND2RUCProvider("5min", config=local_config)
+    repo = provider.get_icechunk_repo()
+    latitude = xr.Variable("values", np.array([47.0, 48.0, 49.0], dtype="float32"))
+    first = hour(0).assign_coords(latitude=latitude)
+    # As in the published stores: the variable names other coordinates itself, so
+    # latitude is recorded only in the group's "coordinates" attribute.
+    first["tot_prec"].encoding["coordinates"] = "time"
+    assert provider.write_to_icechunk(repo, first)
+    assert provider.write_to_icechunk(repo, hour(1))
+    assert provider.write_to_icechunk(repo, hour(2))
+
+    stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    assert "latitude" in stored.coords and set(stored.data_vars) == {"tot_prec"}
+    assert stored.sizes["time"] == 3
 
 
 def test_ruc_process_refuses_an_empty_run(local_config):
