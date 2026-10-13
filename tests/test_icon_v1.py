@@ -34,7 +34,8 @@ LONGITUDE = np.linspace(-170, 170, N_CELLS).astype(np.float32)
 def schema_data(model: str) -> dict:
     """A miniature schema with one variable of every kind the provider handles.
 
-    00/12Z runs go to step 3, 06/18Z runs to step 2. ``CEIL_BSC_DUST`` is wavelength
+    00/12Z runs go to step 3, 06/18Z runs to step 2. ``T_2M`` is stored as float16, the
+    rest as float32 (no ``dtype`` key). ``CEIL_BSC_DUST`` is wavelength
     resolved on a subset (2-3) of the full model levels (1-3); ``W`` and ``HHL`` are on
     the half levels (1-4); ``HHL`` and ``HSURF`` are published at step 0 only.
     """
@@ -65,7 +66,7 @@ def schema_data(model: str) -> dict:
         {"param": "T", "level_type": 100, "levels": ["50000", "85000"], "steps": every},
         {"param": "T", "level_type": 150, "levels": ["1", "2", "3"], "steps": every},
         {"param": "TOT_PREC", "level_type": None, "levels": [], "steps": every},
-        {"param": "T_2M", "level_type": None, "levels": [], "steps": every},
+        {"param": "T_2M", "level_type": None, "levels": [], "steps": every, "dtype": "float16"},
         {"param": "W", "level_type": 150, "levels": ["1", "2", "3", "4"], "steps": every},
         {"param": "W_SO", "level_type": 106, "levels": ["0.0", "0.01"], "steps": every},
     ]
@@ -293,8 +294,10 @@ def test_run_partition_writes_every_level_kind(source, local_config):
     def at(name, **index):
         return ds[name].isel(init_time=0, **index).values
 
+    # T_2M is float16 in this schema, everything else float32.
+    assert ds["t_2m"].dtype == np.float16 and ds["t"].dtype == np.float32
     np.testing.assert_array_equal(
-        at("t_2m", step=2), field_value(uri("T_2M", None, None, 2, RUN_00))
+        at("t_2m", step=2), field_value(uri("T_2M", None, None, 2, RUN_00)).astype(np.float16)
     )
     np.testing.assert_array_equal(
         at("t", step=1, isobaricInhPa=1), field_value(uri("T", 100, "85000", 1, RUN_00))
@@ -330,6 +333,8 @@ def test_06z_steps_beyond_the_horizon_are_nan(source, local_config):
     provider.run_partition(RUN_06)
     ds = open_store(local_config, provider.store_prefix)
     t2m = ds["t_2m"].isel(init_time=0)
+    # NaN survives float16 storage.
+    assert t2m.dtype == np.float16
     assert np.isnan(t2m.isel(step=3).values).all()
     assert np.isfinite(t2m.isel(step=slice(0, 3)).values).all()
     assert np.isnan(ds["t_ml"].isel(init_time=0, step=3).values).all()
@@ -378,7 +383,7 @@ def test_append_carries_the_stored_grid_over(source, local_config):
     np.testing.assert_array_equal(ds["latitude"].values, LATITUDE)
     np.testing.assert_array_equal(
         ds["t_2m"].sel(init_time=RUN_06).isel(step=0).values,
-        field_value(uri("T_2M", None, None, 0, RUN_06)),
+        field_value(uri("T_2M", None, None, 0, RUN_06)).astype(np.float16),
     )
     # Already stored: skipped without reading anything.
     before = len(source.reads)
@@ -571,3 +576,61 @@ def test_backfill_walks_the_archive_forward_and_resumes(source, monkeypatch, loc
         archived[1],
         archived[3],
     ]
+
+
+# -- precision ---------------------------------------------------------------------------
+
+
+def test_float16_variables_are_built_and_estimated_at_two_bytes(source):
+    provider = ICONV1Provider("eu_art")
+    ds = provider.process(provider.fetch(RUN_00), RUN_00)
+    assert ds["t_2m"].dtype == np.float16
+    assert ds["tot_prec"].dtype == np.float32
+    assert ds["latitude"].dtype == np.float32
+    only_half = ICONV1Provider("eu_art", params=["T_2M"])
+    only_full = ICONV1Provider("eu_art", params=["TOT_PREC"])
+    half = only_half.process(only_half.fetch(RUN_00), RUN_00)
+    full = only_full.process(only_full.fetch(RUN_00), RUN_00)
+    from planetary_datasets.common.lazy_fields import estimate_peak_bytes
+
+    def per_block(ds):
+        return estimate_peak_bytes(ds, 2) - estimate_peak_bytes(ds, 1)
+
+    assert per_block(half) * 2 == per_block(full)
+
+
+def test_a_float16_field_that_overflows_is_refused(source, local_config):
+    real_decode = source.decode
+    huge = uri("T_2M", None, None, 1, RUN_00)
+
+    def decode(data, dtype=np.float32, out=None):
+        if data.decode() == huge:
+            values = np.full(N_CELLS, 1.0e5, np.float32)
+            if out is None:
+                return values.astype(dtype)
+            with np.errstate(over="ignore"):
+                out[...] = values
+            return out
+        return real_decode(data, dtype=dtype, out=out)
+
+    import planetary_datasets.providers.icon_v1 as module
+
+    module_decode = module.decode_grib_field
+    try:
+        module.decode_grib_field = decode
+        with pytest.raises(icon_v1.PrecisionOverflow, match="T_2M.*100000"):
+            ICONV1Provider("eu_art").run_partition(RUN_00)
+    finally:
+        module.decode_grib_field = module_decode
+    # Nothing was committed.
+    assert ICONV1Provider("eu_art").missing_timesteps(pd.DatetimeIndex([RUN_00])) == [RUN_00]
+
+
+def test_a_change_of_precision_is_refused_on_append(source, monkeypatch, local_config):
+    ICONV1Provider("eu_art").run_partition(RUN_00)
+    data = schema_data("icon-art-eu")
+    for entry in data["variables"]:
+        entry.pop("dtype", None)
+    monkeypatch.setattr(icon_v1, "load_schema", lambda model: cat.ICONSchema(data))
+    with pytest.raises(ValueError, match="dtype differs"):
+        ICONV1Provider("eu_art").run_partition(RUN_06)

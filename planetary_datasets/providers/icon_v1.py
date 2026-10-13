@@ -50,6 +50,20 @@ level axes and step axis and appends to the same store:
   ``CLAT``/``CLON``, from an earlier run, or from the store, in that order of preference;
   a run is refused if none of them has the grid.
 
+Precision
+---------
+
+Each variable is stored at the dtype its schema entry gives (``VariableSpec.dtype``):
+float16 where sampled real fields fit comfortably inside float16's range and do not live
+below its normal range, float32 otherwise and always for moisture, heights, pressure and
+the ART dust and aerosol fields (see
+:func:`~planetary_datasets.providers.icon_v1_catalog.classify_precision`). Float16
+variables decode straight into float16 block buffers, so they cost half the memory and
+half the store. A float16 field that overflows raises :class:`PrecisionOverflow` rather
+than storing inf. The generation fingerprint does not look at dtypes, so an append whose
+dtypes differ from the store's is refused; changing a variable's precision later means a
+new store or a rewrite.
+
 Memory and throughput
 ---------------------
 
@@ -169,6 +183,7 @@ __all__ = [
     "ICONV1Provider",
     "IncompleteRun",
     "MissingGridError",
+    "PrecisionOverflow",
     "plan_variables",
 ]
 
@@ -229,6 +244,14 @@ class MissingGridError(RuntimeError):
     """No cell coordinates for a run: its CLAT/CLON are missing and none are stored."""
 
 
+class PrecisionOverflow(ValueError):
+    """A field of a float16 variable does not fit in float16.
+
+    Never stored as inf: the schema has the variable at the wrong precision and must be
+    reclassified (``python -m planetary_datasets.providers.icon_v1_catalog precision``).
+    """
+
+
 # ---------------------------------------------------------------------------------------
 # Layout: which variables a schema becomes, on which dimensions
 # ---------------------------------------------------------------------------------------
@@ -247,6 +270,7 @@ class VariablePlan:
         wavelengths: Wavelengths in nm for the ``wvl1/`` fields; empty otherwise.
         invariant: Published at step 0 only, so stored without a ``step`` dimension.
         specs: The schema variables behind this one, one per wavelength.
+        dtype: Storage dtype, ``float16`` or ``float32``, from the schema.
     """
 
     name: str
@@ -257,6 +281,7 @@ class VariablePlan:
     wavelengths: tuple[int, ...]
     invariant: bool
     specs: tuple[VariableSpec, ...]
+    dtype: str = "float32"
 
     @property
     def dims(self) -> tuple[str, ...]:
@@ -395,6 +420,9 @@ def plan_variables(schema: ICONSchema) -> Layout:
         wavelengths = tuple(s.wavelength for s in specs if s.wavelength is not None)
         if wavelengths and len(wavelengths) != len(specs):
             raise ValueError(f"{param}@{level_type}: mixes wavelength and plain fields")
+        dtypes = {s.dtype for s in specs}
+        if len(dtypes) != 1:
+            raise ValueError(f"{param}@{level_type}: wavelengths disagree on dtype {dtypes}")
         name = param.lower() + ("_ml" if level_type == _MODEL else "")
         if name in names:
             raise ValueError(f"{param}@{level_type} and {names[name]} would both be named {name!r}")
@@ -416,6 +444,7 @@ def plan_variables(schema: ICONSchema) -> Layout:
                 wavelengths=wavelengths,
                 invariant=param in invariant,
                 specs=tuple(specs),
+                dtype=dtypes.pop(),
             )
         )
     return Layout(tuple(plans), level_coords)
@@ -708,6 +737,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
                     shape=tuple(shape),
                     chunks=tuple(chunks),
                     uri_for=self._uri_for(plan, it, hour, source, available),
+                    dtype=np.dtype(plan.dtype),
                     attrs=attrs,
                 )
             )
@@ -818,7 +848,20 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
                     raise ValueError(
                         f"{uri} is on grid {info.grid_number}, not the model's {grid_number}"
                     )
-            decode_grib_field(data, out=row)
+            if row.dtype == np.float16:
+                # Decoding casts to the row's dtype; a value beyond float16's range
+                # becomes inf, which no GRIB field holds.
+                with np.errstate(over="ignore"):
+                    decode_grib_field(data, out=row)
+                if np.isinf(row).any():
+                    peak = float(np.nanmax(np.abs(decode_grib_field(data, dtype=np.float32))))
+                    raise PrecisionOverflow(
+                        f"{_param_of(uri)} is stored as float16 but {uri} reaches {peak:g}, "
+                        "beyond float16's 65504; reclassify it in the schema "
+                        "(icon_v1_catalog precision)"
+                    )
+            else:
+                decode_grib_field(data, out=row)
             progress.record(True)
             return True
 
@@ -1024,6 +1067,15 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             raise ValueError(
                 f"{self.name}: variables differ from the store: new {only_new[:5]}, "
                 f"stored only {only_old[:5]}"
+            )
+        # The generation fingerprint ignores dtypes; appending float32 data to a float16
+        # array would silently round it, so a change of precision is refused here.
+        changed = sorted(n for n in ds.data_vars if ds[n].dtype != stored[n].dtype)
+        if changed:
+            raise ValueError(
+                f"{self.name}: dtype differs from the store for {changed[:5]} (e.g. "
+                f"{ds[changed[0]].dtype} vs {stored[changed[0]].dtype}); a change of precision "
+                "needs a new store"
             )
         for name in ("latitude", "longitude"):
             if name not in stored.coords:
