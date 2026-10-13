@@ -251,7 +251,7 @@ def test_a_young_live_run_still_arriving_is_refused(source, monkeypatch):
 
     monkeypatch.setattr(icon_v1, "get_lister", lambda model, src: lister)
     provider = ICONV1Provider("eu_art")
-    with pytest.raises(IncompleteRun, match="still being published"):
+    with pytest.raises(IncompleteRun, match="not fully published"):
         provider.fetch(it)
 
     # Once the last step of every probed variable is there, the run is taken.
@@ -261,14 +261,17 @@ def test_a_young_live_run_still_arriving_is_refused(source, monkeypatch):
     assert files and all(f.startswith(cat.LIVE_ROOT) for f in files)
 
 
-def test_archive_and_settled_live_runs_are_never_probed(source, monkeypatch):
+def test_archive_runs_are_never_probed_and_late_live_runs_are(source, monkeypatch):
     def lister(directory):
-        raise AssertionError("listed")
+        raise FileNotFoundError(directory)
 
     monkeypatch.setattr(icon_v1, "get_lister", lambda model, src: lister)
-    assert ICONV1Provider("eu_art").fetch(young_live_run())  # archive
+    assert ICONV1Provider("eu_art").fetch(young_live_run())  # archive: nothing listed
+    # A scheduled partition runs once its six hours are up; a run DWD is late with is
+    # still refused rather than written with NaN where the late fields belong.
     monkeypatch.setattr(icon_v1, "choose_source", lambda model, it: "live")
-    assert ICONV1Provider("eu_art").fetch(RUN_00)  # live, but long settled
+    with pytest.raises(IncompleteRun):
+        ICONV1Provider("eu_art").fetch(young_live_run() - pd.Timedelta(12, "h"))
 
 
 # -- process and write -------------------------------------------------------------------
@@ -394,8 +397,8 @@ def test_a_moved_grid_is_refused_rather_than_appended(source, local_config):
         provider.write_to_icechunk(repo, ds)
 
 
-def write_old_icon_global(config) -> None:
-    """The original ICON-Global store: lower-case names, 0-96 h, ended 2026-01-31."""
+def write_old_icon_global(config, init_time=pd.Timestamp("2026-01-31T18:00")) -> None:
+    """The original ICON-Global store: lower-case names, a few fields, 0-96 h."""
     from icechunk.xarray import to_icechunk
 
     old = xr.Dataset(
@@ -407,7 +410,7 @@ def write_old_icon_global(config) -> None:
             ),
         },
         coords={
-            "init_time": [pd.Timestamp("2026-01-31T18:00")],
+            "init_time": [init_time],
             "step": pd.to_timedelta([0, 96], unit="h"),
             "isobaricInhPa": [500.0, 850.0],
             "latitude": ("values", LATITUDE),
@@ -427,10 +430,8 @@ def test_global_starts_a_dated_generation_beside_the_old_store(source, monkeypat
     provider = ICONV1Provider("global")
     assert provider.run_partition(RUN_06) is True
     assert provider.store_prefix == "bkr/icon/icon_global_11102026.icechunk"
-    assert provider.generations() == [
-        "bkr/icon/icon_global.icechunk",
-        "bkr/icon/icon_global_11102026.icechunk",
-    ]
+    # The old store is a generation of the series but not one of this layout.
+    assert provider.generations() == ["bkr/icon/icon_global_11102026.icechunk"]
     old = open_store(local_config, "bkr/icon/icon_global.icechunk")
     assert old.sizes["init_time"] == 1  # untouched
 
@@ -441,10 +442,29 @@ def test_global_starts_a_dated_generation_beside_the_old_store(source, monkeypat
     new = open_store(local_config, provider.store_prefix)
     assert new.sizes["init_time"] == 2
     assert np.isnan(new["t_2m"].isel(init_time=0, step=3).values).all()  # 06Z horizon
-    # Both runs are found across generations, and neither is fetched again.
-    assert (
-        later.missing_timesteps(pd.DatetimeIndex([RUN_06, pd.Timestamp("2026-01-31T18:00")])) == []
+    # Runs of this layout are found; the old store's are not this store's runs.
+    old_run = pd.Timestamp("2026-01-31T18:00")
+    assert later.missing_timesteps(pd.DatetimeIndex([RUN_06, old_run])) == [old_run]
+
+
+def test_runs_in_other_layouts_do_not_count_as_stored(source, monkeypatch, local_config):
+    monkeypatch.setattr(
+        icon_v1, "grib_field_info", lambda data: FakeSource.info(data, model="icon")
     )
+    # The original store and a test subset both hold RUN_06; the full store does not.
+    write_old_icon_global(local_config, init_time=RUN_06)
+    subset = ICONV1Provider("global", params=["T_2M"])
+    assert subset.run_partition(RUN_00) is True
+    assert subset.store_prefix == "bkr/icon/icon_global_11102026.icechunk"
+
+    full = ICONV1Provider("global")
+    assert full.missing_timesteps(pd.DatetimeIndex([RUN_00, RUN_06])) == [RUN_00, RUN_06]
+    assert full.run_partition(RUN_06) is True
+    assert full.run_partition(RUN_00) is True
+    stored = open_store(local_config, full.store_prefix)
+    assert full.store_prefix == "bkr/icon/icon_global_11102026_1.icechunk"
+    assert sorted(pd.DatetimeIndex(stored["init_time"].values)) == [RUN_00, RUN_06]
+    assert len(stored.data_vars) == len(full.layout.variables)
 
 
 # -- memory bounding ---------------------------------------------------------------------
@@ -513,7 +533,7 @@ def test_dagster_assets_have_their_own_pools_and_memory_tags():
         partitions = asset.partitions_def
         assert pd.Timestamp(partitions.start).tz_localize(None) == cat.MODELS[model].archive_start
         assert partitions.cron_schedule == "0 0,6,12,18 * * *"
-        assert asset.op.retry_policy is not None
+        assert asset.op.tags["dagster/max_runtime"] == str(12 * 3600)
     assert len(pools) == 3
     # The other ICON assets are unchanged.
     assert {"icon_global_model", "icon_eu", "icon_d2_ruc_60min"} <= set(by_name)

@@ -75,7 +75,14 @@ Each variant writes a family of generations
 (:class:`~planetary_datasets.common.generations.GenerationalStoreMixin`). ICON-Global
 shares its base prefix with the original ``bkr/icon/icon_global.icechunk``, whose schema
 is different, so its first run here starts a dated generation
-``icon_global_<DDMMYYYY>.icechunk``. ICON-ART and ICON-ART-EU start at their base prefix.
+``icon_global_<DDMMYYYY>.icechunk``. ICON-ART and ICON-ART-EU start at their base prefix,
+which no store occupies yet; one of another layout there would push them to a dated
+generation in the same way.
+
+Only generations with this provider's variables on its dimensions count when deciding
+whether a run is already stored (:meth:`ICONV1Provider.generations`). A run held only by
+the original ``icon_global.icechunk``, or by a generation a ``params`` subset wrote, is
+still written to the full store.
 
 Example::
 
@@ -499,16 +506,11 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         fetch_workers: Concurrent reads per block from the archive.
         live_fetch_workers: Concurrent reads per block from DWD's live server.
         max_workers: Upper bound on blocks in flight; fewer if the ceiling requires it.
-        settle_after: Age after which a live run is assumed to be fully published.
     """
 
     append_dim = "init_time"
 
-    #: How long after its init time a live run is assumed fully published. Younger runs are
-    #: probed and refused with :class:`IncompleteRun` if still arriving.
-    settle_after: pd.Timedelta = pd.Timedelta(6, "h")
-
-    #: Variables probed for a young live run's last step: the first, middle and last.
+    #: Variables probed for a live run's last step: the first, middle and last selected.
     probe_count: int = 3
 
     def __init__(
@@ -521,7 +523,6 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         fetch_workers: int = 8,
         live_fetch_workers: int = 4,
         max_workers: int = 4,
-        settle_after: pd.Timedelta | None = None,
     ) -> None:
         """Build a provider for one variant; see the class docstring for the arguments."""
         super().__init__(config)
@@ -552,8 +553,6 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         self.fetch_workers = fetch_workers
         self.live_fetch_workers = live_fetch_workers
         self.max_workers = max_workers
-        if settle_after is not None:
-            self.settle_after = settle_after
         self._grid: tuple[np.ndarray, np.ndarray] | None = None
         self._runs: dict[pd.Timestamp, _RunState] = {}
 
@@ -598,8 +597,8 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         so a field missing at the source is discovered when it is read, and stored as NaN.
 
         Raises:
-            IncompleteRun: The run is on the live server, younger than
-                :attr:`settle_after`, and its last files are not there yet.
+            IncompleteRun: The run is read from the live server and the last files of
+                the probed variables are not there yet.
             ListingError: A source that could hold the run could not be listed.
         """
         it = to_naive_utc(it)
@@ -608,7 +607,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             logger.info(f"{self.name}: run {it} is in neither the archive nor the live server")
             return []
         if source == "live":
-            self._require_settled(it)
+            self._require_published(it)
         keys = self._selected(self.schema.expected_fields(it))
         keys += self.schema.coordinate_fields()
         logger.info(f"{self.name}: run {it} from {source}, {len(keys):,} fields")
@@ -633,12 +632,15 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         picks = np.linspace(0, len(candidates) - 1, self.probe_count).round().astype(int)
         return [candidates[i] for i in sorted(set(picks.tolist()))]
 
-    def _require_settled(self, it: pd.Timestamp) -> None:
-        """Raise :class:`IncompleteRun` if a young live run's last files are missing."""
-        now = pd.Timestamp.now("UTC").tz_localize(None)
-        age = now - it
-        if age >= self.settle_after:
-            return
+    def _require_published(self, it: pd.Timestamp) -> None:
+        """Raise :class:`IncompleteRun` if a live run's last files are not there yet.
+
+        Asked of every live run, whatever its age: a scheduled partition runs once its
+        six-hour window has closed, by when DWD has normally finished, so the age alone
+        would never trigger the check in exactly the case it is for, a late run. Every
+        field still missing when the run is written would be stored as NaN for good.
+        """
+        age = pd.Timestamp.now("UTC").tz_localize(None) - it
         lister = get_lister(self.model, "live")
         absent = []
         for key in self._probe_fields(it):
@@ -651,7 +653,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
                 absent.append(f"{directory}/{name}")
         if absent:
             raise IncompleteRun(
-                f"{self.name}: live run {it} is {age} old and still being published; "
+                f"{self.name}: live run {it} is {age} old and not fully published; "
                 f"{len(absent)} probe file(s) absent, e.g. {absent[0]}. Retry later."
             )
 
@@ -883,6 +885,35 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
                 )
         return None
 
+    # -- stores -------------------------------------------------------------------------
+
+    def generations(self) -> list[str]:
+        """The generations holding this provider's variables on its dimensions, oldest first.
+
+        Narrower than the mixin's "every generation with data", which is what the presence
+        check and the grid fallback consult. ICON-Global's base prefix is also the original
+        ``icon_global.icechunk``, holding a few hand-picked fields, and a ``params`` subset
+        is written to a generation of its own; a run in either is not a run in this store,
+        and counting it as one would leave a permanent hole in the full store.
+        """
+        wanted = {v.name: v.dims for v in self.layout.variables}
+        own = []
+        for prefix in super().generations():
+            try:
+                stored = xr.open_zarr(
+                    self.config.icechunk_repo(prefix).readonly_session("main").store,
+                    consolidated=False,
+                )
+            except STORE_READ_ERRORS as exc:
+                logger.debug(f"{prefix}: unreadable ({type(exc).__name__}), not ours")
+                continue
+            found = {str(n): tuple(map(str, stored[n].dims)) for n in stored.data_vars}
+            if found == wanted:
+                own.append(prefix)
+            else:
+                logger.debug(f"{prefix}: a different layout, not consulted for {self.name}")
+        return own
+
     # -- write --------------------------------------------------------------------------
 
     def run_partition(self, it: pd.Timestamp, check_present: bool = True) -> bool:
@@ -941,9 +972,8 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
 
         The number of blocks in flight comes from :meth:`compute_workers`. The dask compute
         and the commit both run inside :func:`bounded_compute` and :func:`memory_guard`:
-        they are one call, so the guard cannot stop between them, and a breach is raised
-        after the commit. That fails the partition, so it is noticed, though the run is
-        stored.
+        they are one call, so the guard cannot stop between them. A breach is raised if the
+        write failed, and logged as an error if the run was committed anyway.
 
         Written here rather than through :func:`~planetary_datasets.common.store.write_to_icechunk`
         for two reasons: a new store is created at :data:`CREATE_CLEVEL`, and the commit
@@ -960,9 +990,18 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         state = self._runs.get(it)
         workers = self.compute_workers(processed)
         what = f"{self.name} {it:%Y-%m-%dT%H}"
-        with memory_guard(ceiling_gb=self.ceiling_gb, what=what):
-            with bounded_compute(workers):
-                return self._write_run(repo, processed, it, state)
+        written = False
+        try:
+            with memory_guard(ceiling_gb=self.ceiling_gb, what=what):
+                with bounded_compute(workers):
+                    written = self._write_run(repo, processed, it, state)
+        except MemoryLimitExceeded as exc:
+            if not written:
+                raise
+            # The run is committed and correct; failing the partition now would only make
+            # a retry find it stored and report it as not written.
+            logger.error(f"{self.name}: run {it} was committed, but {exc}")
+        return written
 
     def _open_stored(self, repo: icechunk.Repository, session) -> xr.Dataset | None:
         """The store's contents, or None if nothing has been written to it yet."""

@@ -29,6 +29,7 @@ from planetary_datasets.providers.icon import (
     VARIANTS,
     ICOND2RUCProvider,
     ICONProvider,
+    IncompleteRun,
     write_model_level_half_heights,
 )
 from planetary_datasets.providers.icon_v1 import (
@@ -59,10 +60,16 @@ ICON_V1_ASSETS: dict[str, str] = {
 #: Memory each ICON v1 run is held to, in GB. The provider sizes its write to fit.
 ICON_V1_MEMORY_GB = 4
 
-#: A live run younger than the provider's settle time and still being published raises
-#: IncompleteRun; DWD finishes a global run within a few hours, so retrying over about
-#: four hours covers it without holding every partition back by the worst case.
-ICON_V1_RETRY = dg.RetryPolicy(max_retries=4, delay=900, backoff=dg.Backoff.EXPONENTIAL)
+#: Retries of a live run DWD has not finished publishing (IncompleteRun), 15, 30, 60 and
+#: 120 min apart. Only that failure is retried: anything else is deterministic (a grid or
+#: schema mismatch) or already retried inside the provider (a transient read), and
+#: retrying it would hold the variant's one-writer pool for hours to no effect.
+ICON_V1_INCOMPLETE_RETRIES = 4
+ICON_V1_RETRY_DELAY_S = 900
+
+#: Longest an ICON v1 run may take. A global 00Z run is ~450 GB of GRIB; this allows it
+#: at under 15 MB/s, and stops a wedged run holding the pool for good.
+ICON_V1_MAX_RUNTIME_H = 12
 
 #: The rapid update cycle produces a new analysis every hour.
 RUC_PARTITIONS = dg.HourlyPartitionsDefinition(start_date="2026-04-18-00:00", end_offset=0)
@@ -152,6 +159,7 @@ def _v1_asset(variant: str):
         MEMORY_CLASS_TAG: memory_class_for(ICON_V1_MEMORY_GB),
         MEMORY_GB_TAG: str(ICON_V1_MEMORY_GB),
     }
+    op_tags = {**memory_tags, "dagster/max_runtime": str(ICON_V1_MAX_RUNTIME_H * 3600)}
 
     @dg.asset(
         name=name,
@@ -166,14 +174,19 @@ def _v1_asset(variant: str):
             "live": dg.MetadataValue.url(f"{LIVE_ROOT}/{model}"),
         },
         pool=f"icon_v1_{variant}",
-        retry_policy=ICON_V1_RETRY,
         tags=memory_tags,
-        op_tags=memory_tags,
+        op_tags=op_tags,
     )
     def _asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
         provider = ICONV1Provider(variant)
         it = _partition_timestamp(context)
-        written = provider.run_partition(it)
+        try:
+            written = provider.run_partition(it)
+        except IncompleteRun as exc:
+            raise dg.RetryRequested(
+                max_retries=ICON_V1_INCOMPLETE_RETRIES,
+                seconds_to_wait=ICON_V1_RETRY_DELAY_S * 2**context.retry_number,
+            ) from exc
         return dg.MaterializeResult(
             metadata={
                 "written": dg.MetadataValue.bool(written),

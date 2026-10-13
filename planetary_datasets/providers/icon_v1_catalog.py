@@ -683,7 +683,10 @@ def _walk_tree(
             for lt in _children(lister, f"{base}/lvt1"):
                 if not lt.isdigit():
                     excluded.append(
-                        {"param": param, "level_type": lt, "reason": "non-numeric level type"}
+                        _with_wavelength(
+                            {"param": param, "level_type": lt, "reason": "non-numeric level type"},
+                            wavelength,
+                        )
                     )
                     continue
                 levels = _children(lister, f"{base}/lvt1/{lt}/lv1")
@@ -702,11 +705,14 @@ def _walk_tree(
                 excluded.extend(skipped)
         else:
             excluded.append(
-                {
-                    "param": param,
-                    "level_type": None,
-                    "reason": f"published under {child}/, which FieldKey cannot address",
-                }
+                _with_wavelength(
+                    {
+                        "param": param,
+                        "level_type": None,
+                        "reason": f"published under {child}/, which FieldKey cannot address",
+                    },
+                    wavelength,
+                )
             )
     return groups, excluded
 
@@ -899,7 +905,10 @@ def discover_schema(
         "invariant_params": invariant,
         "step_sets": {sid: list(steps) for steps, sid in sorted(ids.items(), key=lambda i: i[1])},
         "variables": variables,
-        "excluded": sorted(excluded, key=lambda e: (e["param"], str(e["level_type"]))),
+        "excluded": sorted(
+            excluded,
+            key=lambda e: (e["param"], str(e["level_type"]), e.get("wavelength") or -1),
+        ),
     }
 
 
