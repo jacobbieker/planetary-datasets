@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import posixpath
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -637,3 +638,120 @@ def test_committed_art_schemas_carry_the_wavelength_fields(model):
     assert all(v.wavelength is None for v in schema.variables if "BSC" not in v.param)
     key = FieldKey("SAT_BSC_DUST", 150, str(last), 0, 532)
     assert key in schema.expected_fields(pd.Timestamp("2026-10-11T00:00"))
+
+
+# -- storage precision -------------------------------------------------------------------
+
+
+def stats_of(*fields) -> cat.PrecisionStats:
+    stats = cat.PrecisionStats()
+    for values in fields:
+        stats.add(np.asarray(values, dtype=np.float32))
+    return stats
+
+
+def test_precision_stats_measure_range_underflow_and_fp16_error():
+    stats = stats_of([0.0, 1.0, 250.123, -3.0], [1e-6, 2.0, np.nan])
+    assert stats.samples == 2
+    assert stats.max_abs == pytest.approx(250.123, rel=1e-6)
+    assert stats.nonzero == 5 and stats.below_normal == 1
+    assert stats.subnormal_fraction == pytest.approx(0.2)
+    assert 0 < stats.fp16_max_abs_error <= 0.125
+    # Merging is the same as adding everything to one.
+    merged = stats_of([0.0, 1.0, 250.123, -3.0]).merge(stats_of([1e-6, 2.0, np.nan]))
+    assert merged == stats
+
+
+@pytest.mark.parametrize(
+    "param, fields, expected",
+    [
+        ("T_2M", [[230.0, 310.5]], ("float16", "fits")),
+        ("U_10M", [[-30.0, 0.0, 0.0, 12.5]], ("float16", "fits")),
+        # Above 65504 / 4: pressure-like ranges, even under a name not on the list.
+        ("RUNOFF_G", [[0.0, 20540.0]], ("float32", "range")),
+        # More than 0.1% of the non-zero values below float16's smallest normal.
+        ("W", [[0.5] * 998 + [1e-6, 2e-6]], ("float32", "underflow")),
+        # One in a thousand is allowed.
+        ("W", [[0.5] * 999 + [1e-6]], ("float16", "fits")),
+        # The list beats statistics that would pass.
+        ("QV", [[0.5, 1.0]], ("float32", "full-precision list")),
+        ("tqv", [[0.5, 1.0]], ("float32", "full-precision list")),
+        ("FI", [[10.0]], ("float32", "full-precision list")),
+        ("PS", [[10.0]], ("float32", "full-precision list")),
+        ("ACCDRYDEPO_DUSTA", [[1.0]], ("float32", "full-precision list")),
+        ("CEIL_BSC_DUST", [[1.0]], ("float32", "full-precision list")),
+        ("CLAT", [[1.0]], ("float32", "full-precision list")),
+    ],
+)
+def test_classify_precision(param, fields, expected):
+    assert cat.classify_precision(param, stats_of(*fields)) == expected
+
+
+def test_unsampled_variables_stay_float32():
+    assert cat.classify_precision("T_2M", None) == ("float32", "not sampled")
+    assert cat.classify_precision("T_2M", cat.PrecisionStats()) == ("float32", "not sampled")
+
+
+def test_full_precision_list_covers_the_committed_families():
+    params = {v.param for m in cat.MODELS for v in cat.load_schema(m).variables}
+    full = {p for p in params if cat.is_full_precision(p)}
+    assert {"QV", "QC", "QI", "QV_S", "TQV", "TQC_DIA", "FI", "HHL", "HSURF", "P", "PS"} <= full
+    assert {p for p in params if "DUST" in p} <= full
+    assert not {"T_2M", "U_10M", "CLCT", "TOT_PREC"} & full
+
+
+def test_a_missing_dtype_means_float32(fake_tree):
+    data = discover(fake_tree)
+    assert all("dtype" not in v for v in data["variables"])
+    schema = cat.ICONSchema(data)
+    assert {v.dtype for v in schema.variables} == {"float32"}
+    data["variables"][0]["dtype"] = "float64"
+    with pytest.raises(ValueError, match="dtype"):
+        cat.ICONSchema(data)
+
+
+def test_measure_and_apply_precision_sample_each_variable(fake_tree):
+    data = discover(fake_tree, runs=RUNS_4)
+    schema = cat.ICONSchema(data)
+    read: list[str] = []
+
+    def reader(uri: str):
+        read.append(uri)
+        if "/p/HSURF/" in uri:
+            return None  # missing at the source
+        if "/p/W_SO/" in uri:
+            return np.array([1e-7, 1e-7, 0.3], np.float32)
+        return np.array([280.0, 0.0, 1.5], np.float32)
+
+    runs = [RUN_00, pd.Timestamp("2026-10-11T12:00")]
+    results = cat.measure_precision("icon", runs, "archive", schema=schema, reader=reader)
+    # T on model levels 1, 2, 10: top, middle and bottom level, by first, middle and last
+    # step, in each of the two runs.
+    assert results[("T", 150, None)].samples == 3 * 3 * 2
+    assert results[("HSURF", None, None)].samples == 0
+    assert not any("/r/2026-10-11T06:00/" in u for u in read)
+
+    updated = cat.apply_precision(data, results)
+    entries = {(v["param"], v["level_type"], v.get("wavelength")): v for v in updated["variables"]}
+    assert entries[("T_2M", None, None)]["dtype"] == "float16"
+    assert entries[("W_SO", 106, None)]["precision"]["reason"] == "underflow"
+    assert entries[("HSURF", None, None)]["dtype"] == "float32"
+    assert entries[("T_2M", None, None)]["precision"]["samples"] == 6
+    reloaded = cat.ICONSchema(json.loads(cat.dump_schema(updated)))
+    assert reloaded.variable("T_2M", None).dtype == "float16"
+    assert "dtype" not in data["variables"][0]  # the input is not modified
+
+    # Rediscovering keeps the recorded precision of the variables it still has.
+    carried = cat.carry_precision(discover(fake_tree, runs=RUNS_4), updated)
+    assert carried == updated | {"generated_at": carried["generated_at"]}
+
+
+@pytest.mark.parametrize("model", sorted(cat.MODELS))
+def test_committed_schemas_carry_a_dtype_for_every_variable(model):
+    schema = cat.load_schema(model)
+    assert {v.dtype for v in schema.variables} == {"float16", "float32"}
+    for v in schema.variables:
+        if cat.is_full_precision(v.param):
+            assert v.dtype == "float32", v
+    assert schema.variable("T_2M", None).dtype == "float16"
+    assert schema.variable("QV", 150).dtype == "float32"

@@ -24,6 +24,12 @@ as JSON in ``icon_v1_schemas/<model>.json``. Regenerate one with::
 
     python -m planetary_datasets.providers.icon_v1_catalog schema icon --source live
 
+Each variable also records the precision it is stored at, ``float16`` or ``float32``, chosen
+by sampling real fields (:func:`measure_precision`, :func:`classify_precision`) and kept
+across rediscovery. Record or refresh it with::
+
+    python -m planetary_datasets.providers.icon_v1_catalog precision icon --source live
+
 The committed schemas come from the four runs on the live server, one per cycle hour. The
 archive mirror often lacks whole parameters or levels of a run (ICON-Global especially),
 which the discovery refuses as reference runs; the live server's finished runs are whole.
@@ -67,6 +73,7 @@ from html.parser import HTMLParser
 from typing import Any, Callable, Collection, Iterable, Literal, Mapping, Sequence
 
 import fsspec
+import numpy as np
 import pandas as pd
 import requests
 from loguru import logger
@@ -1092,6 +1099,8 @@ class VariableSpec:
         levels: Levels as they appear in paths, sorted numerically; empty if single-level.
         steps: Union of the steps published in any cycle.
         wavelength: Wavelength in nanometres for the ``wvl1/<nm>/`` fields, else None.
+        dtype: ``"float16"`` or ``"float32"``, the precision it is stored at; see
+            :func:`classify_precision`. Schemas without the key store everything as float32.
     """
 
     param: str
@@ -1099,6 +1108,7 @@ class VariableSpec:
     levels: tuple[str, ...]
     steps: tuple[int, ...]
     wavelength: int | None = None
+    dtype: str = "float32"
 
 
 class ICONSchema:
@@ -1163,8 +1173,11 @@ class ICONSchema:
             levels = tuple(str(lv) for lv in entry["levels"])
             if (entry["level_type"] is None) != (not levels):
                 raise ValueError(f"{key}: levels must be given exactly for levelled fields")
+            dtype = entry.get("dtype", FLOAT32)
+            if dtype not in STORAGE_DTYPES:
+                raise ValueError(f"{key}: dtype must be one of {STORAGE_DTYPES}, got {dtype!r}")
             variables.append(
-                VariableSpec(entry["param"], entry["level_type"], levels, union, wavelength)
+                VariableSpec(entry["param"], entry["level_type"], levels, union, wavelength, dtype)
             )
         self.variables: tuple[VariableSpec, ...] = tuple(variables)
         self._cycle_steps = cycle_steps
@@ -1263,6 +1276,346 @@ def load_schema(model: str) -> ICONSchema:
 
 
 # ---------------------------------------------------------------------------------------
+# Storage precision
+# ---------------------------------------------------------------------------------------
+
+FLOAT16 = "float16"
+FLOAT32 = "float32"
+
+#: The dtypes a variable may be stored as.
+STORAGE_DTYPES: tuple[str, str] = (FLOAT16, FLOAT32)
+
+#: Largest finite float16.
+FLOAT16_MAX = 65504.0
+
+#: How far inside :data:`FLOAT16_MAX` the largest sampled value must stay: a few runs do
+#: not see a variable's extremes, and a value that overflows is stored as inf.
+FLOAT16_HEADROOM = 4.0
+
+#: Smallest normal float16. Below it float16 loses relative precision bit by bit, down to
+#: zero at 6e-8, so a field that lives there (a mixing ratio in kg/kg) is wiped out.
+FLOAT16_TINY = float(np.finfo(np.float16).tiny)
+
+#: Largest fraction of non-zero values allowed below :data:`FLOAT16_TINY`.
+FLOAT16_MAX_SUBNORMAL_FRACTION = 1e-3
+
+#: Parameters always stored at full precision, whatever their sampled range says.
+#:
+#: DWD packs every field at 16 bits per value, so float16, with 11 significant bits, is
+#: never bit-exact; it is used where the loss is far below what the field means (a
+#: temperature to an eighth of a kelvin, a wind to a centimetre per second). The fields
+#: listed here are the ones where it is not, or where the sampled range cannot be trusted
+#: to show it:
+#:
+#: * Moisture: specific humidity, the hydrometeors and their columns (``Q*``, ``TQ*``).
+#:   Mixing ratios sit at 1e-3 to 1e-8 kg/kg, below float16's normal range, and are the
+#:   inputs of every derived humidity and precipitation diagnostic.
+#: * Geopotential and heights in metres (``FI``, ``HHL``, ``HSURF``, cloud base and top,
+#:   freezing level, ceiling, subgrid orography). Large offsets, where float16's
+#:   relative precision is metres to tens of metres, and level heights are differenced.
+#: * Pressure (``P``, ``PS``, ``PMSL``): about 1e5 Pa, beyond float16's range entirely.
+#: * Every ICON-ART dust, aerosol and deposition field (anything containing ``DUST``,
+#:   ``AER_*``, ``TAOD*``, the ``ACC*`` accumulations): concentrations and fluxes many
+#:   orders of magnitude apart, mostly far below float16's normal range.
+#: * The cell coordinates ``CLAT``/``CLON`` (stored as float32 coordinates regardless).
+FULL_PRECISION_PARAMS: frozenset[str] = frozenset(
+    {
+        # Geopotential and geometric heights.
+        "FI",
+        "HHL",
+        "HSURF",
+        "HZEROCL",
+        "HBAS_CON",
+        "HTOP_CON",
+        "HTOP_DC",
+        "CEILING",
+        "SSO_STDH",
+        "SNOWLMT",
+        "HPBL",
+        "MH",
+        # Pressure.
+        "P",
+        "PS",
+        "PMSL",
+        # Coordinates.
+        "CLAT",
+        "CLON",
+    }
+)
+
+#: Parameter name prefixes always stored at full precision; see :data:`FULL_PRECISION_PARAMS`.
+FULL_PRECISION_PREFIXES: tuple[str, ...] = ("Q", "TQ", "AER_", "TAOD", "ACC")
+
+#: Substrings that mark a parameter as always full precision.
+FULL_PRECISION_SUBSTRINGS: tuple[str, ...] = ("DUST",)
+
+
+def is_full_precision(param: str) -> bool:
+    """Whether ``param`` is always stored as float32. Case-insensitive.
+
+    Args:
+        param: DWD parameter name.
+    """
+    name = param.upper()
+    return (
+        name in FULL_PRECISION_PARAMS
+        or name.startswith(FULL_PRECISION_PREFIXES)
+        or any(part in name for part in FULL_PRECISION_SUBSTRINGS)
+    )
+
+
+@dataclasses.dataclass
+class PrecisionStats:
+    """What sampled fields of one variable say about storing it as float16.
+
+    Attributes:
+        samples: Fields decoded.
+        max_abs: Largest finite absolute value.
+        nonzero: Finite non-zero values seen.
+        below_normal: Of those, how many are smaller in magnitude than float16's smallest
+            normal number.
+        fp16_max_abs_error: Largest absolute error of a float16 round trip, over values
+            that do not overflow.
+        fp16_max_rel_error: Largest relative error of a float16 round trip, over non-zero
+            values that do not overflow.
+    """
+
+    samples: int = 0
+    max_abs: float = 0.0
+    nonzero: int = 0
+    below_normal: int = 0
+    fp16_max_abs_error: float = 0.0
+    fp16_max_rel_error: float = 0.0
+
+    @property
+    def subnormal_fraction(self) -> float:
+        """Fraction of non-zero values below float16's normal range."""
+        return self.below_normal / self.nonzero if self.nonzero else 0.0
+
+    def add(self, values: np.ndarray) -> None:
+        """Fold one decoded field into the statistics."""
+        finite = np.asarray(values, dtype=np.float32)
+        finite = finite[np.isfinite(finite)]
+        self.samples += 1
+        if not finite.size:
+            return
+        magnitude = np.abs(finite)
+        self.max_abs = max(self.max_abs, float(magnitude.max()))
+        nonzero = magnitude > 0
+        self.nonzero += int(nonzero.sum())
+        self.below_normal += int((nonzero & (magnitude < FLOAT16_TINY)).sum())
+        with np.errstate(over="ignore"):
+            half = finite.astype(np.float16)
+        representable = np.isfinite(half)
+        error = np.abs(half[representable].astype(np.float32) - finite[representable])
+        if error.size:
+            self.fp16_max_abs_error = max(self.fp16_max_abs_error, float(error.max()))
+            rel = nonzero[representable]
+            if rel.any():
+                relative = error[rel] / magnitude[representable][rel]
+                self.fp16_max_rel_error = max(self.fp16_max_rel_error, float(relative.max()))
+
+    def merge(self, other: "PrecisionStats") -> "PrecisionStats":
+        """Combine two sets of statistics."""
+        return PrecisionStats(
+            samples=self.samples + other.samples,
+            max_abs=max(self.max_abs, other.max_abs),
+            nonzero=self.nonzero + other.nonzero,
+            below_normal=self.below_normal + other.below_normal,
+            fp16_max_abs_error=max(self.fp16_max_abs_error, other.fp16_max_abs_error),
+            fp16_max_rel_error=max(self.fp16_max_rel_error, other.fp16_max_rel_error),
+        )
+
+    def as_json(self) -> dict[str, Any]:
+        """A compact summary for the schema JSON, to four significant figures."""
+
+        def short(value: float) -> float:
+            return float(f"{value:.4g}")
+
+        return {
+            "samples": self.samples,
+            "max_abs": short(self.max_abs),
+            "subnormal_fraction": short(self.subnormal_fraction),
+            "fp16_max_abs_error": short(self.fp16_max_abs_error),
+            "fp16_max_rel_error": short(self.fp16_max_rel_error),
+        }
+
+
+def classify_precision(param: str, stats: PrecisionStats | None) -> tuple[str, str]:
+    """Decide whether a variable is stored as float16 or float32.
+
+    float16 only when every one of these holds; float32 otherwise:
+
+    1. ``param`` is not always full precision (:func:`is_full_precision`);
+    2. it was sampled at all;
+    3. its largest sampled magnitude is at most :data:`FLOAT16_MAX` /
+       :data:`FLOAT16_HEADROOM`, so extremes the sample missed still fit;
+    4. at most :data:`FLOAT16_MAX_SUBNORMAL_FRACTION` of its non-zero values are below
+       float16's smallest normal number. Exact zeros are fine.
+
+    Args:
+        param: DWD parameter name.
+        stats: Sampled statistics, or None if nothing could be sampled.
+
+    Returns:
+        ``(dtype, reason)``.
+    """
+    if is_full_precision(param):
+        return FLOAT32, "full-precision list"
+    if stats is None or stats.samples == 0:
+        return FLOAT32, "not sampled"
+    if stats.max_abs > FLOAT16_MAX / FLOAT16_HEADROOM:
+        return FLOAT32, "range"
+    if stats.subnormal_fraction > FLOAT16_MAX_SUBNORMAL_FRACTION:
+        return FLOAT32, "underflow"
+    return FLOAT16, "fits"
+
+
+VariableKey = tuple[str, "int | None", "int | None"]
+
+
+def _variable_key(param: str, level_type: int | None, wavelength: int | None) -> VariableKey:
+    return (param, level_type, wavelength)
+
+
+def precision_samples(
+    schema: ICONSchema, spec: VariableSpec, runs: Sequence[pd.Timestamp]
+) -> list[tuple[FieldKey, pd.Timestamp]]:
+    """The fields sampled for one variable.
+
+    Per run, the first, middle and last step of its cycle, at its top, middle and bottom
+    level: at most nine fields a run.
+    """
+
+    def ends(items: Sequence) -> list:
+        return list(dict.fromkeys([items[0], items[len(items) // 2], items[-1]]))
+
+    samples = []
+    for run in runs:
+        steps = schema.steps_for_cycle(spec.param, spec.level_type, run.hour, spec.wavelength)
+        if not steps:
+            continue
+        for level in ends(spec.levels) if spec.levels else [None]:
+            for step in ends(steps):
+                key = FieldKey(spec.param, spec.level_type, level, step, spec.wavelength)
+                samples.append((key, run))
+    return samples
+
+
+#: Reads and decodes one field to float32, or returns None if it is missing.
+FieldReader = Callable[[str], "np.ndarray | None"]
+
+
+def _field_reader(source: Source) -> FieldReader:
+    from planetary_datasets.common.download import read_bytes
+    from planetary_datasets.common.grib import decode_grib_field
+
+    options = storage_options(source)
+
+    def read(uri: str) -> np.ndarray | None:
+        data = read_bytes(uri, storage_options=options)
+        return None if data is None else decode_grib_field(data, dtype=np.float32)
+
+    return read
+
+
+def measure_precision(
+    model: str,
+    runs: Sequence[pd.Timestamp],
+    source: Source,
+    *,
+    schema: ICONSchema | None = None,
+    reader: FieldReader | None = None,
+    max_workers: int = MAX_LISTING_WORKERS,
+) -> dict[VariableKey, PrecisionStats]:
+    """Sample real fields of every variable and gather their float16 statistics.
+
+    Args:
+        model: Model name, a key of :data:`MODELS`.
+        runs: Runs to sample, e.g. one 00Z and one 12Z.
+        source: ``"archive"`` or ``"live"``.
+        schema: Schema to sample; defaults to the committed one.
+        reader: Field reader to use instead of the network, for tests.
+        max_workers: Concurrent reads, at most :data:`MAX_LISTING_WORKERS`.
+
+    Returns:
+        Statistics per ``(param, level_type, wavelength)``; variables whose every sample
+        was missing have ``samples == 0``.
+    """
+    schema = schema or load_schema(model)
+    runs = [_normalize_init_time(r) for r in runs]
+    reader = reader or _field_reader(source)
+    jobs = [
+        (_variable_key(spec.param, spec.level_type, spec.wavelength), key, run)
+        for spec in schema.variables
+        for key, run in precision_samples(schema, spec, runs)
+    ]
+    logger.info(f"sampling {len(jobs)} {model} fields from {source} runs {runs}")
+    results: dict[VariableKey, PrecisionStats] = {
+        _variable_key(s.param, s.level_type, s.wavelength): PrecisionStats()
+        for s in schema.variables
+    }
+
+    def one(job: tuple[VariableKey, FieldKey, pd.Timestamp]) -> tuple[VariableKey, PrecisionStats]:
+        variable, key, run = job
+        stats = PrecisionStats()
+        values = reader(field_uri(model, key, run, source))
+        if values is not None:
+            stats.add(values)
+        return variable, stats
+
+    workers = max(1, min(max_workers, MAX_LISTING_WORKERS))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for variable, stats in pool.map(one, jobs):
+            results[variable] = results[variable].merge(stats)
+    return results
+
+
+def apply_precision(
+    data: Mapping[str, Any], results: Mapping[VariableKey, PrecisionStats]
+) -> dict[str, Any]:
+    """Record each variable's dtype and its statistics in a schema's JSON data.
+
+    Args:
+        data: Schema JSON, as :func:`discover_schema` returns it.
+        results: Output of :func:`measure_precision`.
+
+    Returns:
+        A copy of ``data`` whose variable entries carry ``dtype`` and ``precision``.
+    """
+    out = json.loads(json.dumps(data))
+    for entry in out["variables"]:
+        key = _variable_key(entry["param"], entry["level_type"], entry.get("wavelength"))
+        stats = results.get(key)
+        dtype, reason = classify_precision(entry["param"], stats)
+        entry["dtype"] = dtype
+        entry["precision"] = {**(stats or PrecisionStats()).as_json(), "reason": reason}
+    return out
+
+
+def carry_precision(new: Mapping[str, Any], old: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy ``dtype`` and ``precision`` from an older schema's matching variables.
+
+    So that rediscovering a schema does not silently send every variable back to float32;
+    variables new to the schema stay float32 until ``precision`` is run again.
+    """
+    previous = {
+        _variable_key(e["param"], e["level_type"], e.get("wavelength")): e
+        for e in old.get("variables", ())
+    }
+    out = json.loads(json.dumps(new))
+    for entry in out["variables"]:
+        match = previous.get(
+            _variable_key(entry["param"], entry["level_type"], entry.get("wavelength"))
+        )
+        if match is not None:
+            for field in ("dtype", "precision"):
+                if field in match:
+                    entry[field] = match[field]
+    return out
+
+
+# ---------------------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------------------
 
@@ -1319,6 +1672,28 @@ def _summarise_runs(model: str, source: Source) -> str:
     return f"{model} {source}: {len(runs)} runs, {runs[0]} -> {runs[-1]}"
 
 
+def _precision_command(
+    model: str, runs: Sequence[pd.Timestamp], source: Source, output: pathlib.Path, workers: int
+) -> int:
+    """Measure, classify and record every variable's storage dtype in ``output``."""
+    data = json.loads(output.read_text(encoding="utf-8"))
+    schema = ICONSchema(data)
+    results = measure_precision(model, runs, source, schema=schema, max_workers=workers)
+    updated = apply_precision(data, results)
+    ICONSchema(updated)
+    output.write_text(dump_schema(updated), encoding="utf-8")
+    by_dtype: dict[str, list[str]] = {FLOAT16: [], FLOAT32: []}
+    for entry in updated["variables"]:
+        name = entry["param"] + (f"@{entry['level_type']}" if entry["level_type"] else "")
+        if entry.get("wavelength"):
+            name += f"@{entry['wavelength']}nm"
+        by_dtype[entry["dtype"]].append(f"{name}({entry['precision']['reason']})")
+    for dtype, names in by_dtype.items():
+        logger.info(f"{model} {dtype} ({len(names)}): {', '.join(names)}")
+    logger.info(f"wrote {output}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point. Returns the exit code."""
     parser = argparse.ArgumentParser(prog="python -m planetary_datasets.providers.icon_v1_catalog")
@@ -1347,6 +1722,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="write the schema even if a reference run looks incomplete",
     )
 
+    precision_cmd = sub.add_parser(
+        "precision", help="sample real fields and record each variable's storage dtype"
+    )
+    precision_cmd.add_argument("model", choices=sorted(MODELS))
+    precision_cmd.add_argument("--source", choices=("archive", "live"), default="live")
+    precision_cmd.add_argument(
+        "--runs", nargs="+", help="runs to sample; defaults to the newest 00Z and 12Z"
+    )
+    precision_cmd.add_argument("--min-age-hours", type=float, default=None)
+    precision_cmd.add_argument("--output", type=pathlib.Path, help="defaults to the package JSON")
+    precision_cmd.add_argument("--max-workers", type=int, default=MAX_LISTING_WORKERS)
+
     runs_cmd = sub.add_parser("runs", help="summarise the runs each source holds")
     runs_cmd.add_argument("models", nargs="*", choices=sorted(MODELS))
     runs_cmd.add_argument("--source", choices=("archive", "live"), action="append")
@@ -1368,6 +1755,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         runs = default_reference_runs(
             list_runs(args.model, args.source), now, pd.Timedelta(hours, "h")
         )
+    output = args.output or schema_path(args.model)
+    if args.command == "precision":
+        if not args.runs:
+            runs = [r for r in runs if r.hour in (0, 12)]
+        return _precision_command(args.model, runs, args.source, output, args.max_workers)
+
     logger.info(f"discovering {args.model} from {args.source} runs {[str(r) for r in runs]}")
     schema = discover_schema(
         args.model,
@@ -1376,8 +1769,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         check_grid=not args.no_grid_check,
         strict=not args.allow_gaps,
     )
+    if output.exists():
+        schema = carry_precision(schema, json.loads(output.read_text(encoding="utf-8")))
     ICONSchema(schema)  # validate before writing
-    output = args.output or schema_path(args.model)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(dump_schema(schema), encoding="utf-8")
     logger.info(
