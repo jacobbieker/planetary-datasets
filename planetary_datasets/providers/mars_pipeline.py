@@ -146,11 +146,12 @@ SHORT_CUTOFF_STREAMS = {"oper": "scda", "wave": "scwv"}
 #: 18 UTC model levels and 2D spectra from oper/wave for August 2026.
 SHORT_CUTOFF_RETIRED = pd.Timestamp("2026-05-12 06:00")
 
-#: Seconds a single socket read in a MARS child may block for. Bounds the
-#: hang described in `_mars_execute`; must stay well under `retrieve`'s
-#: ``stall_seconds`` so the child gives up before the parent kills it, and
-#: well over the time any one chunk read takes.
-MARS_SOCKET_TIMEOUT = 600
+#: Seconds the post-transfer tidy-up in a MARS child may block for. Bounds
+#: the hang described in `_mars_execute`; must stay well under `retrieve`'s
+#: ``stall_seconds`` so the child gives up before the parent kills it. It
+#: applies to nothing else -- notably not to the queue polling, which has no
+#: deadline and legitimately runs for hours.
+MARS_CLEANUP_TIMEOUT = 600
 
 #: Ocean wave analysis parameters (GRIB codes, table 140)
 WAVE_PARAMS = (
@@ -438,19 +439,24 @@ def _mars_execute(request: dict[str, str], target: str) -> None:
     ``spawn`` child: it re-imports the module and re-reads the configuration,
     and an ``ECMWFService`` would not survive being pickled across.
 
-    Sets a socket timeout first, because ecmwfapi builds none of its HTTP
-    calls with one. Once a transfer finishes, ``execute`` ends by asking the
+    Bounds the tidy-up call, because ecmwfapi builds none of its HTTP calls
+    with a timeout. Once a transfer finishes, ``execute`` ends by asking the
     server to drop the request, and that call has been seen to block on an SSL
     read that never returns: the target is complete and closed, but the child
     sits in ``read(2)`` forever. `retrieve` watches the file rather than the
     client, so such a child is indistinguishable from a dead transfer, and
     `stall_seconds` later the request is killed and a finished retrieval
     deleted -- measured at eleven whole files, each killed 30 minutes to the
-    second after its "Done". The timeout is far longer than any single chunk
-    read (transfers measured 19-71 MB/s against 1MB chunks) and shorter than
-    `stall_seconds`, so it only ever fires on a hang. ecmwfapi already
-    discards whatever that last call raises, so timing it out simply skips
-    the tidy-up and lets the retrieval finish.
+    second after its "Done".
+
+    Only that one call is bounded, not every socket. A request waits in the
+    MARS queue by polling, for hours when the archive is busy, and the parent
+    only starts its stall clock once bytes arrive (``size > 0``), so the queue
+    has no deadline and must not be given one: a blanket timeout turned a slow
+    poll into a failed request that lost its place in the queue and started
+    over, which cost three runs. The tidy-up has no such excuse -- it follows
+    a completed transfer -- and ecmwfapi discards whatever it raises, so
+    timing it out simply skips it and lets the retrieval finish.
 
     Exits through ``os._exit`` rather than returning, so that a client which
     leaves a thread behind cannot hang interpreter shutdown either. Nothing
@@ -458,9 +464,18 @@ def _mars_execute(request: dict[str, str], target: str) -> None:
     already, and the buffers that do matter are flushed first.
     """
     # Deferred so importing this module does not need ecmwfapi at all.
+    from ecmwfapi import api  # noqa: PLC0415
     from planetary_datasets.providers.mars import mars_service  # noqa: PLC0415
 
-    socket.setdefaulttimeout(MARS_SOCKET_TIMEOUT)
+    def bounded_cleanup(self, _original=api.Connection.cleanup):
+        previous = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(MARS_CLEANUP_TIMEOUT)
+        try:
+            _original(self)
+        finally:
+            socket.setdefaulttimeout(previous)
+
+    api.Connection.cleanup = bounded_cleanup
     code = 0
     try:
         mars_service().execute(request, target)
