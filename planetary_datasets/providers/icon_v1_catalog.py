@@ -30,7 +30,19 @@ across rediscovery. Record or refresh it with::
 
     python -m planetary_datasets.providers.icon_v1_catalog precision icon icon-art icon-art-eu
 
-The committed schemas come from the four runs on the live server, one per cycle hour. The
+Each model's grid eras are in :data:`ERAS`: ICON-ART and ICON-ART-EU moved to finer grids
+with the 2026-10-06T00 run, and every run is described by its own era's schema
+(:func:`era_for`, :func:`load_schema`). The old-grid schemas
+(``icon-art_grid36.json``, ``icon-art-eu_grid51.json``) were discovered from the archive,
+as the live server only has the current grid, from the three best-covered runs of each
+cycle hour (:func:`rank_reference_runs`)::
+
+    python -m planetary_datasets.providers.icon_v1_catalog schema icon-art-eu --era 51 \
+        --source archive --allow-gaps
+    python -m planetary_datasets.providers.icon_v1_catalog precision icon-art-eu --era 51 \
+        --source archive
+
+The committed current schemas come from the four runs on the live server, one per cycle hour. The
 archive mirror often lacks whole parameters or levels of a run (ICON-Global especially),
 which the discovery refuses as reference runs; the live server's finished runs are whole.
 The cycle hours differ beyond the 00/12Z vs 06/18Z horizon: ICON-ART publishes ``RSTOM``
@@ -164,6 +176,91 @@ MODELS: dict[str, ICONModelSpec] = {
     "icon-art": ICONModelSpec("icon-art", 1_310_720, 39, pd.Timestamp("2025-09-30T18:00")),
     "icon-art-eu": ICONModelSpec("icon-art-eu", 1_013_404, 61, pd.Timestamp("2025-09-30T18:00")),
 }
+
+
+@dataclasses.dataclass(frozen=True)
+class ICONEra:
+    """A span of runs one model published on one grid, with one frozen schema.
+
+    Attributes:
+        start: First run of the era, or None for an era with no known beginning.
+        grid_number: GRIB2 ``numberOfGridUsed`` of the cell grid.
+        n_cells: Cells on that grid.
+        schema: Stem of the era's schema JSON in ``icon_v1_schemas/``.
+    """
+
+    start: pd.Timestamp | None
+    grid_number: int
+    n_cells: int
+    schema: str
+
+
+#: The grids each model has published on, oldest first. An era runs until the next one
+#: starts. :data:`MODELS` describes the current, last era.
+#:
+#: ICON-ART and ICON-ART-EU moved to finer grids with the 2026-10-06T00 run: ICON-ART from
+#: grid 36 (737,280 cells) to grid 39 (1,310,720), ICON-ART-EU from grid 51 (571,088) to
+#: grid 61 (1,013,404). Read from the CLAT headers of the archived runs: 2026-10-05T18 is
+#: the last on the old grids, 2026-10-06T00 the first on the new.
+ERAS: dict[str, tuple[ICONEra, ...]] = {
+    "icon": (ICONEra(None, 26, 2_949_120, "icon"),),
+    "icon-art": (
+        ICONEra(None, 36, 737_280, "icon-art_grid36"),
+        ICONEra(pd.Timestamp("2026-10-06T00:00"), 39, 1_310_720, "icon-art"),
+    ),
+    "icon-art-eu": (
+        ICONEra(None, 51, 571_088, "icon-art-eu_grid51"),
+        ICONEra(pd.Timestamp("2026-10-06T00:00"), 61, 1_013_404, "icon-art-eu"),
+    ),
+}
+
+
+def current_era(model: str) -> ICONEra:
+    """The era a model publishes on now.
+
+    Raises:
+        ValueError: If the model is unknown.
+    """
+    _spec(model)
+    return ERAS[model][-1]
+
+
+def era_for(model: str, init_time: pd.Timestamp | str | dt.datetime) -> ICONEra:
+    """The era a run of ``model`` belongs to.
+
+    Args:
+        model: Model name, a key of :data:`MODELS`.
+        init_time: Model run.
+
+    Raises:
+        ValueError: If the model is unknown or ``init_time`` is not a model cycle.
+    """
+    _spec(model)
+    run = _normalize_init_time(init_time)
+    chosen = ERAS[model][0]
+    for era in ERAS[model]:
+        if era.start is None or run >= era.start:
+            chosen = era
+    return chosen
+
+
+def era_by_grid(model: str, grid_number: int) -> ICONEra:
+    """The era of ``model`` on grid ``grid_number``.
+
+    Raises:
+        ValueError: If the model never published on that grid.
+    """
+    _spec(model)
+    for era in ERAS[model]:
+        if era.grid_number == grid_number:
+            return era
+    grids = [e.grid_number for e in ERAS[model]]
+    raise ValueError(f"{model} has no era on grid {grid_number}; its grids are {grids}")
+
+
+def era_runs(model: str, era: ICONEra, runs: Iterable[pd.Timestamp]) -> list[pd.Timestamp]:
+    """The runs of ``runs`` that belong to ``era``."""
+    return [r for r in runs if era_for(model, r) == era]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -777,14 +874,20 @@ def discover_schema(
         max_workers: Concurrent listing requests, capped at :data:`MAX_LISTING_WORKERS`.
 
     Returns:
-        A JSON-serialisable schema, the input of :class:`ICONSchema`.
+        A JSON-serialisable schema, the input of :class:`ICONSchema`. Its ``n_cells`` and
+        ``grid_number`` are those of the reference runs' era (:func:`era_for`).
 
     Raises:
-        ValueError: If no run covers one of the two cycle classes, or nothing was found.
+        ValueError: If no run covers one of the two cycle classes, the runs span more than
+            one era, or nothing was found.
         IncompleteReferenceRun: If ``strict`` and a reference run has gaps.
     """
-    spec = _spec(model)
+    _spec(model)
     runs = sorted({_normalize_init_time(t) for t in init_times})
+    eras = {era_for(model, run) for run in runs}
+    if len(eras) != 1:
+        raise ValueError(f"reference runs {runs} span {len(eras)} {model} grid eras; pick one")
+    spec = eras.pop()
     hours = {run.hour for run in runs}
     derived: dict[int, int] = {}
     for hour in CYCLE_HOURS:
@@ -928,7 +1031,7 @@ def _with_wavelength(entry: dict[str, Any], wavelength: int | None) -> dict[str,
 
 def _check_grids(
     model: str,
-    spec: ICONModelSpec,
+    spec: ICONModelSpec | ICONEra,
     groups: list[_Group],
     reader: HeaderReader,
     workers: int,
@@ -1245,33 +1348,56 @@ class ICONSchema:
         return [FieldKey(p, None, None, 0) for p in self.coordinate_params]
 
 
-def schema_path(model: str) -> pathlib.Path:
-    """Return the source-tree path of a model's committed schema JSON."""
-    return pathlib.Path(__file__).with_name(_SCHEMA_DIR) / f"{model}.json"
-
-
-@lru_cache(maxsize=None)
-def load_schema(model: str) -> ICONSchema:
-    """Load the committed schema of a model.
+def schema_path(model: str, era: ICONEra | None = None) -> pathlib.Path:
+    """Return the source-tree path of a model's committed schema JSON for one era.
 
     Args:
         model: Model name, a key of :data:`MODELS`.
+        era: Era of the schema; defaults to the current one.
+    """
+    era = era or current_era(model)
+    return pathlib.Path(__file__).with_name(_SCHEMA_DIR) / f"{era.schema}.json"
+
+
+def load_schema(
+    model: str, init_time: pd.Timestamp | str | dt.datetime | None = None
+) -> ICONSchema:
+    """Load the committed schema a run of ``model`` follows.
+
+    Args:
+        model: Model name, a key of :data:`MODELS`.
+        init_time: Run whose era's schema to load; None for the current era.
 
     Raises:
-        ValueError: If the model is unknown or its schema does not match :data:`MODELS`.
-        FileNotFoundError: If no schema is committed for the model.
+        ValueError: If the model is unknown or its schema does not match its era's grid.
+        FileNotFoundError: If no schema is committed for the era.
     """
-    spec = _spec(model)
+    era = current_era(model) if init_time is None else era_for(model, init_time)
+    return load_era_schema(model, era)
+
+
+@lru_cache(maxsize=None)
+def load_era_schema(model: str, era: ICONEra) -> ICONSchema:
+    """Load the committed schema of one era of ``model``.
+
+    Raises:
+        ValueError: If the schema's cell count or grid number is not the era's.
+        FileNotFoundError: If no schema is committed for the era.
+    """
     resource = importlib.resources.files("planetary_datasets.providers").joinpath(
-        _SCHEMA_DIR, f"{model}.json"
+        _SCHEMA_DIR, f"{era.schema}.json"
     )
     schema = ICONSchema(json.loads(resource.read_text(encoding="utf-8")))
     if (schema.model, schema.n_cells, schema.grid_number) != (
-        spec.model,
-        spec.n_cells,
-        spec.grid_number,
+        model,
+        era.n_cells,
+        era.grid_number,
     ):
-        raise ValueError(f"schema for {model} does not match {spec}")
+        raise ValueError(
+            f"{era.schema}.json describes {schema.model} with {schema.n_cells} cells on grid "
+            f"{schema.grid_number}, but that era of {model} has {era.n_cells} on grid "
+            f"{era.grid_number}"
+        )
     return schema
 
 
@@ -1569,6 +1695,7 @@ def measure_precision(
     schema: ICONSchema | None = None,
     reader: FieldReader | None = None,
     max_workers: int = MAX_LISTING_WORKERS,
+    only: Collection[VariableKey] | None = None,
 ) -> dict[VariableKey, PrecisionStats]:
     """Sample real fields of every variable and gather their float16 statistics.
 
@@ -1579,23 +1706,28 @@ def measure_precision(
         schema: Schema to sample; defaults to the committed one.
         reader: Field reader to use instead of the network, for tests.
         max_workers: Concurrent reads, at most :data:`MAX_LISTING_WORKERS`.
+        only: Measure only these variables.
 
     Returns:
         Statistics per ``(param, level_type, wavelength)``; variables whose every sample
         was missing have ``samples == 0``.
     """
-    schema = schema or load_schema(model)
+    schema = schema or load_schema(model, runs[0] if runs else None)
     runs = [_normalize_init_time(r) for r in runs]
     reader = reader or _field_reader(source)
+    specs = [
+        spec
+        for spec in schema.variables
+        if only is None or _variable_key(spec.param, spec.level_type, spec.wavelength) in only
+    ]
     jobs = [
         (_variable_key(spec.param, spec.level_type, spec.wavelength), key, run)
-        for spec in schema.variables
+        for spec in specs
         for key, run in precision_samples(schema, spec, runs)
     ]
     logger.info(f"sampling {len(jobs)} {model} fields from {source} runs {runs}")
     results: dict[VariableKey, PrecisionStats] = {
-        _variable_key(s.param, s.level_type, s.wavelength): PrecisionStats()
-        for s in schema.variables
+        _variable_key(s.param, s.level_type, s.wavelength): PrecisionStats() for s in specs
     }
 
     def one(job: tuple[VariableKey, FieldKey, pd.Timestamp]) -> tuple[VariableKey, PrecisionStats]:
@@ -1692,6 +1824,45 @@ def carry_precision(new: Mapping[str, Any], old: Mapping[str, Any]) -> dict[str,
     return out
 
 
+def inherit_precision(
+    data: Mapping[str, Any], references: Sequence[Mapping[str, Any]]
+) -> tuple[dict[str, Any], list[VariableKey]]:
+    """Give an era's variables the dtype the same parameter has in other schemas.
+
+    One parameter is stored at one precision everywhere, so an older era's variables take
+    the dtype already decided for the current eras. Matched on (param, level_type), then
+    on param alone when every level type of it agrees.
+
+    Args:
+        data: Schema JSON to update.
+        references: Schema JSONs whose dtypes are authoritative.
+
+    Returns:
+        The updated copy, and the variables that had no counterpart and so still need
+        measuring.
+    """
+    by_level: dict[tuple[str, int | None], set[str]] = {}
+    by_param: dict[str, set[str]] = {}
+    for reference in references:
+        for entry in reference["variables"]:
+            if "dtype" not in entry:
+                continue
+            by_level.setdefault((entry["param"], entry["level_type"]), set()).add(entry["dtype"])
+            by_param.setdefault(entry["param"], set()).add(entry["dtype"])
+    out = json.loads(json.dumps(data))
+    unmatched: list[VariableKey] = []
+    for entry in out["variables"]:
+        found = by_level.get((entry["param"], entry["level_type"])) or by_param.get(entry["param"])
+        if found and len(found) == 1:
+            entry["dtype"] = next(iter(found))
+            entry["precision"] = {"reason": "inherited from the current era"}
+        else:
+            unmatched.append(
+                _variable_key(entry["param"], entry["level_type"], entry.get("wavelength"))
+            )
+    return out, unmatched
+
+
 # ---------------------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------------------
@@ -1742,6 +1913,66 @@ def default_reference_runs(
     return chosen
 
 
+def rank_reference_runs(
+    model: str,
+    source: Source,
+    candidates: Sequence[pd.Timestamp],
+    per_hour: int,
+    *,
+    lister: Lister | None = None,
+    max_workers: int = MAX_LISTING_WORKERS,
+) -> list[pd.Timestamp]:
+    """Pick, per cycle hour, the ``per_hour`` candidate runs the source holds most of.
+
+    For a source with gaps, the archive mirror above all: a run is scored by how many of
+    the model's (param, level type, wavelength) groups have it, judged from each group's
+    lowest level, and the best of each hour win, newest first among equals. One listing
+    of a group's run directory serves every candidate, so this costs a few hundred
+    listings however many candidates there are.
+
+    Args:
+        model: Model name, a key of :data:`MODELS`.
+        source: ``"archive"`` or ``"live"``.
+        candidates: Runs to choose from, e.g. those of one era.
+        per_hour: Runs to pick for each cycle hour.
+        lister: Listing function to use instead of the network, for tests.
+        max_workers: Concurrent listings, at most :data:`MAX_LISTING_WORKERS`.
+
+    Returns:
+        The chosen runs, sorted.
+    """
+    lister = lister or get_lister(model, source)
+    workers = max(1, min(max_workers, MAX_LISTING_WORKERS))
+    params = [
+        p
+        for p in _children(lister, "p")
+        if p not in COORDINATE_PARAMS and p not in NON_CELL_GRID_PARAMS
+    ]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        groups = [
+            g for found, _ in pool.map(lambda p: _walk_param(lister, p), params) for g in found
+        ]
+
+    def runs_of(group: _Group) -> set[pd.Timestamp]:
+        key = group.field_key(group.levels[-1], 0)
+        return {r for r in map(_parse_run, _children(lister, f"{_field_dir(key)}/r")) if r}
+
+    wanted = set(candidates)
+    score: Counter[pd.Timestamp] = Counter()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for held in pool.map(runs_of, groups):
+            score.update(held & wanted)
+    chosen = []
+    for hour in CYCLE_HOURS:
+        hourly = sorted(
+            (r for r in wanted if r.hour == hour), key=lambda r: (score[r], r), reverse=True
+        )
+        for run in hourly[:per_hour]:
+            logger.info(f"{model} {run}: {score[run]} of {len(groups)} groups in the {source}")
+            chosen.append(run)
+    return sorted(chosen)
+
+
 def _summarise_runs(model: str, source: Source) -> str:
     runs = list_runs(model, source)
     if not runs:
@@ -1771,6 +2002,56 @@ def precision_runs(
     return chosen
 
 
+def _old_era_precision(
+    model: str,
+    era: ICONEra,
+    runs: Sequence[pd.Timestamp] | None,
+    source: Source,
+    workers: int,
+) -> int:
+    """Inherit an old era's dtypes from the current schemas; measure what has no match."""
+    output = schema_path(model, era)
+    data = json.loads(output.read_text(encoding="utf-8"))
+    references = [json.loads(schema_path(m).read_text(encoding="utf-8")) for m in sorted(MODELS)]
+    updated, unmatched = inherit_precision(data, references)
+    logger.info(
+        f"{output.name}: {len(data['variables']) - len(unmatched)} variables inherit their "
+        f"dtype; measuring {len(unmatched)}: {unmatched}"
+    )
+    if unmatched:
+        schema = ICONSchema(updated)
+        if not runs:
+            runs = [
+                min((r for r in schema.reference_runs if r.hour == hour), default=None)
+                for hour in (0, 12)
+            ]
+            runs = [r for r in runs if r is not None]
+        results = measure_precision(
+            model, runs, source, schema=schema, max_workers=workers, only=set(unmatched)
+        )
+        measured = apply_precision(updated, results)
+        keep = set(unmatched)
+        for entry, fresh in zip(updated["variables"], measured["variables"]):
+            if _variable_key(entry["param"], entry["level_type"], entry.get("wavelength")) in keep:
+                entry.update(dtype=fresh["dtype"], precision=fresh["precision"])
+    ICONSchema(updated)
+    output.write_text(dump_schema(updated), encoding="utf-8")
+    _log_dtypes(model, updated)
+    logger.info(f"wrote {output}")
+    return 0
+
+
+def _log_dtypes(model: str, data: Mapping[str, Any]) -> None:
+    by_dtype: dict[str, list[str]] = {FLOAT16: [], FLOAT32: []}
+    for entry in data["variables"]:
+        name = entry["param"] + (f"@{entry['level_type']}" if entry["level_type"] else "")
+        if entry.get("wavelength"):
+            name += f"@{entry['wavelength']}nm"
+        by_dtype[entry["dtype"]].append(f"{name}({entry['precision']['reason']})")
+    for dtype, names in by_dtype.items():
+        logger.info(f"{model} {dtype} ({len(names)}): {', '.join(names)}")
+
+
 def _precision_command(
     models: Sequence[str],
     runs: Sequence[pd.Timestamp] | None,
@@ -1796,14 +2077,7 @@ def _precision_command(
         ICONSchema(updated)
         output = schema_path(model)
         output.write_text(dump_schema(updated), encoding="utf-8")
-        by_dtype: dict[str, list[str]] = {FLOAT16: [], FLOAT32: []}
-        for entry in updated["variables"]:
-            name = entry["param"] + (f"@{entry['level_type']}" if entry["level_type"] else "")
-            if entry.get("wavelength"):
-                name += f"@{entry['wavelength']}nm"
-            by_dtype[entry["dtype"]].append(f"{name}({entry['precision']['reason']})")
-        for dtype, names in by_dtype.items():
-            logger.info(f"{model} {dtype} ({len(names)}): {', '.join(names)}")
+        _log_dtypes(model, updated)
         logger.info(f"wrote {output}")
     return 0
 
@@ -1828,6 +2102,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
         default=None,
         help="age of automatically chosen runs (default 36 archive, 5 live)",
+    )
+    schema_cmd.add_argument(
+        "--era",
+        type=int,
+        metavar="GRID",
+        help="discover the era on this grid number (e.g. 51 for old ICON-ART-EU); "
+        "defaults to the current one",
+    )
+    schema_cmd.add_argument(
+        "--per-hour",
+        type=int,
+        default=None,
+        help="reference runs per cycle hour; above one, the best-covered runs are chosen "
+        "(default 1 live, 3 archive)",
     )
     schema_cmd.add_argument("--no-grid-check", action="store_true")
     schema_cmd.add_argument(
@@ -1856,6 +2144,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="age of automatically chosen runs",
     )
     precision_cmd.add_argument("--max-workers", type=int, default=MAX_LISTING_WORKERS)
+    precision_cmd.add_argument(
+        "--era",
+        type=int,
+        metavar="GRID",
+        help="an older era of one model: inherit dtypes from the current schemas and "
+        "measure only its own parameters, from its reference runs",
+    )
 
     runs_cmd = sub.add_parser("runs", help="summarise the runs each source holds")
     runs_cmd.add_argument("models", nargs="*", choices=sorted(MODELS))
@@ -1870,6 +2165,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "precision":
         runs = [_normalize_init_time(r) for r in args.runs] if args.runs else None
+        if args.era is not None:
+            if len(args.models) != 1:
+                parser.error("--era takes exactly one model")
+            era = era_by_grid(args.models[0], args.era)
+            return _old_era_precision(args.models[0], era, runs, args.source, args.max_workers)
         return _precision_command(
             args.models,
             runs,
@@ -1878,6 +2178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.max_workers,
         )
 
+    era = current_era(args.model) if args.era is None else era_by_grid(args.model, args.era)
     if args.runs:
         runs = [_normalize_init_time(r) for r in args.runs]
     else:
@@ -1885,10 +2186,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if hours is None:
             hours = 36.0 if args.source == "archive" else 5.0
         now = pd.Timestamp.now("UTC").tz_localize(None)
-        runs = default_reference_runs(
-            list_runs(args.model, args.source), now, pd.Timedelta(hours, "h")
-        )
-    output = args.output or schema_path(args.model)
+        candidates = [
+            r
+            for r in era_runs(args.model, era, list_runs(args.model, args.source))
+            if r <= now - pd.Timedelta(hours, "h")
+        ]
+        per_hour = args.per_hour or (3 if args.source == "archive" else 1)
+        if per_hour == 1 and args.source == "live":
+            runs = default_reference_runs(candidates, now, pd.Timedelta(hours, "h"))
+        else:
+            runs = rank_reference_runs(args.model, args.source, candidates, per_hour)
+    output = args.output or schema_path(args.model, era)
 
     logger.info(f"discovering {args.model} from {args.source} runs {[str(r) for r in runs]}")
     schema = discover_schema(
