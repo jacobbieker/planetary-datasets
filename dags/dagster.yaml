@@ -1,26 +1,65 @@
 # Dagster instance configuration for the planetary-datasets code location.
 #
-# Concurrency here is about memory, not CPU. A single ingest can hold tens of GB of
-# gridded data in RAM, so the limits below are expressed per memory class. Assets built
-# by dags/factory.py declare a `memory_gb`, which the factory turns into a
-# `planetary/memory_class` tag on both the asset and the run. The three layers are:
+# Runs are spread over the machines in dags/fleet.yaml by dags.fleet.launcher, and every
+# host — the one running the webserver and daemon, and each worker — loads this same file
+# (DAGSTER_HOME is <repo>/dags everywhere). Start the daemon with `pixi run dev`, which
+# loads the Postgres password and storage paths from ~/.config/planetary-fleet/env.
 #
-#   1. `concurrency.runs`  - how many *runs* of each memory class leave the queue.
-#   2. `concurrency.pools` - how many *steps* of one provider run at once, across runs.
-#   3. the executor in dags/definitions.py - how many steps run inside a single run,
-#      sized at import time from the host's actual memory budget.
+# Concurrency is about memory, not CPU. A single ingest can hold tens of GB of gridded
+# data in RAM. Four layers keep the fleet inside its memory:
 #
-# The limits below assume a host with roughly 64 GB of usable RAM: one xlarge (>48 GB)
-# run at a time, or one large, or four small. Adjust them together with MEMORY_FRACTION
-# / MEMORY_CEILING_GB if the host differs.
+#   1. `concurrency.runs`  - how many *runs* of each memory class leave the queue,
+#      fleet-wide. A coarse cap; sized for the fleet, not one host.
+#   2. the run launcher    - places each run on a host where its memory and disk fit,
+#      both against the reservations of runs already there and against what the host
+#      has free right now; requeues it when nothing fits (dags/fleet/placement.py).
+#   3. `concurrency.pools` - how many *steps* of one provider run at once, across runs
+#      and hosts. Shared Postgres storage is what makes this hold across machines.
+#   4. the executor in dags/definitions.py - how many steps run inside a single run,
+#      held to the memory the launcher reserved for that run (MEMORY_CEILING_GB).
+
+storage:
+  postgres:
+    postgres_db:
+      hostname: {env: DAGSTER_PG_HOST}
+      port: {env: DAGSTER_PG_PORT}
+      db_name: {env: DAGSTER_PG_DB}
+      username: {env: DAGSTER_PG_USER}
+      password: {env: DAGSTER_PG_PASSWORD}
+      # dagster-postgres's SQL is written for psycopg2. SQLAlchemy's default PostgreSQL
+      # driver is now psycopg 3, whose server-side parameter binding rejects some of it
+      # ("syntax error at or near $1"), so the driver is named explicitly.
+      scheme: postgresql+psycopg2
+
+# Per host: each machine keeps its own compute logs and local artifacts under the
+# work_dir set in dags/fleet.yaml.
+local_artifact_storage:
+  module: dagster.core.storage.root
+  class: LocalArtifactStorage
+  config:
+    base_dir: {env: DAGSTER_STORAGE_DIR}
+
+compute_logs:
+  module: dagster.core.storage.local_compute_log_manager
+  class: LocalComputeLogManager
+  config:
+    base_dir: {env: DAGSTER_COMPUTE_LOG_DIR}
 
 run_coordinator:
   module: dagster.core.run_coordinator
   class: QueuedRunCoordinator
+  config:
+    # The fleet launcher reports "no host has room right now" as unreachable user code,
+    # which is the one launch failure the queue retries instead of failing the run. The
+    # delay is how long dequeuing pauses before trying again; 5760 x 15 s is a day. The
+    # launcher also demotes the run's priority, so the runs behind it that do fit go
+    # first on the next pass rather than waiting behind it.
+    max_user_code_failure_retries: 5760
+    user_code_failure_retry_delay: 15
 
 run_launcher:
-  module: dagster.core.launcher
-  class: DefaultRunLauncher
+  module: dags.fleet.launcher
+  class: FleetRunLauncher
 
 concurrency:
   pools:
@@ -37,7 +76,8 @@ concurrency:
     granularity: op
     default_limit: 1
   runs:
-    max_concurrent_runs: 10
+    # The sum of max_runs over the hosts in dags/fleet.yaml.
+    max_concurrent_runs: 20
     tag_concurrency_limits:
       # The 06:00 priority batch (dags/priority.py). `applyLimitPerUniqueValue` makes this
       # a cap *per source* — four SILAM runs may be in flight together, and four HARMONIE
@@ -49,28 +89,34 @@ concurrency:
         limit: 4
         value:
           applyLimitPerUniqueValue: true
-      # >48 GB: nothing else large may run alongside it.
+      # Fleet-wide caps per memory class. The launcher is what keeps each *host* within
+      # its memory; these only stop one class from crowding out the others. Roughly:
+      # one >48 GB run per host big enough, one 16-48 GB run per host, and so on.
       - key: planetary/memory_class
         value: xlarge
         limit: 1
-      # 16-48 GB.
       - key: planetary/memory_class
         value: large
-        limit: 1
-      # 4-16 GB.
+        limit: 3
       - key: planetary/memory_class
         value: medium
-        limit: 2
-      # <=4 GB.
+        limit: 8
       - key: planetary/memory_class
         value: small
-        limit: 4
-      # Backfills are the usual way to exhaust a host; keep them a minority of the queue.
+        limit: 16
+      # Backfills are how a fleet gets filled; let them use most of it, but leave room
+      # for the scheduled runs.
       - key: dagster/backfill
-        limit: 2
+        limit: 14
 
 run_monitoring:
   enabled: true
+  # Polls each run's worker over SSH (FleetRunLauncher.check_run_worker_health), so a
+  # worker killed by the OOM killer or a reboot is marked failed and retried.
+  poll_interval_seconds: 60
+  # A worker's first launch on a host after pixi.lock changes installs the environment.
+  start_timeout_seconds: 1800
+  cancel_timeout_seconds: 300
   # Honours the `dagster/max_runtime` tag the factory sets on every provider asset.
   max_runtime_seconds: 86400
 
