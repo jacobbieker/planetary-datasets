@@ -24,7 +24,7 @@ the ``publish_to_hf`` run config, so a normal materialisation never uploads anyt
 import dagster as dg
 import pandas as pd
 
-from dags.factory import MEMORY_CLASS_TAG, MEMORY_GB_TAG, memory_class_for
+from dags.factory import MEMORY_CLASS_TAG, MEMORY_GB_TAG, SCHEDULE_TAG, memory_class_for
 from planetary_datasets.providers.icon import (
     VARIANTS,
     ICOND2RUCProvider,
@@ -59,6 +59,11 @@ ICON_V1_ASSETS: dict[str, str] = {
 
 #: Memory each ICON v1 run is held to, in GB. The provider sizes its write to fit.
 ICON_V1_MEMORY_GB = 4
+
+#: Variants whose archive backfill (``scripts/icon_v1_backfill.py``) is still running. The
+#: script has to be the only writer to its store, so these assets stay off the schedules
+#: until it has caught up; remove a variant from here to start its live updates.
+ICON_V1_BACKFILLING: frozenset[str] = frozenset({"global", "global_art", "eu_art"})
 
 #: Retries of a live run DWD has not finished publishing (IncompleteRun), 15, 30, 60 and
 #: 120 min apart. Only that failure is retried: anything else is deterministic (a grid or
@@ -159,6 +164,9 @@ def _v1_asset(variant: str):
         MEMORY_CLASS_TAG: memory_class_for(ICON_V1_MEMORY_GB),
         MEMORY_GB_TAG: str(ICON_V1_MEMORY_GB),
     }
+    asset_tags = dict(memory_tags)
+    if variant in ICON_V1_BACKFILLING:
+        asset_tags[SCHEDULE_TAG] = "manual"
     op_tags = {**memory_tags, "dagster/max_runtime": str(ICON_V1_MAX_RUNTIME_H * 3600)}
 
     @dg.asset(
@@ -174,7 +182,7 @@ def _v1_asset(variant: str):
             "live": dg.MetadataValue.url(f"{LIVE_ROOT}/{model}"),
         },
         pool=f"icon_v1_{variant}",
-        tags=memory_tags,
+        tags=asset_tags,
         op_tags=op_tags,
     )
     def _asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
