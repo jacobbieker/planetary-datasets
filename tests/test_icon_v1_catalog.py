@@ -1,0 +1,584 @@
+"""Offline tests for the ICON v1 catalog and its frozen schemas. No network access."""
+
+# ruff: noqa: D103 - test names say what they check, as elsewhere in tests/
+
+from __future__ import annotations
+
+import json
+import posixpath
+
+import pandas as pd
+import pytest
+
+from planetary_datasets.providers import icon_v1_catalog as cat
+from planetary_datasets.providers.icon_v1_catalog import FieldKey
+
+RUN_00 = pd.Timestamp("2026-10-11T00:00")
+RUN_06 = pd.Timestamp("2026-10-11T06:00")
+
+
+# -- fakes -------------------------------------------------------------------------------
+
+
+def make_lister(files: list[str], noise: bool = True):
+    """Build a Lister over model-relative file paths, mimicking the mirrored tree.
+
+    Every directory also contains DWD's ``index.html`` and, when ``noise`` is set, a macOS
+    ``._`` resource fork, as the Source Cooperative mirror does.
+    """
+    tree: dict[str, set[str]] = {}
+    for path in files:
+        parts = path.split("/")
+        for i in range(len(parts)):
+            parent = "/".join(parts[:i])
+            tree.setdefault(parent, set()).add(parts[i])
+    calls: list[str] = []
+
+    def ls(relative: str) -> list[str]:
+        relative = relative.strip("/")
+        calls.append(relative)
+        if relative not in tree:
+            raise FileNotFoundError(relative)
+        names = sorted(tree[relative]) + ["index.html"]
+        if noise:
+            names += [f"._{n}" for n in sorted(tree[relative])[:1]]
+        # Emulate s3fs, which returns full keys rather than bare names.
+        return [posixpath.join("bucket/bkr/icon/icon", relative, n) for n in names]
+
+    ls.calls = calls  # type: ignore[attr-defined]
+    return ls
+
+
+def grib_header(points: int, grid: int = 26, template: int = 101) -> bytes:
+    """A GRIB2 message head: sections 0, 1 and an unstructured-grid section 3."""
+    sec0 = b"GRIB" + b"\x00\x00" + bytes([0, 2]) + (1000).to_bytes(8, "big")
+    sec1 = (21).to_bytes(4, "big") + bytes([1]) + bytes(16)
+    sec3 = (
+        (35).to_bytes(4, "big")
+        + bytes([3, 0])
+        + points.to_bytes(4, "big")
+        + bytes([0, 0])
+        + template.to_bytes(2, "big")
+        + bytes([6])
+        + grid.to_bytes(3, "big")
+        + bytes([1])
+        + bytes(16)
+    )
+    return sec0 + sec1 + sec3 + b"7777"
+
+
+def run_files(prefix: str, run: pd.Timestamp, steps) -> list[str]:
+    return [f"{prefix}/r/{run:%Y-%m-%dT%H:%M}/s/PT{s:03d}H00M.grib2" for s in steps]
+
+
+#: Two days of runs; the tests pick their reference runs from the second.
+TREE_RUNS = list(pd.date_range("2026-10-10T00:00", "2026-10-11T18:00", freq="6h"))
+RUNS_4 = [pd.Timestamp(t) for t in pd.date_range("2026-10-11T00:00", periods=4, freq="6h")]
+
+
+@pytest.fixture
+def fake_tree() -> list[str]:
+    """A miniature ``icon`` tree: one of each field kind, plus the things to exclude.
+
+    00/12Z runs go to step 3, 06/18Z runs to step 2. ``RSTOM`` is published at 00Z only,
+    as in ICON-ART.
+    """
+    files: list[str] = []
+    for run in TREE_RUNS:
+        steps = range(0, 4) if run.hour in (0, 12) else range(0, 3)
+        if run.hour == 0:
+            files += run_files("p/RSTOM", run, steps)
+        files += run_files("p/T_2M", run, steps)
+        files += run_files("p/TMAX_2M", run, [s for s in steps if s > 0])
+        for level in ("50000", "85000"):
+            files += run_files(f"p/T/lvt1/100/lv1/{level}", run, steps)
+        for level in ("1", "2", "10"):
+            files += run_files(f"p/T/lvt1/150/lv1/{level}", run, steps)
+        for level in ("0.0", "0.01"):
+            files += run_files(f"p/W_SO/lvt1/106/lv1/{level}", run, steps)
+        for param in ("HSURF", "CLAT", "CLON", "ELAT", "OFFGRID"):
+            files += run_files(f"p/{param}", run, [0])
+        files += run_files("p/HHL/lvt1/150/lv1/1", run, [0])
+        files += run_files("p/CEIL_BSC_DUST/wvl1/532/lvt1/150/lv1/120", run, steps)
+    # A level directory with no files in either reference run.
+    files += run_files("p/T/lvt1/150/lv1/3", pd.Timestamp("2026-09-01T00:00"), [0])
+    return files
+
+
+def header_reader(path: str) -> bytes:
+    if path.startswith("p/OFFGRID/"):
+        return grib_header(4_423_680)
+    return grib_header(cat.MODELS["icon"].n_cells)
+
+
+# -- addressing --------------------------------------------------------------------------
+
+
+def test_field_path_single_level():
+    key = FieldKey("T_2M", None, None, 3)
+    assert cat.field_path("icon", key, RUN_00) == "p/T_2M/r/2026-10-11T00:00/s/PT003H00M.grib2"
+
+
+def test_field_path_pressure_and_soil_levels():
+    pressure = FieldKey("T", 100, "85000", 120)
+    soil = FieldKey("W_SO", 106, "0.01", 0)
+    assert (
+        cat.field_path("icon", pressure, RUN_06)
+        == "p/T/lvt1/100/lv1/85000/r/2026-10-11T06:00/s/PT120H00M.grib2"
+    )
+    assert (
+        cat.field_path("icon-art", soil, RUN_00)
+        == "p/W_SO/lvt1/106/lv1/0.01/r/2026-10-11T00:00/s/PT000H00M.grib2"
+    )
+
+
+def test_field_uri_archive_keeps_colon_and_live_encodes_it():
+    key = FieldKey("T", 100, "85000", 3)
+    assert cat.field_uri("icon-art-eu", key, RUN_00, "archive") == (
+        "s3://us-west-2.opendata.source.coop/bkr/icon/icon-art-eu/"
+        "p/T/lvt1/100/lv1/85000/r/2026-10-11T00:00/s/PT003H00M.grib2"
+    )
+    assert cat.field_uri("icon-art-eu", key, RUN_00, "live") == (
+        "https://opendata.dwd.de/weather/nwp/v1/m/icon-art-eu/"
+        "p/T/lvt1/100/lv1/85000/r/2026-10-11T00%3A00/s/PT003H00M.grib2"
+    )
+
+
+def test_field_path_accepts_tz_aware_and_rejects_off_cycle_times():
+    key = FieldKey("T_2M", None, None, 0)
+    aware = pd.Timestamp("2026-10-11T02:00", tz="Europe/Berlin")  # 00Z
+    assert "/r/2026-10-11T00:00/" in cat.field_path("icon", key, aware)
+    with pytest.raises(ValueError, match="not an ICON cycle"):
+        cat.field_path("icon", key, pd.Timestamp("2026-10-11T03:00"))
+    with pytest.raises(ValueError, match="unknown ICON model"):
+        cat.field_path("icon-d2", key, RUN_00)
+
+
+def test_field_key_rejects_half_levels():
+    with pytest.raises(ValueError):
+        FieldKey("T", 100, None, 0)
+    with pytest.raises(ValueError):
+        FieldKey("T", None, "85000", 0)
+
+
+def test_storage_options():
+    assert cat.storage_options("archive") == {"anon": True}
+    assert cat.storage_options("live") == {}
+    with pytest.raises(ValueError):
+        cat.storage_options("ftp")  # type: ignore[arg-type]
+
+
+def test_models_match_the_published_grids():
+    assert set(cat.MODELS) == {"icon", "icon-art", "icon-art-eu"}
+    assert cat.MODELS["icon"].n_cells == 2_949_120
+    assert cat.MODELS["icon-art"].grid_number == 39
+    assert cat.MODELS["icon-art-eu"].archive_start == pd.Timestamp("2025-09-30T18:00")
+
+
+# -- listings ----------------------------------------------------------------------------
+
+
+def test_clean_names_drops_index_pages_and_resource_forks():
+    raw = [
+        "bucket/bkr/icon/icon/p/T_2M",
+        "bucket/bkr/icon/icon/p/index.html",
+        "bucket/bkr/icon/icon/p/._T_2M",
+        ".DS_Store",
+        "2026-10-12T18%3A00/",
+        "PT000H00M.grib2",
+        "T_2M",
+    ]
+    assert cat.clean_names(raw) == ["2026-10-12T18:00", "PT000H00M.grib2", "T_2M"]
+
+
+def test_parse_index_html_reads_dwd_autoindex():
+    html = """<html><head><title>Index of /weather/nwp/v1/m/icon/p/T_2M/r/</title></head>
+<body><h1>Index of /weather/nwp/v1/m/icon/p/T_2M/r/</h1><hr><pre><a href="../">../</a>
+<a href="2026-10-12T18%3A00/">2026-10-12T18:00/</a>   12-Oct-2026 20:39:26   -
+<a href="2026-10-13T00%3A00/">2026-10-13T00:00/</a>   13-Oct-2026 02:36:26   -
+<a href="https://www.dwd.de/">elsewhere</a>
+</pre><hr></body></html>"""
+    names = cat.parse_index_html(html)
+    assert names == ["2026-10-12T18%3A00/", "2026-10-13T00%3A00/"]
+    assert cat.clean_names(names) == ["2026-10-12T18:00", "2026-10-13T00:00"]
+
+
+def test_list_runs_sorts_dedupes_and_ignores_noise():
+    def lister(relative: str) -> list[str]:
+        assert relative == "p/T_2M/r"
+        return [
+            "2026-10-13T06:00",
+            "2026-10-12T18%3A00/",
+            "2026-10-12T18:00",
+            "index.html",
+            "._2026-10-13T06:00",
+            "not-a-run",
+            "2026-10-13T07:00",  # not a cycle
+        ]
+
+    runs = cat.list_runs("icon", "live", lister=lister)
+    assert runs == [pd.Timestamp("2026-10-12T18:00"), pd.Timestamp("2026-10-13T06:00")]
+
+
+def test_list_runs_of_a_missing_param_is_empty():
+    assert cat.list_runs("icon", "archive", probe_param="NOPE", lister=make_lister([])) == []
+
+
+# -- choose_source -----------------------------------------------------------------------
+
+NOW = pd.Timestamp("2026-10-13T17:00")
+LISTINGS = {
+    "live": [pd.Timestamp(t) for t in ("2026-10-12T18:00", "2026-10-13T00:00", "2026-10-13T12:00")],
+    "archive": [pd.Timestamp(t) for t in ("2026-10-11T00:00", "2026-10-12T18:00")],
+}
+
+
+@pytest.mark.parametrize(
+    ("init_time", "expected"),
+    [
+        ("2026-10-13T12:00", "live"),
+        ("2026-10-12T18:00", "live"),  # in both: live wins
+        ("2026-10-11T00:00", "archive"),
+        ("2026-10-13T06:00", None),  # in neither
+        ("2026-10-14T00:00", None),  # in the future
+    ],
+)
+def test_choose_source(init_time, expected):
+    assert (
+        cat.choose_source("icon", pd.Timestamp(init_time), now=NOW, listings=LISTINGS) == expected
+    )
+
+
+def test_choose_source_prefers_the_archive_once_live_files_start_expiring():
+    run = pd.Timestamp("2026-10-12T12:00")  # 29 h old: listed live, early files gone
+    both = {"live": [run], "archive": [run]}
+    assert cat.choose_source("icon", run, now=NOW, listings=both) == "archive"
+    assert cat.choose_source("icon", run, now=NOW, listings={"live": [run]}) == "live"
+
+
+def test_choose_source_does_not_ask_live_about_expired_runs(monkeypatch):
+    asked: list[str] = []
+
+    def fake_cached_runs(model, source, *, probe_param="T_2M"):
+        asked.append(source)
+        return (pd.Timestamp("2026-10-01T00:00"),)
+
+    monkeypatch.setattr(cat, "cached_runs", fake_cached_runs)
+    assert cat.choose_source("icon", pd.Timestamp("2026-10-01T00:00"), now=NOW) == "archive"
+    assert asked == ["archive"]
+
+
+def test_choose_source_falls_back_to_archive_when_live_listing_fails(monkeypatch):
+    def fake_cached_runs(model, source, *, probe_param="T_2M"):
+        if source == "live":
+            raise cat.ListingError("down")
+        return (pd.Timestamp("2026-10-13T00:00"),)
+
+    monkeypatch.setattr(cat, "cached_runs", fake_cached_runs)
+    assert cat.choose_source("icon", pd.Timestamp("2026-10-13T00:00"), now=NOW) == "archive"
+    with pytest.raises(cat.ListingError):
+        cat.choose_source("icon", pd.Timestamp("2026-10-13T06:00"), now=NOW)
+
+
+def test_cached_runs_reuses_listings_until_the_ttl(monkeypatch):
+    cat.clear_listing_cache()
+    calls: list[tuple[str, str]] = []
+    clock = [1000.0]
+
+    def fake_list_runs(model, source, *, probe_param="T_2M", lister=None):
+        calls.append((model, source))
+        return [RUN_00]
+
+    monkeypatch.setattr(cat, "list_runs", fake_list_runs)
+    monkeypatch.setattr(cat, "_clock", lambda: clock[0])
+    try:
+        for _ in range(5):
+            assert cat.cached_runs("icon", "archive") == (RUN_00,)
+        assert calls == [("icon", "archive")]
+        clock[0] += cat.LISTING_TTL["archive"].total_seconds() + 1
+        cat.cached_runs("icon", "archive")
+        assert len(calls) == 2
+        cat.clear_listing_cache()
+        cat.cached_runs("icon", "archive")
+        assert len(calls) == 3
+    finally:
+        cat.clear_listing_cache()
+
+
+# -- GRIB header -------------------------------------------------------------------------
+
+
+def test_parse_grib2_grid():
+    assert cat.parse_grib2_grid(grib_header(1_013_404, grid=61)) == (1_013_404, 61)
+    assert cat.parse_grib2_grid(grib_header(100, template=0)) == (100, None)
+    with pytest.raises(ValueError):
+        cat.parse_grib2_grid(b"GRIB" + bytes(12))
+    with pytest.raises(ValueError):
+        cat.parse_grib2_grid(b"not grib at all")
+    with pytest.raises(ValueError):
+        cat.parse_grib2_grid(grib_header(100)[:40])
+
+
+# -- discover_schema ---------------------------------------------------------------------
+
+
+def discover(files, runs=(RUN_00, RUN_06), **kwargs):
+    kwargs.setdefault("header_reader", header_reader)
+    return cat.discover_schema("icon", list(runs), "archive", lister=make_lister(files), **kwargs)
+
+
+def test_discover_schema_builds_variables_per_level_type(fake_tree):
+    data = discover(fake_tree)
+    json.dumps(data)  # serialisable
+    keys = [(v["param"], v["level_type"]) for v in data["variables"]]
+    assert keys == [
+        ("HHL", 150),
+        ("HSURF", None),
+        ("RSTOM", None),
+        ("T", 100),
+        ("T", 150),
+        ("TMAX_2M", None),
+        ("T_2M", None),
+        ("W_SO", 106),
+    ]
+    by_key = {(v["param"], v["level_type"]): v for v in data["variables"]}
+    # Levels sort numerically and keep their path spelling; the empty level 3 is dropped.
+    assert by_key[("T", 150)]["levels"] == ["1", "2", "10"]
+    assert by_key[("W_SO", 106)]["levels"] == ["0.0", "0.01"]
+    assert by_key[("T_2M", None)]["levels"] == []
+    assert data["reference_runs"] == ["2026-10-11T00:00", "2026-10-11T06:00"]
+    assert data["derived_cycles"] == {"12": "00", "18": "06"}
+    assert data["invariant_params"] == ["HHL", "HSURF"]
+    assert data["coordinate_params"] == ["CLAT", "CLON"]
+
+
+def test_discover_schema_excludes_coordinates_off_grid_and_wavelength_fields(fake_tree):
+    data = discover(fake_tree)
+    params = {v["param"] for v in data["variables"]}
+    assert not params & {"CLAT", "CLON", "ELAT", "OFFGRID", "CEIL_BSC_DUST"}
+    excluded = {e["param"]: e["reason"] for e in data["excluded"]}
+    assert set(excluded) == {"CEIL_BSC_DUST", "ELAT", "OFFGRID"}
+    assert "wvl1" in excluded["CEIL_BSC_DUST"]
+    assert "4423680 points" in excluded["OFFGRID"]
+
+
+def test_discover_schema_strict_refuses_unreadable_grid_headers(fake_tree):
+    def flaky_reader(path: str) -> bytes:
+        if path.startswith("p/OFFGRID/"):
+            raise OSError("connection reset")
+        return header_reader(path)
+
+    data = discover(fake_tree, header_reader=flaky_reader)  # lenient keeps it
+    assert "OFFGRID" in {v["param"] for v in data["variables"]}
+    with pytest.raises(cat.IncompleteReferenceRun, match="could not read the grid"):
+        discover(fake_tree, header_reader=flaky_reader, strict=True)
+
+
+def test_discover_schema_without_grid_check_keeps_unknown_grids(fake_tree):
+    data = discover(fake_tree, check_grid=False, header_reader=None)
+    assert "OFFGRID" in {v["param"] for v in data["variables"]}
+
+
+def test_discover_schema_only_descends_into_reference_runs(fake_tree):
+    lister = make_lister(fake_tree)
+    cat.discover_schema("icon", [RUN_00, RUN_06], "archive", lister=lister, check_grid=False)
+    below_r = [c for c in lister.calls if "/r/" in c]
+    assert below_r
+    for call in below_r:
+        assert call.endswith("/s")
+        assert "/r/2026-10-11T00:00/s" in call or "/r/2026-10-11T06:00/s" in call
+
+
+def test_discover_schema_needs_both_cycle_classes(fake_tree):
+    with pytest.raises(ValueError, match="cover neither"):
+        discover(fake_tree, runs=[RUN_00])
+
+
+def test_discover_schema_records_hour_specific_params(fake_tree):
+    data = discover(fake_tree, runs=RUNS_4, strict=True)
+    assert data["derived_cycles"] == {}
+    schema = cat.ICONSchema(data)
+    assert schema.steps_for_cycle("RSTOM", None, 0) == (0, 1, 2, 3)
+    for hour in (6, 12, 18):
+        assert schema.steps_for_cycle("RSTOM", None, hour) == ()
+    assert schema.steps_for_cycle("T_2M", None, 12) == (0, 1, 2, 3)
+    assert schema.steps_for_cycle("T_2M", None, 18) == (0, 1, 2)
+
+
+def test_discover_schema_derived_hours_skip_params_never_published_then(fake_tree):
+    schema = cat.ICONSchema(discover(fake_tree, strict=True))
+    # 12Z copies 00Z, except RSTOM: the source holds 12Z runs, but none of RSTOM.
+    assert schema.steps_for_cycle("T_2M", None, 12) == (0, 1, 2, 3)
+    assert schema.steps_for_cycle("RSTOM", None, 0) == (0, 1, 2, 3)
+    assert schema.steps_for_cycle("RSTOM", None, 12) == ()
+
+
+def test_discover_schema_strict_rejects_missing_levels(fake_tree):
+    partial = [f for f in fake_tree if not f.startswith("p/T/lvt1/150/lv1/10/r/2026-10-11T06")]
+    data = discover(partial)  # lenient: levels are still the union over runs
+    by_key = {(v["param"], v["level_type"]): v for v in data["variables"]}
+    assert by_key[("T", 150)]["levels"] == ["1", "2", "10"]
+    with pytest.raises(cat.IncompleteReferenceRun, match="lacks levels"):
+        discover(partial, strict=True)
+
+
+def test_discover_schema_strict_rejects_a_variable_missing_from_a_run(fake_tree):
+    # The mirror lacks W_SO for the 06Z reference run, though it has other 06Z runs of it.
+    partial = [f for f in fake_tree if not (f.startswith("p/W_SO/") and "2026-10-11T06" in f)]
+    with pytest.raises(cat.IncompleteReferenceRun, match="W_SO@106: no files in 2026-10-11T06"):
+        discover(partial, strict=True)
+    # Lenient discovery records what it saw.
+    schema = cat.ICONSchema(discover(partial))
+    assert schema.steps_for_cycle("W_SO", 106, 6) == ()
+
+
+def test_discover_schema_strict_rejects_same_hour_runs_that_disagree(fake_tree):
+    runs = [RUN_00, RUN_06, pd.Timestamp("2026-10-10T00:00")]
+    partial = [f for f in fake_tree if f != "p/T_2M/r/2026-10-10T00:00/s/PT003H00M.grib2"]
+    discover(fake_tree, runs=runs, strict=True)
+    with pytest.raises(cat.IncompleteReferenceRun, match="disagree"):
+        discover(partial, runs=runs, strict=True)
+
+
+def test_discovered_schema_loads_and_is_cycle_aware(fake_tree):
+    schema = cat.ICONSchema(discover(fake_tree, runs=RUNS_4))
+    assert schema.step_axis == (0, 1, 2, 3)
+    assert schema.steps_for_cycle("T_2M", None, 0) == (0, 1, 2, 3)
+    assert schema.steps_for_cycle("T_2M", None, 18) == (0, 1, 2)
+    assert schema.steps_for_cycle("TMAX_2M", None, 12) == (1, 2, 3)
+    assert schema.variable("T", 150).steps == (0, 1, 2, 3)
+    assert schema.invariant_params == ("HHL", "HSURF")
+    assert schema.variable("HSURF", None).steps == (0,)
+    with pytest.raises(ValueError):
+        schema.steps_for_cycle("T_2M", None, 3)
+    with pytest.raises(KeyError):
+        schema.steps_for_cycle("T_2M", 100, 0)
+
+    fields = {run: schema.expected_fields(run) for run in RUNS_4}
+    f00, f06 = fields[RUN_00], fields[RUN_06]
+    assert FieldKey("T_2M", None, None, 3) in f00
+    assert FieldKey("T_2M", None, None, 3) not in f06
+    assert FieldKey("RSTOM", None, None, 0) in f00
+    assert FieldKey("RSTOM", None, None, 0) not in fields[RUNS_4[2]]
+    assert FieldKey("T", 150, "10", 2) in f06
+    assert FieldKey("HSURF", None, None, 0) in f06
+    # One step more per level of each forecast variable, plus RSTOM's four files.
+    assert len(f00) - len(f06) == (2 + 3 + 2 + 1 + 1) + 4
+    assert len(set(f00)) == len(f00)
+    # Every expected field of a run exists in the tree, and nothing on the grid is missed.
+    off_schema = ("p/CLAT", "p/CLON", "p/ELAT", "p/OFFGRID", "p/CEIL")
+    tree = set(fake_tree)
+    for run, keys in fields.items():
+        paths = {cat.field_path("icon", k, run) for k in keys}
+        stem = f"/r/{run:%Y-%m-%dT%H:%M}/"
+        assert paths == {f for f in tree if stem in f and not f.startswith(off_schema)}
+    assert schema.coordinate_fields() == [
+        FieldKey("CLAT", None, None, 0),
+        FieldKey("CLON", None, None, 0),
+    ]
+
+
+def test_dump_schema_round_trips(fake_tree):
+    data = discover(fake_tree)
+    text = cat.dump_schema(data)
+    assert json.loads(text) == data
+    assert text.count("\n") > len(data["variables"])  # one variable per line
+
+
+def test_icon_schema_rejects_bad_step_set_references(fake_tree):
+    data = discover(fake_tree)
+    data["variables"][0]["steps"]["00"] = "missing"
+    with pytest.raises(ValueError, match="unknown step set"):
+        cat.ICONSchema(data)
+
+
+def test_default_reference_runs_picks_the_newest_old_enough_run_per_hour():
+    runs = [pd.Timestamp(t) for t in pd.date_range("2026-10-10", "2026-10-13T12:00", freq="6h")]
+    chosen = cat.default_reference_runs(runs, NOW, pd.Timedelta(36, "h"))
+    assert chosen == [
+        pd.Timestamp("2026-10-12T00:00"),
+        pd.Timestamp("2026-10-11T06:00"),
+        pd.Timestamp("2026-10-11T12:00"),
+        pd.Timestamp("2026-10-11T18:00"),
+    ]
+    with pytest.raises(ValueError):
+        cat.default_reference_runs(runs[:1], NOW, pd.Timedelta(36, "h"))
+
+
+# -- committed schemas -------------------------------------------------------------------
+
+
+#: Per model: variables, length of T_2M's 00Z and 06Z schedules, and the step axis. The
+#: axis is the union over all variables, longer than T_2M's 113/75 steps because VMAX_10M
+#: stays hourly to the end (global) and the ART-EU dust fields are hourly to 72 h.
+COMMITTED = {
+    "icon": (103, 113, 93, 181),
+    "icon-art": (133, 113, 93, 181),
+    "icon-art-eu": (126, 75, 75, 89),
+}
+
+
+@pytest.mark.parametrize("model", sorted(COMMITTED))
+def test_committed_schemas_load(model):
+    n_variables, n_t2m_00, n_t2m_06, n_steps = COMMITTED[model]
+    schema = cat.load_schema(model)
+    spec = cat.MODELS[model]
+    assert schema.model == model
+    assert schema.n_cells == spec.n_cells
+    assert schema.grid_number == spec.grid_number
+    assert len(schema.variables) == n_variables
+    assert len(schema.step_axis) == n_steps
+    assert schema.step_axis == tuple(sorted(set(schema.step_axis)))
+    assert schema.step_axis[0] == 0
+    assert schema.coordinate_params == ("CLAT", "CLON")
+    assert len(schema.reference_runs) == 4
+    assert {r.hour for r in schema.reference_runs} == set(cat.CYCLE_HOURS)
+    params = {v.param for v in schema.variables}
+    assert not params & {"CLAT", "CLON", "ELAT", "ELON"}
+    assert {"T_2M", "HSURF"} <= params
+    assert "HSURF" in schema.invariant_params
+    assert set(schema.invariant_params) <= params
+    assert schema.variable("HSURF", None).steps == (0,)
+    t2m = [schema.steps_for_cycle("T_2M", None, h) for h in cat.CYCLE_HOURS]
+    assert [len(s) for s in t2m] == [n_t2m_00, n_t2m_06, n_t2m_00, n_t2m_06]
+    keys = [(v.param, v.level_type) for v in schema.variables]
+    assert len(keys) == len(set(keys))
+    for v in schema.variables:
+        assert set(v.steps) <= set(schema.step_axis)
+        assert list(v.levels) == sorted(v.levels, key=float)
+
+
+def test_committed_icon_schema_is_cycle_aware():
+    schema = cat.load_schema("icon")
+    t2m_00 = schema.steps_for_cycle("T_2M", None, 0)
+    assert t2m_00[:79] == tuple(range(79))
+    assert t2m_00[79:] == tuple(range(81, 181, 3))
+    assert schema.steps_for_cycle("T_2M", None, 6) == t2m_00[:93]
+    assert schema.step_axis == tuple(range(181))
+    f00 = schema.expected_fields(pd.Timestamp("2026-10-11T00:00"))
+    f06 = schema.expected_fields(pd.Timestamp("2026-10-11T06:00"))
+    assert len(f00) > len(f06)
+    assert max(k.step for k in f06) == 120
+    assert FieldKey("T_2M", None, None, 180) in f00
+    assert FieldKey("T_2M", None, None, 180) not in f06
+    assert FieldKey("T", 100, "85000", 0) in f00
+    assert FieldKey("W_SO", 106, "0.01", 0) in f00
+    assert len(schema.variable("T", 100).levels) == 18
+    assert len(schema.variable("T", 150).levels) == 120
+    assert len(schema.variable("HHL", 150).levels) == 121
+    assert {v.level_type for v in schema.variables if v.param == "T"} == {100, 150}
+
+
+@pytest.mark.parametrize("model", ["icon-art", "icon-art-eu"])
+def test_committed_art_schemas_know_the_00z_only_fields(model):
+    schema = cat.load_schema(model)
+    for param in ("RSTOM", "ALHFL_BS"):
+        assert schema.steps_for_cycle(param, None, 0)
+        for hour in (6, 12, 18):
+            assert schema.steps_for_cycle(param, None, hour) == ()
+    f00 = schema.expected_fields(pd.Timestamp("2026-10-11T00:00"))
+    f12 = schema.expected_fields(pd.Timestamp("2026-10-11T12:00"))
+    assert any(k.param == "RSTOM" for k in f00)
+    assert not any(k.param == "RSTOM" for k in f12)
+    excluded = {e["param"] for e in schema.excluded}
+    assert {"CEIL_BSC_DUST", "SAT_BSC_DUST", "ELAT", "ELON"} <= excluded
