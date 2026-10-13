@@ -38,6 +38,7 @@ import os
 import pathlib
 import re
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable, List, Sequence
 
@@ -702,10 +703,19 @@ def _sorted_by_step(paths: Sequence[str]) -> list[str]:
 
 
 def _sort_along(ds: xr.Dataset, name: str, ascending: bool = True) -> xr.Dataset:
-    """Sort along ``name`` when it is a real dimension coordinate, otherwise pass through."""
-    if name in ds.dims and name in ds.coords:
-        return ds.sortby(name, ascending=ascending)
-    return ds
+    """Sort along ``name`` when it is a real dimension coordinate, otherwise pass through.
+
+    An axis already in order is passed through. Otherwise this is ``sortby``'s ordering
+    applied with ``isel``: ``sortby`` copies every variable, including those without
+    ``name``, which on a full ICON-D2-RUC hour is gigabytes for nothing.
+    """
+    if name not in ds.dims or name not in ds.coords:
+        return ds
+    index = ds.indexes[name]
+    if index.is_monotonic_increasing if ascending else index.is_monotonic_decreasing:
+        return ds
+    order = np.argsort(index.values, kind="stable")
+    return ds.isel({name: order if ascending else order[::-1]})
 
 
 def _promote_to_dim(ds: xr.Dataset, coord: str, dim: str, rename_to: str | None = None):
@@ -1154,6 +1164,20 @@ class ICOND2RUCProvider(BaseProvider):
 
     MIRROR_SUBPATH = "opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p"
 
+    #: Stored names that differ from the mirror directory, for the fields published on both
+    #: model and pressure levels. The first stores named those after cfgrib's short name
+    #: (``wz_pressure_level``, ``q_model_level``), and an append under any other name is
+    #: refused as a variable mismatch.
+    STORED_NAMES = {"W": "WZ", "QV": "Q"}
+
+    #: GRIB level dimensions and the names they are stored under.
+    LEVEL_DIMS = {
+        "isobaricInhPa": "level",
+        "generalVerticalLayer": "model_level",
+        "generalVertical": "model_level_half",
+        "heightAboveGroundLayer": "height",
+    }
+
     VARIABLES = [
         "CLAT", "CLON", "ALB_RAD", "ASOB_S", "ASWDIFD_S", "ASWDIR_S", "CAPE_ML", "CAPE_MU",
         "CEILING", "CIN_ML", "CIN_MU", "CLC", "CLCH", "CLCL", "CLCM", "CLCT", "DEPTH_LK",
@@ -1193,6 +1217,7 @@ class ICOND2RUCProvider(BaseProvider):
         self.name = f"icon_d2_ruc_{timescale}"
         self.store_prefix = f"bkr/icon/icon_d2_ruc_{timescale}{store_suffix}.icechunk"
         self._grib_dir = pathlib.Path(grib_dir) if grib_dir is not None else None
+        self._run_parent_cache: dict[str, list[pathlib.Path]] = {}
 
     @property
     def grib_dir(self) -> pathlib.Path:
@@ -1214,14 +1239,34 @@ class ICOND2RUCProvider(BaseProvider):
         init_time_str = it.strftime("%Y-%m-%dT%H:%M")
         files: List[str] = []
         for var in self.VARIABLES:
-            var_path = base / var
-            if not var_path.is_dir():
-                continue
-            files.extend(str(f) for f in var_path.rglob(f"*/{init_time_str}/*/PT000H*.grib2"))
+            for parent in self._run_parents(var):
+                files.extend(
+                    str(f) for f in (parent / "r" / init_time_str).glob("*/PT000H*.grib2")
+                )
 
         if not files:
             logger.warning(f"{self.name}: no files for {init_time_str} under {base}")
         return sorted(files)
+
+    def _run_parents(self, var: str) -> list[pathlib.Path]:
+        """Directories under ``var`` that hold its ``r/<run>`` tree, one per level.
+
+        Cached: globbing the whole mirror for every partition walks each level's thousands
+        of run directories every time, which made a backfill I/O-bound on directory walks.
+        """
+        if var not in self._run_parent_cache:
+            parents: list[pathlib.Path] = []
+            stack = [self.grib_dir / var]
+            while stack:
+                path = stack.pop()
+                if not path.is_dir():
+                    continue
+                if (path / "r").is_dir():
+                    parents.append(path)
+                    continue
+                stack.extend(p for p in path.iterdir() if p.is_dir())
+            self._run_parent_cache[var] = parents
+        return self._run_parent_cache[var]
 
     def process(
         self,
@@ -1245,13 +1290,23 @@ class ICOND2RUCProvider(BaseProvider):
                     continue
                 # cfgrib often names the variable "unknown" for DWD's local GRIB tables, so
                 # the directory name is authoritative.
-                target = f"{var}{suffix}".lower()
+                target = f"{self.STORED_NAMES.get(var, var)}{suffix}".lower()
                 data_vars = list(ds.data_vars)
                 if len(data_vars) == 1:
                     ds = ds.rename({data_vars[0]: target})
                 else:
                     ds = ds.rename({dv: f"{target}_{dv}".lower() for dv in data_vars})
-                selected.append(ds)
+                # Sorted one variable at a time, so that sorting the merged hour below finds
+                # nothing to do: there it would copy the whole dataset once per axis.
+                # Pressure levels are the exception and are left to the merged sort.
+                # ECHOTOP's two dBZ thresholds arrive on cfgrib's generic "level" axis,
+                # whose labels _clean_ruc_dataset drops, so they ride along on the pressure
+                # axis and only the merged sort reorders them; the published 15-minute store
+                # has them in that order. The pressure-level fields are small.
+                for dim in self.LEVEL_DIMS:
+                    if dim != "isobaricInhPa":
+                        ds = _sort_along(ds, dim)
+                selected.append(_sort_along(ds, "time"))
 
         if not selected:
             raise ValueError(f"{self.name}: no {self.timescale} variables found for {it}")
@@ -1261,22 +1316,49 @@ class ICOND2RUCProvider(BaseProvider):
             ["entireLake", "meanSea", "entireAtmosphere"], errors="ignore"
         )
 
-        renames = {
-            "isobaricInhPa": "level",
-            "generalVerticalLayer": "model_level",
-            "generalVertical": "model_level_half",
-            "heightAboveGroundLayer": "height",
-        }
-        merged = merged.rename({k: v for k, v in renames.items() if k in merged.dims})
+        merged = merged.rename({k: v for k, v in self.LEVEL_DIMS.items() if k in merged.dims})
 
         chunks: dict[str, int] = {"time": 1}
         if "values" in merged.dims:
             chunks["values"] = -1
-        for dim in ("level", "model_level", "model_level_half", "height"):
+        for dim in self.LEVEL_DIMS.values():
             if dim in merged.dims:
-                merged = merged.sortby(dim, ascending=dim != "level")
+                # Still needed when variables carry different subsets of an axis: the merge
+                # unions them, and the union is ascending whatever the inputs were.
+                merged = _sort_along(merged, dim, ascending=dim != "level")
                 chunks[dim] = -1
-        return merged.sortby("time").chunk(chunks)
+        return _sort_along(merged, "time").chunk(chunks)
+
+    def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
+        """Append, carrying over the static coordinates the store already has.
+
+        The 15- and 5-minute stores were created with ``latitude``/``longitude`` on the
+        ``values`` axis, which this provider does not produce. An append without them
+        rewrites the group attributes from the incoming dataset and drops the ``coordinates``
+        entry that marks them, after which they read back as data variables and every later
+        append is refused as a variable mismatch.
+        """
+        try:
+            existing = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+        except STORE_READ_ERRORS:
+            existing = None
+        if existing is not None:
+            static = {
+                name: existing[name].variable.load()
+                for name in existing.coords
+                if name not in processed.coords
+                and self.append_dim not in existing[name].dims
+                and all(processed.sizes.get(d) == n for d, n in existing[name].sizes.items())
+            }
+            if static:
+                processed = processed.assign_coords(static)
+                # Where xarray records a coordinate depends on what each variable's own
+                # "coordinates" names; matching the store's keeps the group entry intact.
+                processed = processed.copy(deep=False)
+                for name, var in processed.data_vars.items():
+                    if name in existing and "coordinates" in existing[name].encoding:
+                        var.encoding["coordinates"] = existing[name].encoding["coordinates"]
+        return super().write_to_icechunk(repo, processed)
 
     def _matches_cadence(self, ds: xr.Dataset, variable: str) -> bool:
         """True when ``ds`` has the number and spacing of valid times of this cadence.
@@ -1310,11 +1392,21 @@ class ICOND2RUCProvider(BaseProvider):
         """
         pressure = [f for f in var_files if f"lvt1/{LEVEL_TYPE_PRESSURE}" in f]
         model = [f for f in var_files if f"lvt1/{LEVEL_TYPE_MODEL}" in f]
-        if pressure and model:
-            yield _open_and_merge_by_valid_time(model), "_model_level"
-            yield _open_and_merge_by_valid_time(pressure), "_pressure_level"
-        else:
-            yield _open_and_merge_by_valid_time(var_files), ""
+        groups = [(model, "_model_level"), (pressure, "_pressure_level")]
+        if not (pressure and model):
+            groups = [(var_files, "")]
+        for files, suffix in groups:
+            # One file per valid time and level, named after the valid time. Counting the
+            # names with the full set of levels predicts how many valid times
+            # _open_and_merge_by_valid_time will keep, without opening anything; that
+            # spares each cadence from decoding the other cadences' GRIB, which was most
+            # of its run time. A level type can carry both: T on pressure levels has 23
+            # hourly levels and two of them again every 15 minutes.
+            per_name = Counter(pathlib.Path(f).name for f in files)
+            complete = sum(n == max(per_name.values()) for n in per_name.values())
+            if complete != self.TIMESTEPS[self.timescale]:
+                continue
+            yield _open_and_merge_by_valid_time(files), suffix
 
 
 def _clean_ruc_dataset(ds: xr.Dataset) -> xr.Dataset:
