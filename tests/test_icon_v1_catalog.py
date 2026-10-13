@@ -789,3 +789,105 @@ def test_precision_runs_are_the_newest_settled_00z_and_12z():
     ]
     with pytest.raises(ValueError, match="12Z"):
         cat.precision_runs(runs, now, pd.Timedelta(8, "h"))
+
+
+# -- grid eras ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "model, old_grid, old_cells, new_grid, new_cells",
+    [
+        ("icon-art", 36, 737_280, 39, 1_310_720),
+        ("icon-art-eu", 51, 571_088, 61, 1_013_404),
+    ],
+)
+def test_art_models_changed_grid_with_the_2026_10_06_run(
+    model, old_grid, old_cells, new_grid, new_cells
+):
+    last_old, first_new = pd.Timestamp("2026-10-05T18:00"), pd.Timestamp("2026-10-06T00:00")
+    assert cat.era_for(model, last_old).grid_number == old_grid
+    assert cat.era_for(model, first_new).grid_number == new_grid
+    assert cat.era_for(model, pd.Timestamp("2025-09-30T18:00")).grid_number == old_grid
+    assert cat.current_era(model).grid_number == new_grid == cat.MODELS[model].grid_number
+    old = cat.load_schema(model, last_old)
+    new = cat.load_schema(model, first_new)
+    assert (old.n_cells, old.grid_number) == (old_cells, old_grid)
+    assert (new.n_cells, new.grid_number) == (new_cells, new_grid)
+    assert cat.load_schema(model) is new
+    assert cat.era_by_grid(model, old_grid).schema == f"{model}_grid{old_grid}"
+    with pytest.raises(ValueError, match="no era on grid"):
+        cat.era_by_grid(model, 26)
+    # The old grid's schema has the same fields; only the grid differs.
+    assert [(v.param, v.level_type, v.wavelength, v.levels, v.dtype) for v in old.variables] == [
+        (v.param, v.level_type, v.wavelength, v.levels, v.dtype) for v in new.variables
+    ]
+    assert len(old.reference_runs) >= 4
+
+
+def test_icon_global_has_one_era():
+    assert cat.era_for("icon", pd.Timestamp("2026-08-25T12:00")) == cat.current_era("icon")
+    assert cat.load_schema("icon", pd.Timestamp("2026-08-25T12:00")).n_cells == 2_949_120
+
+
+def test_a_schema_must_match_its_eras_grid():
+    wrong = cat.ICONEra(None, 51, 571_088, "icon-art-eu")  # the current era's schema
+    with pytest.raises(ValueError, match="grid 61"):
+        cat.load_era_schema("icon-art-eu", wrong)
+
+
+def test_discover_schema_takes_the_grid_of_its_runs_era(fake_tree):
+    old_runs = [pd.Timestamp("2026-01-07T00:00"), pd.Timestamp("2026-01-07T06:00")]
+    files = [f.replace("2026-10-11T", "2026-01-07T") for f in fake_tree]
+    data = cat.discover_schema(
+        "icon-art", old_runs, "archive", lister=make_lister(files), check_grid=False
+    )
+    assert (data["n_cells"], data["grid_number"]) == (737_280, 36)
+    with pytest.raises(ValueError, match="span 2"):
+        cat.discover_schema(
+            "icon-art", [old_runs[0], pd.Timestamp("2026-10-11T00:00")], "archive", lister=None
+        )
+
+
+def test_reference_runs_are_ranked_by_how_much_of_them_the_source_holds(fake_tree):
+    # Drop most parameters from the newest 00Z run: the older, whole one wins its hour.
+    newest = pd.Timestamp("2026-10-11T00:00")
+    stem = f"/r/{newest:%Y-%m-%dT%H:%M}/"
+    files = [f for f in fake_tree if stem not in f or f.startswith("p/T_2M/")]
+    chosen = cat.rank_reference_runs(
+        "icon", "archive", TREE_RUNS, per_hour=1, lister=make_lister(files)
+    )
+    assert pd.Timestamp("2026-10-10T00:00") in chosen and newest not in chosen
+    assert sorted(r.hour for r in chosen) == [0, 6, 12, 18]
+    two = cat.rank_reference_runs(
+        "icon", "archive", TREE_RUNS, per_hour=2, lister=make_lister(files)
+    )
+    assert len(two) == 8
+
+
+def test_an_older_era_inherits_the_current_dtypes():
+    reference = {
+        "variables": [
+            {"param": "T_2M", "level_type": None, "dtype": "float16"},
+            {"param": "T", "level_type": 150, "dtype": "float16"},
+            {"param": "T", "level_type": 100, "dtype": "float16"},
+            {"param": "QV", "level_type": 150, "dtype": "float32"},
+        ]
+    }
+    data = {
+        "variables": [
+            {"param": "T_2M", "level_type": None},
+            {"param": "T", "level_type": 106},  # a level type the references lack
+            {"param": "QV", "level_type": 150},
+            {"param": "NEW_FIELD", "level_type": None},
+        ]
+    }
+    updated, unmatched = cat.inherit_precision(data, [reference])
+    assert [v.get("dtype") for v in updated["variables"]] == ["float16", None, "float32", None]
+    assert unmatched == [("T", 106, None), ("NEW_FIELD", None, None)]
+
+
+def test_the_schema_command_refuses_runs_of_another_era():
+    # Runs of the old grid cannot be written into the current era's schema; nothing is
+    # listed before the refusal.
+    with pytest.raises(SystemExit):
+        cat.main(["schema", "icon-art", "--runs", "2026-10-01T00:00", "2026-10-01T06:00"])
