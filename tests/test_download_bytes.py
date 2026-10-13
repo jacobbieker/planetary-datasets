@@ -41,6 +41,8 @@ class FakeFS:
         outcome = FakeFS.script.pop(0) if FakeFS.script else b"GRIBpayload"
         if isinstance(outcome, BaseException):
             raise outcome
+        if callable(outcome):
+            return outcome()
         return outcome
 
 
@@ -101,6 +103,40 @@ def test_permanent_errors_return_none_without_retrying(fake_fs, sleeps, error):
     assert dl.read_bytes(S3_URI, retries=5) is None
     assert len(fake_fs.calls) == 1
     assert sleeps == []
+
+
+def _raise_like_fsspec_sync(error: BaseException):
+    """Re-raise ``error`` the way ``fsspec.asyn.sync`` does, from a frame holding it."""
+
+    def sync():
+        return_result = error
+        raise return_result
+
+    return sync
+
+
+@pytest.mark.parametrize("first", [FileNotFoundError("gone"), TimeoutError("slow")])
+def test_a_handled_error_does_not_keep_the_callers_locals_alive(fake_fs, sleeps, first):
+    # A re-raised error is in a cycle with the frame that raised it, and frames reach
+    # their callers through f_back: unbroken, a miss pinned a reader's 150 MB block buffer
+    # until the cyclic collector happened to run.
+    import gc
+    import weakref
+
+    class Held:
+        pass
+
+    def caller():
+        held = Held()
+        dl.read_bytes(S3_URI, retries=2)
+        return weakref.ref(held)
+
+    fake_fs.script = [_raise_like_fsspec_sync(first), b"GRIB"]
+    gc.disable()
+    try:
+        assert caller()() is None
+    finally:
+        gc.enable()
 
 
 @pytest.mark.parametrize(

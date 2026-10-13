@@ -13,6 +13,7 @@ import os
 import pathlib
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Iterable, Sequence, TypeVar
 
@@ -51,6 +52,28 @@ def _is_permanent_read_error(exc: BaseException) -> bool:
     return isinstance(exc, ClientResponseError) and exc.status in PERMANENT_HTTP_STATUSES
 
 
+def _release_traceback(exc: BaseException) -> None:
+    """Drop the frames a handled exception holds, and with them its callers' locals.
+
+    An error re-raised by fsspec's ``sync`` sits in a reference cycle with the frame that
+    re-raised it, and a frame keeps every caller up the stack alive through ``f_back``. A
+    handled miss therefore pinned whatever its callers held until the cyclic garbage
+    collector next ran: reading a run with many missing fields into block buffers kept
+    dozens of 150 MB blocks alive and took a 4 GB write to 7 GB.
+    """
+    seen: set[int] = set()
+    pending: list[BaseException | None] = [exc]
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if current.__traceback__ is not None:
+            traceback.clear_frames(current.__traceback__)
+            current.__traceback__ = None
+        pending += [current.__cause__, current.__context__]
+
+
 def _with_retries(
     attempt_once: Callable[[], _T],
     uri: str,
@@ -87,6 +110,7 @@ def _with_retries(
                 # A 404 or a denial will not become a success; retrying only burns the
                 # backoff budget. Archives with gaps hit this constantly.
                 logger.debug(f"{uri} unavailable ({type(exc).__name__}), not retrying")
+                _release_traceback(exc)
                 return None
             if attempt == retries:
                 raise
@@ -94,6 +118,7 @@ def _with_retries(
             logger.debug(
                 f"attempt {attempt}/{retries} for {uri} failed ({exc!r}), retrying in {sleep:.1f}s"
             )
+            _release_traceback(exc)
             time.sleep(sleep)
     return None
 
