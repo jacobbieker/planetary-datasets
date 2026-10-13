@@ -26,7 +26,13 @@ import dagster as dg
 import pandas as pd
 from dagster_docker import PipesDockerClient
 
-from dags.factory import MEMORY_CLASS_TAG, MEMORY_GB_TAG, _format_gb, memory_class_for
+from dags.factory import (
+    MEMORY_CLASS_TAG,
+    MEMORY_GB_TAG,
+    REQUIRES_TAG,
+    _format_gb,
+    memory_class_for,
+)
 from planetary_datasets.providers._timestamps import to_naive_utc
 
 
@@ -63,6 +69,20 @@ def partition_start(context: dg.AssetExecutionContext) -> pd.Timestamp:
 def memory_tags(memory_gb: float) -> dict[str, str]:
     """Run-queue tags for a step that needs ``memory_gb``, as the provider factory sets."""
     return {MEMORY_CLASS_TAG: memory_class_for(memory_gb), MEMORY_GB_TAG: _format_gb(memory_gb)}
+
+
+def staged_op_tags(asset_tags: Mapping[str, str]) -> dict[str, str]:
+    """Op tags for both halves of a staged pipeline.
+
+    The memory figures size the step's placement. Both halves require ``docker``: the
+    download runs an image that is only built on the Docker host, and the publish reads
+    the staging directory that download left on that host's disk.
+    """
+    return {
+        MEMORY_CLASS_TAG: asset_tags[MEMORY_CLASS_TAG],
+        MEMORY_GB_TAG: asset_tags[MEMORY_GB_TAG],
+        REQUIRES_TAG: "docker",
+    }
 
 
 def host_user_container_kwargs(host_dir, container_dir: str, memory_gb: float) -> dict:
@@ -114,7 +134,7 @@ def make_staged_download_asset(
         metadata={"image_env": dg.MetadataValue.text(image_env), **(metadata or {})},
         retry_policy=retry_policy,
         tags=all_tags,
-        op_tags={MEMORY_CLASS_TAG: all_tags[MEMORY_CLASS_TAG]},
+        op_tags=staged_op_tags(all_tags),
     )
     def _asset(
         context: dg.AssetExecutionContext, pipes_docker_client: PipesDockerClient
@@ -171,7 +191,7 @@ def make_staged_publish_asset(
         compute_kind=compute_kind,
         metadata=dict(metadata or {}),
         tags=all_tags,
-        op_tags={MEMORY_CLASS_TAG: all_tags[MEMORY_CLASS_TAG]},
+        op_tags=staged_op_tags(all_tags),
     )
     def _asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
         it = partition_start(context)

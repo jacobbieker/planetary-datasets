@@ -1,0 +1,80 @@
+# The machines Dagster spreads runs over. Read by dags/fleet (the run launcher in
+# dags/dagster.yaml and `pixi run fleet ...`). Edits take effect on the next launch; no
+# restart is needed.
+#
+# A run is placed on the host with the most memory headroom that satisfies all of:
+#   * reservations of runs already there + this run <= memory_gb   (the ledger)
+#   * free memory right now - this run >= reserve_gb                (the live probe)
+#   * free disk under work_dir - reservations - this run >= min_free_disk_gb
+#   * fewer than max_runs runs there
+#   * the host offers every capability the run's steps require (planetary/requires)
+# A run's memory is the sum of its heaviest steps' declared planetary/memory_gb, up to
+# the steps it can run at once; see dags/fleet/placement.py.
+#
+# repo_dir on a remote host is a fleet-only copy that is rsynced (with --delete) from the
+# daemon's checkout before launches. Never point it at a working copy.
+
+# The path the code location is loaded from on every host. Dagster stores it with each
+# run, and the run's worker imports the code from it, so it must hold the fleet's copy
+# wherever it exists: it is each remote host's repo_dir, and on pb a symlink to the
+# checkout (`pixi run dev` creates it). A launch is refused if it exists on a host but
+# is something else, such as a personal working copy.
+code_dir: ~/planetary-fleet/planetary-datasets
+
+postgres:
+  # pb's tailnet address. Every host, pb included, connects here; the password is in
+  # ~/.config/planetary-fleet/env on each host (`pixi run fleet setup`).
+  host: 100.88.107.114
+  port: 5432
+  db: dagster
+  user: dagster
+
+hosts:
+  pb:
+    # This machine: webserver, daemon and Postgres run here too.
+    ssh: null
+    repo_dir: /home/jacob/Development/planetary-datasets
+    # /ext_data, not /tmp: /tmp is a RAM-backed tmpfs here, and the root disk is full.
+    work_dir: /ext_data/dagster-fleet
+    # The system package, not ~/.pixi/bin.
+    pixi: /usr/bin/pixi
+    # 125 GB physical. Leaves room for the desktop, IDE, mergerfs and the tmpfs /tmp,
+    # which is regularly holding tens of GB.
+    memory_gb: 72
+    reserve_gb: 12
+    min_free_disk_gb: 500
+    max_runs: 10
+    # The staged sources' Docker images (earth2studio, opera-radar, meteoswiss-kenda)
+    # are built here, and their staging directories live here.
+    capabilities: [docker]
+
+  aero:
+    ssh: aero
+    repo_dir: ~/planetary-fleet/planetary-datasets
+    work_dir: ~/planetary-fleet/work
+    # The fleet's own pixi, matching pb's version (`fleet setup` copies it). aero's
+    # ~/.pixi/bin/pixi is too old to read this pixi.lock.
+    pixi: ~/planetary-fleet/bin/pixi
+    # 62 GB physical, 16 cores.
+    memory_gb: 48
+    reserve_gb: 6
+    min_free_disk_gb: 200
+    max_runs: 6
+    capabilities: []
+
+  mac:
+    ssh: mac
+    repo_dir: ~/planetary-fleet/planetary-datasets
+    work_dir: ~/planetary-fleet/work
+    # Needs a pixi at least as new as pb's; `fleet setup mac` says so if it is not.
+    pixi: ~/planetary-fleet/bin/pixi
+    # Size unknown until it can be probed; commit 60% of physical memory and keep 8 GB
+    # free for whoever is using it.
+    memory_fraction: 0.6
+    reserve_gb: 8
+    min_free_disk_gb: 100
+    max_runs: 4
+    capabilities: []
+    # This machine's SSH key is not authorised on mac yet. Enable once
+    # `ssh -o BatchMode=yes mac true` works and `pixi run fleet setup mac` passes.
+    enabled: false

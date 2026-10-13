@@ -13,19 +13,30 @@ lint = "ruff check ."
 
 
 # Webserver plus daemon for the code location in dags/definitions.py. The daemon is what
-# runs the schedules and the queued run coordinator, hence `dagster dev` and not
-# `dagster-webserver` alone.
+# runs the schedules, the queued run coordinator and the fleet run launcher that places
+# runs on the machines in dags/fleet.yaml; hence `dagster dev` and not `dagster-webserver`
+# alone.
 #
 # DAGSTER_HOME is set here, and deliberately overrides whatever is in the shell, so the
-# instance picks up the committed dags/dagster.yaml: the run queue, the per-memory-class
-# concurrency limits and the retry policy. Pointing it elsewhere silently reverts all of
-# that to Dagster's defaults. Dagster demands an absolute path, hence PIXI_PROJECT_ROOT.
+# instance picks up the committed dags/dagster.yaml: Postgres storage, the run queue, the
+# fleet launcher, the per-memory-class concurrency limits and the retry policy. Pointing it
+# elsewhere silently reverts all of that to Dagster's defaults. Dagster demands an
+# absolute path, hence PIXI_PROJECT_ROOT. `fleet dev` loads the Postgres password and
+# storage directories from ~/.config/planetary-fleet/env first, and loads the code
+# location from the fleet's code_dir (a symlink to this checkout) because that path is
+# stored with every run and must hold the same code on every host; see dags/fleet.yaml.
 #
 # Named `dev` rather than `dagster` because a task shadows the executable of the same
 # name: `pixi run dagster definitions validate` would append those arguments to
 # `dagster dev` instead of running the subcommand.
 [tasks.dev]
-cmd = "dagster dev -m dags.definitions"
+cmd = "python -m dags.fleet dev"
+env = { DAGSTER_HOME = "$PIXI_PROJECT_ROOT/dags" }
+
+# Operate the fleet of machines runs are spread over: `pixi run fleet status`,
+# `pixi run fleet setup aero`, `pixi run fleet logs <run id>`. See dags/fleet/__main__.py.
+[tasks.fleet]
+cmd = "python -m dags.fleet"
 env = { DAGSTER_HOME = "$PIXI_PROJECT_ROOT/dags" }
 
 [dependencies]
@@ -81,6 +92,7 @@ python-dotenv = ">=1.0,<2"
 loguru = ">=0.7,<1"
 obstore = ">=0.11,<1"
 copernicusmarine = ">=2.4.1,<3"
+dagster-postgres = ">=1!0.28.2,<1!0.29"
 
 [pypi-dependencies]
 odc-stac = ">=0.4.0, <0.5"

@@ -58,7 +58,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 from types import ModuleType
-from typing import Iterator
+from typing import Iterable, Iterator
 
 import dagster as dg
 import pandas as pd
@@ -69,6 +69,7 @@ if str(_REPO_ROOT) not in sys.path:
     # Lets `dagster dev -f dags/definitions.py` work as well as `-m dags.definitions`.
     sys.path.insert(0, str(_REPO_ROOT))
 
+from dagster._core.definitions.partitions.context import partition_loading_context  # noqa: E402
 from dagster._core.storage.tags import GLOBAL_CONCURRENCY_TAG  # noqa: E402
 
 from dags import assets as assets_package  # noqa: E402
@@ -78,6 +79,7 @@ from dags.factory import (  # noqa: E402
     DEFAULT_MEMORY_GB,
     MEMORY_CLASS_TAG,
     MEMORY_CLASSES,
+    REQUIRES_TAG,
     SCHEDULE_TAG,
     executor_tag_concurrency_limits,
     memory_class_for,
@@ -356,17 +358,48 @@ def pool_name_for(asset: dg.AssetsDefinition, family: str) -> str | None:
     return pool_name(f"{family}_{keys[0].path[-1]}")
 
 
+#: Resources only some hosts can provide, and the capability (see ``dags/fleet.yaml``) a
+#: step using one requires. The Docker images the Pipes assets run are built on one
+#: machine, so a step that runs one must be placed there.
+RESOURCE_REQUIREMENTS: dict[str, str] = {"pipes_docker_client": "docker"}
+
+
+def fleet_requirements(node_def) -> str | None:
+    """The ``planetary/requires`` op tag an op should carry, or None if it needs none.
+
+    Derived from the resources the op uses, merged with any requirement it declares.
+    """
+    declared = {
+        part.strip() for part in (node_def.tags.get(REQUIRES_TAG) or "").split(",") if part.strip()
+    }
+    needed = declared | {
+        capability
+        for resource, capability in RESOURCE_REQUIREMENTS.items()
+        if resource in node_def.required_resource_keys
+    }
+    return ",".join(sorted(needed)) or None
+
+
 def _with_pool(asset: dg.AssetsDefinition, family: str) -> dg.AssetsDefinition:
-    """Return ``asset`` with its op bound to the pool :func:`pool_name_for` picks.
+    """Return ``asset`` with its op bound to its pool and tagged with its host needs.
+
+    The pool is the one :func:`pool_name_for` picks; the ``planetary/requires`` op tag is
+    what the fleet launcher places runs by (:func:`fleet_requirements`).
 
     Rebuilt through ``dagster_internal_init`` because ``OpDefinition.with_replaced_properties``
     carries the existing pool over rather than taking a new one.
     """
+    node_def = _node_def(asset)
+    if not isinstance(node_def, dg.OpDefinition):
+        return asset
     pool = pool_name_for(asset, family)
-    if pool is None:
+    requires = fleet_requirements(node_def)
+    tags = dict(node_def.tags)
+    if requires:
+        tags[REQUIRES_TAG] = requires
+    if pool is None and tags == dict(node_def.tags):
         return asset
 
-    node_def = _node_def(asset)
     attributes = asset.get_attributes_dict()
     attributes["node_def"] = dg.OpDefinition.dagster_internal_init(
         compute_fn=node_def.compute_fn,
@@ -379,11 +412,11 @@ def _with_pool(asset: dg.AssetsDefinition, family: str) -> dg.AssetsDefinition:
         description=node_def.description,
         config_schema=node_def.config_schema,
         required_resource_keys=node_def.required_resource_keys,
-        tags=node_def.tags,
+        tags=tags,
         version=None,  # code_version replaces version
         retry_policy=node_def.retry_policy,
         code_version=node_def.version,
-        pool=pool,
+        pool=pool if pool is not None else node_def.pool,
     )
     return dg.AssetsDefinition.dagster_internal_init(**attributes)
 
@@ -418,11 +451,7 @@ def _load_one_module(module: ModuleType, family: str) -> list[dg.AssetsDefinitio
 
     # Mixed module: pair the two loads by op identity, which ``key_prefix`` preserves.
     prefixed = _load_grouped(module, family, key_prefix=family)
-    by_node = {
-        id(node): asset
-        for asset in prefixed
-        if (node := _node_def(asset)) is not None
-    }
+    by_node = {id(node): asset for asset in prefixed if (node := _node_def(asset)) is not None}
     result: list[dg.AssetsDefinition] = []
     for asset in plain:
         node_def = _node_def(asset)
@@ -474,8 +503,7 @@ def load_assets(
             if keys & seen_keys:
                 clashing = sorted(k.to_user_string() for k in keys & seen_keys)
                 logger.warning(
-                    f"dagster: {module.__name__} redefines {clashing}; "
-                    "keeping the first definition"
+                    f"dagster: {module.__name__} redefines {clashing}; keeping the first definition"
                 )
                 continue
             seen_keys |= keys
@@ -561,12 +589,16 @@ def _catch_up_schedule(
     job: dg.JobDefinition,
     name: str,
     partitions_def: dg.PartitionsDefinition,
+    components: list[list[dg.AssetKey]] | None = None,
 ) -> dg.ScheduleDefinition:
     """A :data:`MIN_SCHEDULE_INTERVAL` schedule for a partitioning finer than the floor.
 
     Fires on :data:`MIN_SCHEDULE_CRON` and asks for every partition whose window fell in
     the interval just gone, oldest first, so nothing is dropped by slowing the tick down:
     an hourly ingest gets one tick with six partitions instead of six ticks with one.
+
+    With ``components``, each partition is requested as one run per component, as
+    :func:`_split_schedule` does, so the fleet can spread them.
     """
 
     @dg.schedule(
@@ -594,16 +626,14 @@ def _catch_up_schedule(
         if not keys:
             return dg.SkipReason(f"{name}: nothing since the last tick")
         stamp = fired.strftime("%Y-%m-%dT%H")
-        return [
-            dg.RunRequest(run_key=f"{name}-{stamp}-{key}", partition_key=key) for key in keys
-        ]
+        if components:
+            return _component_run_requests(components, keys, f"{name}-{stamp}")
+        return [dg.RunRequest(run_key=f"{name}-{stamp}-{key}", partition_key=key) for key in keys]
 
     return _schedule
 
 
-def _partition_keys_for_times(
-    partitions_def: dg.PartitionsDefinition, times: list[str]
-) -> list:
+def _partition_keys_for_times(partitions_def: dg.PartitionsDefinition, times: list[str]) -> list:
     """Turn time-dimension keys into keys of ``partitions_def``.
 
     For a plain time-window partitioning that is the identity. For a
@@ -693,7 +723,24 @@ def _linked_groups(
     is not scheduled (one with its own automation condition, or tagged manual) are ignored
     — it is not ours to place, and its absence is not something a job can fix.
     """
-    parent: dict[dg.AssetKey, dg.AssetKey] = {key: key for key in memory_classes}
+    heaviest: dict[dg.AssetKey, str] = {}
+    for component in linked_components(memory_classes, upstreams):
+        memory_class = max((memory_classes[key] for key in component), key=_memory_class_rank)
+        for key in component:
+            heaviest[key] = memory_class
+    return heaviest
+
+
+def linked_components(
+    keys: Iterable[dg.AssetKey], upstreams: dict[dg.AssetKey, set[dg.AssetKey]]
+) -> list[list[dg.AssetKey]]:
+    """The connected components of the dependency graph among ``keys``, each sorted.
+
+    Assets in one component must run together: in one job (:func:`_linked_groups`) and,
+    since the staged sources hand files over on local disk, in one *run* on one host
+    (:func:`_component_run_requests`). Edges to assets outside ``keys`` are ignored.
+    """
+    parent: dict[dg.AssetKey, dg.AssetKey] = {key: key for key in keys}
 
     def find(key: dg.AssetKey) -> dg.AssetKey:
         while parent[key] != key:
@@ -702,17 +749,85 @@ def _linked_groups(
         return key
 
     for key, deps in upstreams.items():
+        if key not in parent:
+            continue
         for dep in deps:
             if dep in parent:
                 parent[find(key)] = find(dep)
 
-    heaviest: dict[dg.AssetKey, str] = {}
-    for key, memory_class in memory_classes.items():
-        root = find(key)
-        current = heaviest.get(root)
-        if current is None or _memory_class_rank(memory_class) > _memory_class_rank(current):
-            heaviest[root] = memory_class
-    return {key: heaviest[find(key)] for key in memory_classes}
+    groups: dict[dg.AssetKey, list[dg.AssetKey]] = defaultdict(list)
+    for key in parent:
+        groups[find(key)].append(key)
+    components = [sorted(group, key=lambda k: k.to_user_string()) for group in groups.values()]
+    return sorted(components, key=lambda group: group[0].to_user_string())
+
+
+def _component_label(component: list[dg.AssetKey]) -> str:
+    """A short, stable name for a component, for run keys."""
+    first = component[0].to_user_string().replace("/", "__")
+    return first if len(component) == 1 else f"{first}+{len(component) - 1}"
+
+
+def _component_run_requests(
+    components: list[list[dg.AssetKey]], keys: list, run_key_prefix: str
+) -> list[dg.RunRequest]:
+    """One run per (partition, component), oldest partition first.
+
+    A job here holds every asset of a memory class, often dozens of unrelated sources. As
+    one run per tick it would all land on one host; split per component, the fleet
+    launcher can place each source on whichever machine has room for it.
+    """
+    if len(components) <= 1:
+        # The whole job is one component; a selection would only restate it.
+        return [dg.RunRequest(run_key=f"{run_key_prefix}-{key}", partition_key=key) for key in keys]
+    return [
+        dg.RunRequest(
+            run_key=f"{run_key_prefix}-{key}-{_component_label(component)}",
+            partition_key=key,
+            asset_selection=component,
+        )
+        for key in keys
+        for component in components
+    ]
+
+
+def _split_schedule(
+    job: dg.JobDefinition,
+    name: str,
+    partitions_def: dg.PartitionsDefinition,
+    components: list[list[dg.AssetKey]],
+) -> dg.ScheduleDefinition:
+    """Fire when ``build_schedule_from_partitioned_job`` would, one run per component.
+
+    The cron and timezone are derived from the partitioning exactly as Dagster derives
+    them for that schedule, so the cadence is unchanged; only the single all-assets run
+    becomes one per component.
+    """
+    inner = _time_partitions_def(partitions_def)
+    cron_schedule = inner.get_cron_schedule(**_schedule_offsets(partitions_def))
+
+    @dg.schedule(
+        name=name,
+        cron_schedule=cron_schedule,
+        job=job,
+        default_status=dg.DefaultScheduleStatus.RUNNING,
+        execution_timezone=inner.timezone,
+    )
+    def _schedule(context: dg.ScheduleEvaluationContext):
+        fired = context.scheduled_execution_time
+        try:
+            # Evaluated as of the tick, not the wall clock, as Dagster's own partitioned
+            # schedules do, so a late or replayed tick asks for the partition it was for.
+            with partition_loading_context(effective_dt=fired):
+                last = inner.get_last_partition_key()
+            if last is None:
+                return dg.SkipReason(f"{name}: no partitions yet")
+            keys = _partition_keys_for_times(partitions_def, [last])
+        except Exception as exc:  # noqa: BLE001 - a partitioning that cannot answer skips
+            return dg.SkipReason(f"{name}: {type(exc).__name__}: {exc}")
+        return _component_run_requests(components, keys, f"{name}-{fired:%Y-%m-%dT%H%M}")
+
+    return _schedule
 
 
 def build_memory_class_jobs(
@@ -764,10 +879,14 @@ def build_memory_class_jobs(
                 dep.asset_key for dep in (spec.deps or ())
             }
 
+    components_by_group: dict[tuple[str, str], list[list[dg.AssetKey]]] = defaultdict(list)
     for partitions_key, memory_classes in classes_by_partitioning.items():
-        linked = _linked_groups(memory_classes, upstreams_by_partitioning[partitions_key])
+        upstreams = upstreams_by_partitioning[partitions_key]
+        linked = _linked_groups(memory_classes, upstreams)
         for key, memory_class in linked.items():
             by_group[(partitions_key, memory_class)].append(key)
+        for component in linked_components(memory_classes, upstreams):
+            components_by_group[(partitions_key, linked[component[0]])].append(component)
 
     jobs: list[dg.JobDefinition] = []
     schedules: list[dg.ScheduleDefinition] = []
@@ -803,17 +922,22 @@ def build_memory_class_jobs(
                 f"dagster: {name} is partitioned every "
                 f"{partition_period(partitions_def)}, scheduling it on {MIN_SCHEDULE_CRON}"
             )
-            schedules.append(_catch_up_schedule(job, f"{name}_schedule", partitions_def))
+            schedules.append(
+                _catch_up_schedule(
+                    job,
+                    f"{name}_schedule",
+                    partitions_def,
+                    components_by_group[(partitions_key, memory_class)],
+                )
+            )
             continue
 
         schedules.append(
-            dg.build_schedule_from_partitioned_job(
+            _split_schedule(
                 job,
-                name=f"{name}_schedule",
-                default_status=dg.DefaultScheduleStatus.RUNNING,
-                # The execution timezone comes from the partitioning itself; passing it as
-                # well as an offset is rejected.
-                **_schedule_offsets(partitions_def),
+                f"{name}_schedule",
+                partitions_def,
+                components_by_group[(partitions_key, memory_class)],
             )
         )
 
@@ -906,4 +1030,3 @@ def build_definitions() -> dg.Definitions:
             "memory_budget_gb": round(memory_budget_gb(), 1),
         },
     )
-

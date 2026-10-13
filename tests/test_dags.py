@@ -501,11 +501,76 @@ def test_a_schedule_tick_carries_a_partition_key():
     defs = dg.Definitions(assets=[tick_me], schedules=[schedule])
     resolved = defs.resolve_schedule_def(schedule.name)
 
-    context = dg.build_schedule_context(scheduled_execution_time=pd.Timestamp("2026-06-02T06:00"))
+    # The daemon always supplies the repository; partitioned run requests need it.
+    context = dg.build_schedule_context(
+        scheduled_execution_time=pd.Timestamp("2026-06-02T06:00"),
+        repository_def=defs.get_repository_def(),
+    )
     run_requests = list(resolved.evaluate_tick(context).run_requests or [])
 
     assert run_requests, "the schedule produced no run request"
     assert all(request.partition_key for request in run_requests)
+    # Evaluated as of the tick: with end_offset=-1, 06:00 on the 2nd asks for the 31st.
+    assert [request.partition_key for request in run_requests] == ["2026-05-31"]
+
+
+def test_a_schedule_tick_is_one_run_per_linked_component():
+    """A job's tick is split so the fleet launcher can put each source on its own host.
+
+    Assets that depend on one another stay in one run: the staged sources hand their
+    files over on local disk, so a download and its publish must land on the same host.
+    """
+
+    @dg.asset(name="alone", partitions_def=daily_partitions)
+    def alone(context):
+        return 1
+
+    @dg.asset(name="download", partitions_def=daily_partitions)
+    def download(context):
+        return 1
+
+    @dg.asset(name="publish", partitions_def=daily_partitions, deps=[download])
+    def publish(context):
+        return 1
+
+    assets = [alone, download, publish]
+    _, (schedule,) = loader_module.build_memory_class_jobs(assets)
+    defs = dg.Definitions(assets=assets, schedules=[schedule])
+    resolved = defs.resolve_schedule_def(schedule.name)
+    context = dg.build_schedule_context(
+        scheduled_execution_time=pd.Timestamp("2026-06-02T06:00"),
+        repository_def=defs.get_repository_def(),
+    )
+    run_requests = list(resolved.evaluate_tick(context).run_requests or [])
+
+    selections = sorted(
+        sorted(key.to_user_string() for key in request.asset_selection)
+        for request in run_requests
+    )
+    assert selections == [["alone"], ["download", "publish"]]
+    assert {request.partition_key for request in run_requests} == {"2026-05-31"}
+    assert len({request.run_key for request in run_requests}) == len(run_requests)
+
+
+def test_docker_backed_ops_require_the_docker_host():
+    """An op using the Docker Pipes client may only be placed where the images are."""
+    from dags.factory import REQUIRES_TAG
+
+    # Declared by key: this module's string annotations cannot name the resource type.
+    @dg.asset(name="in_a_container", required_resource_keys={"pipes_docker_client"})
+    def in_a_container(context):
+        return None
+
+    @dg.asset(name="plain")
+    def plain(context):
+        return None
+
+    loaded = {
+        asset.key.path[-1]: asset
+        for asset in (loader_module._with_pool(a, "fam") for a in (in_a_container, plain))
+    }
+    assert loaded["in_a_container"].node_def.tags[REQUIRES_TAG] == "docker"
+    assert REQUIRES_TAG not in loaded["plain"].node_def.tags
 
 
 def test_an_asset_is_scheduled_with_what_it_depends_on():
@@ -693,17 +758,34 @@ def test_executor_parallelism_is_bounded_by_the_memory_budget(budget_gb):
 
 
 def test_dagster_yaml_is_valid_instance_config(tmp_path, monkeypatch):
-    import shutil
-
     from dagster import DagsterInstance
+
+    import yaml
+
+    from dags.fleet.launcher import FleetRunLauncher
 
     dagster_home = tmp_path / "dagster_home"
     dagster_home.mkdir()
     dagster_yaml = pathlib.Path(loader_module.__file__).parent / "dagster.yaml"
-    shutil.copy(dagster_yaml, dagster_home / "dagster.yaml")
+    config = yaml.safe_load(dagster_yaml.read_text())
+
+    # Every host shares one Postgres, reached through env vars each host sets; nothing
+    # about it may be hard-coded in the committed file.
+    postgres = config["storage"]["postgres"]["postgres_db"]
+    for key in ("hostname", "port", "db_name", "username", "password"):
+        assert isinstance(postgres[key], dict) and "env" in postgres[key], key
+    # dagster-postgres's SQL needs psycopg2; SQLAlchemy would otherwise pick psycopg 3.
+    assert postgres["scheme"] == "postgresql+psycopg2"
+
+    # Validate the rest against a real instance without needing a live database.
+    del config["storage"]
+    (dagster_home / "dagster.yaml").write_text(yaml.safe_dump(config))
     monkeypatch.setenv("DAGSTER_HOME", str(dagster_home))
+    monkeypatch.setenv("DAGSTER_STORAGE_DIR", str(tmp_path / "storage"))
+    monkeypatch.setenv("DAGSTER_COMPUTE_LOG_DIR", str(tmp_path / "compute_logs"))
 
     with DagsterInstance.get() as instance:
+        assert isinstance(instance.run_launcher, FleetRunLauncher)
         concurrency = instance.get_concurrency_config()
         run_queue = concurrency.run_queue_config
         assert run_queue is not None

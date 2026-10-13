@@ -73,6 +73,11 @@ MEMORY_HEADROOM_GB = 1.0
 MEMORY_CLASS_TAG = "planetary/memory_class"
 MEMORY_GB_TAG = "planetary/memory_gb"
 
+#: Op tag naming what a step needs from the host it runs on, comma-separated (e.g.
+#: ``docker``). The fleet run launcher only places a run on a host whose
+#: ``capabilities`` in ``dags/fleet.yaml`` cover every step's requirements.
+REQUIRES_TAG = "planetary/requires"
+
 #: Set to ``"manual"`` on an asset to keep it out of the scheduled jobs: it is then only
 #: materialised by hand or by a backfill. For ingests whose every partition is heavy
 #: enough that running the newest one on a timer is not wanted by default.
@@ -419,6 +424,7 @@ __all__ = [
     "MEMORY_CLASSES",
     "MEMORY_CLASS_TAG",
     "MEMORY_GB_TAG",
+    "REQUIRES_TAG",
     "concurrency_limit_for",
     "daily_partitions",
     "executor_tag_concurrency_limits",
