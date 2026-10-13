@@ -6,7 +6,7 @@
  "source": "live",
  "reference_runs": ["2026-10-12T18:00", "2026-10-13T00:00", "2026-10-13T06:00", "2026-10-13T12:00"],
  "derived_cycles": {},
- "generated_at": "2026-10-13T17:40:07Z",
+ "generated_at": "2026-10-13T18:08:26Z",
  "coordinate_params": ["CLAT", "CLON"],
  "invariant_params": ["ALB_SEAICE", "DEPTH_LK", "EVAP_PL", "FR_LAKE", "FR_LAND", "HHL", "HSNOW_MAX", "HSURF", "LAI", "PLCOV", "ROOTDP", "SMI", "SNOAG", "SOILTYP", "SSO_STDH", "Z0"],
  "step_sets": {
@@ -53,6 +53,8 @@
   {"param": "CAPE_ML", "level_type": null, "levels": [], "steps": {"00": "s3", "06": "s3", "12": "s3", "18": "s3"}},
   {"param": "CAPE_MU", "level_type": null, "levels": [], "steps": {"00": "s3", "06": "s3", "12": "s3", "18": "s3"}},
   {"param": "CEILING", "level_type": null, "levels": [], "steps": {"00": "s3", "06": "s3", "12": "s3", "18": "s3"}},
+  {"param": "CEIL_BSC_DUST", "level_type": 150, "levels": ["31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "60", "61", "62", "63", "64", "65", "66", "67", "68", "69", "70", "71", "72", "73", "74"], "steps": {"00": "s6", "06": "s6", "12": "s6", "18": "s6"}, "wavelength": 532},
+  {"param": "CEIL_BSC_DUST", "level_type": 150, "levels": ["31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "60", "61", "62", "63", "64", "65", "66", "67", "68", "69", "70", "71", "72", "73", "74"], "steps": {"00": "s6", "06": "s6", "12": "s6", "18": "s6"}, "wavelength": 1064},
   {"param": "CLCH", "level_type": null, "levels": [], "steps": {"00": "s3", "06": "s3", "12": "s3", "18": "s3"}},
   {"param": "CLCL", "level_type": null, "levels": [], "steps": {"00": "s2", "06": "s2", "12": "s2", "18": "s2"}},
   {"param": "CLCM", "level_type": null, "levels": [], "steps": {"00": "s3", "06": "s3", "12": "s3", "18": "s3"}},
@@ -104,6 +106,8 @@
   {"param": "RHO_SNOW", "level_type": null, "levels": [], "steps": {"00": "s3", "06": "s3", "12": "s3", "18": "s3"}},
   {"param": "ROOTDP", "level_type": null, "levels": [], "steps": {"00": "s7", "06": "s7", "12": "s7", "18": "s7"}},
   {"param": "RSTOM", "level_type": null, "levels": [], "steps": {"00": "s5", "06": "s8", "12": "s8", "18": "s8"}},
+  {"param": "SAT_BSC_DUST", "level_type": 150, "levels": ["31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "60", "61", "62", "63", "64", "65", "66", "67", "68", "69", "70", "71", "72", "73", "74"], "steps": {"00": "s6", "06": "s6", "12": "s6", "18": "s6"}, "wavelength": 532},
+  {"param": "SAT_BSC_DUST", "level_type": 150, "levels": ["31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "60", "61", "62", "63", "64", "65", "66", "67", "68", "69", "70", "71", "72", "73", "74"], "steps": {"00": "s6", "06": "s6", "12": "s6", "18": "s6"}, "wavelength": 1064},
   {"param": "SMI", "level_type": 106, "levels": ["0.0", "0.01", "0.03", "0.09", "0.27", "0.81", "2.43", "7.29"], "steps": {"00": "s7", "06": "s7", "12": "s7", "18": "s7"}},
   {"param": "SNOAG", "level_type": null, "levels": [], "steps": {"00": "s7", "06": "s7", "12": "s7", "18": "s7"}},
   {"param": "SNOW_CON", "level_type": null, "levels": [], "steps": {"00": "s2", "06": "s2", "12": "s2", "18": "s2"}},
@@ -149,9 +153,7 @@
   {"param": "Z0", "level_type": null, "levels": [], "steps": {"00": "s7", "06": "s7", "12": "s7", "18": "s7"}}
  ],
  "excluded": [
-  {"param": "CEIL_BSC_DUST", "level_type": null, "reason": "published under wvl1/, which FieldKey cannot address"},
   {"param": "ELAT", "level_type": null, "reason": "edge/vertex grid coordinate"},
-  {"param": "ELON", "level_type": null, "reason": "edge/vertex grid coordinate"},
-  {"param": "SAT_BSC_DUST", "level_type": null, "reason": "published under wvl1/, which FieldKey cannot address"}
+  {"param": "ELON", "level_type": null, "reason": "edge/vertex grid coordinate"}
  ]
 }

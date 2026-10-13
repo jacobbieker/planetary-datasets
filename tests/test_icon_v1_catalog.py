@@ -99,7 +99,11 @@ def fake_tree() -> list[str]:
         for param in ("HSURF", "CLAT", "CLON", "ELAT", "OFFGRID"):
             files += run_files(f"p/{param}", run, [0])
         files += run_files("p/HHL/lvt1/150/lv1/1", run, [0])
-        files += run_files("p/CEIL_BSC_DUST/wvl1/532/lvt1/150/lv1/120", run, steps)
+        for nm in ("532", "1064"):
+            for level in ("119", "120"):
+                files += run_files(f"p/CEIL_BSC_DUST/wvl1/{nm}/lvt1/150/lv1/{level}", run, steps)
+        # A layout FieldKey cannot address.
+        files += run_files("p/ODD/ens1/1", run, steps)
     # A level directory with no files in either reference run.
     files += run_files("p/T/lvt1/150/lv1/3", pd.Timestamp("2026-09-01T00:00"), [0])
     return files
@@ -330,17 +334,21 @@ def discover(files, runs=(RUN_00, RUN_06), **kwargs):
 def test_discover_schema_builds_variables_per_level_type(fake_tree):
     data = discover(fake_tree)
     json.dumps(data)  # serialisable
-    keys = [(v["param"], v["level_type"]) for v in data["variables"]]
+    keys = [(v["param"], v["level_type"], v.get("wavelength")) for v in data["variables"]]
     assert keys == [
-        ("HHL", 150),
-        ("HSURF", None),
-        ("RSTOM", None),
-        ("T", 100),
-        ("T", 150),
-        ("TMAX_2M", None),
-        ("T_2M", None),
-        ("W_SO", 106),
+        ("CEIL_BSC_DUST", 150, 532),
+        ("CEIL_BSC_DUST", 150, 1064),
+        ("HHL", 150, None),
+        ("HSURF", None, None),
+        ("RSTOM", None, None),
+        ("T", 100, None),
+        ("T", 150, None),
+        ("TMAX_2M", None, None),
+        ("T_2M", None, None),
+        ("W_SO", 106, None),
     ]
+    # Only wavelength-resolved entries carry the key, so other entries are unchanged.
+    assert ["wavelength" in v for v in data["variables"]].count(True) == 2
     by_key = {(v["param"], v["level_type"]): v for v in data["variables"]}
     # Levels sort numerically and keep their path spelling; the empty level 3 is dropped.
     assert by_key[("T", 150)]["levels"] == ["1", "2", "10"]
@@ -352,13 +360,38 @@ def test_discover_schema_builds_variables_per_level_type(fake_tree):
     assert data["coordinate_params"] == ["CLAT", "CLON"]
 
 
-def test_discover_schema_excludes_coordinates_off_grid_and_wavelength_fields(fake_tree):
+def test_field_path_wavelength_levels():
+    key = FieldKey("CEIL_BSC_DUST", 150, "77", 6, wavelength=1064)
+    assert cat.field_path("icon-art", key, RUN_00) == (
+        "p/CEIL_BSC_DUST/wvl1/1064/lvt1/150/lv1/77/r/2026-10-11T00:00/s/PT006H00M.grib2"
+    )
+    # Positional construction without a wavelength still works and means "none".
+    assert FieldKey("T", 150, "77", 6).wavelength is None
+    with pytest.raises(ValueError, match="wavelength"):
+        FieldKey("CEIL_BSC_DUST", 150, "77", 6, wavelength=0)
+
+
+def test_discover_schema_descends_into_wavelengths(fake_tree):
+    schema = cat.ICONSchema(discover(fake_tree, runs=RUNS_4))
+    ceil = [v for v in schema.variables if v.param == "CEIL_BSC_DUST"]
+    assert [(v.level_type, v.wavelength, v.levels) for v in ceil] == [
+        (150, 532, ("119", "120")),
+        (150, 1064, ("119", "120")),
+    ]
+    assert schema.variable("CEIL_BSC_DUST", 150, 1064).steps == (0, 1, 2, 3)
+    assert schema.steps_for_cycle("CEIL_BSC_DUST", 150, 6, 532) == (0, 1, 2)
+    with pytest.raises(KeyError):
+        schema.variable("CEIL_BSC_DUST", 150)
+    assert FieldKey("CEIL_BSC_DUST", 150, "119", 3, 1064) in schema.expected_fields(RUN_00)
+
+
+def test_discover_schema_excludes_coordinates_off_grid_and_unknown_layouts(fake_tree):
     data = discover(fake_tree)
     params = {v["param"] for v in data["variables"]}
-    assert not params & {"CLAT", "CLON", "ELAT", "OFFGRID", "CEIL_BSC_DUST"}
+    assert not params & {"CLAT", "CLON", "ELAT", "OFFGRID", "ODD"}
     excluded = {e["param"]: e["reason"] for e in data["excluded"]}
-    assert set(excluded) == {"CEIL_BSC_DUST", "ELAT", "OFFGRID"}
-    assert "wvl1" in excluded["CEIL_BSC_DUST"]
+    assert set(excluded) == {"ELAT", "OFFGRID", "ODD"}
+    assert "ens1" in excluded["ODD"]
     assert "4423680 points" in excluded["OFFGRID"]
 
 
@@ -463,10 +496,11 @@ def test_discovered_schema_loads_and_is_cycle_aware(fake_tree):
     assert FieldKey("T", 150, "10", 2) in f06
     assert FieldKey("HSURF", None, None, 0) in f06
     # One step more per level of each forecast variable, plus RSTOM's four files.
-    assert len(f00) - len(f06) == (2 + 3 + 2 + 1 + 1) + 4
+    # CEIL_BSC_DUST adds one step at each of its two levels and two wavelengths.
+    assert len(f00) - len(f06) == (2 + 3 + 2 + 1 + 1 + 4) + 4
     assert len(set(f00)) == len(f00)
     # Every expected field of a run exists in the tree, and nothing on the grid is missed.
-    off_schema = ("p/CLAT", "p/CLON", "p/ELAT", "p/OFFGRID", "p/CEIL")
+    off_schema = ("p/CLAT", "p/CLON", "p/ELAT", "p/OFFGRID", "p/ODD")
     tree = set(fake_tree)
     for run, keys in fields.items():
         paths = {cat.field_path("icon", k, run) for k in keys}
@@ -513,8 +547,8 @@ def test_default_reference_runs_picks_the_newest_old_enough_run_per_hour():
 #: stays hourly to the end (global) and the ART-EU dust fields are hourly to 72 h.
 COMMITTED = {
     "icon": (103, 113, 93, 181),
-    "icon-art": (133, 113, 93, 181),
-    "icon-art-eu": (126, 75, 75, 89),
+    "icon-art": (137, 113, 93, 181),
+    "icon-art-eu": (130, 75, 75, 89),
 }
 
 
@@ -541,7 +575,7 @@ def test_committed_schemas_load(model):
     assert schema.variable("HSURF", None).steps == (0,)
     t2m = [schema.steps_for_cycle("T_2M", None, h) for h in cat.CYCLE_HOURS]
     assert [len(s) for s in t2m] == [n_t2m_00, n_t2m_06, n_t2m_00, n_t2m_06]
-    keys = [(v.param, v.level_type) for v in schema.variables]
+    keys = [(v.param, v.level_type, v.wavelength) for v in schema.variables]
     assert len(keys) == len(set(keys))
     for v in schema.variables:
         assert set(v.steps) <= set(schema.step_axis)
@@ -581,4 +615,25 @@ def test_committed_art_schemas_know_the_00z_only_fields(model):
     assert any(k.param == "RSTOM" for k in f00)
     assert not any(k.param == "RSTOM" for k in f12)
     excluded = {e["param"] for e in schema.excluded}
-    assert {"CEIL_BSC_DUST", "SAT_BSC_DUST", "ELAT", "ELON"} <= excluded
+    assert {"ELAT", "ELON"} <= excluded
+    assert not {"CEIL_BSC_DUST", "SAT_BSC_DUST"} & excluded
+
+
+#: The wavelength-resolved backscatter fields: their levels, a subset of the model levels.
+WAVELENGTH_LEVELS = {"icon-art": (77, 120), "icon-art-eu": (31, 74)}
+
+
+@pytest.mark.parametrize("model", sorted(WAVELENGTH_LEVELS))
+def test_committed_art_schemas_carry_the_wavelength_fields(model):
+    schema = cat.load_schema(model)
+    first, last = WAVELENGTH_LEVELS[model]
+    for param in ("CEIL_BSC_DUST", "SAT_BSC_DUST"):
+        specs = [v for v in schema.variables if v.param == param]
+        assert sorted(v.wavelength for v in specs) == [532, 1064]
+        for v in specs:
+            assert v.level_type == 150
+            assert v.levels == tuple(str(lv) for lv in range(first, last + 1))
+            assert v.steps == specs[0].steps
+    assert all(v.wavelength is None for v in schema.variables if "BSC" not in v.param)
+    key = FieldKey("SAT_BSC_DUST", 150, str(last), 0, 532)
+    assert key in schema.expected_fields(pd.Timestamp("2026-10-11T00:00"))

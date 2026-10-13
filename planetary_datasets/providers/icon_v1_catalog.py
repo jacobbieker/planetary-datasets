@@ -5,6 +5,7 @@ DWD publishes ICON-Global (``icon``), ICON-ART (``icon-art``) and ICON-ART-EU
 
     <model>/p/<PARAM>/r/<YYYY-MM-DDTHH:MM>/s/PT<HHH>H<MM>M.grib2
     <model>/p/<PARAM>/lvt1/<typeOfFirstFixedSurface>/lv1/<level>/r/<run>/s/PT<HHH>H00M.grib2
+    <model>/p/<PARAM>/wvl1/<nm>/lvt1/<type>/lv1/<level>/r/<run>/s/PT<HHH>H00M.grib2
 
 The live server (:data:`LIVE_ROOT`) keeps roughly the last day of runs. Source Cooperative
 (:data:`ARCHIVE_ROOT`) holds a byte-for-byte mirror of it going back further, with gaps. The
@@ -38,8 +39,12 @@ Fields excluded from a schema:
   ``VLAT``/``VLON`` (vertices) are excluded by name; any other field is excluded when the
   GRIB2 grid section of its first file reports a ``numberOfDataPoints`` other than the
   model's cell count, or an unstructured-grid number other than the model's.
-* Fields published under a layout :class:`FieldKey` cannot address, i.e. the
-  wavelength-resolved ``wvl1/<nm>/...`` trees of ``CEIL_BSC_DUST`` and ``SAT_BSC_DUST``.
+* Fields published under a layout :class:`FieldKey` cannot address: any directory beside
+  ``r/``, ``lvt1/`` and ``wvl1/``.
+
+The wavelength-resolved ICON-ART backscatter fields (``CEIL_BSC_DUST``, ``SAT_BSC_DUST``)
+are published once per wavelength in nanometres under ``wvl1/<nm>/`` and are cataloged as
+one variable per (param, level type, wavelength); see :attr:`FieldKey.wavelength`.
 """
 
 from __future__ import annotations
@@ -164,12 +169,15 @@ class FieldKey:
             or None for single-level fields.
         level: Level exactly as it appears in the path (``"85000"``, ``"0.01"``), or None.
         step: Forecast step in hours.
+        wavelength: Wavelength in nanometres for the ``wvl1/<nm>/`` trees of the ICON-ART
+            backscatter fields, or None for every other field.
     """
 
     param: str
     level_type: int | None
     level: str | None
     step: int
+    wavelength: int | None = None
 
     def __post_init__(self) -> None:
         """Reject keys that cannot name a file."""
@@ -177,6 +185,8 @@ class FieldKey:
             raise ValueError(f"level_type and level must both be set or both be None: {self}")
         if self.step < 0:
             raise ValueError(f"step must be non-negative: {self}")
+        if self.wavelength is not None and self.wavelength <= 0:
+            raise ValueError(f"wavelength must be positive: {self}")
 
 
 def _spec(model: str) -> ICONModelSpec:
@@ -203,9 +213,12 @@ def _run_name(init_time: pd.Timestamp) -> str:
 
 
 def _field_dir(key: FieldKey) -> str:
+    base = f"p/{key.param}"
+    if key.wavelength is not None:
+        base = f"{base}/wvl1/{key.wavelength}"
     if key.level_type is None:
-        return f"p/{key.param}"
-    return f"p/{key.param}/lvt1/{key.level_type}/lv1/{key.level}"
+        return base
+    return f"{base}/lvt1/{key.level_type}/lv1/{key.level}"
 
 
 def field_path(model: str, key: FieldKey, init_time: pd.Timestamp) -> str:
@@ -217,7 +230,7 @@ def field_path(model: str, key: FieldKey, init_time: pd.Timestamp) -> str:
         init_time: Model run.
 
     Returns:
-        ``p/<PARAM>[/lvt1/<t>/lv1/<l>]/r/<YYYY-MM-DDTHH:MM>/s/PT<HHH>H00M.grib2``.
+        ``p/<PARAM>[/wvl1/<nm>][/lvt1/<t>/lv1/<l>]/r/<YYYY-MM-DDTHH:MM>/s/PT<HHH>H00M.grib2``.
 
     Raises:
         ValueError: If the model is unknown or ``init_time`` is not a model cycle.
@@ -633,33 +646,60 @@ def _level_sort_key(level: str) -> tuple[float, str]:
 
 @dataclasses.dataclass
 class _Group:
-    """Files found for one (param, level_type) across the reference runs."""
+    """Files found for one (param, level_type, wavelength) across the reference runs."""
 
     param: str
     level_type: int | None
     levels: list[str | None]
     # run -> level -> steps
     found: dict[pd.Timestamp, dict[str | None, set[int]]] = dataclasses.field(default_factory=dict)
+    wavelength: int | None = None
+
+    @property
+    def key(self) -> tuple[str, int | None, int | None]:
+        """What identifies the variable this group becomes."""
+        return self.param, self.level_type, self.wavelength
+
+    def field_key(self, level: str | None, step: int) -> FieldKey:
+        """The file of this group at one level and step."""
+        return FieldKey(self.param, self.level_type, level, step, self.wavelength)
 
 
 def _walk_param(lister: Lister, param: str) -> tuple[list[_Group], list[dict[str, Any]]]:
-    """Find a parameter's level types and levels."""
+    """Find a parameter's wavelengths, level types and levels."""
+    return _walk_tree(lister, param, f"p/{param}", None)
+
+
+def _walk_tree(
+    lister: Lister, param: str, base: str, wavelength: int | None
+) -> tuple[list[_Group], list[dict[str, Any]]]:
+    """Find the level types and levels under ``p/<PARAM>`` or ``p/<PARAM>/wvl1/<nm>``."""
     groups: list[_Group] = []
     excluded: list[dict[str, Any]] = []
-    for child in _children(lister, f"p/{param}"):
+    for child in _children(lister, base):
         if child == "r":
-            groups.append(_Group(param, None, [None]))
+            groups.append(_Group(param, None, [None], wavelength=wavelength))
         elif child == "lvt1":
-            for lt in _children(lister, f"p/{param}/lvt1"):
+            for lt in _children(lister, f"{base}/lvt1"):
                 if not lt.isdigit():
                     excluded.append(
                         {"param": param, "level_type": lt, "reason": "non-numeric level type"}
                     )
                     continue
-                levels = _children(lister, f"p/{param}/lvt1/{lt}/lv1")
+                levels = _children(lister, f"{base}/lvt1/{lt}/lv1")
                 levels.sort(key=_level_sort_key)
                 if levels:
-                    groups.append(_Group(param, int(lt), list(levels)))
+                    groups.append(_Group(param, int(lt), list(levels), wavelength=wavelength))
+        elif child == "wvl1" and wavelength is None:
+            for nm in _children(lister, f"{base}/wvl1"):
+                if not nm.isdigit() or int(nm) <= 0:
+                    excluded.append(
+                        {"param": param, "level_type": None, "reason": f"wavelength {nm!r}"}
+                    )
+                    continue
+                found, skipped = _walk_tree(lister, param, f"{base}/wvl1/{nm}", int(nm))
+                groups.extend(found)
+                excluded.extend(skipped)
         else:
             excluded.append(
                 {
@@ -776,7 +816,7 @@ def discover_schema(
 
     def list_task(task: tuple[_Group, str | None, pd.Timestamp]) -> set[int]:
         group, level, run = task
-        key = FieldKey(group.param, group.level_type, level, 0)
+        key = group.field_key(level, 0)
         return _list_steps(lister, f"{_field_dir(key)}/r/{_run_name(run)}/s")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -788,8 +828,8 @@ def discover_schema(
         reader = header_reader or _header_reader(model, source)
         off_grid, unverified = _check_grids(model, spec, groups, reader, workers)
         excluded.extend(off_grid)
-        bad = {(e["param"], e["level_type"]) for e in off_grid}
-        groups = [g for g in groups if (g.param, g.level_type) not in bad]
+        bad = {(e["param"], e["level_type"], e.get("wavelength")) for e in off_grid}
+        groups = [g for g in groups if g.key not in bad]
 
     # A variable without files in an hour's reference runs is either not published at that
     # hour (ICON-ART's RSTOM and ALHFL_BS are 00Z-only, so 12Z cannot simply copy 00Z) or
@@ -805,7 +845,7 @@ def discover_schema(
     with ThreadPoolExecutor(max_workers=workers) as pool:
         histories = dict(
             zip(
-                [(g.param, g.level_type) for g in probed],
+                [g.key for g in probed],
                 pool.map(lambda g: _run_history(lister, g), probed),
             )
         )
@@ -814,17 +854,20 @@ def discover_schema(
 
     variables: list[dict[str, Any]] = []
     gaps: list[str] = list(unverified)
-    for group in sorted(groups, key=lambda g: (g.param, g.level_type or -1)):
-        history = histories.get((group.param, group.level_type))
+    for group in sorted(groups, key=lambda g: (g.param, g.level_type or -1, g.wavelength or -1)):
+        history = histories.get(group.key)
         entry, group_gaps = _summarise_group(model, group, runs, derived, history, source_hours)
         gaps.extend(group_gaps)
         if entry is None:
             excluded.append(
-                {
-                    "param": group.param,
-                    "level_type": group.level_type,
-                    "reason": "no files in the reference runs",
-                }
+                _with_wavelength(
+                    {
+                        "param": group.param,
+                        "level_type": group.level_type,
+                        "reason": "no files in the reference runs",
+                    },
+                    group.wavelength,
+                )
             )
             continue
         variables.append(entry)
@@ -860,6 +903,13 @@ def discover_schema(
     }
 
 
+def _with_wavelength(entry: dict[str, Any], wavelength: int | None) -> dict[str, Any]:
+    """Add ``wavelength`` to a schema entry only when set, leaving other entries as they were."""
+    if wavelength is not None:
+        entry["wavelength"] = wavelength
+    return entry
+
+
 def _check_grids(
     model: str,
     spec: ICONModelSpec,
@@ -880,8 +930,7 @@ def _check_grids(
             for level in group.levels:
                 steps = group.found[run].get(level)
                 if steps:
-                    key = FieldKey(group.param, group.level_type, level, min(steps))
-                    return field_path(model, key, run)
+                    return field_path(model, group.field_key(level, min(steps)), run)
         return None
 
     def check(group: _Group) -> dict[str, Any] | str | None:
@@ -893,14 +942,17 @@ def _check_grids(
         except (OSError, ValueError, ListingError) as exc:
             return f"{group.param}: could not read the grid of {path}: {exc}"
         if points != spec.n_cells or (grid is not None and grid != spec.grid_number):
-            return {
-                "param": group.param,
-                "level_type": group.level_type,
-                "reason": (
-                    f"not on the cell grid: {points} points on grid {grid}, model has "
-                    f"{spec.n_cells} cells on grid {spec.grid_number}"
-                ),
-            }
+            return _with_wavelength(
+                {
+                    "param": group.param,
+                    "level_type": group.level_type,
+                    "reason": (
+                        f"not on the cell grid: {points} points on grid {grid}, model has "
+                        f"{spec.n_cells} cells on grid {spec.grid_number}"
+                    ),
+                },
+                group.wavelength,
+            )
         return None
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -916,7 +968,7 @@ def _run_history(lister: Lister, group: _Group) -> Counter[int]:
         (lv for lv in group.levels if any(per.get(lv) for per in group.found.values())),
         group.levels[0],
     )
-    key = FieldKey(group.param, group.level_type, level, 0)
+    key = group.field_key(level, 0)
     runs = (_parse_run(name) for name in _children(lister, f"{_field_dir(key)}/r"))
     return Counter(run.hour for run in runs if run is not None)
 
@@ -948,6 +1000,8 @@ def _summarise_group(
         being published or mirrored shows up here.
     """
     name = f"{group.param}" + (f"@{group.level_type}" if group.level_type else "")
+    if group.wavelength is not None:
+        name += f"@{group.wavelength}nm"
     present = {run: {lv for lv, steps in group.found.get(run, {}).items() if steps} for run in runs}
     levels: set[str | None] = set().union(*present.values())
     if not levels:
@@ -1001,7 +1055,7 @@ def _summarise_group(
         "levels": level_list,
         "steps": {f"{h:02d}": sorted(by_hour.get(h, ())) for h in CYCLE_HOURS},
     }
-    return entry, gaps
+    return _with_wavelength(entry, group.wavelength), gaps
 
 
 def _invariant_params(variables: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -1021,19 +1075,21 @@ def _invariant_params(variables: Sequence[Mapping[str, Any]]) -> list[str]:
 
 @dataclasses.dataclass(frozen=True)
 class VariableSpec:
-    """One stored variable: a parameter on one level type.
+    """One cataloged variable: a parameter on one level type, at one wavelength.
 
     Attributes:
         param: DWD parameter name.
         level_type: ``typeOfFirstFixedSurface``, or None for single-level fields.
         levels: Levels as they appear in paths, sorted numerically; empty if single-level.
         steps: Union of the steps published in any cycle.
+        wavelength: Wavelength in nanometres for the ``wvl1/<nm>/`` fields, else None.
     """
 
     param: str
     level_type: int | None
     levels: tuple[str, ...]
     steps: tuple[int, ...]
+    wavelength: int | None = None
 
 
 class ICONSchema:
@@ -1043,8 +1099,8 @@ class ICONSchema:
         model: Model name.
         n_cells: Cells on the model grid.
         grid_number: GRIB2 ``numberOfGridUsed``.
-        variables: One entry per (param, level_type), sorted; excludes non-cell-grid
-            fields and the coordinate parameters.
+        variables: One entry per (param, level_type, wavelength), sorted; excludes
+            non-cell-grid fields and the coordinate parameters.
         invariant_params: Parameters published at step 0 only (also in ``variables``).
         coordinate_params: Cell-centre latitude and longitude parameters.
         step_axis: Sorted union of every variable's steps.
@@ -1079,10 +1135,12 @@ class ICONSchema:
         self.excluded: tuple[dict[str, Any], ...] = tuple(data.get("excluded", ()))
 
         step_sets = {sid: tuple(int(s) for s in steps) for sid, steps in data["step_sets"].items()}
-        cycle_steps: dict[tuple[str, int | None], dict[int, tuple[int, ...]]] = {}
+        cycle_steps: dict[tuple[str, int | None, int | None], dict[int, tuple[int, ...]]] = {}
         variables: list[VariableSpec] = []
         for entry in data["variables"]:
-            key = (entry["param"], entry["level_type"])
+            wavelength = entry.get("wavelength")
+            wavelength = None if wavelength is None else int(wavelength)
+            key = (entry["param"], entry["level_type"], wavelength)
             if key in cycle_steps:
                 raise ValueError(f"duplicate variable {key}")
             try:
@@ -1096,7 +1154,9 @@ class ICONSchema:
             levels = tuple(str(lv) for lv in entry["levels"])
             if (entry["level_type"] is None) != (not levels):
                 raise ValueError(f"{key}: levels must be given exactly for levelled fields")
-            variables.append(VariableSpec(entry["param"], entry["level_type"], levels, union))
+            variables.append(
+                VariableSpec(entry["param"], entry["level_type"], levels, union, wavelength)
+            )
         self.variables: tuple[VariableSpec, ...] = tuple(variables)
         self._cycle_steps = cycle_steps
         self.step_axis: tuple[int, ...] = tuple(sorted(set().union(*(v.steps for v in variables))))
@@ -1107,24 +1167,29 @@ class ICONSchema:
             f"steps={len(self.step_axis)})"
         )
 
-    def variable(self, param: str, level_type: int | None) -> VariableSpec:
+    def variable(
+        self, param: str, level_type: int | None, wavelength: int | None = None
+    ) -> VariableSpec:
         """Return the spec of one variable.
 
         Raises:
             KeyError: If the schema has no such variable.
         """
         for v in self.variables:
-            if v.param == param and v.level_type == level_type:
+            if v.param == param and v.level_type == level_type and v.wavelength == wavelength:
                 return v
-        raise KeyError((param, level_type))
+        raise KeyError((param, level_type, wavelength))
 
-    def steps_for_cycle(self, param: str, level_type: int | None, hour: int) -> tuple[int, ...]:
+    def steps_for_cycle(
+        self, param: str, level_type: int | None, hour: int, wavelength: int | None = None
+    ) -> tuple[int, ...]:
         """Return the steps one variable has in runs initialised at ``hour``.
 
         Args:
             param: DWD parameter name.
             level_type: Level type, or None for single-level fields.
             hour: Init hour, one of :data:`CYCLE_HOURS`.
+            wavelength: Wavelength in nanometres, for the ``wvl1/`` fields.
 
         Raises:
             KeyError: If the schema has no such variable.
@@ -1132,7 +1197,7 @@ class ICONSchema:
         """
         if hour not in CYCLE_HOURS:
             raise ValueError(f"{hour} is not an ICON cycle hour")
-        return self._cycle_steps[(param, level_type)][hour]
+        return self._cycle_steps[(param, level_type, wavelength)][hour]
 
     def expected_fields(self, init_time: pd.Timestamp) -> list[FieldKey]:
         """Return every field a complete run at ``init_time`` publishes.
@@ -1146,9 +1211,11 @@ class ICONSchema:
         hour = _normalize_init_time(init_time).hour
         fields: list[FieldKey] = []
         for v in self.variables:
-            steps = self.steps_for_cycle(v.param, v.level_type, hour)
+            steps = self.steps_for_cycle(v.param, v.level_type, hour, v.wavelength)
             for level in v.levels or (None,):
-                fields.extend(FieldKey(v.param, v.level_type, level, step) for step in steps)
+                fields.extend(
+                    FieldKey(v.param, v.level_type, level, step, v.wavelength) for step in steps
+                )
         return fields
 
     def coordinate_fields(self) -> list[FieldKey]:
