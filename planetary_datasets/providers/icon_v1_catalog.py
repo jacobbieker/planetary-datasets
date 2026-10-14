@@ -1488,6 +1488,10 @@ FULL_PRECISION_PARAMS: frozenset[str] = frozenset(
         "RUNOFF_S",
         "EVAP_PL",
         "DURSUN",
+        # Within 0.1% of the float16 underflow cut-off when measured, so a re-measurement
+        # could flip them; pinned to full precision instead.
+        "CLDEPTH",
+        "TKE",
         # Coordinates.
         "CLAT",
         "CLON",
