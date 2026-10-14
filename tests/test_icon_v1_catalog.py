@@ -707,6 +707,16 @@ def test_full_precision_list_covers_the_committed_families():
     assert not {"T_2M", "U_10M", "CLCT", "T", "U", "V", "ALB_RAD", "SOILTYP"} & full
 
 
+def test_cldepth_and_tke_are_full_precision_in_every_era():
+    assert cat.is_full_precision("CLDEPTH") and cat.is_full_precision("TKE")
+    for model, eras in cat.ERAS.items():
+        for era in eras:
+            schema = cat.load_schema(model, era.start)
+            for variable in schema.variables:
+                if variable.param in ("CLDEPTH", "TKE"):
+                    assert variable.dtype == "float32", (model, era.start, variable)
+
+
 def test_a_missing_dtype_means_float32(fake_tree):
     data = discover(fake_tree)
     assert all("dtype" not in v for v in data["variables"])

@@ -60,7 +60,7 @@
   {"param": "CLCM", "level_type": null, "levels": [], "steps": {"00": "s3", "06": "s3", "12": "s3", "18": "s3"}, "dtype": "float16", "precision": {"reason": "inherited from the current era"}},
   {"param": "CLCT", "level_type": null, "levels": [], "steps": {"00": "s2", "06": "s2", "12": "s2", "18": "s2"}, "dtype": "float16", "precision": {"reason": "inherited from the current era"}},
   {"param": "CLCT_MOD", "level_type": null, "levels": [], "steps": {"00": "s3", "06": "s3", "12": "s3", "18": "s3"}, "dtype": "float16", "precision": {"reason": "inherited from the current era"}},
-  {"param": "CLDEPTH", "level_type": null, "levels": [], "steps": {"00": "s3", "06": "s3", "12": "s3", "18": "s3"}, "dtype": "float16", "precision": {"reason": "inherited from the current era"}},
+  {"param": "CLDEPTH", "level_type": null, "levels": [], "steps": {"00": "s3", "06": "s3", "12": "s3", "18": "s3"}, "dtype": "float32", "precision": {"reason": "inherited from the current era"}},
   {"param": "C_T_LK", "level_type": null, "levels": [], "steps": {"00": "s3", "06": "s3", "12": "s3", "18": "s3"}, "dtype": "float16", "precision": {"reason": "inherited from the current era"}},
   {"param": "DEN", "level_type": 150, "levels": ["72", "73", "74"], "steps": {"00": "s6", "06": "s6", "12": "s6", "18": "s6"}, "dtype": "float16", "precision": {"reason": "inherited from the current era"}},
   {"param": "DEPTH_LK", "level_type": null, "levels": [], "steps": {"00": "s7", "06": "s7", "12": "s7", "18": "s7"}, "dtype": "float16", "precision": {"reason": "inherited from the current era"}},
