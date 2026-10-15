@@ -447,14 +447,42 @@ def clean_names(names: Iterable[str]) -> list[str]:
     return sorted(out)
 
 
+def archive_filesystem() -> fsspec.AbstractFileSystem:
+    """The S3 filesystem the archive is listed through, with its listings cache off.
+
+    s3fs keeps every listing it makes in ``dircache``, ``refresh=True`` or not, and never
+    lets go of one. The provider lists every directory of each run it writes, so one
+    backfill process accumulated about 15,500 entries (12 MiB, 31,000 Python objects) per
+    ICON-ART-EU run and ten times that per ICON-Global run. Over a day RSS crept up by a
+    gigabyte and garbage collection, which walks every live object, slowed each run to a
+    third of its starting speed. Listings here are always fresh, so nothing is cached.
+    """
+    global _ARCHIVE_FS
+    with _ARCHIVE_FS_LOCK:
+        if _ARCHIVE_FS is None:
+            # skip_instance_cache: fsspec's instance cache is keyed by thread, so every
+            # thread that listed would otherwise build and keep its own client.
+            _ARCHIVE_FS = fsspec.filesystem(
+                "s3",
+                **storage_options("archive"),
+                use_listings_cache=False,
+                skip_instance_cache=True,
+            )
+        return _ARCHIVE_FS
+
+
+_ARCHIVE_FS: fsspec.AbstractFileSystem | None = None
+_ARCHIVE_FS_LOCK = threading.Lock()
+
+
 def _archive_lister(model: str) -> Lister:
-    fs = fsspec.filesystem("s3", **storage_options("archive"))
+    fs = archive_filesystem()
     root = ARCHIVE_ROOT.removeprefix("s3://") + f"/{model}"
 
     def ls(relative: str) -> list[str]:
         path = f"{root}/{relative}".rstrip("/")
         try:
-            return list(fs.ls(path, detail=False, refresh=True))
+            return list(fs.ls(path, detail=False))
         except FileNotFoundError:
             raise
         except (OSError, ValueError) as exc:

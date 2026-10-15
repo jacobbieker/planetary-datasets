@@ -672,7 +672,7 @@ def test_backfill_walks_the_archive_forward_and_resumes(source, monkeypatch, loc
     assert not source.reads
 
     ICONV1Provider("eu_art").run_partition(archived[2])
-    assert script.main(["eu_art", "--start", "2026-10-11T00:00"]) == 0
+    assert script.main(["eu_art", "--start", "2026-10-11T00:00", "--in-process"]) == 0
     ds = open_store(local_config, "bkr/icon/icon_eu_art.icechunk")
     # The already-stored run was skipped and the rest were appended oldest first.
     assert pd.DatetimeIndex(ds["init_time"].values).tolist() == [
@@ -843,7 +843,7 @@ def test_backfill_records_skipped_runs(source, monkeypatch, local_config, tmp_pa
     assert script.main(["eu_art", "--dry-run", "--skipped-log", str(log)]) == 0
     assert not source.reads and not log.exists()
 
-    assert script.main(["eu_art", "--skipped-log", str(log)]) == 0
+    assert script.main(["eu_art", "--skipped-log", str(log), "--in-process"]) == 0
     rows = log.read_text().splitlines()
     assert rows[0].split("\t") == list(script.SKIPPED_COLUMNS)
     assert len(rows) == 2 and rows[1].split("\t")[1] == RUN_00.isoformat()
@@ -879,3 +879,118 @@ def test_dagster_marks_a_skipped_run_and_reports_completeness(source):
     assert provider.run_partition(RUN_00) is True
     assert skipped_as_incomplete(provider, RUN_00, written=True) is None
     assert completeness_metadata(provider, RUN_00)["completeness"].value == 1.0
+
+
+# -- nothing accumulates across runs -----------------------------------------------------
+
+
+def test_archive_listings_are_not_cached():
+    fs = cat.archive_filesystem()
+    fs.dircache["bkr/icon/icon-art-eu/p/T_2M/r/2026-10-11T00:00/s"] = [{"name": "x"}]
+    assert len(fs.dircache) == 0
+
+
+def test_a_long_backfill_does_not_accumulate_objects(source):
+    """Runs through one provider leave nothing behind that grows with their number.
+
+    With s3fs caching every listing, each ICON-ART-EU run left about 31,000 objects behind
+    and a day-long backfill slowed to a quarter of its speed as garbage collection walked
+    them. The bound here is far below that.
+    """
+    import gc
+
+    provider = ICONV1Provider("eu_art")
+    runs = list(pd.date_range("2026-10-07T00:00", periods=8, freq="6h"))
+    counts = []
+    for it in runs:
+        assert provider.run_partition(it) is True
+        gc.collect()
+        counts.append(len(gc.get_objects()))
+    assert counts[-1] - counts[2] < 500 * (len(runs) - 3), counts
+
+
+# Module-level so a spawned child can import them.
+
+
+def _report_pid(variant, it, provider_kwargs):
+    import os
+
+    return os.getpid()
+
+
+def _a_result(variant, it, provider_kwargs):
+    listed = icon_v1.RunCompleteness(it, "archive", 10, 9, {"T": 1}, 0.5)
+    return icon_v1.PartitionResult(it, True, "bkr/icon/x.icechunk", listed, 1.0)
+
+
+def _raise(variant, it, provider_kwargs):
+    raise ValueError(f"no grid for {variant} {it}")
+
+
+class _Unpicklable(Exception):
+    def __init__(self, a, b):
+        super().__init__(a)
+        self.b = b
+
+
+def _raise_unpicklable(variant, it, provider_kwargs):
+    raise _Unpicklable("lost", object())
+
+
+def _die(variant, it, provider_kwargs):
+    import os
+
+    os._exit(9)
+
+
+def _echo_kwargs(variant, it, provider_kwargs):
+    return provider_kwargs
+
+
+def test_each_partition_runs_in_a_fresh_process():
+    import os
+
+    script = load_backfill_script()
+    runner = script.PartitionRunner("eu_art", {}, isolated=True, target=_report_pid)
+    pids = [runner(RUN_00), runner(RUN_06)]
+    assert os.getpid() not in pids and pids[0] != pids[1]
+    in_process = script.PartitionRunner("eu_art", {}, isolated=False, target=_report_pid)
+    assert in_process(RUN_00) == os.getpid()
+
+
+def test_a_child_returns_its_result_and_raises_its_errors():
+    result = icon_v1.run_in_child(_a_result, "eu_art", RUN_00, {})
+    assert result.written and result.completeness.missing_by_param == {"T": 1}
+    with pytest.raises(ValueError, match="no grid for eu_art") as raised:
+        icon_v1.run_in_child(_raise, "eu_art", RUN_00, {})
+    assert any("in child process" in note for note in raised.value.__notes__)
+    # An error that cannot be pickled still arrives, as a RuntimeError naming it.
+    with pytest.raises(RuntimeError, match="_Unpicklable: lost"):
+        icon_v1.run_in_child(_raise_unpicklable, "eu_art", RUN_00, {})
+    with pytest.raises(icon_v1.ChildDied, match="exit code 9"):
+        icon_v1.run_in_child(_die, "eu_art", RUN_00, {})
+
+
+def test_a_child_is_given_the_ceiling_less_the_parents_memory(monkeypatch):
+    script = load_backfill_script()
+    monkeypatch.setattr(script, "process_tree_rss_gb", lambda: 0.75)
+    runner = script.PartitionRunner("eu_art", {"ceiling_gb": 4.0}, target=_echo_kwargs)
+    assert runner(RUN_00) == {"ceiling_gb": 3.25}
+    monkeypatch.setattr(script, "process_tree_rss_gb", lambda: 3.9)
+    assert runner.child_kwargs() == {"ceiling_gb": script.MIN_CHILD_CEILING_GB}
+
+
+def test_a_failed_first_write_stops_the_backfill(source, monkeypatch, local_config):
+    script = load_backfill_script()
+    monkeypatch.setattr(script, "list_runs", lambda model, src: [RUN_00, RUN_06])
+    calls = []
+
+    def fail_and_leave_an_empty_generation(variant, it, kwargs):
+        calls.append(it)
+        local_config.icechunk_repo("bkr/icon/icon_global_11102026.icechunk")
+        raise RuntimeError("killed mid-write")
+
+    monkeypatch.setattr(script, "run_partition_child", fail_and_leave_an_empty_generation)
+    assert script.main(["global", "--in-process"]) == 1
+    # The second run, of the same day, was never started.
+    assert calls == [RUN_00]

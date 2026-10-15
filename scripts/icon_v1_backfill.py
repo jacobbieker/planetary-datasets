@@ -2,9 +2,19 @@
 
 The Dagster assets ``icon_global``, ``icon_global_art`` and ``icon_eu_art`` write one run
 per partition through :class:`~planetary_datasets.providers.icon_v1.ICONV1Provider`. This
-walks the archive's runs with the same provider, in time order, in one process: the
-provider already reads, decodes and writes in parallel inside a memory ceiling, so there is
-nothing to gain from more processes and a second writer would only race the first.
+walks the archive's runs with the same provider, in time order, one run at a time: the
+provider already reads, decodes and writes in parallel inside a memory ceiling, and a
+second writer would only race the first.
+
+**Each run is written by a fresh process.** A worker is spawned for one partition and
+exits when it is done (:func:`~planetary_datasets.providers.icon_v1.run_partition_child`),
+so nothing a run leaves behind in the process can slow the next one. That was not
+hypothetical: s3fs kept every directory listing it made, and a backfill left running for a
+day slowed to a quarter of its starting speed as garbage collection walked millions of
+cached entries. The listing cache is now off, and the fresh process guards against
+whatever else accumulates; it costs a few seconds of imports per run, against minutes of
+writing. Still one partition at a time, so still one writer per store. ``--in-process``
+runs everything in this process instead, for debugging.
 
 Runs already stored, in any generation of the store, are skipped, so the script resumes
 where it stopped. A run that fails is logged and the walk goes on; run the script again to
@@ -59,18 +69,26 @@ import argparse
 import pathlib
 import sys
 import time
+from typing import Callable
 
 import pandas as pd
 from loguru import logger
 
 from planetary_datasets.common.store import axis_is_sorted
+from planetary_datasets.memory import process_tree_rss_gb
 from planetary_datasets.providers.icon_v1 import (
     DEFAULT_MIN_COMPLETENESS,
     VARIANT_MODELS,
     ICONV1Provider,
+    PartitionResult,
     RunCompleteness,
+    run_in_child,
+    run_partition_child,
 )
 from planetary_datasets.providers.icon_v1_catalog import list_runs
+
+#: Least memory a child is given, whatever the parent holds, in GB.
+MIN_CHILD_CEILING_GB = 1.0
 
 #: Columns of the skipped-runs log.
 SKIPPED_COLUMNS = (
@@ -146,6 +164,53 @@ def report_completeness(provider: ICONV1Provider, runs: list[pd.Timestamp]) -> N
         )
 
 
+class PartitionRunner:
+    """Runs one partition at a time, each in a freshly spawned process unless told not to.
+
+    The child (:func:`~planetary_datasets.providers.icon_v1.run_in_child`) imports the
+    library afresh, builds its provider, writes its run and exits. It lives no longer than
+    this process: it ends itself if this one is killed, and an interrupt here terminates
+    it, so a restarted backfill never finds a second writer still at work.
+
+    The child's memory ceiling is the configured one less what this process holds, so the
+    two together stay within ``--ceiling-gb``.
+    """
+
+    def __init__(
+        self,
+        variant: str,
+        provider_kwargs: dict,
+        isolated: bool = True,
+        target: Callable[[str, pd.Timestamp, dict], PartitionResult] = run_partition_child,
+    ) -> None:
+        """Set up a runner.
+
+        Args:
+            variant: Provider variant.
+            provider_kwargs: Keyword arguments for the provider each run builds.
+            isolated: Run each partition in a fresh spawned process.
+            target: What runs one partition; module-level so a child can import it.
+        """
+        self.variant = variant
+        self.provider_kwargs = provider_kwargs
+        self.isolated = isolated
+        self.target = target
+
+    def child_kwargs(self) -> dict:
+        """The provider arguments for a child: its ceiling less this process's memory."""
+        kwargs = dict(self.provider_kwargs)
+        ceiling = kwargs.get("ceiling_gb")
+        if ceiling is not None:
+            kwargs["ceiling_gb"] = max(MIN_CHILD_CEILING_GB, ceiling - process_tree_rss_gb())
+        return kwargs
+
+    def __call__(self, it: pd.Timestamp) -> PartitionResult:
+        """Write one run; raises whatever the run raised, or ChildDied."""
+        if not self.isolated:
+            return self.target(self.variant, it, self.provider_kwargs)
+        return run_in_child(self.target, self.variant, it, self.child_kwargs())
+
+
 def main(argv: list[str] | None = None) -> int:
     """Command-line entry point. Returns the exit code."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -172,15 +237,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="list each run and report its completeness; write nothing",
     )
+    parser.add_argument(
+        "--in-process",
+        action="store_true",
+        help="write every run in this process rather than a fresh one per run",
+    )
     args = parser.parse_args(argv)
 
-    provider = ICONV1Provider(
-        args.variant,
-        params=args.params,
-        ceiling_gb=args.ceiling_gb,
-        fetch_workers=args.fetch_workers,
-        min_completeness=args.min_completeness,
-    )
+    provider_kwargs = {
+        "params": args.params,
+        "ceiling_gb": args.ceiling_gb,
+        "fetch_workers": args.fetch_workers,
+        "min_completeness": args.min_completeness,
+    }
+    provider = ICONV1Provider(args.variant, **provider_kwargs)
     skipped_log = args.skipped_log or pathlib.Path("logs") / f"icon_v1_{args.variant}_skipped.tsv"
 
     empty = provider.empty_generations()
@@ -209,24 +279,39 @@ def main(argv: list[str] | None = None) -> int:
     written = failed = 0
     skipped: list[RunCompleteness] = []
     started = time.monotonic()
+    runner = PartitionRunner(
+        args.variant, provider_kwargs, isolated=not args.in_process, target=run_partition_child
+    )
     for number, it in enumerate(missing, 1):
         run_started = time.monotonic()
         try:
-            ok = provider.run_partition(it, check_present=False)
+            result = runner(it)
         except Exception as exc:  # noqa: BLE001 - one bad run must not stop the backfill
             failed += 1
             logger.exception(f"{provider.name}: run {it} failed: {exc}")
+            # A run that failed while starting a new generation leaves it empty, and
+            # the next run of that day would be written into it; stop instead, as the
+            # startup check would.
+            empty = provider.empty_generations()
+            if empty:
+                logger.error(
+                    f"{provider.name}: run {it} left {', '.join(empty)} with nothing "
+                    "committed; stopping. Delete it before restarting the backfill."
+                )
+                break
             continue
-        written += int(ok)
-        listed = provider.completeness.get(it)
-        if not ok and listed is not None and listed.fraction < provider.min_completeness:
+        written += int(result.written)
+        listed = result.completeness
+        if not result.written and listed is not None and listed.fraction < args.min_completeness:
             skipped.append(listed)
             log_skipped(skipped_log, listed)
+        took = time.monotonic() - run_started
         elapsed = time.monotonic() - started
         logger.info(
             f"{provider.name}: [{number}/{len(missing)}] {it} "
-            f"{'written' if ok else 'skipped'} in {(time.monotonic() - run_started) / 60:.1f} "
-            f"min; {elapsed / 3600:.1f} h so far, "
+            f"{'written' if result.written else 'skipped'} in {took / 60:.1f} min "
+            f"({took - result.seconds:.1f}s of it starting the worker); "
+            f"{elapsed / 3600:.1f} h so far, "
             f"~{elapsed / number * (len(missing) - number) / 3600:.1f} h to go"
         )
     logger.info(

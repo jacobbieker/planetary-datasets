@@ -125,10 +125,14 @@ Example::
 from __future__ import annotations
 
 import dataclasses
+import multiprocessing
+import os
 import pathlib
+import pickle
 import re
 import threading
 import time
+import traceback
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Iterable, List, Sequence
@@ -208,7 +212,11 @@ __all__ = [
     "ICONV1Provider",
     "IncompleteRun",
     "MissingGridError",
+    "ChildDied",
+    "PartitionResult",
     "RunCompleteness",
+    "run_in_child",
+    "run_partition_child",
     "PrecisionOverflow",
     "plan_variables",
 ]
@@ -1458,6 +1466,55 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             logger.warning(f"{self.name}: run {it} unreadable fields by variable: {summary}")
 
 
+@dataclasses.dataclass(frozen=True)
+class PartitionResult:
+    """What one :func:`run_partition_child` call did, small enough to send between processes.
+
+    Attributes:
+        init_time: The run.
+        written: Whether it was committed.
+        store_prefix: The generation it went to, or would have.
+        completeness: What the source listed for it, if it was listed.
+        seconds: Wall time of :func:`run_partition_child` itself: building the provider and
+            running the partition, not starting the process or importing the library.
+    """
+
+    init_time: pd.Timestamp
+    written: bool
+    store_prefix: str
+    completeness: RunCompleteness | None
+    seconds: float
+
+
+def run_partition_child(
+    variant: str, it: pd.Timestamp, provider_kwargs: dict | None = None
+) -> PartitionResult:
+    """Build a provider and run one partition; the entry point of a backfill's worker.
+
+    Module-level so a ``spawn`` child process can import it. A long backfill runs each
+    partition in a fresh process (:func:`run_in_child`), so nothing a run leaves behind -
+    caches in libraries, allocator fragmentation - can slow the next one down. The cost is
+    a fresh provider each run: the source's run listing and the run's CLAT/CLON are read
+    again, about a second against minutes of writing.
+
+    Args:
+        variant: Provider variant.
+        it: Run to write. Already known not to be stored; the presence check is skipped.
+        provider_kwargs: Keyword arguments for :class:`ICONV1Provider`.
+    """
+    started = time.monotonic()
+    provider = ICONV1Provider(variant, **(provider_kwargs or {}))
+    it = to_naive_utc(it)
+    written = provider.run_partition(it, check_present=False)
+    return PartitionResult(
+        init_time=it,
+        written=written,
+        store_prefix=provider.store_prefix,
+        completeness=provider.completeness.get(it),
+        seconds=time.monotonic() - started,
+    )
+
+
 def _level_attrs(dim: str) -> dict[str, str]:
     """Units and a description for a level coordinate."""
     if dim.startswith("isobaricInhPa"):
@@ -1471,3 +1528,107 @@ def _level_attrs(dim: str) -> dict[str, str]:
     if dim == _WAVELENGTH:
         return {"units": "nm", "long_name": "wavelength"}
     return {}
+
+
+# ---------------------------------------------------------------------------------------
+# Running one partition in a child process
+# ---------------------------------------------------------------------------------------
+
+
+class ChildDied(RuntimeError):
+    """A child process ended without reporting a result: killed, or crashed natively."""
+
+
+#: Seconds between a child's checks that the process that started it is still there.
+PARENT_CHECK_INTERVAL = 5.0
+
+
+def _watch_parent(parent_pid: int) -> None:
+    """Exit the process as soon as its parent is gone.
+
+    A backfill must stay the only writer to its store. If the parent is killed and a new
+    one started, an orphaned child still writing its run would be a second writer, so the
+    child ends itself rather than finish. It never commits half a run; an interrupted
+    first write can leave an empty generation, which the backfill refuses to start beside.
+    """
+    while True:
+        time.sleep(PARENT_CHECK_INTERVAL)
+        if os.getppid() != parent_pid:
+            os._exit(3)
+
+
+def _sendable(exc: BaseException) -> BaseException:
+    """``exc`` if it survives pickling, else a RuntimeError carrying its type and message."""
+    try:
+        pickle.loads(pickle.dumps(exc))
+    except Exception:  # noqa: BLE001 - any failure to round-trip means "send a stand-in"
+        return RuntimeError(f"{type(exc).__module__}.{type(exc).__qualname__}: {exc}")
+    return exc
+
+
+def _child_entry(conn, parent_pid: int, target: Callable, args: tuple) -> None:
+    """Body of a :func:`run_in_child` process: run ``target`` and send back the outcome."""
+    threading.Thread(target=_watch_parent, args=(parent_pid,), daemon=True).start()
+    try:
+        result = target(*args)
+    except BaseException as exc:  # noqa: BLE001 - every failure goes back to the parent
+        conn.send(("error", _sendable(exc), traceback.format_exc()))
+    else:
+        conn.send(("ok", result, None))
+    finally:
+        conn.close()
+
+
+def run_in_child(target: Callable, *args, poll: float = 1.0):
+    """Call ``target(*args)`` in a freshly spawned process and return its result.
+
+    The child imports everything afresh and exits when done, so nothing the call leaves
+    behind outlives it. It lives no longer than the caller: it ends itself if the caller
+    disappears (:func:`_watch_parent`), and an interrupt in the caller terminates it.
+
+    Args:
+        target: A module-level callable, so the child can import it.
+        *args: Its arguments; they and its result must pickle.
+        poll: Seconds between checks that the child is still alive.
+
+    Returns:
+        What ``target`` returned.
+
+    Raises:
+        ChildDied: If the child ended without sending a result.
+        BaseException: Whatever ``target`` raised, with the child's traceback as a note;
+            a RuntimeError naming it if it could not be pickled.
+    """
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_child_entry, args=(sender, os.getpid(), target, args), daemon=True
+    )
+    process.start()
+    sender.close()
+    outcome = None
+    try:
+        while outcome is None:
+            if receiver.poll(poll):
+                try:
+                    outcome = receiver.recv()
+                except EOFError:
+                    break
+            elif not process.is_alive():
+                break
+    except BaseException:
+        process.terminate()
+        process.join(30)
+        if process.is_alive():
+            process.kill()
+        raise
+    finally:
+        receiver.close()
+    process.join()
+    if outcome is None:
+        raise ChildDied(f"child process {process.pid} ended with exit code {process.exitcode}")
+    status, payload, child_traceback = outcome
+    if status == "error":
+        payload.add_note(f"in child process {process.pid}:\n{child_traceback}")
+        raise payload
+    return payload
