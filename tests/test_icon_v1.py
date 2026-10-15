@@ -672,7 +672,7 @@ def test_backfill_walks_the_archive_forward_and_resumes(source, monkeypatch, loc
     assert not source.reads
 
     ICONV1Provider("eu_art").run_partition(archived[2])
-    assert script.main(["eu_art", "--start", "2026-10-11T00:00"]) == 0
+    assert script.main(["eu_art", "--start", "2026-10-11T00:00", "--in-process"]) == 0
     ds = open_store(local_config, "bkr/icon/icon_eu_art.icechunk")
     # The already-stored run was skipped and the rest were appended oldest first.
     assert pd.DatetimeIndex(ds["init_time"].values).tolist() == [
@@ -843,7 +843,7 @@ def test_backfill_records_skipped_runs(source, monkeypatch, local_config, tmp_pa
     assert script.main(["eu_art", "--dry-run", "--skipped-log", str(log)]) == 0
     assert not source.reads and not log.exists()
 
-    assert script.main(["eu_art", "--skipped-log", str(log)]) == 0
+    assert script.main(["eu_art", "--skipped-log", str(log), "--in-process"]) == 0
     rows = log.read_text().splitlines()
     assert rows[0].split("\t") == list(script.SKIPPED_COLUMNS)
     assert len(rows) == 2 and rows[1].split("\t")[1] == RUN_00.isoformat()
@@ -879,3 +879,68 @@ def test_dagster_marks_a_skipped_run_and_reports_completeness(source):
     assert provider.run_partition(RUN_00) is True
     assert skipped_as_incomplete(provider, RUN_00, written=True) is None
     assert completeness_metadata(provider, RUN_00)["completeness"].value == 1.0
+
+
+# -- nothing accumulates across runs -----------------------------------------------------
+
+
+def test_archive_listings_are_not_cached():
+    fs = cat.archive_filesystem()
+    fs.dircache["bkr/icon/icon-art-eu/p/T_2M/r/2026-10-11T00:00/s"] = [{"name": "x"}]
+    assert len(fs.dircache) == 0
+
+
+def test_a_long_backfill_does_not_accumulate_objects(source, monkeypatch):
+    """Runs through one provider leave nothing behind that grows with their number.
+
+    The listings go through the real archive filesystem's cache, as s3fs's own listings do;
+    with that cache on, every run left about 15,000 entries behind and a day-long backfill
+    slowed to a quarter of its speed.
+    """
+    import gc
+
+    fs = cat.archive_filesystem()
+    fake = source.lister
+
+    def caching_lister(model, src):
+        ls = fake(model, src)
+
+        def cached(directory):
+            names = ls(directory)
+            fs.dircache[directory] = [{"name": f"{directory}/{n}", "type": "file"} for n in names]
+            return names
+
+        return cached
+
+    monkeypatch.setattr(icon_v1, "get_lister", caching_lister)
+    provider = ICONV1Provider("eu_art")
+    runs = list(pd.date_range("2026-10-07T00:00", periods=8, freq="6h"))
+    counts = []
+    for it in runs:
+        assert provider.run_partition(it) is True
+        gc.collect()
+        counts.append(len(gc.get_objects()))
+    # A few objects per run (the completeness record) are expected; a listing cache would
+    # add several hundred per run here and tens of thousands in production.
+    assert counts[-1] - counts[2] < 100 * (len(runs) - 3), counts
+    assert len(fs.dircache) == 0
+
+
+def _report_pid(variant, it, provider_kwargs):
+    import os
+
+    return os.getpid()
+
+
+def test_each_partition_runs_in_a_fresh_process():
+    import os
+
+    script = load_backfill_script()
+    runner = script.PartitionRunner("eu_art", {}, isolated=True, target=_report_pid)
+    try:
+        pids = [runner(RUN_00), runner(RUN_06)]
+    finally:
+        runner.close()
+    assert os.getpid() not in pids and pids[0] != pids[1]
+    in_process = script.PartitionRunner("eu_art", {}, isolated=False, target=_report_pid)
+    assert in_process(RUN_00) == os.getpid()

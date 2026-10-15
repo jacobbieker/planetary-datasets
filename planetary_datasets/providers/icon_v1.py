@@ -208,7 +208,9 @@ __all__ = [
     "ICONV1Provider",
     "IncompleteRun",
     "MissingGridError",
+    "PartitionResult",
     "RunCompleteness",
+    "run_partition_child",
     "PrecisionOverflow",
     "plan_variables",
 ]
@@ -1456,6 +1458,52 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             top = Counter(missing).most_common(REPORT_TOP_N)
             summary = ", ".join(f"{name} {count:,}" for name, count in top if count)
             logger.warning(f"{self.name}: run {it} unreadable fields by variable: {summary}")
+
+
+@dataclasses.dataclass(frozen=True)
+class PartitionResult:
+    """What one :func:`run_partition_child` call did, small enough to send between processes.
+
+    Attributes:
+        init_time: The run.
+        written: Whether it was committed.
+        store_prefix: The generation it went to, or would have.
+        completeness: What the source listed for it, if it was listed.
+        seconds: Wall time of the call, imports excluded.
+    """
+
+    init_time: pd.Timestamp
+    written: bool
+    store_prefix: str
+    completeness: RunCompleteness | None
+    seconds: float
+
+
+def run_partition_child(
+    variant: str, it: pd.Timestamp, provider_kwargs: dict | None = None
+) -> PartitionResult:
+    """Build a provider and run one partition; the entry point of a backfill's worker.
+
+    Module-level so a ``spawn`` child process can import it. A long backfill runs each
+    partition in a fresh process, so nothing a run leaves behind - caches in libraries,
+    allocator fragmentation - can slow the next one down.
+
+    Args:
+        variant: Provider variant.
+        it: Run to write. Already known not to be stored; the presence check is skipped.
+        provider_kwargs: Keyword arguments for :class:`ICONV1Provider`.
+    """
+    started = time.monotonic()
+    provider = ICONV1Provider(variant, **(provider_kwargs or {}))
+    it = to_naive_utc(it)
+    written = provider.run_partition(it, check_present=False)
+    return PartitionResult(
+        init_time=it,
+        written=written,
+        store_prefix=provider.store_prefix,
+        completeness=provider.completeness.get(it),
+        seconds=time.monotonic() - started,
+    )
 
 
 def _level_attrs(dim: str) -> dict[str, str]:

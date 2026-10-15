@@ -2,9 +2,19 @@
 
 The Dagster assets ``icon_global``, ``icon_global_art`` and ``icon_eu_art`` write one run
 per partition through :class:`~planetary_datasets.providers.icon_v1.ICONV1Provider`. This
-walks the archive's runs with the same provider, in time order, in one process: the
-provider already reads, decodes and writes in parallel inside a memory ceiling, so there is
-nothing to gain from more processes and a second writer would only race the first.
+walks the archive's runs with the same provider, in time order, one run at a time: the
+provider already reads, decodes and writes in parallel inside a memory ceiling, and a
+second writer would only race the first.
+
+**Each run is written by a fresh process.** A worker is spawned for one partition and
+exits when it is done (:func:`~planetary_datasets.providers.icon_v1.run_partition_child`),
+so nothing a run leaves behind in the process can slow the next one. That was not
+hypothetical: s3fs kept every directory listing it made, and a backfill left running for a
+day slowed to a quarter of its starting speed as garbage collection walked millions of
+cached entries. The listing cache is now off, and the fresh process guards against
+whatever else accumulates; it costs a few seconds of imports per run, against minutes of
+writing. Still one partition at a time, so still one writer per store. ``--in-process``
+runs everything in this process instead, for debugging.
 
 Runs already stored, in any generation of the store, are skipped, so the script resumes
 where it stopped. A run that fails is logged and the walk goes on; run the script again to
@@ -56,9 +66,13 @@ filling the production stores.
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import pathlib
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
+from typing import Callable
 
 import pandas as pd
 from loguru import logger
@@ -68,7 +82,9 @@ from planetary_datasets.providers.icon_v1 import (
     DEFAULT_MIN_COMPLETENESS,
     VARIANT_MODELS,
     ICONV1Provider,
+    PartitionResult,
     RunCompleteness,
+    run_partition_child,
 )
 from planetary_datasets.providers.icon_v1_catalog import list_runs
 
@@ -146,6 +162,65 @@ def report_completeness(provider: ICONV1Provider, runs: list[pd.Timestamp]) -> N
         )
 
 
+class PartitionRunner:
+    """Runs one partition at a time, each in a freshly spawned process unless told not to.
+
+    A ``spawn`` pool of one worker with ``max_tasks_per_child=1``: the child imports the
+    library afresh, builds its provider, writes its run and exits. A child that dies (killed
+    for memory, say) breaks the pool; it is rebuilt for the next run.
+    """
+
+    def __init__(
+        self,
+        variant: str,
+        provider_kwargs: dict,
+        isolated: bool = True,
+        target: Callable[[str, pd.Timestamp, dict], PartitionResult] = run_partition_child,
+    ) -> None:
+        """Set up a runner; the worker pool is only started by the first run.
+
+        Args:
+            variant: Provider variant.
+            provider_kwargs: Keyword arguments for the provider each run builds.
+            isolated: Run each partition in a fresh spawned process.
+            target: What runs one partition; module-level so a child can import it.
+        """
+        self.variant = variant
+        self.provider_kwargs = provider_kwargs
+        self.isolated = isolated
+        self.target = target
+        self._pool: ProcessPoolExecutor | None = None
+
+    def _executor(self) -> ProcessPoolExecutor:
+        if self._pool is None:
+            self._pool = ProcessPoolExecutor(
+                max_workers=1,
+                mp_context=multiprocessing.get_context("spawn"),
+                max_tasks_per_child=1,
+            )
+        return self._pool
+
+    def __call__(self, it: pd.Timestamp) -> PartitionResult:
+        """Write one run; raises whatever the run raised."""
+        if not self.isolated:
+            return self.target(self.variant, it, self.provider_kwargs)
+        try:
+            return (
+                self._executor()
+                .submit(self.target, self.variant, it, self.provider_kwargs)
+                .result()
+            )
+        except BrokenProcessPool:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        """Shut the worker pool down."""
+        if self._pool is not None:
+            self._pool.shutdown(wait=True, cancel_futures=True)
+            self._pool = None
+
+
 def main(argv: list[str] | None = None) -> int:
     """Command-line entry point. Returns the exit code."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -172,15 +247,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="list each run and report its completeness; write nothing",
     )
+    parser.add_argument(
+        "--in-process",
+        action="store_true",
+        help="write every run in this process rather than a fresh one per run",
+    )
     args = parser.parse_args(argv)
 
-    provider = ICONV1Provider(
-        args.variant,
-        params=args.params,
-        ceiling_gb=args.ceiling_gb,
-        fetch_workers=args.fetch_workers,
-        min_completeness=args.min_completeness,
-    )
+    provider_kwargs = {
+        "params": args.params,
+        "ceiling_gb": args.ceiling_gb,
+        "fetch_workers": args.fetch_workers,
+        "min_completeness": args.min_completeness,
+    }
+    provider = ICONV1Provider(args.variant, **provider_kwargs)
     skipped_log = args.skipped_log or pathlib.Path("logs") / f"icon_v1_{args.variant}_skipped.tsv"
 
     empty = provider.empty_generations()
@@ -209,26 +289,36 @@ def main(argv: list[str] | None = None) -> int:
     written = failed = 0
     skipped: list[RunCompleteness] = []
     started = time.monotonic()
-    for number, it in enumerate(missing, 1):
-        run_started = time.monotonic()
-        try:
-            ok = provider.run_partition(it, check_present=False)
-        except Exception as exc:  # noqa: BLE001 - one bad run must not stop the backfill
-            failed += 1
-            logger.exception(f"{provider.name}: run {it} failed: {exc}")
-            continue
-        written += int(ok)
-        listed = provider.completeness.get(it)
-        if not ok and listed is not None and listed.fraction < provider.min_completeness:
-            skipped.append(listed)
-            log_skipped(skipped_log, listed)
-        elapsed = time.monotonic() - started
-        logger.info(
-            f"{provider.name}: [{number}/{len(missing)}] {it} "
-            f"{'written' if ok else 'skipped'} in {(time.monotonic() - run_started) / 60:.1f} "
-            f"min; {elapsed / 3600:.1f} h so far, "
-            f"~{elapsed / number * (len(missing) - number) / 3600:.1f} h to go"
-        )
+    runner = PartitionRunner(args.variant, provider_kwargs, isolated=not args.in_process)
+    try:
+        for number, it in enumerate(missing, 1):
+            run_started = time.monotonic()
+            try:
+                result = runner(it)
+            except Exception as exc:  # noqa: BLE001 - one bad run must not stop the backfill
+                failed += 1
+                logger.exception(f"{provider.name}: run {it} failed: {exc}")
+                continue
+            written += int(result.written)
+            listed = result.completeness
+            if (
+                not result.written
+                and listed is not None
+                and listed.fraction < args.min_completeness
+            ):
+                skipped.append(listed)
+                log_skipped(skipped_log, listed)
+            took = time.monotonic() - run_started
+            elapsed = time.monotonic() - started
+            logger.info(
+                f"{provider.name}: [{number}/{len(missing)}] {it} "
+                f"{'written' if result.written else 'skipped'} in {took / 60:.1f} min "
+                f"({took - result.seconds:.1f}s of it starting the worker); "
+                f"{elapsed / 3600:.1f} h so far, "
+                f"~{elapsed / number * (len(missing) - number) / 3600:.1f} h to go"
+            )
+    finally:
+        runner.close()
     logger.info(
         f"{provider.name}: {written} run(s) written, {len(skipped)} skipped as incomplete, "
         f"{failed} failed, {len(missing) - written - failed - len(skipped)} with nothing to "
