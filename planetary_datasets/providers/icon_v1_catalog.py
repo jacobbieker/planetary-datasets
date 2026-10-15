@@ -457,7 +457,22 @@ def archive_filesystem() -> fsspec.AbstractFileSystem:
     gigabyte and garbage collection, which walks every live object, slowed each run to a
     third of its starting speed. Listings here are always fresh, so nothing is cached.
     """
-    return fsspec.filesystem("s3", **storage_options("archive"), use_listings_cache=False)
+    global _ARCHIVE_FS
+    with _ARCHIVE_FS_LOCK:
+        if _ARCHIVE_FS is None:
+            # skip_instance_cache: fsspec's instance cache is keyed by thread, so every
+            # thread that listed would otherwise build and keep its own client.
+            _ARCHIVE_FS = fsspec.filesystem(
+                "s3",
+                **storage_options("archive"),
+                use_listings_cache=False,
+                skip_instance_cache=True,
+            )
+        return _ARCHIVE_FS
+
+
+_ARCHIVE_FS: fsspec.AbstractFileSystem | None = None
+_ARCHIVE_FS_LOCK = threading.Lock()
 
 
 def _archive_lister(model: str) -> Lister:
@@ -467,7 +482,7 @@ def _archive_lister(model: str) -> Lister:
     def ls(relative: str) -> list[str]:
         path = f"{root}/{relative}".rstrip("/")
         try:
-            return list(fs.ls(path, detail=False, refresh=True))
+            return list(fs.ls(path, detail=False))
         except FileNotFoundError:
             raise
         except (OSError, ValueError) as exc:

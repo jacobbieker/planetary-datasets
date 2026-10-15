@@ -66,27 +66,29 @@ filling the production stores.
 from __future__ import annotations
 
 import argparse
-import multiprocessing
 import pathlib
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor
-from concurrent.futures.process import BrokenProcessPool
 from typing import Callable
 
 import pandas as pd
 from loguru import logger
 
 from planetary_datasets.common.store import axis_is_sorted
+from planetary_datasets.memory import process_tree_rss_gb
 from planetary_datasets.providers.icon_v1 import (
     DEFAULT_MIN_COMPLETENESS,
     VARIANT_MODELS,
     ICONV1Provider,
     PartitionResult,
     RunCompleteness,
+    run_in_child,
     run_partition_child,
 )
 from planetary_datasets.providers.icon_v1_catalog import list_runs
+
+#: Least memory a child is given, whatever the parent holds, in GB.
+MIN_CHILD_CEILING_GB = 1.0
 
 #: Columns of the skipped-runs log.
 SKIPPED_COLUMNS = (
@@ -165,9 +167,13 @@ def report_completeness(provider: ICONV1Provider, runs: list[pd.Timestamp]) -> N
 class PartitionRunner:
     """Runs one partition at a time, each in a freshly spawned process unless told not to.
 
-    A ``spawn`` pool of one worker with ``max_tasks_per_child=1``: the child imports the
-    library afresh, builds its provider, writes its run and exits. A child that dies (killed
-    for memory, say) breaks the pool; it is rebuilt for the next run.
+    The child (:func:`~planetary_datasets.providers.icon_v1.run_in_child`) imports the
+    library afresh, builds its provider, writes its run and exits. It lives no longer than
+    this process: it ends itself if this one is killed, and an interrupt here terminates
+    it, so a restarted backfill never finds a second writer still at work.
+
+    The child's memory ceiling is the configured one less what this process holds, so the
+    two together stay within ``--ceiling-gb``.
     """
 
     def __init__(
@@ -177,7 +183,7 @@ class PartitionRunner:
         isolated: bool = True,
         target: Callable[[str, pd.Timestamp, dict], PartitionResult] = run_partition_child,
     ) -> None:
-        """Set up a runner; the worker pool is only started by the first run.
+        """Set up a runner.
 
         Args:
             variant: Provider variant.
@@ -189,36 +195,20 @@ class PartitionRunner:
         self.provider_kwargs = provider_kwargs
         self.isolated = isolated
         self.target = target
-        self._pool: ProcessPoolExecutor | None = None
 
-    def _executor(self) -> ProcessPoolExecutor:
-        if self._pool is None:
-            self._pool = ProcessPoolExecutor(
-                max_workers=1,
-                mp_context=multiprocessing.get_context("spawn"),
-                max_tasks_per_child=1,
-            )
-        return self._pool
+    def child_kwargs(self) -> dict:
+        """The provider arguments for a child: its ceiling less this process's memory."""
+        kwargs = dict(self.provider_kwargs)
+        ceiling = kwargs.get("ceiling_gb")
+        if ceiling is not None:
+            kwargs["ceiling_gb"] = max(MIN_CHILD_CEILING_GB, ceiling - process_tree_rss_gb())
+        return kwargs
 
     def __call__(self, it: pd.Timestamp) -> PartitionResult:
-        """Write one run; raises whatever the run raised."""
+        """Write one run; raises whatever the run raised, or ChildDied."""
         if not self.isolated:
             return self.target(self.variant, it, self.provider_kwargs)
-        try:
-            return (
-                self._executor()
-                .submit(self.target, self.variant, it, self.provider_kwargs)
-                .result()
-            )
-        except BrokenProcessPool:
-            self.close()
-            raise
-
-    def close(self) -> None:
-        """Shut the worker pool down."""
-        if self._pool is not None:
-            self._pool.shutdown(wait=True, cancel_futures=True)
-            self._pool = None
+        return run_in_child(self.target, self.variant, it, self.child_kwargs())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -289,36 +279,41 @@ def main(argv: list[str] | None = None) -> int:
     written = failed = 0
     skipped: list[RunCompleteness] = []
     started = time.monotonic()
-    runner = PartitionRunner(args.variant, provider_kwargs, isolated=not args.in_process)
-    try:
-        for number, it in enumerate(missing, 1):
-            run_started = time.monotonic()
-            try:
-                result = runner(it)
-            except Exception as exc:  # noqa: BLE001 - one bad run must not stop the backfill
-                failed += 1
-                logger.exception(f"{provider.name}: run {it} failed: {exc}")
-                continue
-            written += int(result.written)
-            listed = result.completeness
-            if (
-                not result.written
-                and listed is not None
-                and listed.fraction < args.min_completeness
-            ):
-                skipped.append(listed)
-                log_skipped(skipped_log, listed)
-            took = time.monotonic() - run_started
-            elapsed = time.monotonic() - started
-            logger.info(
-                f"{provider.name}: [{number}/{len(missing)}] {it} "
-                f"{'written' if result.written else 'skipped'} in {took / 60:.1f} min "
-                f"({took - result.seconds:.1f}s of it starting the worker); "
-                f"{elapsed / 3600:.1f} h so far, "
-                f"~{elapsed / number * (len(missing) - number) / 3600:.1f} h to go"
-            )
-    finally:
-        runner.close()
+    runner = PartitionRunner(
+        args.variant, provider_kwargs, isolated=not args.in_process, target=run_partition_child
+    )
+    for number, it in enumerate(missing, 1):
+        run_started = time.monotonic()
+        try:
+            result = runner(it)
+        except Exception as exc:  # noqa: BLE001 - one bad run must not stop the backfill
+            failed += 1
+            logger.exception(f"{provider.name}: run {it} failed: {exc}")
+            # A run that failed while starting a new generation leaves it empty, and
+            # the next run of that day would be written into it; stop instead, as the
+            # startup check would.
+            empty = provider.empty_generations()
+            if empty:
+                logger.error(
+                    f"{provider.name}: run {it} left {', '.join(empty)} with nothing "
+                    "committed; stopping. Delete it before restarting the backfill."
+                )
+                break
+            continue
+        written += int(result.written)
+        listed = result.completeness
+        if not result.written and listed is not None and listed.fraction < args.min_completeness:
+            skipped.append(listed)
+            log_skipped(skipped_log, listed)
+        took = time.monotonic() - run_started
+        elapsed = time.monotonic() - started
+        logger.info(
+            f"{provider.name}: [{number}/{len(missing)}] {it} "
+            f"{'written' if result.written else 'skipped'} in {took / 60:.1f} min "
+            f"({took - result.seconds:.1f}s of it starting the worker); "
+            f"{elapsed / 3600:.1f} h so far, "
+            f"~{elapsed / number * (len(missing) - number) / 3600:.1f} h to go"
+        )
     logger.info(
         f"{provider.name}: {written} run(s) written, {len(skipped)} skipped as incomplete, "
         f"{failed} failed, {len(missing) - written - failed - len(skipped)} with nothing to "
