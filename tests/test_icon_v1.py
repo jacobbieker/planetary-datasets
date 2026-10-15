@@ -652,15 +652,20 @@ def test_dagster_assets_stay_off_the_schedules_while_backfilling():
 # -- backfill script ---------------------------------------------------------------------
 
 
-def load_backfill_script():
+def load_script(name: str):
+    """Import ``scripts/<name>.py``; the scripts are not a package."""
     import importlib.util
     import pathlib
 
-    path = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "icon_v1_backfill.py"
-    spec = importlib.util.spec_from_file_location("icon_v1_backfill", path)
+    path = pathlib.Path(__file__).resolve().parent.parent / "scripts" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_backfill_script():
+    return load_script("icon_v1_backfill")
 
 
 def test_backfill_walks_the_archive_forward_and_resumes(source, monkeypatch, local_config):
@@ -1004,9 +1009,11 @@ def test_stores_upload_chunks_as_parallel_multipart(source, local_config):
     assert provider.run_partition(RUN_00) is True
     # The repository the write went through, and one reopened for the next run, both
     # upload chunks above the threshold in parallel parts.
-    assert (
-        provider.get_icechunk_repo().config.storage.minimum_size_for_multipart_upload
-        == icon_v1.MULTIPART_UPLOAD_MIN_BYTES
+    storage = provider.get_icechunk_repo().config.storage
+    assert storage.minimum_size_for_multipart_upload == icon_v1.MULTIPART_UPLOAD_MIN_BYTES
+    # Every multipart upload has at least two parts.
+    assert storage.concurrency.ideal_concurrent_request_size * 2 <= (
+        storage.minimum_size_for_multipart_upload
     )
     reopened = ICONV1Provider("eu_art")
     reopened.resolve_store(provider.process(provider.fetch(RUN_06), RUN_06))
@@ -1017,14 +1024,7 @@ def test_stores_upload_chunks_as_parallel_multipart(source, local_config):
 
 
 def load_gc_script():
-    import importlib.util
-    import pathlib
-
-    path = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "icon_v1_gc.py"
-    spec = importlib.util.spec_from_file_location("icon_v1_gc", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_script("icon_v1_gc")
 
 
 def test_gc_finds_and_deletes_the_chunks_of_a_run_that_never_committed(
@@ -1068,3 +1068,63 @@ def test_gc_finds_and_deletes_the_chunks_of_a_run_that_never_committed(
         stored["t"].isel(init_time=0, step=1, isobaricInhPa=1).values,
         field_value(uri("T", 100, "85000", 1, RUN_00)),
     )
+
+
+def test_gc_dry_run_creates_nothing(source, local_config):
+    import os
+
+    gc = load_gc_script()
+    root = local_config.local_store_path("bkr/icon")
+    # An existing root, so the provider's own generation lookup lists rather than probes.
+    root.mkdir(parents=True)
+    ICONV1Provider("eu_art").run_partition(RUN_00)
+    before = sorted(os.listdir(root))
+    assert gc.main(["eu_art"]) == 0
+    # No probing of numbered generations, so no new repositories.
+    assert sorted(os.listdir(root)) == before
+    assert gc.list_generations(local_config, "bkr/icon/icon_eu_art.icechunk") == [
+        "bkr/icon/icon_eu_art.icechunk"
+    ]
+
+
+def test_gc_aborts_unfinished_uploads_older_than_the_cutoff(monkeypatch, local_config):
+    import datetime as dt
+
+    gc = load_gc_script()
+    now = dt.datetime.now(dt.UTC)
+    pages = [
+        {
+            "Uploads": [
+                {"Key": "a", "UploadId": "old", "Initiated": now - dt.timedelta(days=2)},
+                {"Key": "b", "UploadId": "new", "Initiated": now - dt.timedelta(hours=1)},
+            ],
+            "IsTruncated": True,
+            "NextKeyMarker": "b",
+            "NextUploadIdMarker": "new",
+        },
+        {
+            "Uploads": [{"Key": "c", "UploadId": "older", "Initiated": now - dt.timedelta(days=5)}],
+            "IsTruncated": False,
+        },
+    ]
+    calls = []
+
+    def call(operation, **kwargs):
+        calls.append((operation, kwargs))
+        if operation == "list_multipart_uploads":
+            return pages[0] if "KeyMarker" not in kwargs else pages[1]
+        return {}
+
+    import dataclasses
+
+    s3_config = dataclasses.replace(local_config, icechunk_local_path=None)
+    cutoff = now - dt.timedelta(hours=24)
+    prefix = "bkr/icon/icon_eu_art.icechunk"
+    assert gc.stale_uploads(local_config, prefix, cutoff, delete=False, call=call) == 0
+    assert gc.stale_uploads(s3_config, prefix, cutoff, delete=False, call=call) == 2
+    assert not [c for c in calls if c[0] == "abort_multipart_upload"]
+    assert calls[0][1]["Prefix"] == "bkr/icon/icon_eu_art.icechunk/"
+    calls.clear()
+    assert gc.stale_uploads(s3_config, prefix, cutoff, delete=True, call=call) == 2
+    aborted = sorted(c[1]["UploadId"] for c in calls if c[0] == "abort_multipart_upload")
+    assert aborted == ["old", "older"]

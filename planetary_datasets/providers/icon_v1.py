@@ -213,6 +213,7 @@ __all__ = [
     "IncompleteRun",
     "MissingGridError",
     "ChildDied",
+    "MULTIPART_PART_BYTES",
     "MULTIPART_UPLOAD_MIN_BYTES",
     "PartitionResult",
     "RunCompleteness",
@@ -264,22 +265,30 @@ CREATE_CLEVEL = 5
 #: smaller, so each went up as one PUT on one TCP stream - one stream per block in flight.
 #: A stream's throughput is its send buffer over the round trip: aero's 4 MiB buffer
 #: across the 143 ms to us-west-2 allows at most ~29 MB/s, and the ICON-Global backfill
-#: sent 24 MB/s while the host's uplink carried 119 MB/s over 8 streams. Against a fake S3
-#: capped at 20 MB/s per stream, uploading ~65 MB chunks from 3 blocks in flight went from
-#: 37 to 62 MB/s with this threshold (1.8 to 3.7 uploads in flight); with ~83 MB chunks
-#: from 45 to 118 MB/s.
-MULTIPART_UPLOAD_MIN_BYTES = 8 * 2**20
+#: sent 24 MB/s while the host's uplink carried 119 MB/s over 8 streams. Writing a real
+#: ICON-Global subset through this provider to a fake S3 capped at 25 MB/s a stream:
+#: 9.4 fields/s with single PUTs, 10.7 with 24 MiB / 12 MiB parts, 13.9 with these.
+MULTIPART_UPLOAD_MIN_BYTES = 16 * 2**20
+
+#: Size of each part of a multipart upload. Half the threshold, so every multipart upload
+#: has at least two parts: one part would only add two round trips to a single PUT.
+MULTIPART_PART_BYTES = 8 * 2**20
 
 
 def repository_config() -> icechunk.RepositoryConfig:
-    """Repository settings for the stores this provider writes: parallel chunk uploads.
+    """Repository settings for writing these stores: chunks uploaded in parallel parts.
 
     Only the storage settings are given, so everything else comes from the repository's
-    own saved configuration. A store created with it keeps the setting.
+    own saved configuration. They apply to the handle :meth:`ICONV1Provider.get_icechunk_repo`
+    opens, which is the one every write goes through; a store is usually created first,
+    by the generation lookup, without them, so they are not saved with it.
     """
     config = icechunk.RepositoryConfig()
     config.storage = icechunk.StorageSettings(
-        minimum_size_for_multipart_upload=MULTIPART_UPLOAD_MIN_BYTES
+        minimum_size_for_multipart_upload=MULTIPART_UPLOAD_MIN_BYTES,
+        concurrency=icechunk.StorageConcurrencySettings(
+            ideal_concurrent_request_size=MULTIPART_PART_BYTES
+        ),
     )
     return config
 
