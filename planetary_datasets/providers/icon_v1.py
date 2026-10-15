@@ -213,6 +213,8 @@ __all__ = [
     "IncompleteRun",
     "MissingGridError",
     "ChildDied",
+    "MULTIPART_PART_BYTES",
+    "MULTIPART_UPLOAD_MIN_BYTES",
     "PartitionResult",
     "RunCompleteness",
     "run_in_child",
@@ -256,6 +258,40 @@ READER_BYTES_PER_CELL = 10
 
 #: zstd level of stores this provider creates; see the module docstring.
 CREATE_CLEVEL = 5
+
+#: Chunk objects larger than this are uploaded as a multipart upload, its parts in parallel.
+#:
+#: icechunk's default is 100 MB, and an ICON chunk (13 fields, 2-80 MB compressed) is
+#: smaller, so each went up as one PUT on one TCP stream - one stream per block in flight.
+#: A stream's throughput is its send buffer over the round trip: aero's 4 MiB buffer
+#: across the 143 ms to us-west-2 allows at most ~29 MB/s, and the ICON-Global backfill
+#: sent 24 MB/s while the host's uplink carried 119 MB/s over 8 streams. Writing a real
+#: ICON-Global subset through this provider to a fake S3 capped at 25 MB/s a stream:
+#: 9.4 fields/s with single PUTs, 10.7 with 24 MiB / 12 MiB parts, 13.9 with these.
+MULTIPART_UPLOAD_MIN_BYTES = 16 * 2**20
+
+#: Size of each part of a multipart upload. Half the threshold, so every multipart upload
+#: has at least two parts: one part would only add two round trips to a single PUT.
+MULTIPART_PART_BYTES = 8 * 2**20
+
+
+def repository_config() -> icechunk.RepositoryConfig:
+    """Repository settings for writing these stores: chunks uploaded in parallel parts.
+
+    Only the storage settings are given, so everything else comes from the repository's
+    own saved configuration. They apply to the handle :meth:`ICONV1Provider.get_icechunk_repo`
+    opens, which is the one every write goes through; a store is usually created first,
+    by the generation lookup, without them, so they are not saved with it.
+    """
+    config = icechunk.RepositoryConfig()
+    config.storage = icechunk.StorageSettings(
+        minimum_size_for_multipart_upload=MULTIPART_UPLOAD_MIN_BYTES,
+        concurrency=icechunk.StorageConcurrencySettings(
+            ideal_concurrent_request_size=MULTIPART_PART_BYTES
+        ),
+    )
+    return config
+
 
 #: Target decoded size of one chunk, in MiB.
 CHUNK_TARGET_MB = 150.0
@@ -1196,6 +1232,18 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             else:
                 logger.debug(f"{prefix}: a different layout, not consulted for {self.name}")
         return own
+
+    def get_icechunk_repo(self) -> icechunk.Repository:
+        """Open or create the generation being written, with parallel chunk uploads.
+
+        See :data:`MULTIPART_UPLOAD_MIN_BYTES`. The handle is cached until the generation
+        changes, as in :meth:`BaseProvider.get_icechunk_repo`.
+        """
+        if self._repo is None:
+            self._repo = icechunk.Repository.open_or_create(
+                self.config.icechunk_storage(self.store_prefix), config=repository_config()
+            )
+        return self._repo
 
     def empty_generations(self) -> list[str]:
         """Dated generations that exist but hold no committed data.
