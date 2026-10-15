@@ -994,3 +994,77 @@ def test_a_failed_first_write_stops_the_backfill(source, monkeypatch, local_conf
     assert script.main(["global", "--in-process"]) == 1
     # The second run, of the same day, was never started.
     assert calls == [RUN_00]
+
+
+# -- uploads and orphaned chunks ---------------------------------------------------------
+
+
+def test_stores_upload_chunks_as_parallel_multipart(source, local_config):
+    provider = ICONV1Provider("eu_art")
+    assert provider.run_partition(RUN_00) is True
+    # The repository the write went through, and one reopened for the next run, both
+    # upload chunks above the threshold in parallel parts.
+    assert (
+        provider.get_icechunk_repo().config.storage.minimum_size_for_multipart_upload
+        == icon_v1.MULTIPART_UPLOAD_MIN_BYTES
+    )
+    reopened = ICONV1Provider("eu_art")
+    reopened.resolve_store(provider.process(provider.fetch(RUN_06), RUN_06))
+    repo = reopened.get_icechunk_repo()
+    assert (
+        repo.config.storage.minimum_size_for_multipart_upload == icon_v1.MULTIPART_UPLOAD_MIN_BYTES
+    )
+
+
+def load_gc_script():
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "icon_v1_gc.py"
+    spec = importlib.util.spec_from_file_location("icon_v1_gc", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_gc_finds_and_deletes_the_chunks_of_a_run_that_never_committed(
+    source, monkeypatch, local_config
+):
+    from icechunk.xarray import to_icechunk
+
+    # Real chunk objects, not chunks small enough to be inlined into the manifest.
+    original = icon_v1.repository_config
+
+    def config_without_inlining():
+        config = original()
+        config.inline_chunk_threshold_bytes = 0
+        return config
+
+    monkeypatch.setattr(icon_v1, "repository_config", config_without_inlining)
+    provider = ICONV1Provider("eu_art")
+    assert provider.run_partition(RUN_00) is True
+
+    # A run killed after uploading its chunks and before its commit.
+    ds = provider.process(provider.fetch(RUN_06), RUN_06)
+    session = provider.store_for(ds, None).writable_session("main")
+    to_icechunk(ds, session, append_dim="init_time", mode="a-")
+    del session
+
+    gc = load_gc_script()
+    prefix = "bkr/icon/icon_eu_art.icechunk"
+    import datetime as dt
+
+    # Too young to touch at the default age: a run in progress is safe.
+    assert gc.collect(prefix, dt.timedelta(hours=24), delete=False)["chunks"] == 0
+    found = gc.collect(prefix, dt.timedelta(0), delete=False)
+    # The chunks, and the flush snapshots of the forked write sessions; never a commit.
+    assert found["chunks"] > 0
+    assert gc.main(["eu_art", "--older-than-hours", "0", "--delete"]) == 0
+    assert gc.collect(prefix, dt.timedelta(0), delete=False)["chunks"] == 0
+
+    stored = open_store(local_config, prefix)
+    assert pd.DatetimeIndex(stored["init_time"].values).tolist() == [RUN_00]
+    np.testing.assert_array_equal(
+        stored["t"].isel(init_time=0, step=1, isobaricInhPa=1).values,
+        field_value(uri("T", 100, "85000", 1, RUN_00)),
+    )
