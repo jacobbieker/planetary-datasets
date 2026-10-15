@@ -447,8 +447,21 @@ def clean_names(names: Iterable[str]) -> list[str]:
     return sorted(out)
 
 
+def archive_filesystem() -> fsspec.AbstractFileSystem:
+    """The S3 filesystem the archive is listed through, with its listings cache off.
+
+    s3fs keeps every listing it makes in ``dircache``, ``refresh=True`` or not, and never
+    lets go of one. The provider lists every directory of each run it writes, so one
+    backfill process accumulated about 15,500 entries (12 MiB, 31,000 Python objects) per
+    ICON-ART-EU run and ten times that per ICON-Global run. Over a day RSS crept up by a
+    gigabyte and garbage collection, which walks every live object, slowed each run to a
+    third of its starting speed. Listings here are always fresh, so nothing is cached.
+    """
+    return fsspec.filesystem("s3", **storage_options("archive"), use_listings_cache=False)
+
+
 def _archive_lister(model: str) -> Lister:
-    fs = fsspec.filesystem("s3", **storage_options("archive"))
+    fs = archive_filesystem()
     root = ARCHIVE_ROOT.removeprefix("s3://") + f"/{model}"
 
     def ls(relative: str) -> list[str]:
