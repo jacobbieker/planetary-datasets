@@ -240,11 +240,17 @@ class _DMIHarmonieBase(BaseProvider):
         return chunk_present(ds, self.chunks)
 
 
-class DMIHarmonieProvider(_DMIHarmonieBase):
-    """HARMONIE pressure-level and surface fields."""
+class DMIHarmonieProvider(GenerationalStoreMixin, _DMIHarmonieBase):
+    """HARMONIE pressure-level and surface fields.
+
+    Generational, like the model levels below. The series already ran to a hand-made third
+    store, so the base is ``_3``: writing carries on there, and a future grid change starts
+    ``..._3_<DDMMYYYY>.icechunk`` rather than reaching back into the first two stores.
+    """
 
     name = "dmi_harmonie"
-    store_prefix = "bkr/dmi/harmonie_greenland_iceland_3.icechunk"
+    base_store_prefix = "bkr/dmi/harmonie_greenland_iceland_3.icechunk"
+    fingerprint_multi_dim_coords = ("latitude", "longitude")
     level_types = ("PL", "SF")
     chunks = {"time": 1, "step": 1, "y": -1, "x": -1, "level": -1}
 

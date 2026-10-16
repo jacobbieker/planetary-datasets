@@ -130,12 +130,20 @@ def test_providers_keep_their_published_store(provider_cls, store_prefix):
     ) == store_prefix
 
 
-def test_harmonie_model_levels_roll_to_a_new_store_on_a_new_grid(local_config):
+@pytest.mark.parametrize(
+    ("provider_cls", "base"),
+    [
+        (dmi.DMIHarmonieModelLevelProvider, "bkr/dmi/harmonie_greenland_iceland_model_level"),
+        (dmi.DMIHarmonieProvider, "bkr/dmi/harmonie_greenland_iceland_3"),
+    ],
+    ids=["model-level", "surface"],
+)
+def test_harmonie_rolls_to_a_new_store_on_a_new_grid(local_config, provider_cls, base):
     """A grid change starts a dated generation rather than being refused."""
     import numpy as np
     import xarray as xr
 
-    provider = dmi.DMIHarmonieModelLevelProvider(config=local_config)
+    provider = provider_cls(config=local_config)
 
     def init_time(it: str, lat0: float) -> xr.Dataset:
         lat = lat0 + np.arange(4.0)[:, None] + np.zeros((4, 3))
@@ -155,10 +163,7 @@ def test_harmonie_model_levels_roll_to_a_new_store_on_a_new_grid(local_config):
     new = init_time("2026-10-16T00:00", 61.5)
     assert provider.write_to_icechunk(provider.store_for(new, None), new)
 
-    assert provider.generations() == [
-        "bkr/dmi/harmonie_greenland_iceland_model_level.icechunk",
-        "bkr/dmi/harmonie_greenland_iceland_model_level_16102026.icechunk",
-    ]
+    assert provider.generations() == [f"{base}.icechunk", f"{base}_16102026.icechunk"]
     assert provider.missing_timesteps(
         pd.DatetimeIndex(["2026-10-15", "2026-10-16", "2026-10-17"])
     ) == [pd.Timestamp("2026-10-17")]
