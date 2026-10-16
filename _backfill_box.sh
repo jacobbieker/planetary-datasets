@@ -1,7 +1,8 @@
 #!/bin/bash
 # Start every continuous backfill lane on the backfill box, each under a restart loop.
 #
-#     ./_backfill_box.sh start          # start any lane that is not already running
+#     ./_backfill_box.sh start          # start any lane that is not already running (cron
+#                                       # runs this every 15 minutes as a watchdog)
 #     ./_backfill_box.sh status         # which lanes run, and each log's last line
 #     ./_backfill_box.sh stop           # stop every lane
 #     ./_backfill_box.sh noon           # the daily short-retention catch-up (cron, 12:00 UTC)
@@ -9,6 +10,7 @@
 # Crontab on the box:
 #     CRON_TZ=UTC
 #     0 12 * * * <repo>/_backfill_box.sh noon
+#     */15 * * * * <repo>/_backfill_box.sh start >> ~/backfill-logs/box.log 2>&1
 #     @reboot sleep 60 && <repo>/_backfill_box.sh start >> ~/backfill-logs/box.log 2>&1
 #
 # One lane is one store and one writer. Lanes never share a store, and nothing else may
@@ -45,8 +47,9 @@ declare -A LANES=(
   [uk_marine]="_backfill_lanes.py uk_marine --threads 1 --pause 43200"
   [mtg_irs_l1]="_backfill_mtg_irs.py mtg_irs_l1 --follow --threads 12 --downloads 16"
   [mtg_irs_l1_lac4_hourly]="_backfill_mtg_irs.py mtg_irs_l1_lac4_hourly --follow --threads 12 --downloads 16"
-  [gmgsi_v3]="_backfill_gmgsi.py --follow"
-  [geos_v2]="_backfill_lanes.py geos_v2 --threads 8"
+  # GMGSI and GEOS-CF v2 are near-realtime: once caught up, a pass every two hours.
+  [gmgsi_v3]="_backfill_gmgsi.py --follow --period 7200"
+  [geos_v2]="_backfill_lanes.py geos_v2 --threads 8 --pause 7200"
   [ifs_analysis]="_backfill_lanes.py ifs_analysis --threads 8"
   [opera_rainfall]="_backfill_lanes.py opera_rainfall --threads 4"
   [opera_dbz]="_backfill_lanes.py opera_dbz --threads 4"

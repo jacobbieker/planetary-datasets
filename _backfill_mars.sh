@@ -9,6 +9,10 @@
 #
 #     setsid nohup ./_backfill_mars.sh >> ~/backfill-logs/mars_pipeline.log 2>&1 < /dev/null &
 cd "$(dirname "$0")"
+# Set once the range is complete, so the watchdog in _backfill_box.sh does not run it again.
+# Delete it to re-run.
+DONE=~/backfill-logs/mars_pipeline.done
+[[ -f $DONE ]] && exit 0
 export PYTHONPATH=$PWD MEMORY_CEILING_GB=${MEMORY_CEILING_GB:-48}
 PIXI=${PIXI:-~/.pixi/bin/pixi}
 until $PIXI run python -m planetary_datasets.providers.mars_pipeline \
@@ -17,3 +21,4 @@ until $PIXI run python -m planetary_datasets.providers.mars_pipeline \
   sleep 600
 done
 echo "=== $(date -u '+%F %T') mars_pipeline complete"
+touch "$DONE"
