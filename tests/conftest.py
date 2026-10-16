@@ -156,10 +156,7 @@ def sample_dataset():
 
     return xr.Dataset(
         {
-            "temperature": (
-                ("time", "latitude", "longitude"),
-                np.zeros((1, 4, 5), dtype="float32"),
-            ),
+            "temperature": (("time", "latitude", "longitude"), np.zeros((1, 4, 5), dtype="float32")),
             "pressure": (("time", "latitude", "longitude"), np.ones((1, 4, 5), dtype="float32")),
         },
         coords={
