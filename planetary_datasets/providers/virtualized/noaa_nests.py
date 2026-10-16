@@ -5,7 +5,7 @@ buckets, written by gribberish's VirtualiZarr parser: every message is one chunk
 read time by the ``gribberish`` zarr codec (``pip install gribberish``), so a run of the
 whole model costs a few hundred kilobytes of manifest rather than gigabytes of data.
 
-Stores, one per GRIB file kind, under ``bkr/nwp/virtualized``:
+Stores, one per GRIB file kind, under ``bkr/dmi/virtualized``:
 
 * ``hrrr_alaska_sfc``, ``hrrr_alaska_prs``, ``hrrr_alaska_nat`` — HRRR's ``wrfsfc``,
   ``wrfprs`` and ``wrfnat`` files, every three hours from 2018-07-11, steps 0-48 h;
@@ -45,7 +45,7 @@ from planetary_datasets.config import Config, get_config
 from planetary_datasets.providers.virtualized.virtual_repo import open_virtual_repo
 
 LEDGER_ATTR = "ingested_runs"
-STORE_BASE = "bkr/nwp/virtualized"
+STORE_BASE = "bkr/dmi/virtualized"
 SPATIAL = ("y", "x")
 #: How many generations a store may reach before a run is refused rather than starting
 #: another: more than this means the schema is splitting on noise, not on upgrades.
@@ -253,12 +253,24 @@ def _store_schema(repo) -> _Schema | None:
 
 
 def _misfits(variables: Dict[Tuple[str, str], _Var], schema: _Schema) -> List[str]:
-    """What of the run ``schema`` cannot hold: unknown variables, other dims, new levels."""
+    """What of the run ``schema`` cannot hold, which forces a new generation.
+
+    A variable the store has never seen is *not* a misfit: it is added to the store, with
+    every earlier run missing (see ``NestVirtualProvider._extend``). Only a change to
+    something already stored is: a variable on other dimensions, a different grid, or
+    levels outside an axis the store already has.
+    """
     out = []
+    spatial = {meta["spatial"] for meta in schema.arrays.values()}
     for key, var in variables.items():
         stored = schema.arrays.get(key)
         if stored is None:
-            out.append(f"{key[0]}/{key[1]}: not in the store")
+            if spatial and var.spatial not in spatial:
+                out.append(f"{key[0]}/{key[1]}: grid {var.spatial} vs {sorted(spatial)}")
+            for dim, values in var.levels.items():
+                have = schema.levels.get((key[0], dim))
+                if have is not None and not np.isin(values, have).all():
+                    out.append(f"{key[0]}/{key[1]}: {dim} values outside the store's axis")
             continue
         if stored["dims"] != var.dims or stored["spatial"] != var.spatial:
             out.append(f"{key[0]}/{key[1]}: dims {var.dims} vs {stored['dims']}")
@@ -281,14 +293,17 @@ def _manifest_array(
     steps: Tuple[int, ...],
     level_axes: List[np.ndarray],
     cells: Dict[Tuple[int, Tuple[Any, ...]], Tuple[str, int, int]],
+    runs: int = 1,
 ):
-    """``(init_time=1, step, levels..., y, x)``: every message where it belongs, gaps empty."""
+    """``(init_time=runs, step, levels..., y, x)``: every message where it belongs, gaps
+    empty. ``cells`` are placed in the first run; ``runs > 1`` with no cells gives the
+    all-missing history a newly seen variable is given for the runs before it."""
     from gribberish.virtualizarr.parser import _gribberish_codecs
     from virtualizarr.manifests import ChunkManifest, ManifestArray
     from virtualizarr.manifests.utils import create_v3_array_metadata
 
     level_sizes = [len(a) for a in level_axes]
-    grid = (1, len(steps), *level_sizes, 1, 1)
+    grid = (runs, len(steps), *level_sizes, 1, 1)
     paths = np.full(grid, "", dtype=np.dtypes.StringDType())
     offsets = np.zeros(grid, dtype=np.uint64)
     lengths = np.zeros(grid, dtype=np.uint64)
@@ -305,7 +320,7 @@ def _manifest_array(
             continue  # a level outside the store's axis; checked by _fits before writing
         cell = (0, step_index[step], *idx, 0, 0)
         paths[cell], offsets[cell], lengths[cell] = path, offset, length
-    shape = (1, len(steps), *level_sizes, *spatial)
+    shape = (runs, len(steps), *level_sizes, *spatial)
     metadata = create_v3_array_metadata(
         shape=shape,
         data_type=np.dtype("float64"),
@@ -465,6 +480,70 @@ class NestVirtualProvider:
         prefix, schema = self.choose_generation(it, variables)
         return self._write(prefix, schema, it, variables, coords)
 
+    def _extend(self, session, schema: _Schema, variables, coords) -> None:
+        """Add the run's never-seen variables to the store, missing for every earlier run.
+
+        Done in the run's own session, before its append, so the store never holds a
+        variable shorter than the rest along ``init_time``. A new group gets its step,
+        level and spatial coordinates; a new level dimension in an existing group gets its
+        axis. Updates ``schema`` in place, so the append that follows includes them.
+        """
+        new = sorted(k for k in variables if k not in schema.arrays)
+        if not new:
+            return
+        any_group = next(iter(schema.arrays))[0]
+        history = xr.open_zarr(
+            session.store, group=any_group.lstrip("/") or None, consolidated=False
+        )["init_time"].values
+        steps = self.product.steps
+        known_groups = {g for g, _ in schema.arrays}
+        by_group: Dict[str, Dict[str, Any]] = {}
+        new_levels: Dict[Tuple[str, str], np.ndarray] = {}
+        for group, name in new:
+            var = variables[(group, name)]
+            axes = []
+            for dim in var.dims[:-2]:
+                axis = schema.levels.get((group, dim))
+                if axis is None:
+                    axis = new_levels.setdefault((group, dim), np.sort(var.levels[dim]))
+                axes.append(axis)
+            ma = _manifest_array(
+                name, var.dims, var.attrs, var.spatial, steps, axes, {}, runs=len(history)
+            )
+            by_group.setdefault(group, {})[name] = (ma, ("init_time", "step", *var.dims))
+            schema.arrays[(group, name)] = {
+                "dims": var.dims,
+                "attrs": var.attrs,
+                "spatial": var.spatial,
+            }
+        schema.levels.update(new_levels)
+        for group, data in sorted(by_group.items()):
+            ds = xr.Dataset(
+                {name: xr.Variable(dims, ma) for name, (ma, dims) in data.items()},
+                coords={"init_time": history},
+            )
+            for (g, dim), values in new_levels.items():
+                if g == group:
+                    ds = ds.assign_coords({dim: (dim, values)})
+            if group not in known_groups:
+                ds = ds.assign_coords(step=("step", pd.to_timedelta(steps, unit="h").values))
+                if group in coords:
+                    extra = coords[group].drop_vars(
+                        [v for v in coords[group].variables if v in ds.variables]
+                    )
+                    ds = ds.assign_coords(
+                        {
+                            k: extra[k]
+                            for k in extra.variables
+                            if set(extra[k].dims) <= set(SPATIAL) or not extra[k].dims
+                        }
+                    )
+            ds.vz.to_icechunk(session.store, group=group.lstrip("/") or None, mode="a")
+        logger.info(
+            f"{self.name}: added {len(new)} variable(s) first seen in this run, e.g. "
+            f"{', '.join(f'{g}/{n}' for g, n in new[:3])}"
+        )
+
     def _write(self, prefix, schema, it, variables, coords) -> bool:
         steps = self.product.steps
         first = schema is None
@@ -482,6 +561,11 @@ class NestVirtualProvider:
                         values if have is None else np.union1d(have, values)
                     )
             schema = _Schema(arrays=arrays, levels=levels)
+
+        repo = self.repo(prefix)
+        session = repo.writable_session("main")
+        if not first:
+            self._extend(session, schema, variables, coords)
 
         by_group: Dict[str, Dict[str, Any]] = {}
         for (group, name), meta in schema.arrays.items():
@@ -506,8 +590,6 @@ class NestVirtualProvider:
         if missing:
             logger.debug(f"{self.name}: {it} lacks {len(missing)} stored variable(s); left missing")
 
-        repo = self.repo(prefix)
-        session = repo.writable_session("main")
         for group, data in sorted(by_group.items()):
             ds = xr.Dataset(
                 {name: xr.Variable(dims, ma) for name, (ma, dims) in data.items()},

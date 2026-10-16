@@ -32,12 +32,12 @@ def test_product_urls():
     )
 
 
-def test_stores_sit_under_the_nwp_virtualized_prefix():
+def test_stores_sit_under_the_regional_virtualized_prefix():
     assert {p.store_prefix for p in PRODUCTS.values()} == {
-        "bkr/nwp/virtualized/hrrr_alaska_sfc.icechunk",
-        "bkr/nwp/virtualized/hrrr_alaska_prs.icechunk",
-        "bkr/nwp/virtualized/hrrr_alaska_nat.icechunk",
-        "bkr/nwp/virtualized/nam_hawaii.icechunk",
+        "bkr/dmi/virtualized/hrrr_alaska_sfc.icechunk",
+        "bkr/dmi/virtualized/hrrr_alaska_prs.icechunk",
+        "bkr/dmi/virtualized/hrrr_alaska_nat.icechunk",
+        "bkr/dmi/virtualized/nam_hawaii.icechunk",
     }
     assert PRODUCTS["hrrr_alaska_nat"].steps == tuple(range(49))
     assert PRODUCTS["nam_hawaii"].steps == tuple(range(61))
@@ -81,14 +81,16 @@ def test_a_run_inside_the_schema_fits():
     assert _misfits({("/isobar/instant", "tmp"): var}, _schema()) == []
 
 
+def test_a_variable_never_seen_extends_the_store_rather_than_forking_it():
+    """A short run creates a store without the fields only later steps carry; the first
+    48 h run must add them, not start a generation."""
+    smoke = _Var(dims=("y", "x"), attrs={}, levels={}, spatial=(3, 4))
+    assert _misfits({("/sfc/instant", "smoke"): smoke}, _schema()) == []
+
+
 @pytest.mark.parametrize(
     ("key", "var", "reason"),
     [
-        (
-            ("/sfc/instant", "smoke"),
-            _Var(dims=("y", "x"), attrs={}, levels={}, spatial=(3, 4)),
-            "not in the store",
-        ),
         (
             ("/isobar/instant", "tmp"),
             _Var(
@@ -109,18 +111,33 @@ def test_a_run_inside_the_schema_fits():
             ),
             "dims",
         ),
+        (
+            ("/sfc/instant", "smoke"),
+            _Var(dims=("y", "x"), attrs={}, levels={}, spatial=(5, 4)),
+            "grid",
+        ),
+        (
+            ("/isobar/instant", "rh"),
+            _Var(
+                dims=("isobar", "y", "x"),
+                attrs={},
+                levels={"isobar": np.array([100.0])},
+                spatial=(3, 4),
+            ),
+            "outside the store's axis",
+        ),
     ],
-    ids=["new-variable", "new-level", "new-grid"],
+    ids=["new-level", "new-grid", "new-variable-on-another-grid", "new-variable-off-the-axis"],
 )
-def test_a_run_with_something_new_does_not_fit(key, var, reason):
+def test_a_change_to_something_stored_forks_a_generation(key, var, reason):
     misfits = _misfits({key: var}, _schema())
     assert len(misfits) == 1 and reason in misfits[0]
 
 
 def test_generations_are_listed_without_creating_any(local_config):
     provider = NestVirtualProvider("hrrr_alaska_sfc", config=local_config)
-    assert provider.generations() == ["bkr/nwp/virtualized/hrrr_alaska_sfc.icechunk"]
-    parent = local_config.local_store_path("bkr/nwp/virtualized")
+    assert provider.generations() == ["bkr/dmi/virtualized/hrrr_alaska_sfc.icechunk"]
+    parent = local_config.local_store_path("bkr/dmi/virtualized")
     assert not parent.exists() or not any(parent.iterdir())
 
     parent.mkdir(parents=True, exist_ok=True)
@@ -131,9 +148,9 @@ def test_generations_are_listed_without_creating_any(local_config):
     ):
         (parent / name).mkdir()
     assert provider.generations() == [
-        "bkr/nwp/virtualized/hrrr_alaska_sfc.icechunk",
-        "bkr/nwp/virtualized/hrrr_alaska_sfc_02122020.icechunk",
-        "bkr/nwp/virtualized/hrrr_alaska_sfc_14102026.icechunk",
+        "bkr/dmi/virtualized/hrrr_alaska_sfc.icechunk",
+        "bkr/dmi/virtualized/hrrr_alaska_sfc_02122020.icechunk",
+        "bkr/dmi/virtualized/hrrr_alaska_sfc_14102026.icechunk",
     ]
 
 
@@ -141,7 +158,7 @@ def test_nothing_stored_means_every_run_is_missing(local_config):
     provider = NestVirtualProvider("nam_hawaii", config=local_config)
     runs = pd.date_range("2021-09-16", periods=3, freq="6h")
     assert provider.missing_timesteps(runs) == list(runs)
-    parent = local_config.local_store_path("bkr/nwp/virtualized")
+    parent = local_config.local_store_path("bkr/dmi/virtualized")
     assert not parent.exists() or not any(parent.iterdir())
 
 
