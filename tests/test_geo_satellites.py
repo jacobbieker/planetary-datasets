@@ -376,6 +376,8 @@ def test_definitions_build_from_the_assets():
         "mtg_fdhi_download",
         "mtg_fdlr_download",
         "mtg_hub_upload",
+        "mtg_irs_l1",
+        "mtg_irs_l1_lac4_hourly",
         "eumetsat_iodc_lrv",
     }
 

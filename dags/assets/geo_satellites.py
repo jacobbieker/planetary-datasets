@@ -1,6 +1,6 @@
 """Dagster assets for the non-GOES geostationary imagers.
 
-Three archives, three shapes of work:
+Four archives, four shapes of work:
 
 * **GK-2A AMI** and **Himawari AHI** are ingested as *virtual references*. No
   pixel data is copied — each partition records the chunk layout of one day of
@@ -9,6 +9,9 @@ Three archives, three shapes of work:
   :mod:`planetary_datasets.providers.virtualized`.
 * **MTG FCI** is pulled from the EUMETSAT Data Store over ``eumdac``, an hour
   of repeat cycles at a time, and lands as netCDF on local disk.
+* **MTG IRS** L1 spectral soundings are pulled from the same Data Store and written to
+  Icechunk stores under ``bkr/geo`` by the providers in
+  :mod:`planetary_datasets.providers.eumetsat.mtg_irs`, one store per collection.
 * **MSG RSS (IODC)** is produced by the ``sat-etl`` container, which this
   module only drives through Dagster Pipes.
 
@@ -31,12 +34,14 @@ postponed (string) annotation is rejected outright.
 import datetime as dt
 
 import dagster as dg
+import pandas as pd
 from dagster import AssetExecutionContext
 from dagster_docker import PipesDockerClient
 from loguru import logger
 
 from planetary_datasets.config import get_config
 from planetary_datasets.providers.eumetsat import mtg as mtg_provider
+from planetary_datasets.providers.eumetsat import mtg_irs
 from planetary_datasets.providers.virtualized import gk2a_ami_fd, himawari_isatss
 
 # =============================================================================
@@ -77,6 +82,13 @@ himawari9_partitions = dg.MultiPartitionsDefinition(
 mtg_partitions = dg.HourlyPartitionsDefinition(
     start_date=mtg_provider.ARCHIVE_START.strftime("%Y-%m-%d-%H:%M"),
     end_offset=-3,
+)
+
+#: One hour per partition, matching the IRS providers' ``window``: that window is what decides
+#: whether a partition is already stored.
+mtg_irs_partitions = dg.HourlyPartitionsDefinition(
+    start_date=mtg_irs.ARCHIVE_START.strftime("%Y-%m-%d-%H:%M"),
+    end_offset=-1,
 )
 
 msg_partitions = dg.MonthlyPartitionsDefinition(start_date="2019-01-01", end_offset=-1)
@@ -274,6 +286,47 @@ def mtg_hub_upload_asset(context: AssetExecutionContext) -> dg.MaterializeResult
 
 
 # =============================================================================
+# MTG IRS L1 spectral soundings (EUMETSAT Data Store -> bkr/geo/mtg_irs_*.icechunk)
+# =============================================================================
+def _mtg_irs_asset(provider_cls: type[mtg_irs.MtgIrsProvider]) -> dg.AssetsDefinition:
+    """One hourly asset per IRS collection, each the only writer of its own store."""
+
+    @dg.asset(
+        name=provider_cls.name,
+        description=f"{provider_cls.__doc__} Collection {provider_cls.collection_id}.",
+        metadata={
+            "source": dg.MetadataValue.text("eumetsat-datastore"),
+            "collection": dg.MetadataValue.text(provider_cls.collection_id),
+            "store": dg.MetadataValue.text(provider_cls.store_prefix),
+        },
+        partitions_def=mtg_irs_partitions,
+        # A pool per store rather than the shared "eumetsat" key: an hour of IRS is ~20 GB
+        # and would hold the FCI and IODC downloads up for as long as it ran.
+        tags={**_LONG_RUNNING, "dagster/concurrency_key": provider_cls.name.replace("_", "-")},
+        retry_policy=dg.RetryPolicy(max_retries=2, delay=300),
+    )
+    def _asset(context: AssetExecutionContext) -> dg.MaterializeResult:
+        it = pd.Timestamp(context.partition_time_window.start).tz_localize(None)
+        provider = provider_cls()
+        written = provider.run_partition(it)
+        if not written:
+            context.log.info(f"{provider.name}: nothing written for {it}")
+        return dg.MaterializeResult(
+            metadata={
+                "store": dg.MetadataValue.text(provider.store_path),
+                "partition_start": dg.MetadataValue.text(str(it)),
+                "written": dg.MetadataValue.bool(written),
+            }
+        )
+
+    return _asset
+
+
+mtg_irs_l1_asset = _mtg_irs_asset(mtg_irs.MtgIrsL1Provider)
+mtg_irs_l1_lac4_hourly_asset = _mtg_irs_asset(mtg_irs.MtgIrsL1Lac4HourlyProvider)
+
+
+# =============================================================================
 # MSG SEVIRI Rapid Scan Service, Indian Ocean (EUMETSAT, via the sat-etl image)
 # =============================================================================
 #: Where the sat-etl container writes, inside the container.
@@ -322,5 +375,7 @@ ASSETS = [
     mtg_fdhi_download_asset,
     mtg_fdlr_download_asset,
     mtg_hub_upload_asset,
+    mtg_irs_l1_asset,
+    mtg_irs_l1_lac4_hourly_asset,
     eumetsat_iodc_lrv_asset,
 ]
