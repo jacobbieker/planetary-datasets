@@ -212,9 +212,18 @@ def main(argv) -> int:
                     staged = list(pool.map(lambda it: stager.stage(it, root), batch))
             for index, (it, ok) in enumerate(zip(batch, staged), start=offset + 1):
                 started = time.time()
+                if not ok:
+                    # Usually a frame missing upstream rather than an outage, so it does not
+                    # count toward the failure streak: a run of gaps would otherwise stop the
+                    # lane at the same hours on every restart. The hour stays missing and is
+                    # tried again next pass.
+                    empty += 1
+                    print(
+                        f"[{index:6d}/{len(todo)}] {it} unstaged (see the warning above)",
+                        flush=True,
+                    )
+                    continue
                 try:
-                    if not ok:
-                        raise RuntimeError("staging with the earth2studio image failed")
                     did_write = provider.run_partition(it, check_present=False)
                     if stager:
                         provider.discard_staged(it, settled=did_write)
