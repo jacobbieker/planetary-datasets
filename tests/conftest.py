@@ -65,6 +65,8 @@ ISOLATED_ENV_VARS = [
     "AMDAR_BUFR_DIR",
     "AMDAR_PB2NC_CONFIG",
     "PB2NC_BINARY",
+    "MET_IMAGE",
+    "NCEP_PREPBUFR_WORKERS",
     "IGRA_STATION_DIR",
     "MEPS_ANDOYA_BUCKET",
     "IFS_REGRID_BUCKET",
@@ -154,7 +156,10 @@ def sample_dataset():
 
     return xr.Dataset(
         {
-            "temperature": (("time", "latitude", "longitude"), np.zeros((1, 4, 5), dtype="float32")),
+            "temperature": (
+                ("time", "latitude", "longitude"),
+                np.zeros((1, 4, 5), dtype="float32"),
+            ),
             "pressure": (("time", "latitude", "longitude"), np.ones((1, 4, 5), dtype="float32")),
         },
         coords={

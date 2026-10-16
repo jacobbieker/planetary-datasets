@@ -16,14 +16,20 @@ pool). Three behaviours of the originals were deliberately changed:
   a *subset*, so every header after the first read another header's observations. It is
   now a vectorised gather through the header-index array.
 
-The ``amdar_download`` asset fetches GDAS PREPBUFR from NCAR GDEX and runs ``pb2nc`` in
-the MET Docker image (:data:`STAGE_SCRIPT`), staging NetCDF under ``<bufr_dir>/<YYYYMMDD>``.
-Raw PREPBUFR files already in ``bufr_dir`` are still converted with a local ``pb2nc``.
+The archive itself -- every GDAS cycle from NCAR GDEX d337000, one row per observation
+point, in ``bkr/obs/ncep_amdar.icechunk`` and ``bkr/obs/ncep_adpupa.icechunk`` -- is
+:class:`~planetary_datasets.providers.observations.ncep_prepbufr.NCEPUpperAirProvider`,
+which reuses the pb2nc plumbing here and is what the ``amdar_download`` and
+``amdar_observations`` assets run. :class:`AMDARProvider` remains for converting a local
+directory of PREPBUFR files, optionally cropped to a box, into the long one-row-per-value
+table. When ``pb2nc`` is not installed, :func:`run_pb2nc_docker` runs it from the MET image
+(``MET_IMAGE``, default :data:`DEFAULT_MET_IMAGE`).
 
 Environment:
     ``AMDAR_BUFR_DIR``      Directory holding the raw PREPBUFR files. Defaults to
                             ``<PLANETARY_DATASETS_DATA_DIR>/amdar``.
     ``PB2NC_BINARY``        Path to MET's ``pb2nc``. Defaults to ``pb2nc`` on ``PATH``.
+    ``MET_IMAGE``           MET Docker image for :func:`run_pb2nc_docker`.
     ``AMDAR_PB2NC_CONFIG``  A MET pb2nc configuration file. When unset, the aircraft-only
                             configuration in this module is written to the scratch
                             directory and used.
@@ -62,7 +68,7 @@ PB2NC_CONFIG_TEMPLATE = """\
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-message_type = [ "AIRCAR", "AIRCFT" ];
+message_type = [ {message_types} ];
 
 message_type_group_map = [
    {{ key = "SURFACE"; val = "ADPSFC,SFCSHP,MSONET";               }},
@@ -101,7 +107,7 @@ level_range = {{
 
 level_category = [];
 
-obs_bufr_var = [];
+obs_bufr_var = [{obs_bufr_var}];
 obs_bufr_map = [];
 
 obs_prepbufr_map = [
@@ -124,7 +130,7 @@ obs_prepbufr_map = [
    {{ key = "D_MLCAPE"; val = "MLCAPE"; }}
 ];
 
-quality_mark_thresh = 5;
+quality_mark_thresh = {quality_mark_thresh};
 event_stack_flag    = TOP;
 
 time_summary = {{
@@ -186,6 +192,7 @@ def prepbufr_urls(day: pd.Timestamp) -> List[str]:
     day = pd.Timestamp(day).normalize()
     cycles = [(day, h) for h in GDAS_CYCLES] + [(day + pd.Timedelta(1, "D"), 0)]
     return [GDEX_PREPBUFR_URL.format(day=d, hour=h) for d, h in cycles]
+
 
 #: Observation types whose "unit" makes them a code rather than a measurement. The
 #: original dropped these and so do we: mixing a code table into a float column of
@@ -287,11 +294,15 @@ def write_pb2nc_config(
     tmp_dir: str | os.PathLike,
     obs_window: tuple[int, int] = (-21600, 21600),
     version: str = PB2NC_CONFIG_VERSION,
+    **options,
 ) -> pathlib.Path:
-    """Write the built-in aircraft pb2nc configuration and return its path."""
+    """Write the built-in aircraft pb2nc configuration and return its path.
+
+    ``options`` are passed to :func:`render_pb2nc_config`.
+    """
     dest = pathlib.Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(render_pb2nc_config(tmp_dir, obs_window, version))
+    dest.write_text(render_pb2nc_config(tmp_dir, obs_window, version, **options))
     return dest
 
 
@@ -299,9 +310,27 @@ def render_pb2nc_config(
     tmp_dir: str | os.PathLike,
     obs_window: tuple[int, int] = (-21600, 21600),
     version: str = PB2NC_CONFIG_VERSION,
+    message_types: Sequence[str] = ("AIRCAR", "AIRCFT"),
+    obs_bufr_var: Sequence[str] = (),
+    quality_mark_thresh: int = 5,
 ) -> str:
-    """The built-in aircraft pb2nc configuration as text."""
+    """The pb2nc configuration as text; the defaults are the aircraft-only configuration.
+
+    Args:
+        tmp_dir: Scratch directory pb2nc blocks the input file into.
+        obs_window: Seconds either side of the file's centre time to keep.
+        version: MET version the configuration declares.
+        message_types: PREPBUFR message types to keep, e.g. ``ADPUPA`` for radiosondes.
+        obs_bufr_var: BUFR mnemonics to write, e.g. ``TOB``. Empty leaves MET's choice.
+        quality_mark_thresh: Keep observations whose PREPBUFR quality mark is at most
+            this. 15 keeps everything, including rejected and purged reports.
+    """
     return PB2NC_CONFIG_TEMPLATE.format(
+        message_types=", ".join(f'"{name}"' for name in message_types),
+        obs_bufr_var=(" " + ", ".join(f'"{name}"' for name in obs_bufr_var) + " ")
+        if obs_bufr_var
+        else "",
+        quality_mark_thresh=int(quality_mark_thresh),
         obs_window_beg=int(obs_window[0]),
         obs_window_end=int(obs_window[1]),
         tmp_dir=str(tmp_dir),
@@ -351,6 +380,90 @@ def run_pb2nc(
         partial.unlink(missing_ok=True)
         raise RuntimeError(f"pb2nc reported success but wrote no output for {input_path.name}")
 
+    os.replace(partial, output_path)
+    return output_path
+
+
+#: The MET image used when ``pb2nc`` is not installed. ``MET_IMAGE`` overrides it, the same
+#: variable the ``amdar_download`` Dagster asset reads.
+DEFAULT_MET_IMAGE = "dtcenter/met:12.2.2"
+
+#: Scratch directory inside the MET image, for the ``tmp_dir`` of its configuration.
+CONTAINER_TMP_DIR = "/tmp"
+
+
+def met_image() -> str:
+    """The MET image :func:`run_pb2nc_docker` runs."""
+    return os.environ.get("MET_IMAGE") or DEFAULT_MET_IMAGE
+
+
+def run_pb2nc_docker(
+    input_path: str | os.PathLike,
+    output_path: str | os.PathLike,
+    config_path: str | os.PathLike,
+    image: str | None = None,
+    memory_gb: float = 4,
+    timeout: float | None = 3600,
+) -> pathlib.Path:
+    """Convert one PREPBUFR file with ``pb2nc`` from the MET Docker image.
+
+    The input, output and configuration directories are bind-mounted and the container
+    runs as the calling user, so the output is owned by whoever runs this. The
+    configuration's ``tmp_dir`` must be a path inside the container, such as
+    :data:`CONTAINER_TMP_DIR`. Same contract as :func:`run_pb2nc`: the output appears
+    complete or not at all, and an existing output is reused.
+
+    Raises:
+        MissingToolError: Docker is not installed.
+        RuntimeError: The container failed or wrote nothing.
+    """
+    input_path = pathlib.Path(input_path).resolve()
+    output_path = pathlib.Path(output_path).resolve()
+    config_path = pathlib.Path(config_path).resolve()
+    if output_path.is_file() and output_path.stat().st_size > 0:
+        logger.debug(f"reusing existing {output_path.name}")
+        return output_path
+    docker = shutil.which("docker")
+    if docker is None:
+        raise MissingToolError(
+            "decoding PREPBUFR needs MET's pb2nc, either installed (PB2NC_BINARY) or run "
+            "from the MET Docker image, but neither pb2nc nor docker was found"
+        )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    partial = output_path.with_name(output_path.name + ".part")
+    partial.unlink(missing_ok=True)
+
+    command = [docker, "run", "--rm", "-m", f"{int(memory_gb)}g"]
+    if hasattr(os, "getuid"):
+        command += ["-u", f"{os.getuid()}:{os.getgid()}"]
+    command += [
+        "-v",
+        f"{input_path.parent}:/pb2nc/in:ro",
+        "-v",
+        f"{output_path.parent}:/pb2nc/out",
+        "-v",
+        f"{config_path.parent}:/pb2nc/cfg:ro",
+        image or met_image(),
+        "pb2nc",
+        f"/pb2nc/in/{input_path.name}",
+        f"/pb2nc/out/{partial.name}",
+        f"/pb2nc/cfg/{config_path.name}",
+    ]
+    logger.debug("running " + " ".join(command))
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(f"pb2nc in Docker timed out on {input_path.name}") from exc
+    if result.returncode != 0:
+        partial.unlink(missing_ok=True)
+        tail = (result.stderr.strip() or result.stdout.strip())[-2000:]
+        raise RuntimeError(
+            f"pb2nc in Docker failed on {input_path.name} (exit {result.returncode}): {tail}"
+        )
+    if not partial.is_file() or partial.stat().st_size == 0:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(f"pb2nc in Docker wrote no output for {input_path.name}")
     os.replace(partial, output_path)
     return output_path
 
@@ -640,9 +753,7 @@ class AMDARProvider(StagedFilesMixin, PointObservationProvider):
         if raw:
             work_dir = pathlib.Path(temp_dir) if temp_dir else self.config.scratch_dir
             config_path = self.pb2nc_config_path(work_dir)
-            converted += convert_many(
-                raw, work_dir / "amdar_nc", config_path, workers=self.workers
-            )
+            converted += convert_many(raw, work_dir / "amdar_nc", config_path, workers=self.workers)
         if not converted:
             raise RuntimeError(f"pb2nc produced no output for any of {len(input_files)} file(s)")
 
