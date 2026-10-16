@@ -87,6 +87,15 @@ def _nest(name: str) -> Callable[[], Any]:
     return build
 
 
+def _hafs(name: str) -> Callable[[], Any]:
+    def build():
+        from planetary_datasets.providers.virtualized.hafs import HafsVirtualProvider
+
+        return HafsVirtualProvider(name)
+
+    return build
+
+
 def _catchup(name: str) -> Callable[[], Any]:
     """A provider from the catch-up table, by store name."""
 
@@ -138,6 +147,13 @@ LANES: dict[str, Lane] = {
     "hrrr_alaska_prs": Lane(_nest("hrrr_alaska_prs"), "2018-07-11T18:00", "3h", 4),
     "hrrr_alaska_nat": Lane(_nest("hrrr_alaska_nat"), "2018-07-11T18:00", "3h", 4),
     "nam_hawaii": Lane(_nest("nam_hawaii"), "2021-09-16", "6h", 5),
+    # Virtual references to HAFS-A / HAFS-B, one storm-run per row. A partition is a cycle
+    # (every storm in it); the last step lands ~6.3 h after the cycle.
+    **{
+        f"hafs_{v}_{d}": Lane(_hafs(f"hafs_{v}_{d}"), "2023-06-19T18:00", "6h", 7)
+        for v in ("a", "b")
+        for d in ("storm", "parent")
+    },
     "geos_v2": Lane(_catchup("geos_v2"), "2026-01-01", "15min", 30),
     "ifs_analysis": Lane(_catchup("ifs_analysis"), "2016-01-01", "1D", 48),
     "opera_rainfall": Lane(_catchup("opera_rainfall"), "2018-01-01", "1h", 2, opera=True),

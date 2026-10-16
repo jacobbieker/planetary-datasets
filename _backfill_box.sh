@@ -56,6 +56,14 @@ declare -A LANES=(
   [hrrr_alaska_prs]="_backfill_lanes.py hrrr_alaska_prs --threads 2 --pause 7200"
   [hrrr_alaska_nat]="_backfill_lanes.py hrrr_alaska_nat --threads 2 --pause 7200"
   [nam_hawaii]="_backfill_lanes.py nam_hawaii --threads 2 --pause 7200"
+  # HAFS-A / HAFS-B virtual stores (bkr/dmi/virtualized/hafs_*), from 2023-06-19T18.
+  [hafs_a_storm]="_backfill_lanes.py hafs_a_storm --threads 2 --pause 7200"
+  [hafs_a_parent]="_backfill_lanes.py hafs_a_parent --threads 2 --pause 7200"
+  [hafs_b_storm]="_backfill_lanes.py hafs_b_storm --threads 2 --pause 7200"
+  [hafs_b_parent]="_backfill_lanes.py hafs_b_parent --threads 2 --pause 7200"
+  # ICON v1 Global from the Source Cooperative archive, oldest run first; one fresh worker
+  # per run, incomplete runs skipped and logged. Moved here from aero on 2026-10-16.
+  [icon_v1_global]="scripts/icon_v1_backfill.py global --skipped-log logs/icon_v1_global_skipped.tsv"
   # AOML / OSMC marine observations: bkr/aoml/v2, 2012 onward, then a pass every two hours.
   [osmc_ragged]="_backfill_lanes.py osmc_ragged --threads 4 --pause 7200"
   [ifs_analysis]="_backfill_lanes.py ifs_analysis --threads 8"
