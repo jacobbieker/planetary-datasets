@@ -166,6 +166,11 @@ class BaseProvider(ABC):
     #: Explicit per-variable overrides, by exact name. Consulted before :attr:`keepbits`.
     keepbits_by_variable: dict[str, int | None] = {}
 
+    #: Per-variable encoding applied when the store is created, merged over the default
+    #: compression. For keeping a packed integer source packed rather than storing it as
+    #: the floats it decodes to. Has no effect on a store that already exists.
+    encoding_overrides: dict[str, dict] = {}
+
     def keepbits_for(self, variable: str) -> int | None:
         """Mantissa bits to keep for one variable, or None to store it exactly."""
         if variable in self.keepbits_by_variable:
@@ -199,6 +204,7 @@ class BaseProvider(ABC):
             # writer itself tolerates.
             message=f"{self.name}: {np.atleast_1d(processed[self.append_dim].values)[0]}",
             alignment_coords=self.alignment_coords,
+            encoding_overrides=self.encoding_overrides,
         )
 
     @staticmethod

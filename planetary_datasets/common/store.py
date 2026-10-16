@@ -12,7 +12,7 @@ import itertools
 import random
 import time
 import warnings
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 import icechunk
 import numpy as np
@@ -532,6 +532,7 @@ def write_to_icechunk(
     alignment_coords: Iterable[str] = ALIGNMENT_COORDS,
     require_monotonic: bool = False,
     attempts: int = COMMIT_ATTEMPTS,
+    encoding_overrides: Mapping[str, Mapping] | None = None,
 ) -> bool:
     """Write ``ds`` to ``repo``, creating the store or adding to it along ``append_dim``.
 
@@ -564,6 +565,10 @@ def write_to_icechunk(
             dropped steps are not written anywhere. For stores that must stay sorted at
             every instant and would rather keep a visible gap.
         attempts: How many times to retry a commit that races another writer.
+        encoding_overrides: Per-variable encoding merged over :func:`build_encoding` when
+            the store is created, e.g. ``{"radiance": {"dtype": "int16", "scale_factor":
+            ...}}`` to keep a packed source packed. Appends ignore it: xarray encodes them
+            with the encoding already stored, which is what keeps them consistent.
     """
     if append_dim not in ds.coords:
         raise ValueError(f"dataset has no {append_dim!r} coordinate to append along")
@@ -578,6 +583,7 @@ def write_to_icechunk(
                 check_vars=check_vars,
                 alignment_coords=alignment_coords,
                 require_monotonic=require_monotonic,
+                encoding_overrides=encoding_overrides,
             )
         except RACE_ERRORS as exc:
             # Another writer committed under us. Everything the decision rested on - what
@@ -600,6 +606,7 @@ def _write_once(
     check_vars: bool,
     alignment_coords: Iterable[str],
     require_monotonic: bool,
+    encoding_overrides: Mapping[str, Mapping] | None = None,
 ) -> bool:
     """One attempt at :func:`write_to_icechunk`; raises on a raced commit."""
     session = repo.writable_session("main")
@@ -622,8 +629,12 @@ def _write_once(
     incoming = np.atleast_1d(ds[append_dim].values)
 
     if first_write:
+        encoding = build_encoding(ds, append_dim=append_dim)
+        for name, extra in (encoding_overrides or {}).items():
+            if name in ds.variables:
+                encoding[name] = {**encoding.get(name, {}), **extra}
         with quiet_timedelta_decoding():
-            to_icechunk(ds, session, encoding=build_encoding(ds, append_dim=append_dim))
+            to_icechunk(ds, session, encoding=encoding)
         session.commit(message or f"Initial write of {append_dim} {incoming[0]}")
         logger.info(f"created store with {ds.sizes.get(append_dim, 1)} step(s)")
         return True
