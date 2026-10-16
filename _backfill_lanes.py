@@ -104,6 +104,18 @@ def _ncep_upper_air():
     return NCEPUpperAirProvider(prefetch_workers=4)
 
 
+def _provider(module: str, cls: str, **kwargs) -> Callable[[], Any]:
+    """A provider class from ``planetary_datasets.providers.<module>``, built lazily."""
+
+    def build():
+        import importlib
+
+        found = importlib.import_module(f"planetary_datasets.providers.{module}")
+        return getattr(found, cls)(**kwargs)
+
+    return build
+
+
 def _catchup(name: str) -> Callable[[], Any]:
     """A provider from the catch-up table, by store name."""
 
@@ -147,6 +159,17 @@ LANES: dict[str, Lane] = {
     # NCEP ADP upper air (GDEX d337000): aircraft to bkr/obs/ncep_amdar, sondes to
     # bkr/obs/ncep_adpupa. The full-aircraft 48 h files land ~58-70 h after the cycle.
     "ncep_upper_air": Lane(_ncep_upper_air, "1997-05-01T00:00", "6h", 72),
+    # MRMS outside CONUS (CONUS is archived by dynamical.org): the AWS archive starts here.
+    **{
+        f"mrms_{region.lower()}": Lane(
+            _provider("mrms", "MRMSProvider", region=region), "2020-10-14", "1h", 2
+        )
+        for region in ("ALASKA", "CARIB", "GUAM", "HAWAII")
+    },
+    "silam_aerosol": Lane(_provider("silam", "SILAMAerosolProvider"), "2025-04-26", "1D", 48),
+    "metop_avhrr": Lane(_provider("polar", "MetopAvhrrProvider"), "2008-03-01", "4h", 6),
+    "metop_gome": Lane(_provider("polar", "MetopGomeProvider"), "2008-03-01", "1h", 6),
+    "nordic_radar": Lane(_provider("meps", "NordicReflectivityProvider"), "2020-01-01", "1D", 48),
     # A rolling ten-day bucket: anything older has already gone.
     "uk_marine": Lane(_uk_marine, "-10D", "1h", 2),
     # NOAA OSMC / AOML marine observations, ragged: osmc_all plus one store per platform
