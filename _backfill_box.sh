@@ -48,6 +48,16 @@ declare -A LANES=(
   # NCEP ADP upper-air (AMDAR/aircraft + radiosondes) from GDEX d337000, from 1997; decodes
   # with MET pb2nc in the dtcenter/met Docker image.
   [ncep_upper_air]="_backfill_lanes.py ncep_upper_air --threads 2 --pause 21600"
+  # MRMS outside CONUS (dynamical.org archives CONUS), SILAM aerosol, MetOp AVHRR and GOME,
+  # and the met.no Nordic radar mosaic.
+  [mrms_alaska]="_backfill_lanes.py mrms_alaska --threads 2"
+  [mrms_carib]="_backfill_lanes.py mrms_carib --threads 2"
+  [mrms_guam]="_backfill_lanes.py mrms_guam --threads 2"
+  [mrms_hawaii]="_backfill_lanes.py mrms_hawaii --threads 2"
+  [silam_aerosol]="_backfill_lanes.py silam_aerosol --threads 4 --pause 21600"
+  [metop_avhrr]="_backfill_lanes.py metop_avhrr --threads 4"
+  [metop_gome]="_backfill_lanes.py metop_gome --threads 2"
+  [nordic_radar]="_backfill_lanes.py nordic_radar --threads 2 --pause 21600"
   [mtg_irs_l1]="_backfill_mtg_irs.py mtg_irs_l1 --follow --threads 12 --downloads 16"
   [mtg_irs_l1_lac4_hourly]="_backfill_mtg_irs.py mtg_irs_l1_lac4_hourly --follow --threads 12 --downloads 16"
   # GMGSI and GEOS-CF v2 are near-realtime: once caught up, a pass every two hours.
@@ -82,6 +92,8 @@ declare -A LANES=(
 declare -A SCRIPTS=(
   [mars_pipeline]="_backfill_mars.sh"
   [sondehub]="_backfill_sondehub.sh"
+  # MeteoSwiss KENDA keeps ~a day upstream: a rolling 36 h window every 30 min.
+  [kenda]="_backfill_kenda.sh"
 )
 
 # The short-retention stores. Their sources keep a few days at most, so they are caught up
