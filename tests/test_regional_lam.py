@@ -123,7 +123,45 @@ def _hawaii_step(valid_time: str) -> xr.Dataset:
 def test_providers_keep_their_published_store(provider_cls, store_prefix):
     assert provider_cls.name
     assert provider_cls.append_dim == "time"
-    assert provider_cls.store_prefix == store_prefix
+    # A generational provider names its first generation as base_store_prefix; the store
+    # actually written to is settled per partition.
+    assert (
+        getattr(provider_cls, "base_store_prefix", None) or provider_cls.store_prefix
+    ) == store_prefix
+
+
+def test_harmonie_model_levels_roll_to_a_new_store_on_a_new_grid(local_config):
+    """A grid change starts a dated generation rather than being refused."""
+    import numpy as np
+    import xarray as xr
+
+    provider = dmi.DMIHarmonieModelLevelProvider(config=local_config)
+
+    def init_time(it: str, lat0: float) -> xr.Dataset:
+        lat = lat0 + np.arange(4.0)[:, None] + np.zeros((4, 3))
+        return xr.Dataset(
+            {"t": (("time", "step", "hybrid", "y", "x"), np.ones((1, 1, 2, 4, 3), "float32"))},
+            coords={
+                "time": [pd.Timestamp(it)],
+                "step": [pd.Timedelta(0, "h")],
+                "hybrid": [1, 2],
+                "latitude": (("y", "x"), lat),
+                "longitude": (("y", "x"), lat - 100),
+            },
+        )
+
+    old = init_time("2026-10-15T00:00", 60.0)
+    assert provider.write_to_icechunk(provider.store_for(old, None), old)
+    new = init_time("2026-10-16T00:00", 61.5)
+    assert provider.write_to_icechunk(provider.store_for(new, None), new)
+
+    assert provider.generations() == [
+        "bkr/dmi/harmonie_greenland_iceland_model_level.icechunk",
+        "bkr/dmi/harmonie_greenland_iceland_model_level_16102026.icechunk",
+    ]
+    assert provider.missing_timesteps(
+        pd.DatetimeIndex(["2026-10-15", "2026-10-16", "2026-10-17"])
+    ) == [pd.Timestamp("2026-10-17")]
 
 
 @pytest.mark.parametrize("module", [dmi, hrrr_alaska, hawaii_nam, kenda])
@@ -578,3 +616,36 @@ def test_run_partition_writes_and_then_skips(local_config, monkeypatch):
     stored = read_store(provider)
     assert pd.Timestamp(stored.time.values[0]) == it
     assert stored.sizes["step"] == 3
+
+
+def _curvilinear(lat0: float, noise: float = 0.0):
+    import numpy as np
+    import xarray as xr
+
+    lat = (lat0 + np.arange(5.0)[:, None] * 0.02 + np.zeros((5, 4))).astype("float32") + noise
+    return xr.Dataset(
+        {"t": (("time", "y", "x"), np.ones((1, 5, 4), "float32"))},
+        coords={
+            "time": [pd.Timestamp("2026-10-16")],
+            "latitude": (("y", "x"), lat.astype("float64")),
+            "longitude": (("y", "x"), (lat - 100).astype("float64")),
+        },
+    )
+
+
+def test_two_dimensional_grids_fingerprint_only_when_asked():
+    from planetary_datasets.common.generations import schema_fingerprint
+
+    coords = ("latitude", "longitude")
+    # Not asked: a moved 2-D domain is invisible, exactly as before, so existing stores keep
+    # the fingerprints they were created with.
+    assert schema_fingerprint(_curvilinear(60.0), "time") == schema_fingerprint(
+        _curvilinear(61.5), "time"
+    )
+    # Asked: a moved domain is a new schema, float32 construction noise is not.
+    assert schema_fingerprint(_curvilinear(60.0), "time", coords) != schema_fingerprint(
+        _curvilinear(61.5), "time", coords
+    )
+    assert schema_fingerprint(_curvilinear(60.0), "time", coords) == schema_fingerprint(
+        _curvilinear(60.0, noise=1e-6), "time", coords
+    )

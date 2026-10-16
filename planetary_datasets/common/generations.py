@@ -231,9 +231,22 @@ def _coord_digest(values: np.ndarray) -> str:
     array = np.asarray(values)
     if array.dtype.kind in "mM":
         array = array.astype("int64")
+    elif array.dtype.kind == "f" and array.ndim == 2:
+        return _curvilinear_digest(array.astype("float64"))
     elif array.dtype.kind == "f":
         return _float_axis_digest(array.astype("float64"))
     return hashlib.sha1(np.ascontiguousarray(array).tobytes()).hexdigest()[:16]
+
+
+def _curvilinear_digest(array: np.ndarray) -> str:
+    """Digest of a 2-D coordinate such as the latitude of a projected grid.
+
+    Described by its shape and its four edges, each digested as a 1-D axis, so the same
+    float noise is absorbed and a moved, stretched or resized domain still changes it.
+    """
+    edges = (array[0, :], array[-1, :], array[:, 0], array[:, -1])
+    parts = [repr(array.shape), *(_float_axis_digest(edge) for edge in edges)]
+    return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
 
 
 def _float_axis_digest(array: np.ndarray) -> str:
@@ -262,7 +275,9 @@ def _float_axis_digest(array: np.ndarray) -> str:
     return hashlib.sha1(repr(signature).encode()).hexdigest()[:16]
 
 
-def schema_fingerprint(ds: xr.Dataset, append_dim: str) -> str:
+def schema_fingerprint(
+    ds: xr.Dataset, append_dim: str, multi_dim_coords: tuple[str, ...] = ()
+) -> str:
     """A digest of everything an append has to agree with the store about.
 
     Three things go in:
@@ -275,17 +290,21 @@ def schema_fingerprint(ds: xr.Dataset, append_dim: str) -> str:
 
     Attributes, encoding, chunking and the data are all excluded: they vary run to run and
     splitting a store on them would create a generation per partition.
+
+    Only 1-D grid coordinates go in by default. ``multi_dim_coords`` adds coordinates of
+    any rank, such as the 2-D latitude/longitude of a projected regional model, whose
+    domain can move without the grid changing size. Opt-in, because adding them changes
+    the fingerprint of every store that has them.
     """
     variables = sorted((str(name), tuple(map(str, ds[name].dims))) for name in ds.data_vars)
     sizes = sorted((str(dim), int(size)) for dim, size in ds.sizes.items() if dim != append_dim)
     coords = sorted(
         (str(name), _coord_digest(ds[name].values))
         for name in ds.coords
-        if str(name) in GRID_COORDS and str(name) != append_dim and ds[name].ndim == 1
+        if str(name) != append_dim
+        and ((str(name) in GRID_COORDS and ds[name].ndim == 1) or str(name) in multi_dim_coords)
     )
-    payload = json.dumps(
-        {"variables": variables, "sizes": sizes, "coords": coords}, sort_keys=True
-    )
+    payload = json.dumps({"variables": variables, "sizes": sizes, "coords": coords}, sort_keys=True)
     return hashlib.sha1(payload.encode()).hexdigest()[:16]
 
 
@@ -294,7 +313,9 @@ EMPTY = "empty"
 DAMAGED = "damaged"
 
 
-def inspect_generation(config, prefix: str, append_dim: str) -> tuple[str, str | None]:
+def inspect_generation(
+    config, prefix: str, append_dim: str, multi_dim_coords: tuple[str, ...] = ()
+) -> tuple[str, str | None]:
     """Classify the store at ``prefix`` as empty, damaged, or holding a schema.
 
     The distinction is the whole point and getting it wrong is expensive. An *empty* store
@@ -328,7 +349,7 @@ def inspect_generation(config, prefix: str, append_dim: str) -> tuple[str, str |
         return DAMAGED, None
 
     try:
-        return "ok", schema_fingerprint(ds, append_dim)
+        return "ok", schema_fingerprint(ds, append_dim, multi_dim_coords)
     except Exception as exc:  # noqa: BLE001 - readable but un-fingerprintable is damaged
         logger.warning(f"{prefix}: cannot be fingerprinted ({type(exc).__name__}); leaving it")
         return DAMAGED, None
@@ -354,6 +375,7 @@ def resolve_generation(
     ds: xr.Dataset,
     append_dim: str,
     max_generations: int = MAX_GENERATIONS,
+    multi_dim_coords: tuple[str, ...] = (),
 ) -> str:
     """Return the store prefix ``ds`` should be written to.
 
@@ -365,7 +387,7 @@ def resolve_generation(
             either a genuinely long upgrade history or a fingerprint that is splitting the
             store on something it should be ignoring.
     """
-    wanted = schema_fingerprint(ds, append_dim)
+    wanted = schema_fingerprint(ds, append_dim, multi_dim_coords)
     candidates = existing_generations(config, base_prefix)
 
     # The base store is written to even when it does not exist yet: a brand new series has
@@ -375,7 +397,7 @@ def resolve_generation(
 
     empty: set[str] = set()
     for prefix in candidates[:max_generations]:
-        state, found = inspect_generation(config, prefix, append_dim)
+        state, found = inspect_generation(config, prefix, append_dim, multi_dim_coords)
 
         if state == EMPTY:
             # The base store being empty means a brand new series; claim it. A *dated*
@@ -470,6 +492,10 @@ class GenerationalStoreMixin:
     #: Logical name of the series, without a generation suffix.
     base_store_prefix: str
 
+    #: Coordinates of any rank to include in the schema fingerprint, beyond the 1-D grid
+    #: coordinates every generational store uses. See :func:`schema_fingerprint`.
+    fingerprint_multi_dim_coords: tuple[str, ...] = ()
+
     #: Set once a partition has been processed; the generation actually written to.
     _resolved_prefix: str | None = None
 
@@ -481,7 +507,11 @@ class GenerationalStoreMixin:
     def resolve_store(self, processed: xr.Dataset) -> str:
         """Settle which generation ``processed`` belongs to, and remember it."""
         prefix = resolve_generation(
-            self.config, self.base_store_prefix, processed, self.append_dim
+            self.config,
+            self.base_store_prefix,
+            processed,
+            self.append_dim,
+            multi_dim_coords=self.fingerprint_multi_dim_coords,
         )
         if prefix != self._resolved_prefix:
             self._resolved_prefix = prefix
