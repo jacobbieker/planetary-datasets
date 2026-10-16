@@ -50,6 +50,8 @@ declare -A LANES=(
   # GMGSI and GEOS-CF v2 are near-realtime: once caught up, a pass every two hours.
   [gmgsi_v3]="_backfill_gmgsi.py --follow --period 7200"
   [geos_v2]="_backfill_lanes.py geos_v2 --threads 8 --pause 7200"
+  # AOML / OSMC marine observations: bkr/aoml/v2, 2012 onward, then a pass every two hours.
+  [osmc_ragged]="_backfill_lanes.py osmc_ragged --threads 4 --pause 7200"
   [ifs_analysis]="_backfill_lanes.py ifs_analysis --threads 8"
   [opera_rainfall]="_backfill_lanes.py opera_rainfall --threads 4"
   [opera_dbz]="_backfill_lanes.py opera_dbz --threads 4"

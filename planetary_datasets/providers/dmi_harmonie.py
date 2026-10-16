@@ -22,6 +22,7 @@ import xarray as xr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
+from planetary_datasets.common.generations import GenerationalStoreMixin
 from planetary_datasets.common.grib import open_grib_datasets
 from planetary_datasets.providers.regional_lam_common import (
     chunk_present,
@@ -257,11 +258,21 @@ class DMIHarmonieProvider(_DMIHarmonieBase):
         return _drop_scalar_level_coords(merged, keep=("latitude", "longitude", "time", "step"))
 
 
-class DMIHarmonieModelLevelProvider(_DMIHarmonieBase):
-    """HARMONIE native model levels."""
+class DMIHarmonieModelLevelProvider(GenerationalStoreMixin, _DMIHarmonieBase):
+    """HARMONIE native model levels.
+
+    Generational: on 2026-10-16 every init time began to be refused because its latitude
+    no longer matched the store, so DMI changed the grid. DMI keeps only a few days, so a
+    refused init time is lost for good. A new grid now starts a store of its own,
+    ``..._model_level_<DDMMYYYY>.icechunk``, instead.
+    """
 
     name = "dmi_harmonie_model_level"
-    store_prefix = "bkr/dmi/harmonie_greenland_iceland_model_level.icechunk"
+    base_store_prefix = "bkr/dmi/harmonie_greenland_iceland_model_level.icechunk"
+    # The grid is 2-D latitude/longitude on y/x, which the fingerprint leaves out unless
+    # asked; without it a domain that moves but keeps its size would be routed back to the
+    # old store and refused there.
+    fingerprint_multi_dim_coords = ("latitude", "longitude")
     level_types = ("ML",)
     chunks = {"time": 1, "step": 1, "y": -1, "x": -1, "hybrid": -1}
 

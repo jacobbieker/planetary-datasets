@@ -72,6 +72,12 @@ def _uk_marine():
     return UKMarineObservationsProvider()
 
 
+def _osmc_ragged():
+    from planetary_datasets.providers.observations.osmc_ragged import OSMCRaggedProvider
+
+    return OSMCRaggedProvider()
+
+
 def _catchup(name: str) -> Callable[[], Any]:
     """A provider from the catch-up table, by store name."""
 
@@ -114,6 +120,9 @@ LANES: dict[str, Lane] = {
     ),
     # A rolling ten-day bucket: anything older has already gone.
     "uk_marine": Lane(_uk_marine, "-10D", "1h", 2),
+    # NOAA OSMC / AOML marine observations, ragged: osmc_all plus one store per platform
+    # type. Daily; a day is written 36 h after it starts, so late GTS reports have arrived.
+    "osmc_ragged": Lane(_osmc_ragged, "2012-01-01", "1D", 36),
     "geos_v2": Lane(_catchup("geos_v2"), "2026-01-01", "15min", 30),
     "ifs_analysis": Lane(_catchup("ifs_analysis"), "2016-01-01", "1D", 48),
     "opera_rainfall": Lane(_catchup("opera_rainfall"), "2018-01-01", "1h", 2, opera=True),
