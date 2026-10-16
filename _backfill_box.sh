@@ -30,28 +30,29 @@ UNAVAILABLE_PAUSE=${UNAVAILABLE_PAUSE:-86400}
 export PYTHONPATH=$PWD
 mkdir -p "$LOGS"
 
-# lane name -> command. Threads are per lane; there are ~20 lanes on 48 cores.
+# lane name -> command. Threads are per lane, sized for ~20 lanes on 96 cores (m7i.24xlarge);
+# the box is CPU-bound, so halve them on a 48-core machine.
 declare -A LANES=(
-  [metoffice_global_deterministic_10km]="_backfill_lanes.py metoffice_global_deterministic_10km --threads 4"
-  [metoffice_global_deterministic_10km_6hourly_24hr]="_backfill_lanes.py metoffice_global_deterministic_10km_6hourly_24hr --threads 4"
-  [metoffice_uk_deterministic_2km]="_backfill_lanes.py metoffice_uk_deterministic_2km --threads 4"
-  [metoffice_global_wave]="_backfill_lanes.py metoffice_global_wave --threads 2"
-  [metoffice_global_ocean_hourly]="_backfill_lanes.py metoffice_global_ocean_hourly --threads 2"
-  [metoffice_nws_wave]="_backfill_lanes.py metoffice_nws_wave --threads 2"
-  [metoffice_nws_ocean_surface_hourly]="_backfill_lanes.py metoffice_nws_ocean_surface_hourly --threads 2"
-  [metoffice_nws_ocean_depth_hourly]="_backfill_lanes.py metoffice_nws_ocean_depth_hourly --threads 4"
+  [metoffice_global_deterministic_10km]="_backfill_lanes.py metoffice_global_deterministic_10km --threads 8"
+  [metoffice_global_deterministic_10km_6hourly_24hr]="_backfill_lanes.py metoffice_global_deterministic_10km_6hourly_24hr --threads 8"
+  [metoffice_uk_deterministic_2km]="_backfill_lanes.py metoffice_uk_deterministic_2km --threads 8"
+  [metoffice_global_wave]="_backfill_lanes.py metoffice_global_wave --threads 4"
+  [metoffice_global_ocean_hourly]="_backfill_lanes.py metoffice_global_ocean_hourly --threads 4"
+  [metoffice_nws_wave]="_backfill_lanes.py metoffice_nws_wave --threads 4"
+  [metoffice_nws_ocean_surface_hourly]="_backfill_lanes.py metoffice_nws_ocean_surface_hourly --threads 4"
+  [metoffice_nws_ocean_depth_hourly]="_backfill_lanes.py metoffice_nws_ocean_depth_hourly --threads 8"
   # The marine observations: a pass every 12 hours over the bucket's rolling ten days.
   [uk_marine]="_backfill_lanes.py uk_marine --threads 1 --pause 43200"
-  [mtg_irs_l1]="_backfill_mtg_irs.py mtg_irs_l1 --follow --threads 6 --downloads 12"
-  [mtg_irs_l1_lac4_hourly]="_backfill_mtg_irs.py mtg_irs_l1_lac4_hourly --follow --threads 6 --downloads 12"
+  [mtg_irs_l1]="_backfill_mtg_irs.py mtg_irs_l1 --follow --threads 12 --downloads 16"
+  [mtg_irs_l1_lac4_hourly]="_backfill_mtg_irs.py mtg_irs_l1_lac4_hourly --follow --threads 12 --downloads 16"
   [gmgsi_v3]="_backfill_gmgsi.py --follow"
-  [geos_v2]="_backfill_lanes.py geos_v2 --threads 4"
-  [ifs_analysis]="_backfill_lanes.py ifs_analysis --threads 4"
-  [opera_rainfall]="_backfill_lanes.py opera_rainfall --threads 2"
-  [opera_dbz]="_backfill_lanes.py opera_dbz --threads 2"
-  [metop_sg_mws]="_backfill_lanes.py metop_sg_mws --threads 2"
-  [metop_sg_ro]="_backfill_lanes.py metop_sg_ro --threads 2"
-  [metop_sg_metimage]="_backfill_lanes.py metop_sg_metimage --threads 4"
+  [geos_v2]="_backfill_lanes.py geos_v2 --threads 8"
+  [ifs_analysis]="_backfill_lanes.py ifs_analysis --threads 8"
+  [opera_rainfall]="_backfill_lanes.py opera_rainfall --threads 4"
+  [opera_dbz]="_backfill_lanes.py opera_dbz --threads 4"
+  [metop_sg_mws]="_backfill_lanes.py metop_sg_mws --threads 4"
+  [metop_sg_ro]="_backfill_lanes.py metop_sg_ro --threads 4"
+  [metop_sg_metimage]="_backfill_lanes.py metop_sg_metimage --threads 8"
 )
 
 # Jobs with launchers of their own, which do their own restarting: the MARS archive (stops
