@@ -47,6 +47,9 @@ from planetary_datasets.providers.virtualized.virtual_repo import open_virtual_r
 LEDGER_ATTR = "ingested_runs"
 STORE_BASE = "bkr/dmi/virtualized"
 SPATIAL = ("y", "x")
+#: Attributes gribberish sets per file, which would mislabel every other run of a store.
+_RUN_SPECIFIC_ATTRS = ("reference_date", "forecast_date", "forecast_end_date")
+
 #: How many generations a store may reach before a run is refused rather than starting
 #: another: more than this means the schema is splitting on noise, not on upgrades.
 MAX_GENERATIONS = 12
@@ -109,6 +112,11 @@ PRODUCTS: Dict[str, NestProduct] = {
         ),
     )
 }
+
+
+def _field_attrs(attrs: dict) -> dict:
+    """A field's attributes without the ones that describe a single file."""
+    return {k: v for k, v in attrs.items() if k not in _RUN_SPECIFIC_ATTRS}
 
 
 # ---------------------------------------------------------------------------- parsing
@@ -227,7 +235,17 @@ class _Schema:
     levels: Dict[Tuple[str, str], np.ndarray]  # (group, level dim) -> values
 
 
-def _store_schema(repo) -> _Schema | None:
+def _store_schema(
+    repo, lead: Tuple[str, str] = ("init_time", "step"), skip: frozenset = frozenset()
+) -> _Schema | None:
+    """The schema of the store in ``repo``, or None while it is empty.
+
+    Args:
+        repo: The repository to read.
+        lead: The (append, step) dimensions every field array starts with.
+        skip: Arrays that carry those dimensions but are not GRIB fields, such as
+            per-run coordinates.
+    """
     try:
         root = zarr.open_group(repo.readonly_session("main").store, mode="r")
     except Exception:  # noqa: BLE001 - no group yet: an empty store
@@ -237,13 +255,15 @@ def _store_schema(repo) -> _Schema | None:
     def walk(group, path):
         for name, array in group.arrays():
             dims = tuple(array.metadata.dimension_names or ())
-            if dims[:2] == ("init_time", "step"):
+            if name in skip:
+                continue
+            if dims[:2] == lead:
                 arrays[(path, name)] = {
                     "dims": dims[2:],
                     "attrs": dict(array.attrs),
                     "spatial": tuple(array.shape[-2:]),
                 }
-            elif len(dims) == 1 and dims[0] == name and name not in ("init_time", "step"):
+            elif len(dims) == 1 and dims[0] == name and name not in lead:
                 levels[(path, name)] = np.asarray(array[:])
         for name, sub in group.groups():
             walk(sub, f"{path.rstrip('/')}/{name}")
@@ -252,11 +272,14 @@ def _store_schema(repo) -> _Schema | None:
     return _Schema(arrays=arrays, levels=levels) if arrays else None
 
 
-def _misfits(variables: Dict[Tuple[str, str], _Var], schema: _Schema) -> List[str]:
+def _misfits(
+    variables: Dict[Tuple[str, str], _Var], schema: _Schema, allow_new: bool = True
+) -> List[str]:
     """What of the run ``schema`` cannot hold, which forces a new generation.
 
     A variable the store has never seen is *not* a misfit: it is added to the store, with
-    every earlier run missing (see ``NestVirtualProvider._extend``). Only a change to
+    every earlier run missing (see ``NestVirtualProvider._extend``), unless ``allow_new`` is
+    False, for layouts that start a generation on any new field instead. Only a change to
     something already stored is: a variable on other dimensions, a different grid, or
     levels outside an axis the store already has.
     """
@@ -264,6 +287,9 @@ def _misfits(variables: Dict[Tuple[str, str], _Var], schema: _Schema) -> List[st
     spatial = {meta["spatial"] for meta in schema.arrays.values()}
     for key, var in variables.items():
         stored = schema.arrays.get(key)
+        if stored is None and not allow_new:
+            out.append(f"{key[0]}/{key[1]}: not in the store")
+            continue
         if stored is None:
             if spatial and var.spatial not in spatial:
                 out.append(f"{key[0]}/{key[1]}: grid {var.spatial} vs {sorted(spatial)}")
@@ -294,6 +320,7 @@ def _manifest_array(
     level_axes: List[np.ndarray],
     cells: Dict[Tuple[int, Tuple[Any, ...]], Tuple[str, int, int]],
     runs: int = 1,
+    lead_dim: str = "init_time",
 ):
     """``(init_time=runs, step, levels..., y, x)``: every message where it belongs, gaps
     empty. ``cells`` are placed in the first run; ``runs > 1`` with no cells gives the
@@ -327,8 +354,8 @@ def _manifest_array(
         chunk_shape=(1, 1, *([1] * len(level_sizes)), *spatial),
         fill_value=float("nan"),
         codecs=_gribberish_codecs(name, north_up=True),
-        attributes=attrs,
-        dimension_names=("init_time", "step", *dims),
+        attributes=_field_attrs(attrs),
+        dimension_names=(lead_dim, "step", *dims),
     )
     manifest = ChunkManifest.from_arrays(paths=paths, offsets=offsets, lengths=lengths)
     return ManifestArray(metadata=metadata, chunkmanifest=manifest)
@@ -338,6 +365,9 @@ class NestVirtualProvider:
     """Reference runs of one :class:`NestProduct` into its generational virtual store."""
 
     append_dim = "init_time"
+    #: Add a field first seen in a run to the store (missing for earlier runs) rather than
+    #: starting a generation. Off for layouts whose writer cannot extend a store.
+    extend_new_variables: bool = True
 
     def __init__(self, product: NestProduct | str, config: Config | None = None):
         self.product = PRODUCTS[product] if isinstance(product, str) else product
@@ -358,7 +388,7 @@ class NestVirtualProvider:
             self._repos[prefix] = open_virtual_repo(
                 prefix,
                 virtual_buckets=f"s3://{self.product.bucket}",
-                split_dim="init_time",
+                split_dim=self.append_dim,
                 split_size=self.product.split_size,
                 config=self.config,
             )
@@ -400,7 +430,7 @@ class NestVirtualProvider:
             repo = open_virtual_repo(
                 prefix,
                 virtual_buckets=f"s3://{self.product.bucket}",
-                split_dim="init_time",
+                split_dim=self.append_dim,
                 split_size=self.product.split_size,
                 config=self.config,
                 create=False,
@@ -427,6 +457,10 @@ class NestVirtualProvider:
             done |= self.ledger(prefix)
         return [pd.Timestamp(t) for t in desired if pd.Timestamp(t).isoformat() not in done]
 
+    def _read_schema(self, repo) -> _Schema | None:
+        """What the store in ``repo`` holds; overridden by layouts with other dimensions."""
+        return _store_schema(repo)
+
     def choose_generation(self, it: pd.Timestamp, variables) -> Tuple[str, _Schema | None]:
         """The newest generation whose schema covers the run, the base if nothing is
         stored yet, or a new dated generation when the run has fields none of them hold."""
@@ -434,14 +468,14 @@ class NestVirtualProvider:
         populated = []
         for prefix in prefixes:
             repo = self._existing_repo(prefix)
-            schema = _store_schema(repo) if repo is not None else None
+            schema = self._read_schema(repo) if repo is not None else None
             if schema is not None:
                 populated.append((prefix, schema))
         if not populated:
             return self.product.store_prefix, None
         reasons: List[str] = []
         for prefix, schema in reversed(populated):
-            misfits = _misfits(variables, schema)
+            misfits = _misfits(variables, schema, allow_new=self.extend_new_variables)
             if not misfits:
                 return prefix, schema
             reasons = reasons or misfits
@@ -519,7 +553,10 @@ class NestVirtualProvider:
         schema.levels.update(new_levels)
         for group, data in sorted(by_group.items()):
             ds = xr.Dataset(
-                {name: xr.Variable(dims, ma) for name, (ma, dims) in data.items()},
+                {
+                    name: xr.Variable(dims, ma, attrs=ma.metadata.attributes)
+                    for name, (ma, dims) in data.items()
+                },
                 coords={"init_time": history},
             )
             for (g, dim), values in new_levels.items():
@@ -543,6 +580,24 @@ class NestVirtualProvider:
             f"{self.name}: added {len(new)} variable(s) first seen in this run, e.g. "
             f"{', '.join(f'{g}/{n}' for g, n in new[:3])}"
         )
+
+    @staticmethod
+    def _heal_attrs(root, schema: _Schema, variables) -> None:
+        """Give stored fields that have no attributes the ones this run carries.
+
+        Stores written before attributes were passed to the writer have none, and an append
+        never sets them; this fills each one in once, in the run's own commit.
+        """
+        healed = 0
+        for (group, name), meta in schema.arrays.items():
+            var = variables.get((group, name))
+            if meta["attrs"] or var is None or not var.attrs:
+                continue
+            root[f"{group.strip('/')}/{name}"].attrs.update(_field_attrs(var.attrs))
+            meta["attrs"] = _field_attrs(var.attrs)
+            healed += 1
+        if healed:
+            logger.info(f"gave {healed} stored field(s) the attributes they were written without")
 
     def _write(self, prefix, schema, it, variables, coords) -> bool:
         steps = self.product.steps
@@ -592,7 +647,11 @@ class NestVirtualProvider:
 
         for group, data in sorted(by_group.items()):
             ds = xr.Dataset(
-                {name: xr.Variable(dims, ma) for name, (ma, dims) in data.items()},
+                # The writer takes attributes from the variable, not the array metadata.
+                {
+                    name: xr.Variable(dims, ma, attrs=ma.metadata.attributes)
+                    for name, (ma, dims) in data.items()
+                },
                 coords={"init_time": [np.datetime64(it, "ns")]},
             )
             if first:
@@ -617,6 +676,8 @@ class NestVirtualProvider:
                     session.store, group=group.lstrip("/") or None, append_dim="init_time"
                 )
         root = zarr.open_group(session.store, mode="a")
+        if not first:
+            self._heal_attrs(root, schema, variables)
         root.attrs[LEDGER_ATTR] = sorted(set(root.attrs.get(LEDGER_ATTR, [])) | {it.isoformat()})
         session.commit(f"{self.name}: run {it:%Y-%m-%dT%H}")
         logger.info(f"{self.name}: referenced run {it} into {prefix.rsplit('/', 1)[-1]}")
