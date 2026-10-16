@@ -45,6 +45,9 @@ declare -A LANES=(
   [metoffice_nws_ocean_depth_hourly]="_backfill_lanes.py metoffice_nws_ocean_depth_hourly --threads 8"
   # The marine observations: a pass every 12 hours over the bucket's rolling ten days.
   [uk_marine]="_backfill_lanes.py uk_marine --threads 1 --pause 43200"
+  # NCEP ADP upper-air (AMDAR/aircraft + radiosondes) from GDEX d337000, from 1997; decodes
+  # with MET pb2nc in the dtcenter/met Docker image.
+  [ncep_upper_air]="_backfill_lanes.py ncep_upper_air --threads 2 --pause 21600"
   [mtg_irs_l1]="_backfill_mtg_irs.py mtg_irs_l1 --follow --threads 12 --downloads 16"
   [mtg_irs_l1_lac4_hourly]="_backfill_mtg_irs.py mtg_irs_l1_lac4_hourly --follow --threads 12 --downloads 16"
   # GMGSI and GEOS-CF v2 are near-realtime: once caught up, a pass every two hours.

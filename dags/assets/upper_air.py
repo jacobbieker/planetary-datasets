@@ -22,26 +22,34 @@ import pandas as pd
 
 from dags.staged import make_staged_download_asset, make_staged_publish_asset
 from planetary_datasets.config import get_config
-from planetary_datasets.providers.observations.amdar import (
-    STAGE_SCRIPT,
-    AMDARProvider,
-    prepbufr_urls,
-)
+from planetary_datasets.providers.observations.amdar import DEFAULT_MET_IMAGE, STAGE_SCRIPT
 from planetary_datasets.providers.observations.igra import (
     IGRACDSProvider,
     IGRAStationArchive,
     download_igra_month,
 )
+from planetary_datasets.providers.observations.ncep_prepbufr import (
+    ARCHIVE_START,
+    PUBLICATION_LAG_HOURS,
+    NCEPUpperAirProvider,
+    pb2nc_config_text,
+    source_urls,
+)
 from planetary_datasets.providers.observations.sondehub import SondehubProvider
 
 # Sondehub's archive opens in July 2018.
 SONDEHUB_START = "2018-07-01"
-AMDAR_START = "2020-01-01"
 IGRA_START = "1979-01-01"
 
 daily_partitions = dg.DailyPartitionsDefinition(start_date=SONDEHUB_START)
-# GDEX publishes a day's PREPBUFR about 48 hours after it ends.
-amdar_partitions = dg.DailyPartitionsDefinition(start_date=AMDAR_START, end_offset=-2)
+# One partition per GDAS cycle. GDEX publishes a cycle's 48-hour PREPBUFR file about
+# PUBLICATION_LAG_HOURS after it, so the newest partitions are held back by that much.
+amdar_partitions = dg.TimeWindowPartitionsDefinition(
+    cron_schedule="0 */6 * * *",
+    start=ARCHIVE_START.to_pydatetime(),
+    fmt="%Y-%m-%d-%H:%M",
+    end_offset=-(PUBLICATION_LAG_HOURS // 6),
+)
 monthly_partitions = dg.MonthlyPartitionsDefinition(start_date=IGRA_START)
 
 
@@ -55,28 +63,37 @@ AMDAR_CONTAINER_DIR = "/data/amdar"
 
 amdar_download = make_staged_download_asset(
     name="amdar_download",
-    description="One day of GDAS PREPBUFR from NCAR GDEX, converted by MET pb2nc in Docker.",
+    description=(
+        "One GDAS cycle of PREPBUFR from NCAR GDEX d337000, converted by MET pb2nc in Docker."
+    ),
     partitions_def=amdar_partitions,
-    publisher=AMDARProvider,
+    publisher=NCEPUpperAirProvider,
     image_env="MET_IMAGE",
-    default_image="dtcenter/met:12.2.2",
+    default_image=DEFAULT_MET_IMAGE,
     container_dir=AMDAR_CONTAINER_DIR,
     command=lambda it: [
-        "bash", "-c", STAGE_SCRIPT, "amdar", f"{AMDAR_CONTAINER_DIR}/{it:%Y%m%d}",
-        *prepbufr_urls(it),
-    ],  # fmt: skip
+        "bash",
+        "-c",
+        STAGE_SCRIPT,
+        "amdar",
+        f"{AMDAR_CONTAINER_DIR}/cycles/{it:%Y%m%d%H}",
+        *source_urls(it)[:1],
+    ],
     container_memory_gb=4,
-    env=lambda: {"PB2NC_CONFIG": AMDARProvider().pb2nc_config_text()},
+    env=lambda: {"PB2NC_CONFIG": pb2nc_config_text("@WORK_DIR@")},
     retry_policy=dg.RetryPolicy(max_retries=3, delay=1800, backoff=dg.Backoff.EXPONENTIAL),
     tags={"dagster/concurrency_key": "amdar-download"},
 )
 
 amdar_observations = make_staged_publish_asset(
     name="amdar_observations",
-    description="AMDAR aircraft reports from GDAS PREPBUFR, flattened to timed observations.",
+    description=(
+        "AMDAR/ACARS aircraft and ADPUPA radiosonde reports from GDAS PREPBUFR, one row per "
+        "observation point, into bkr/obs/ncep_amdar.icechunk and bkr/obs/ncep_adpupa.icechunk."
+    ),
     partitions_def=amdar_partitions,
     download=amdar_download,
-    publisher=AMDARProvider,
+    publisher=NCEPUpperAirProvider,
     memory_gb=4,
     compute_kind="icechunk",
 )
@@ -93,9 +110,7 @@ def igra_cds_raw(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     provider = IGRACDSProvider()
     it = _partition_timestamp(context)
     path = download_igra_month(it.year, it.month, provider.raw_dir, config=get_config())
-    return dg.MaterializeResult(
-        metadata={"path": str(path), "bytes": path.stat().st_size}
-    )
+    return dg.MaterializeResult(metadata={"path": str(path), "bytes": path.stat().st_size})
 
 
 @dg.asset(

@@ -96,6 +96,14 @@ def _hafs(name: str) -> Callable[[], Any]:
     return build
 
 
+def _ncep_upper_air():
+    from planetary_datasets.providers.observations.ncep_prepbufr import NCEPUpperAirProvider
+
+    # Four cycles decoded at once (MET pb2nc in Docker, ~1 GB each); walking forward lets
+    # the decodes run ahead of the writes.
+    return NCEPUpperAirProvider(prefetch_workers=4)
+
+
 def _catchup(name: str) -> Callable[[], Any]:
     """A provider from the catch-up table, by store name."""
 
@@ -136,6 +144,9 @@ LANES: dict[str, Lane] = {
     "metoffice_nws_ocean_depth_hourly": Lane(
         _metoffice("metoffice_nws_ocean_depth_hourly"), "2025-10-25", "1D", 48
     ),
+    # NCEP ADP upper air (GDEX d337000): aircraft to bkr/obs/ncep_amdar, sondes to
+    # bkr/obs/ncep_adpupa. The full-aircraft 48 h files land ~58-70 h after the cycle.
+    "ncep_upper_air": Lane(_ncep_upper_air, "1997-05-01T00:00", "6h", 72),
     # A rolling ten-day bucket: anything older has already gone.
     "uk_marine": Lane(_uk_marine, "-10D", "1h", 2),
     # NOAA OSMC / AOML marine observations, ragged: osmc_all plus one store per platform

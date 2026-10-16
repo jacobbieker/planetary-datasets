@@ -1229,12 +1229,22 @@ def test_the_amdar_download_runs_pb2nc_in_the_met_image(local_config, monkeypatc
 
     result = dg.materialize(
         [upper_air.amdar_download],
-        partition_key="2026-03-04",
+        partition_key="2026-03-04-06:00",
         resources={"pipes_docker_client": Client()},
     )
     assert result.success
     (call,) = calls
     assert call["image"] == "dtcenter/met:12.2.2"
-    assert call["command"][:5] == ["bash", "-c", STAGE_SCRIPT, "amdar", "/data/amdar/20260304"]
-    assert len(call["command"]) == 10
+    assert call["command"][:5] == [
+        "bash",
+        "-c",
+        STAGE_SCRIPT,
+        "amdar",
+        "/data/amdar/cycles/2026030406",
+    ]
+    # One partition is one GDAS cycle, so one file: the 48-hour one with every aircraft.
+    assert call["command"][5:] == [
+        "https://data.gdex.ucar.edu/d337000/prep48h/2026/prepbufr.gdas.20260304.t06z.nr.48h"
+    ]
     assert "AIRCAR" in call["env"]["PB2NC_CONFIG"]
+    assert "ADPUPA" in call["env"]["PB2NC_CONFIG"]
