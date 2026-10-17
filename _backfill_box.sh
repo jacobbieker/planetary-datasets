@@ -60,12 +60,14 @@ declare -A LANES=(
   # PAUSED 2026-10-17, by request, to free the CPU for the JPSS and AMPS catch-ups (~1 h per
   # day of radar from 2020). Uncomment to resume; it picks up where it stopped.
   # [nordic_radar]="_backfill_lanes.py nordic_radar --threads 2 --pause 21600"
-  # AMPS WRF24, all seven domains; the 2.6 km and 0.85 km nests get more threads.
+  # AMPS WRF24. d3, d5 and d6 (the 2.6 km and 0.85 km nests) are PAUSED 2026-10-17, by
+  # request: at ~3.5 h a run on a saturated 96-vCPU box they were years of backfill. Resume
+  # them once the box is larger; each picks up where it stopped.
   [amps_d1]="_backfill_lanes.py amps_d1 --threads 4 --pause 21600"
   [amps_d2]="_backfill_lanes.py amps_d2 --threads 4 --pause 21600"
-  [amps_d3]="_backfill_lanes.py amps_d3 --threads 8 --pause 21600"
-  [amps_d5]="_backfill_lanes.py amps_d5 --threads 8 --pause 21600"
-  [amps_d6]="_backfill_lanes.py amps_d6 --threads 4 --pause 21600"
+  # [amps_d3]="_backfill_lanes.py amps_d3 --threads 8 --pause 21600"
+  # [amps_d5]="_backfill_lanes.py amps_d5 --threads 8 --pause 21600"
+  # [amps_d6]="_backfill_lanes.py amps_d6 --threads 4 --pause 21600"
   [amps_drake]="_backfill_lanes.py amps_drake --threads 4 --pause 21600"
   [amps_nz]="_backfill_lanes.py amps_nz --threads 4 --pause 21600"
   # JPSS products NOAA keeps ~90 days: VIIRS M-band SDR and the ATMS-derived L2 stores.
@@ -81,8 +83,10 @@ declare -A LANES=(
   [jpss_mirs_snd_n20]="_backfill_lanes.py jpss_mirs_snd_n20 --threads 2"
   [jpss_mirs_snd_n21]="_backfill_lanes.py jpss_mirs_snd_n21 --threads 2"
   [jpss_mirs_snd_snpp]="_backfill_lanes.py jpss_mirs_snd_snpp --threads 2"
-  [mtg_irs_l1]="_backfill_mtg_irs.py mtg_irs_l1 --follow --threads 12 --downloads 16"
-  [mtg_irs_l1_lac4_hourly]="_backfill_mtg_irs.py mtg_irs_l1_lac4_hourly --follow --threads 12 --downloads 16"
+  # 8 downloads, not 16: EUMETSAT's Data Store throttles a user's concurrent connections, and
+  # the MetOp-SG lanes share that allowance.
+  [mtg_irs_l1]="_backfill_mtg_irs.py mtg_irs_l1 --follow --threads 12 --downloads 8"
+  [mtg_irs_l1_lac4_hourly]="_backfill_mtg_irs.py mtg_irs_l1_lac4_hourly --follow --threads 12 --downloads 8"
   # GMGSI and GEOS-CF v2 are near-realtime: once caught up, a pass every two hours.
   [gmgsi_v3]="_backfill_gmgsi.py --follow --period 7200"
   [geos_v2]="_backfill_lanes.py geos_v2 --threads 8 --pause 7200"
