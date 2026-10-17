@@ -167,7 +167,8 @@ LANES: dict[str, Lane] = {
         for region in ("ALASKA", "CARIB", "GUAM", "HAWAII")
     },
     "silam_aerosol": Lane(_provider("silam", "SILAMAerosolProvider"), "2025-04-26", "1D", 48),
-    "metop_avhrr": Lane(_provider("polar", "MetopAvhrrProvider"), "2008-03-01", "4h", 6),
+    # From 2024 only: from 2008 it ran at ~16 min per 4 h window, over a year of backfill.
+    "metop_avhrr": Lane(_provider("polar", "MetopAvhrrProvider"), "2024-01-01", "4h", 6),
     "metop_gome": Lane(_provider("polar", "MetopGomeProvider"), "2008-03-01", "1h", 6),
     "nordic_radar": Lane(_provider("meps", "NordicReflectivityProvider"), "2020-01-01", "1D", 48),
     # JPSS products NOAA deletes ~90 days after publication (VIIRS M-band SDR, ATMS snowfall
