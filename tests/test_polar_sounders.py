@@ -16,6 +16,8 @@ import xarray as xr
 from planetary_datasets.config import MissingCredential
 from planetary_datasets.providers.polar import (
     JpssAtmsProvider,
+    JpssNdeL2Provider,
+    JpssViirsMbandProvider,
     MetopAmsuaProvider,
     MetopAscatProvider,
     MetopAvhrrProvider,
@@ -647,7 +649,12 @@ def test_dagster_assets_load():
         resources={"pipes_docker_client": PipesDockerClient()},
     )
     keys = {spec.key.to_user_string() for spec in defs.resolve_all_asset_specs()}
-    assert keys == {
+    rolling = {
+        f"{product}-{sat}"
+        for product in ("jpss-viirs-mband", "jpss-atms-sfr", "jpss-mirs-img", "jpss-mirs-snd")
+        for sat in ("n20", "n21", "snpp")
+    }
+    assert keys == rolling | {
         "jpss-atms",
         "metop-amsua",
         "metop-amsua-download",
@@ -679,6 +686,19 @@ def test_dagster_partition_widths_match_the_providers():
             current_time=dt.datetime(2025, 1, 5, tzinfo=dt.timezone.utc)
         )
         window = partitions.time_window_for_partition_key(keys[-1])
+        assert pd.Timestamp(window.end) - pd.Timestamp(window.start) == provider_cls.window
+
+
+def test_jpss_rolling_partition_widths_match_the_providers():
+    from dags.assets import polar_sounders
+
+    partitions = polar_sounders.jpss_rolling_partitions
+    keys = partitions.get_partition_keys(
+        current_time=dt.datetime(2026, 10, 17, tzinfo=dt.timezone.utc)
+    )
+    assert keys[0] == "2026-07-17-00:00"
+    window = partitions.time_window_for_partition_key(keys[-1])
+    for provider_cls in (JpssViirsMbandProvider, JpssNdeL2Provider):
         assert pd.Timestamp(window.end) - pd.Timestamp(window.start) == provider_cls.window
 
 

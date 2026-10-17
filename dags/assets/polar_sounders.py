@@ -21,11 +21,16 @@ import datetime as dt
 import dagster as dg
 import pandas as pd
 
+from dags.factory import MEMORY_CLASS_TAG, MEMORY_GB_TAG, memory_class_for
 from dags.staged import make_staged_download_asset, make_staged_publish_asset
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.config import get_config
 from planetary_datasets.providers.polar import (
     JpssAtmsProvider,
+    JpssAtmsSfrProvider,
+    JpssMirsImgProvider,
+    JpssMirsSndProvider,
+    JpssViirsMbandProvider,
     MetopAmsuaProvider,
     MetopAscatProvider,
     MetopAvhrrProvider,
@@ -36,9 +41,15 @@ from planetary_datasets.providers.polar import (
     MetopSgMwsProvider,
     MetopSgRoProvider,
 )
+from planetary_datasets.providers.polar._jpss import PLATFORM_NAMES
 
 #: ATMS on Suomi-NPP and NOAA-20 in the NOAA open data buckets starts here.
 JPSS_START = "2022-11-07"
+#: First day any 90-day-rolling JPSS product was still in the buckets when these assets
+#: were added (2026-10-16). Partitions before ``now - 90 days`` have nothing left to fetch.
+JPSS_ROLLING_START = "2026-07-17"
+#: Peak memory of one hour of VIIRS M-band granules from one spacecraft.
+VIIRS_MBAND_MEMORY_GB = 8.0
 #: MetOp-A became operational at the start of March 2008.
 METOP_START = "2008-03-01"
 
@@ -57,6 +68,9 @@ def _multi_hour_partitions(start: str, hours: int) -> dg.TimeWindowPartitionsDef
 
 jpss_atms_partitions = dg.HourlyPartitionsDefinition(
     start_date=f"{JPSS_START}-00:00", end_offset=-1
+)
+jpss_rolling_partitions = dg.HourlyPartitionsDefinition(
+    start_date=f"{JPSS_ROLLING_START}-00:00", end_offset=-1
 )
 metop_gome_partitions = dg.HourlyPartitionsDefinition(
     start_date=f"{METOP_START}-00:00", end_offset=-1
@@ -107,6 +121,65 @@ _RETRY = dg.RetryPolicy(max_retries=3, delay=60)
 def jpss_atms_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     """Ingest one hour of JPSS ATMS granules."""
     return _run(context, JpssAtmsProvider())
+
+
+def _rolling_tags(store_key: str, memory_gb: float) -> dict[str, str]:
+    """Tags for a rolling JPSS product: its own writer pool, so stores ingest in parallel."""
+    return {
+        "dagster/max_runtime": str(60 * 60 * 6),
+        "dagster/concurrency_key": store_key,
+        MEMORY_CLASS_TAG: memory_class_for(memory_gb),
+        MEMORY_GB_TAG: str(memory_gb),
+    }
+
+
+def _viirs_mband_asset(satellite: str):
+    name = f"jpss-viirs-mband-{satellite}"
+
+    @dg.asset(
+        name=name,
+        description=(
+            f"VIIRS M-band SDRs and geolocation from {PLATFORM_NAMES[satellite]}. The bucket "
+            "keeps them for 90 days only, so partitions older than that cannot be run."
+        ),
+        partitions_def=jpss_rolling_partitions,
+        tags=_rolling_tags(name, VIIRS_MBAND_MEMORY_GB),
+        retry_policy=_RETRY,
+    )
+    def _asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+        return _run(context, JpssViirsMbandProvider(satellite))
+
+    return _asset
+
+
+jpss_viirs_mband_assets = [_viirs_mband_asset(sat) for sat in ("n20", "n21", "snpp")]
+
+
+def _nde_l2_asset(provider_cls, satellite: str, what: str):
+    name = f"{provider_cls.base_name.replace('_', '-')}-{satellite}"
+
+    @dg.asset(
+        name=name,
+        description=f"{what} from {PLATFORM_NAMES[satellite]} (90-day rolling source).",
+        partitions_def=jpss_rolling_partitions,
+        tags=_rolling_tags(name, 4.0),
+        retry_policy=_RETRY,
+    )
+    def _asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+        return _run(context, provider_cls(satellite))
+
+    return _asset
+
+
+jpss_nde_l2_assets = [
+    _nde_l2_asset(provider_cls, satellite, what)
+    for provider_cls, what in (
+        (JpssAtmsSfrProvider, "ATMS snowfall rate granules"),
+        (JpssMirsImgProvider, "MiRS ATMS surface and column retrievals"),
+        (JpssMirsSndProvider, "MiRS ATMS temperature and moisture profiles"),
+    )
+    for satellite in ("n20", "n21", "snpp")
+]
 
 
 def _epct_assets(name: str, provider_cls, description: str):
@@ -233,6 +306,8 @@ metop_sg_ro_asset = _sg_asset(
 #: Every asset in this module, for the code location to load.
 polar_sounder_assets = [
     jpss_atms_asset,
+    *jpss_viirs_mband_assets,
+    *jpss_nde_l2_assets,
     metop_amsua_download,
     metop_amsua_asset,
     metop_ascat_download,

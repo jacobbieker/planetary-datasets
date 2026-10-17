@@ -170,6 +170,18 @@ LANES: dict[str, Lane] = {
     "metop_avhrr": Lane(_provider("polar", "MetopAvhrrProvider"), "2008-03-01", "4h", 6),
     "metop_gome": Lane(_provider("polar", "MetopGomeProvider"), "2008-03-01", "1h", 6),
     "nordic_radar": Lane(_provider("meps", "NordicReflectivityProvider"), "2020-01-01", "1D", 48),
+    # JPSS products NOAA deletes ~90 days after publication (VIIRS M-band SDR, ATMS snowfall
+    # rate, MiRS imaging/sounding): a trailing window inside the retention, oldest first.
+    **{
+        f"{store}_{sat}": Lane(_provider("polar", cls, satellite=sat), "-90D", "1h", 3)
+        for store, cls in (
+            ("jpss_viirs_mband", "JpssViirsMbandProvider"),
+            ("jpss_atms_sfr", "JpssAtmsSfrProvider"),
+            ("jpss_mirs_img", "JpssMirsImgProvider"),
+            ("jpss_mirs_snd", "JpssMirsSndProvider"),
+        )
+        for sat in ("n20", "n21", "snpp")
+    },
     # A rolling ten-day bucket: anything older has already gone.
     "uk_marine": Lane(_uk_marine, "-10D", "1h", 2),
     # NOAA OSMC / AOML marine observations, ragged: osmc_all plus one store per platform

@@ -20,10 +20,13 @@ import xarray as xr
 from loguru import logger
 
 from planetary_datasets.common import download_many
-from planetary_datasets.providers.polar._granule import (
-    GranuleProvider,
-    mid_time,
-    serialize_dataset_attrs,
+from planetary_datasets.providers.polar._granule import mid_time, serialize_dataset_attrs
+from planetary_datasets.providers.polar._jpss import (  # noqa: F401 - re-exported
+    JpssGranuleProvider,
+    granule_end,
+    granule_key,
+    granule_overlaps,
+    granule_start,
 )
 
 #: The 22 ATMS channels plus the geolocation and geometry fields satpy exposes.
@@ -54,59 +57,7 @@ GEO_PREFIX = "ATMS-SDR-GEO"
 FULL_PRECISION = ("latitude", "longitude", "start_time", "end_time", "platform_name")
 
 
-def granule_key(filename: str) -> Tuple[str, ...]:
-    """Identity of a granule, shared by its SDR and geolocation file.
-
-    ``SATMS_j02_d20250601_t0000244_e0000560_b13247_c2025…_oeac_ops.h5`` and the matching
-    ``GATMO_…`` differ only in the product prefix and creation stamp, so the spacecraft,
-    day, start, end and orbit fields identify the pair. The spacecraft is part of the key
-    because all three are ingested into one store and are paired up together.
-    """
-    parts = pathlib.Path(filename).name.split("_")
-    if len(parts) < 6:
-        raise ValueError(f"not an ATMS granule filename: {filename}")
-    return tuple(parts[1:6])
-
-
-def _time_of_day(day: str, field: str) -> pd.Timestamp:
-    """Decode a ``HHMMSSd`` filename field — hours, minutes, seconds and tenths."""
-    tod = field[1:]
-    stamp = pd.Timestamp(f"{day}T{tod[0:2]}:{tod[2:4]}:{tod[4:6]}")
-    return stamp + pd.Timedelta(int(tod[6]) * 100, "ms")
-
-
-def granule_start(filename: str) -> pd.Timestamp:
-    """Sensing start time encoded in an ATMS granule filename."""
-    parts = pathlib.Path(filename).name.split("_")
-    return _time_of_day(parts[2][1:], parts[3])
-
-
-def granule_end(filename: str) -> pd.Timestamp:
-    """Sensing end time encoded in an ATMS granule filename.
-
-    The day is only in the filename once, so a granule running over midnight has an end
-    field earlier than its start field; that rolls over to the following day.
-    """
-    parts = pathlib.Path(filename).name.split("_")
-    day = parts[2][1:]
-    start = _time_of_day(day, parts[3])
-    end = _time_of_day(day, parts[4])
-    return end + pd.Timedelta(1, "D") if end < start else end
-
-
-def granule_overlaps(filename: str, start: pd.Timestamp, end: pd.Timestamp) -> bool:
-    """True when a granule's sensing interval intersects ``[start, end)``.
-
-    Selection has to be by overlap, not by start time: the timestamp a granule is stored
-    under is the middle of its sensing interval, so a granule starting just before the
-    hour is owned by the *next* partition. Selecting on start alone would have neither
-    partition keep it — this one discards it as out of window, and the next one never
-    looks at it.
-    """
-    return granule_start(filename) < end and granule_end(filename) > start
-
-
-class JpssAtmsProvider(GranuleProvider):
+class JpssAtmsProvider(JpssGranuleProvider):
     """ATMS SDR brightness temperatures for the JPSS constellation."""
 
     name = "jpss_atms"
@@ -140,55 +91,9 @@ class JpssAtmsProvider(GranuleProvider):
 
     # ------------------------------------------------------------------ fetch
 
-    @staticmethod
-    def _https_url(bucket: str, key: str) -> str:
-        return f"https://{bucket}.s3.amazonaws.com/{key}"
-
-    def _list_day(self, fs, bucket: str, prefix: str, day: pd.Timestamp) -> List[str]:
-        path = f"{bucket}/{prefix}/{day.year:04d}/{day.month:02d}/{day.day:02d}/"
-        try:
-            return [str(key) for key in fs.ls(path, detail=False)]
-        except FileNotFoundError:
-            logger.debug(f"{self.name}: no listing for {path}")
-            return []
-
-    def _index_keys(
-        self,
-        keys: List[str],
-        window: Tuple[pd.Timestamp, pd.Timestamp] | None = None,
-    ) -> Dict[Tuple[str, ...], str]:
-        """Index listed object keys by granule, skipping anything unparseable.
-
-        A day prefix occasionally holds an object that is not a granule; one of them must
-        not take the partition down with it.
-        """
-        indexed: Dict[Tuple[str, ...], str] = {}
-        for key in keys:
-            try:
-                if window is not None and not granule_overlaps(key, *window):
-                    continue
-                indexed[granule_key(key)] = key
-            except (ValueError, IndexError) as exc:
-                logger.warning(f"{self.name}: ignoring unparseable key {key} ({exc})")
-        return indexed
-
-    def _days_to_list(self, start: pd.Timestamp, end: pd.Timestamp) -> pd.DatetimeIndex:
-        """Day prefixes that can hold a granule overlapping ``[start, end)``.
-
-        A granule is filed under the day it *started*, so a window beginning exactly at
-        midnight also has to look at the day before. Any later window cannot, which keeps
-        the usual case to a single listing.
-        """
-        first = start.normalize()
-        if start == first:
-            first -= pd.Timedelta(1, "D")
-        return pd.date_range(first, end.normalize(), freq="1D")
-
     def granule_pairs(self, it: pd.Timestamp) -> List[Tuple[str, str, str]]:
         """``(bucket, sdr_key, geo_key)`` for every granule overlapping the partition."""
-        import s3fs
-
-        fs = s3fs.S3FileSystem(anon=True)
+        fs = self._s3()
         start, end = self.partition_window(it)
         days = self._days_to_list(start, end)
 
