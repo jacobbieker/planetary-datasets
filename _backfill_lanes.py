@@ -159,17 +159,20 @@ LANES: dict[str, Lane] = {
     # NCEP ADP upper air (GDEX d337000): aircraft to bkr/obs/ncep_amdar, sondes to
     # bkr/obs/ncep_adpupa. The full-aircraft 48 h files land ~58-70 h after the cycle.
     "ncep_upper_air": Lane(_ncep_upper_air, "1997-05-01T00:00", "6h", 72),
-    # MRMS outside CONUS (CONUS is archived by dynamical.org): the AWS archive starts here.
+    # MRMS outside CONUS (CONUS is archived by dynamical.org). The stores already hold
+    # 2020-10-14 to 2026-10-02; this fills the gap since Dagster stopped and keeps them
+    # current, without the hour-by-hour completeness check over six years of archive.
     **{
         f"mrms_{region.lower()}": Lane(
-            _provider("mrms", "MRMSProvider", region=region), "2020-10-14", "1h", 2
+            _provider("mrms", "MRMSProvider", region=region), "2026-09-25", "1h", 2
         )
         for region in ("ALASKA", "CARIB", "GUAM", "HAWAII")
     },
     "silam_aerosol": Lane(_provider("silam", "SILAMAerosolProvider"), "2025-04-26", "1D", 48),
     # From 2024 only: from 2008 it ran at ~16 min per 4 h window, over a year of backfill.
     "metop_avhrr": Lane(_provider("polar", "MetopAvhrrProvider"), "2024-01-01", "4h", 6),
-    "metop_gome": Lane(_provider("polar", "MetopGomeProvider"), "2008-03-01", "1h", 6),
+    # From 2024, like AVHRR: from 2008 it was 163k hourly partitions, years of backfill.
+    "metop_gome": Lane(_provider("polar", "MetopGomeProvider"), "2024-01-01", "1h", 6),
     "nordic_radar": Lane(_provider("meps", "NordicReflectivityProvider"), "2020-01-01", "1D", 48),
     # JPSS products NOAA deletes ~90 days after publication (VIIRS M-band SDR, ATMS snowfall
     # rate, MiRS imaging/sounding): a trailing window inside the retention, oldest first.
