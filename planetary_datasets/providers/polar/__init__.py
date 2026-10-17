@@ -4,6 +4,10 @@ One provider per instrument, all writing into ``bkr/polar/*.icechunk``:
 
 ============================  =======================================================
 :class:`JpssAtmsProvider`     ATMS microwave sounder, NOAA-21 / NOAA-20 / Suomi-NPP
+:class:`JpssAtmsSfrProvider`  ATMS snowfall rate, one store per JPSS spacecraft (rolling)
+:class:`JpssMirsImgProvider`  MiRS ATMS surface/column retrievals, per spacecraft (rolling)
+:class:`JpssMirsSndProvider`  MiRS ATMS profiles, per spacecraft (rolling)
+:class:`JpssViirsMbandProvider`  VIIRS M-band SDRs, per spacecraft (rolling)
 :class:`MetopAmsuaProvider`   AMSU-A microwave sounder, MetOp
 :class:`MetopAscatProvider`   ASCAT scatterometer, MetOp
 :class:`MetopAvhrrProvider`   AVHRR imager, MetOp
@@ -15,7 +19,8 @@ One provider per instrument, all writing into ``bkr/polar/*.icechunk``:
 :class:`MetopSgRoProvider`    GRAS-2 radio occultation, MetOp-SG
 ============================  =======================================================
 
-ATMS comes from the public NOAA open data buckets and needs no credentials. The MetOp
+The JPSS products come from the public NOAA open data buckets and need no credentials;
+"rolling" ones are deleted there after 90 days, so they are copied, not referenced. The MetOp
 instruments come from the EUMETSAT Data Store and need ``EUMETSAT_CONSUMER_KEY`` and
 ``EUMETSAT_CONSUMER_SECRET``; AMSU-A, ASCAT and MHS are downloaded and converted to netCDF by
 the EUMETSAT Data Tailor in the ``docker/epct`` image.
@@ -31,6 +36,13 @@ from planetary_datasets.providers.polar._granule import (
     serialize_dataset_attrs,
 )
 from planetary_datasets.providers.polar.jpss_atms import JpssAtmsProvider
+from planetary_datasets.providers.polar.jpss_atms_l2 import (
+    JpssAtmsSfrProvider,
+    JpssMirsImgProvider,
+    JpssMirsSndProvider,
+    JpssNdeL2Provider,
+)
+from planetary_datasets.providers.polar.jpss_viirs import JpssViirsMbandProvider
 from planetary_datasets.providers.polar.metop_amsua import MetopAmsuaProvider
 from planetary_datasets.providers.polar.metop_ascat import MetopAscatProvider
 from planetary_datasets.providers.polar.metop_avhrr import MetopAvhrrProvider
@@ -47,6 +59,11 @@ __all__ = [
     "EumdacProvider",
     "GranuleProvider",
     "JpssAtmsProvider",
+    "JpssAtmsSfrProvider",
+    "JpssMirsImgProvider",
+    "JpssMirsSndProvider",
+    "JpssNdeL2Provider",
+    "JpssViirsMbandProvider",
     "MetopAmsuaProvider",
     "MetopAscatProvider",
     "MetopAvhrrProvider",
