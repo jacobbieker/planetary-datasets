@@ -182,6 +182,17 @@ LANES: dict[str, Lane] = {
         )
         for sat in ("n20", "n21", "snpp")
     },
+    # AMPS (WRF24, from 2017-10-10T12; DRAKE and NZ from 2020-08-08), first 48 h of each
+    # 00/12 UTC run, to bkr/dmi/amps_<domain>. GDEX archives a run within about a day.
+    **{
+        f"amps_{domain}": Lane(
+            _provider("amps", "AMPSProvider", domain=domain),
+            "2020-08-08" if domain in ("drake", "nz") else "2017-10-10T12:00",
+            "12h",
+            36,
+        )
+        for domain in ("d1", "d2", "d3", "d5", "d6", "drake", "nz")
+    },
     # A rolling ten-day bucket: anything older has already gone.
     "uk_marine": Lane(_uk_marine, "-10D", "1h", 2),
     # NOAA OSMC / AOML marine observations, ragged: osmc_all plus one store per platform

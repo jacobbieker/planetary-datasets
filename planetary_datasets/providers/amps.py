@@ -210,7 +210,10 @@ FIELDS: tuple[AMPSField, ...] = (
         "v_component_of_wind", 34, "isobaricInhPa", "V-component of wind (grid-relative)",
         "m s-1", "level", dtype=_F16,
     ),
-    AMPSField("vertical_velocity", 40, "isobaricInhPa", "Vertical velocity", "m s-1", "level"),
+    AMPSField(
+        "vertical_velocity", 40, "isobaricInhPa", "Vertical velocity", "m s-1", "level",
+        dtype=_F16,
+    ),
     AMPSField(
         "relative_humidity", 52, "isobaricInhPa", "Relative humidity (with respect to water)",
         "%", "level", notes="Published for 100-1000 hPa only.",
@@ -270,8 +273,7 @@ FIELDS: tuple[AMPSField, ...] = (
     AMPSField("mean_sea_level_pressure", 2, "meanSea", "Sea-level pressure", "Pa", level=0),
     AMPSField(
         "cloud_base_height", 7, "cloudBase", "Geopotential height of cloud base", "gpm",
-        level=0,
-    ),
+        level=0, dtype=_F16),
     AMPSField(
         "surface_temperature", 11, "surface", "Surface (skin) temperature", "K", level=1,
         dtype=_F16,
@@ -341,34 +343,34 @@ FIELDS: tuple[AMPSField, ...] = (
         "Precipitation over the 3 h ending at the step (since the init time before 3 h)",
         "kg m-2", level=0,
     ),
-    AMPSField("albedo", 84, "surface", "Albedo", "%", level=1),
-    AMPSField("sea_ice_cover", 91, "surface", "Sea ice", "1", level=1),
-    AMPSField("latent_heat_flux", 121, "surface", "Latent heat flux", "W m-2", level=1),
-    AMPSField("sensible_heat_flux", 122, "surface", "Sensible heat flux", "W m-2", level=1),
+    AMPSField("albedo", 84, "surface", "Albedo", "%", level=1, dtype=_F16),
+    AMPSField("sea_ice_cover", 91, "surface", "Sea ice", "1", level=1, dtype=_F16),
+    AMPSField("latent_heat_flux", 121, "surface", "Latent heat flux", "W m-2", level=1, dtype=_F16),
+    AMPSField(
+        "sensible_heat_flux", 122, "surface", "Sensible heat flux", "W m-2", level=1, dtype=_F16
+    ),
     AMPSField(
         "downward_shortwave_radiation_flux", 204, "surface",
-        "Downward shortwave radiation flux", "W m-2", level=1,
-    ),
+        "Downward shortwave radiation flux", "W m-2", level=1, dtype=_F16),
     AMPSField(
         "downward_longwave_radiation_flux", 205, "surface",
-        "Downward longwave radiation flux", "W m-2", level=1,
-    ),
+        "Downward longwave radiation flux", "W m-2", level=1, dtype=_F16),
     AMPSField(
         "outgoing_longwave_radiation", 212, "nominalTop",
         "Upward longwave radiation flux at the top of the atmosphere", "W m-2", level=1,
         model_level_output=True,
-        notes="Parameter 212 is not in the AMPS table; named after WMO GRIB1 table 2.",
-    ),
+        notes="Parameter 212 is not in the AMPS table; named after WMO GRIB1 table 2.", dtype=_F16),
     AMPSField(
         "boundary_layer_height", 221, "surface", "Planetary boundary layer height", "m",
         level=1, notes="Parameter 221 is not in the AMPS table; named after WMO GRIB1 table 2.",
+        dtype=_F16,
     ),
     AMPSField(
         "cloud_fraction", 248, "surface", "Cloud fraction", "1", level=1, dtype=_F16,
         notes="The AMPS table gives units of m; the values are a 0-1 fraction.",
     ),
-    AMPSField("inversion_height", 249, "surface", "Inversion height", "m", level=1),
-    AMPSField("inversion_strength", 250, "surface", "Inversion strength", "K", level=1),
+    AMPSField("inversion_height", 249, "surface", "Inversion height", "m", level=1, dtype=_F16),
+    AMPSField("inversion_strength", 250, "surface", "Inversion strength", "K", level=1, dtype=_F16),
     AMPSField(
         "column_integrated_snow", 251, "entireAtmosphere", "Column integrated snow", "kg m-2",
         level=1,
@@ -619,6 +621,11 @@ class AMPSProvider(NaiveUTCPartitions, GenerationalStoreMixin, BaseProvider):
 
     append_dim = "init_time"
     alignment_coords = ("step", "level", "model_level", "soil_depth", "y", "x")
+    #: Bit-rounding (see :attr:`~planetary_datasets.base.BaseProvider.keepbits`): 12
+    #: mantissa bits on the float32 fields, a relative precision of 1 in 4096. Moisture,
+    #: geopotential and pressure stay exact; the float16 fields are already reduced.
+    keepbits = 12
+    keepbits_exact = ("humidity", "mixing_ratio", "geopotential", "pressure")
 
     def __init__(
         self,
