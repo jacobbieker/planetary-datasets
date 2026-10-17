@@ -58,6 +58,14 @@ declare -A LANES=(
   [metop_avhrr]="_backfill_lanes.py metop_avhrr --threads 4"
   [metop_gome]="_backfill_lanes.py metop_gome --threads 2"
   [nordic_radar]="_backfill_lanes.py nordic_radar --threads 2 --pause 21600"
+  # AMPS WRF24, all seven domains; the 2.6 km and 0.85 km nests get more threads.
+  [amps_d1]="_backfill_lanes.py amps_d1 --threads 4 --pause 21600"
+  [amps_d2]="_backfill_lanes.py amps_d2 --threads 4 --pause 21600"
+  [amps_d3]="_backfill_lanes.py amps_d3 --threads 8 --pause 21600"
+  [amps_d5]="_backfill_lanes.py amps_d5 --threads 8 --pause 21600"
+  [amps_d6]="_backfill_lanes.py amps_d6 --threads 4 --pause 21600"
+  [amps_drake]="_backfill_lanes.py amps_drake --threads 4 --pause 21600"
+  [amps_nz]="_backfill_lanes.py amps_nz --threads 4 --pause 21600"
   # JPSS products NOAA keeps ~90 days: VIIRS M-band SDR and the ATMS-derived L2 stores.
   [jpss_viirs_mband_n20]="_backfill_lanes.py jpss_viirs_mband_n20 --threads 8"
   [jpss_viirs_mband_n21]="_backfill_lanes.py jpss_viirs_mband_n21 --threads 8"

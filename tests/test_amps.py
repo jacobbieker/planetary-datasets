@@ -170,16 +170,21 @@ def test_ocean_domains_do_not_declare_model_level_fields():
 def test_float16_only_for_range_safe_fields():
     halves = {f.name for f in amps.FIELDS if f.dtype == "float16"}
     assert halves, "temperature and wind should be stored as float16"
+    # Range-safe fields, checked against real d1 and d5 runs: none overflows float16, and
+    # the worst rounding is 0.5 W m-2 on a flux, 4 m on a cloud base, 0.008 on w.
+    range_safe = (
+        "temperature", "wind", "cloud_fraction", "vertical_velocity", "albedo",
+        "sea_ice_cover", "heat_flux", "radiation_flux", "longwave_radiation",
+        "boundary_layer_height", "cloud_base_height", "inversion_",
+    )  # fmt: skip
     for name in halves:
-        assert any(word in name for word in ("temperature", "wind", "cloud_fraction")), name
+        assert any(word in name for word in range_safe), name
     full = {f.name for f in amps.FIELDS if f.dtype == "float32"}
-    assert {
-        "geopotential_height",
-        "relative_humidity",
-        "water_vapor_mixing_ratio",
-        "mean_sea_level_pressure",
-        "surface_pressure",
-    } <= full
+    # Moisture, geopotential and pressure never go to 16 bits.
+    for name in {f.name for f in amps.FIELDS}:
+        if any(w in name for w in ("humidity", "mixing_ratio", "geopotential", "pressure")):
+            assert name in full, name
+    assert {"precipitable_water", "total_precipitation_3h"} <= full
 
 
 def test_no_hardcoded_credentials_or_buckets():
@@ -406,3 +411,20 @@ def test_run_partition_writes_appends_and_then_skips(local_config, tmp_path, mon
     np.testing.assert_allclose(stored["latitude"], _field(-80.0), rtol=1e-6)
     assert provider.generations() == ["bkr/dmi/amps_d1.icechunk"]
     assert provider.missing_timesteps(pd.DatetimeIndex([first, second])) == []
+
+
+def test_float32_fields_are_bit_rounded_except_moisture_geopotential_and_pressure():
+    from planetary_datasets.providers.amps import AMPSProvider
+
+    provider = AMPSProvider("d1")
+    assert provider.keepbits_for("vertical_velocity") == 12
+    assert provider.keepbits_for("total_precipitation_3h") == 12
+    for exact in (
+        "relative_humidity",
+        "water_vapor_mixing_ratio",
+        "geopotential_height",
+        "surface_pressure",
+        "mean_sea_level_pressure",
+        "pressure_model_level",
+    ):
+        assert provider.keepbits_for(exact) is None, exact
