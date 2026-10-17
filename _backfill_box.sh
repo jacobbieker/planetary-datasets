@@ -57,7 +57,9 @@ declare -A LANES=(
   [silam_aerosol]="_backfill_lanes.py silam_aerosol --threads 4 --pause 21600"
   [metop_avhrr]="_backfill_lanes.py metop_avhrr --threads 4"
   [metop_gome]="_backfill_lanes.py metop_gome --threads 2"
-  [nordic_radar]="_backfill_lanes.py nordic_radar --threads 2 --pause 21600"
+  # PAUSED 2026-10-17, by request, to free the CPU for the JPSS and AMPS catch-ups (~1 h per
+  # day of radar from 2020). Uncomment to resume; it picks up where it stopped.
+  # [nordic_radar]="_backfill_lanes.py nordic_radar --threads 2 --pause 21600"
   # AMPS WRF24, all seven domains; the 2.6 km and 0.85 km nests get more threads.
   [amps_d1]="_backfill_lanes.py amps_d1 --threads 4 --pause 21600"
   [amps_d2]="_backfill_lanes.py amps_d2 --threads 4 --pause 21600"
