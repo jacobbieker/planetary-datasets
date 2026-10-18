@@ -195,6 +195,7 @@ class OperaCatchUp(CatchUp):
             it.strftime("%Y-%m-%dT%H:%M"),
             "--target",
             OPERA_CONTAINER_DIR,
+            *(["--allow-partial"] if provider.allow_partial else []),
         ]
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:

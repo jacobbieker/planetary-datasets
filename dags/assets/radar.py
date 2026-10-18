@@ -137,7 +137,7 @@ opera_dbz_partitions = dg.HourlyPartitionsDefinition(
 )
 
 
-def opera_download_command(provider: OPERAProvider, it: pd.Timestamp) -> list[str]:
+def opera_download_command(provider: Type[OPERAProvider], it: pd.Timestamp) -> list[str]:
     """Arguments for the downloader image's entrypoint, for one hour."""
     return [
         "opera",
@@ -147,6 +147,7 @@ def opera_download_command(provider: OPERAProvider, it: pd.Timestamp) -> list[st
         it.strftime("%Y-%m-%dT%H:%M"),
         "--target",
         OPERA_CONTAINER_ARCHIVE,
+        *(["--allow-partial"] if provider.partial_by_default else []),
     ]
 
 
