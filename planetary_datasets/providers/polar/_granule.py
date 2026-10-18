@@ -174,9 +174,7 @@ def process_eps_netcdf(ds: xr.Dataset, pad_along_track: int | None = None) -> xr
         ds = pad_dim(ds, "along_track", pad_along_track, constant_values=eps_pad_values(ds))
 
     swath_renames = {
-        name: new
-        for name, new in (("along_track", "y"), ("across_track", "x"))
-        if name in ds.dims
+        name: new for name, new in (("along_track", "y"), ("across_track", "x")) if name in ds.dims
     }
     if swath_renames:
         ds = ds.rename(swath_renames)
@@ -293,9 +291,44 @@ class GranuleProvider(BaseProvider):
             ds = pad_dim(ds, dim, size, constant_values=pad_values(ds))
         return ds
 
+    def align_to_store(self, repo, ds: xr.Dataset) -> xr.Dataset:
+        """Re-chunk ``ds`` along the append axis so its chunks start on the store's.
+
+        Granule stores chunk ``time`` in blocks (24 MWS scans, 500 occultations), and a
+        partition rarely fills one exactly, so the store's last chunk is usually partial.
+        Appending dask chunks that straddle a stored chunk boundary is refused by xarray,
+        so the first chunk is cut to fill the partial one and the rest follow on whole.
+        Done per repository because an observation store beside the primary one need not
+        hold the same number of steps.
+        """
+        dim = self.append_dim
+        if not ds.chunks or dim not in ds.chunks:
+            return ds
+        try:
+            stored = xr.open_zarr(
+                repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+            )
+        except STORE_READ_ERRORS:
+            return ds  # the first write sets the layout
+        chunk = next(
+            (
+                var.encoding["chunks"][var.dims.index(dim)]
+                for var in stored.data_vars.values()
+                if dim in var.dims and "chunks" in var.encoding
+            ),
+            None,
+        )
+        if not chunk or chunk == 1:
+            return ds
+        length = ds.sizes[dim]
+        head = min((-stored.sizes.get(dim, 0)) % chunk, length)
+        whole, tail = divmod(length - head, chunk)
+        sizes = ([head] if head else []) + [chunk] * whole + ([tail] if tail else [])
+        return ds.chunk({dim: tuple(sizes)})
+
     def write_to_icechunk(self, repo, processed: xr.Dataset) -> bool:
         """Write a processed partition, treating an empty one as nothing to do."""
         if processed.sizes.get(self.append_dim, 0) == 0:
             logger.info(f"{self.name}: nothing inside the partition window, skipping write")
             return False
-        return super().write_to_icechunk(repo, processed)
+        return super().write_to_icechunk(repo, self.align_to_store(repo, processed))
