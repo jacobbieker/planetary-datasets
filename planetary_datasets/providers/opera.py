@@ -33,6 +33,7 @@ import pandas as pd
 import xarray as xr
 from loguru import logger
 
+from planetary_datasets.config import Config
 from planetary_datasets.providers._timestamps import to_naive_utc
 from planetary_datasets.providers.opera_download import PRODUCTS, Product
 from planetary_datasets.providers.radar import LocalArchiveRadarProvider
@@ -52,6 +53,22 @@ class OPERAProvider(LocalArchiveRadarProvider):
     product: str
     archive_env = ARCHIVE_ENV
     archive_subdir = ARCHIVE_SUBDIR
+    #: Whether an hour with frames missing upstream is staged and written with the frames
+    #: it has, when ``allow_partial`` is not given. The downloader is then run with
+    #: ``--allow-partial`` too.
+    partial_by_default: bool = False
+
+    def __init__(self, config: Config | None = None, allow_partial: bool | None = None):
+        """Build a provider.
+
+        Args:
+            config: Configuration override; the process-wide one is used when omitted.
+            allow_partial: Write an hour even when some of its frames are missing. Defaults
+                to :attr:`partial_by_default`.
+        """
+        if allow_partial is None:
+            allow_partial = self.partial_by_default
+        super().__init__(config, allow_partial=allow_partial)
 
     @property
     def spec(self) -> Product:
@@ -147,11 +164,16 @@ class OPERARainfallProvider(OPERAProvider):
 
 
 class OPERAReflectivityProvider(OPERAProvider):
-    """OPERA composite reflectivity, twelve 5-minute frames per hour."""
+    """OPERA composite reflectivity, twelve 5-minute frames per hour.
+
+    An hour missing some frames upstream is kept with the frames it has: nearly every
+    hour lacks one of its twelve, so requiring all of them archived almost nothing.
+    """
 
     name = "opera_dbz"
     product = "dbz"
     store_prefix = "bkr/precipradar/opera_dbz.icechunk"
+    partial_by_default = True
 
 
 PROVIDERS: tuple[type[OPERAProvider], ...] = (OPERARainfallProvider, OPERAReflectivityProvider)

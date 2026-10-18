@@ -295,6 +295,7 @@ def test_the_download_asset_runs_the_image_for_a_missing_hour(
     assert call["image"] == "example/opera:test"
     assert call["command"] == [
         "opera", "--product", "dbz", "--time", "2026-09-29T06:00", "--target", "/data/opera",
+        "--allow-partial",
     ]  # fmt: skip
     root = str(opera_root.resolve())
     assert call["container_kwargs"]["volumes"] == {root: {"bind": "/data/opera", "mode": "rw"}}
@@ -308,9 +309,7 @@ def test_the_download_asset_skips_an_hour_already_in_the_store(stage, fake_docke
     assert fake_docker_client.calls == []
 
 
-def test_the_download_asset_still_runs_for_an_hour_behind_the_store_end(
-    stage, fake_docker_client
-):
+def test_the_download_asset_still_runs_for_an_hour_behind_the_store_end(stage, fake_docker_client):
     """The asset used to skip these, so a gap behind the end was never even downloaded."""
     later = HOUR + dt.timedelta(hours=3)
     stage("dbz", later)
@@ -345,3 +344,20 @@ def test_opera_stores_depend_on_their_downloads_after_key_prefixing():
         download = dg.AssetKey(["radar", f"{name}_download"])
         assert graph[dg.AssetKey(["radar", name])] == {download}
         assert graph[download] == set()
+
+
+def test_reflectivity_keeps_partial_hours_and_rainfall_does_not():
+    assert opera.OPERAReflectivityProvider().allow_partial is True
+    assert opera.OPERARainfallProvider().allow_partial is False
+    assert opera.OPERAReflectivityProvider(allow_partial=False).allow_partial is False
+
+
+def test_reflectivity_writes_an_hour_with_a_frame_missing(stage):
+    gap = dt.datetime(2026, 9, 29, 6, 30)
+    stage("dbz", HOUR, source=FakeOPERA(missing={gap}), allow_partial=True)
+    provider = opera.OPERAReflectivityProvider()
+    it = pd.Timestamp(HOUR)
+    assert provider.run_partition(it)
+    times = pd.DatetimeIndex(read_store(provider)["time"].values)
+    assert len(times) == 11
+    assert pd.Timestamp(gap) not in times
