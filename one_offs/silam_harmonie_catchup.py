@@ -279,14 +279,21 @@ def build_catchups() -> List[CatchUp]:
 def select(catchups: Sequence[CatchUp], patterns: Sequence[str]) -> List[CatchUp]:
     """Keep the stores whose name contains any of ``patterns``; all of them when empty.
 
+    A pattern starting with ``=`` must match a store name exactly, so ``=dmi_harmonie``
+    picks the surface store without ``dmi_harmonie_model_level``.
+
     Raises:
         SystemExit: when a pattern matches nothing, rather than silently running a
             shorter list than was asked for.
     """
     if not patterns:
         return list(catchups)
-    chosen = [c for c in catchups if any(p in c.name for p in patterns)]
-    unmatched = [p for p in patterns if not any(p in c.name for c in catchups)]
+
+    def matches(pattern: str, name: str) -> bool:
+        return pattern[1:] == name if pattern.startswith("=") else pattern in name
+
+    chosen = [c for c in catchups if any(matches(p, c.name) for p in patterns)]
+    unmatched = [p for p in patterns if not any(matches(p, c.name) for c in catchups)]
     if unmatched:
         raise SystemExit(
             f"no store matches {', '.join(unmatched)}; known stores are "
