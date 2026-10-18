@@ -208,6 +208,28 @@ def test_restricted_writes_leave_the_neighbouring_partition_missing(avhrr):
     assert avhrr.missing_timesteps(pd.DatetimeIndex([second])) == [second]
 
 
+def test_appends_are_rechunked_onto_the_stored_time_chunks(local_config):
+    """A partition appended behind a partial stored chunk must not straddle its boundary."""
+    mws = MetopSgMwsProvider(config=local_config)
+
+    def steps(start: str, count: int) -> xr.Dataset:
+        times = pd.date_range(start, periods=count, freq="1min")
+        data = np.ones((count, 3), dtype="float32")
+        ds = xr.Dataset({"bt": (("time", "y"), data)}, coords={"time": times})
+        return ds.chunk({"time": 24})
+
+    assert mws.write_to_icechunk(mws.get_icechunk_repo(), steps("2026-09-01", 30))
+    # 30 stored in chunks of 24 leaves 18 free in the last one; 40 more as (24, 16) would
+    # straddle it, which xarray refuses.
+    aligned = mws.align_to_store(mws.get_icechunk_repo(), steps("2026-09-02", 40))
+    assert aligned.chunks["time"] == (18, 22)
+    assert mws.write_to_icechunk(mws.get_icechunk_repo(), steps("2026-09-02", 40))
+    stored = xr.open_zarr(
+        mws.get_icechunk_repo().readonly_session("main").store, consolidated=False
+    )
+    assert stored.sizes["time"] == 70
+
+
 # --------------------------------------------------------------------- JPSS ATMS
 
 
@@ -768,6 +790,9 @@ def test_metop_sg_mws_granules_are_padded_and_written_to_both_stores(local_confi
     assert provider.write_to_icechunk(provider.get_icechunk_repo(), ds) is True
     assert provider.partition_stored(pd.Timestamp("2026-09-27"))
     obs = local_config.icechunk_repo("bkr/obs/metop_sg_mws.icechunk")
-    assert xr.open_zarr(
-        obs.readonly_session("main").store, consolidated=False, decode_timedelta=True
-    ).sizes["time"] == 2
+    assert (
+        xr.open_zarr(
+            obs.readonly_session("main").store, consolidated=False, decode_timedelta=True
+        ).sizes["time"]
+        == 2
+    )
