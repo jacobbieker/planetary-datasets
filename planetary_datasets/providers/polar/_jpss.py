@@ -221,7 +221,9 @@ class JpssGranuleProvider(GranuleProvider):
     def _list_day(self, fs, bucket: str, prefix: str, day: pd.Timestamp) -> List[str]:
         path = f"{bucket}/{prefix}/{day.year:04d}/{day.month:02d}/{day.day:02d}/"
         try:
-            return [str(key) for key in fs.ls(path, detail=False)]
+            # refresh: s3fs shares one instance per process and caches listings, so a lane
+            # that listed today's prefix once would never see the granules landing after.
+            return [str(key) for key in fs.ls(path, detail=False, refresh=True)]
         except FileNotFoundError:
             logger.debug(f"{self.name}: no listing for {path}")
             return []

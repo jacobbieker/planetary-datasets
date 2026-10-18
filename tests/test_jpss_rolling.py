@@ -437,3 +437,22 @@ def test_l2_fetch_fails_rather_than_writing_holes(local_config, monkeypatch, tmp
     monkeypatch.setattr(jpss_atms_l2, "download_many", lambda urls, dest, workers: [])
     with pytest.raises(_jpss.IncompleteDownload):
         provider.fetch(pd.Timestamp("2026-10-15T12:00"), temp_dir=tmp_path)
+
+
+def test_a_day_is_listed_afresh_each_time(local_config):
+    """s3fs caches listings per process; a long-running lane must still see new granules."""
+
+    class GrowingBucket:
+        def __init__(self):
+            self.keys = ["b/p/2026/10/18/a.nc"]
+
+        def ls(self, path, detail=False, refresh=False):
+            assert refresh, "a cached listing hides granules that land later in the day"
+            return list(self.keys)
+
+    provider = JpssAtmsSfrProvider(satellite="n20", config=local_config)
+    fs = GrowingBucket()
+    day = pd.Timestamp("2026-10-18")
+    assert provider._list_day(fs, "b", "p", day) == ["b/p/2026/10/18/a.nc"]
+    fs.keys.append("b/p/2026/10/18/b.nc")
+    assert len(provider._list_day(fs, "b", "p", day)) == 2
