@@ -60,13 +60,13 @@ declare -A LANES=(
   # PAUSED 2026-10-17, by request, to free the CPU for the JPSS and AMPS catch-ups (~1 h per
   # day of radar from 2020). Uncomment to resume; it picks up where it stopped.
   # [nordic_radar]="_backfill_lanes.py nordic_radar --threads 2 --pause 21600"
-  # AMPS WRF24. d3, d5 and d6 (the 2.6 km and 0.85 km nests) are PAUSED 2026-10-17, by
-  # request: at ~3.5 h a run on a saturated 96-vCPU box they were years of backfill. Resume
-  # them once the box is larger; each picks up where it stopped.
+  # AMPS WRF24. d3 and d6 (the 2.67 km nests) are PAUSED 2026-10-17, by request: at ~3.5 h
+  # a run on a saturated 96-vCPU box they were years of backfill. Uncomment to resume; each
+  # picks up where it stopped. d5 (0.89 km, the finest) resumed 2026-10-18 on the 192-vCPU box.
   [amps_d1]="_backfill_lanes.py amps_d1 --threads 4 --pause 21600"
   [amps_d2]="_backfill_lanes.py amps_d2 --threads 4 --pause 21600"
   # [amps_d3]="_backfill_lanes.py amps_d3 --threads 8 --pause 21600"
-  # [amps_d5]="_backfill_lanes.py amps_d5 --threads 8 --pause 21600"
+  [amps_d5]="_backfill_lanes.py amps_d5 --threads 8 --pause 21600"
   # [amps_d6]="_backfill_lanes.py amps_d6 --threads 4 --pause 21600"
   [amps_drake]="_backfill_lanes.py amps_drake --threads 4 --pause 21600"
   [amps_nz]="_backfill_lanes.py amps_nz --threads 4 --pause 21600"
