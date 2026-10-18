@@ -188,7 +188,7 @@ def download_ranged(
     url: str,
     dest: str | os.PathLike,
     *,
-    connections: int = 16,
+    connections: int = 4,
     piece_size: int = 64 * CHUNK_SIZE,
     retries: int = 5,
     backoff: float = 2.0,
@@ -199,7 +199,8 @@ def download_ranged(
     """Download one large object as concurrent byte-range requests.
 
     For servers that throttle each connection but serve ranges, such as thredds.met.no
-    (about 5 MB/s per stream, ~170 MB/s over 16). The object is split into ``piece_size``
+    (about 5 MB/s per stream). Keep ``connections`` modest: thredds.met.no blocked a host
+    that ran 16 at once. The object is split into ``piece_size``
     ranges fetched by ``connections`` threads and written in place into a ``.part`` file,
     which is renamed to ``dest`` only once every piece has landed. Each piece is retried on
     its own, so a dropped connection costs one piece rather than the whole file.
@@ -231,9 +232,10 @@ def download_ranged(
         return dest
 
     fs, path = _filesystem_for(url, storage_options)
+    cat_kwargs = {"timeout": timeout} if timeout and fs.async_impl else {}
     try:
         size = _with_retries(
-            lambda: fs.size(path),
+            lambda: fs.size(path, **cat_kwargs),
             url,
             retries=retries,
             backoff=backoff,
@@ -245,7 +247,6 @@ def download_ranged(
     if size is None:
         return None
 
-    cat_kwargs = {"timeout": timeout} if timeout and fs.async_impl else {}
     part = dest.with_name(dest.name + ".part")
 
     def _piece(fd: int, start: int) -> None:

@@ -27,7 +27,7 @@ class RangeFS:
         self.calls: list[tuple[int, int]] = []
         self.lock = threading.Lock()
 
-    def size(self, path):
+    def size(self, path, **kwargs):
         if self.size_error is not None:
             raise self.size_error
         return len(self.blob)
