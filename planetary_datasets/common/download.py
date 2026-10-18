@@ -184,6 +184,105 @@ def download_one(
     return result
 
 
+def download_ranged(
+    url: str,
+    dest: str | os.PathLike,
+    *,
+    connections: int = 16,
+    piece_size: int = 64 * CHUNK_SIZE,
+    retries: int = 5,
+    backoff: float = 2.0,
+    timeout: float | None = 300.0,
+    overwrite: bool = False,
+    storage_options: dict[str, Any] | None = None,
+) -> pathlib.Path | None:
+    """Download one large object as concurrent byte-range requests.
+
+    For servers that throttle each connection but serve ranges, such as thredds.met.no
+    (about 5 MB/s per stream, ~170 MB/s over 16). The object is split into ``piece_size``
+    ranges fetched by ``connections`` threads and written in place into a ``.part`` file,
+    which is renamed to ``dest`` only once every piece has landed. Each piece is retried on
+    its own, so a dropped connection costs one piece rather than the whole file.
+
+    Args:
+        url: Source URL; the server must honour ``Range`` requests.
+        dest: Destination file path.
+        connections: Concurrent range requests.
+        piece_size: Bytes per range request; at most ``connections`` of them are held in
+            memory at once.
+        retries: Attempts per piece before giving up on the download.
+        backoff: Base seconds for exponential backoff between attempts.
+        timeout: Wall-clock seconds allowed per piece, or None for no limit.
+        overwrite: Re-download even if the destination already exists.
+        storage_options: Filesystem options passed to fsspec.
+
+    Returns:
+        The destination path, or None if the object is permanently unavailable: missing
+        (404), denied (401/403) or gone (410).
+
+    Raises:
+        Exception: The last transient error once a piece (or the size request) has failed
+            every attempt. The partial file is removed first.
+    """
+    dest = pathlib.Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not overwrite and dest.is_file() and dest.stat().st_size > 0:
+        logger.debug(f"skipping {dest.name}, already downloaded")
+        return dest
+
+    fs, path = _filesystem_for(url, storage_options)
+    try:
+        size = _with_retries(
+            lambda: fs.size(path),
+            url,
+            retries=retries,
+            backoff=backoff,
+            is_permanent=_is_permanent_read_error,
+        )
+    except Exception as exc:  # noqa: BLE001 - logged, then re-raised unchanged
+        logger.warning(f"could not size {url}: {exc!r}")
+        raise
+    if size is None:
+        return None
+
+    cat_kwargs = {"timeout": timeout} if timeout and fs.async_impl else {}
+    part = dest.with_name(dest.name + ".part")
+
+    def _piece(fd: int, start: int) -> None:
+        end = min(start + piece_size, size)
+        data = _with_retries(
+            lambda: fs.cat_file(path, start=start, end=end, **cat_kwargs),
+            f"{url} [{start}:{end}]",
+            retries=retries,
+            backoff=backoff,
+            is_permanent=_is_permanent_read_error,
+        )
+        if data is None or len(data) != end - start:
+            got = "nothing" if data is None else f"{len(data)} bytes"
+            raise OSError(f"bytes {start}-{end} of {url} returned {got}")
+        os.pwrite(fd, data, start)
+
+    began = time.monotonic()
+    fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.ftruncate(fd, size)
+        with ThreadPoolExecutor(max_workers=connections) as pool:
+            # list(): raise the first failed piece here rather than dropping it.
+            list(pool.map(lambda start: _piece(fd, start), range(0, size, piece_size)))
+    except Exception as exc:  # noqa: BLE001 - logged, then re-raised unchanged
+        part.unlink(missing_ok=True)
+        logger.warning(f"failed to download {url}: {exc!r}")
+        raise
+    finally:
+        os.close(fd)
+    os.replace(part, dest)
+    elapsed = max(time.monotonic() - began, 1e-3)
+    logger.info(
+        f"downloaded {url} ({size / 1e9:.1f} GB in {elapsed:.0f}s, {size / 1e6 / elapsed:.0f} MB/s)"
+    )
+    return dest
+
+
 def download_many(
     urls: Sequence[str] | Iterable[str],
     dest_dir: str | os.PathLike,
