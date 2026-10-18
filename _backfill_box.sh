@@ -125,8 +125,13 @@ declare -A SCRIPTS=(
 
 # The short-retention stores. Their sources keep a few days at most, so they are caught up
 # once a day rather than given a lane: SILAM dust, both DMI HARMONIE stores, every AROME
-# domain and the MEPS model levels.
-NOON_STORES="silam dmi_harmonie arome meps"
+# domain and the MEPS model levels. Each store is its own process, so one slow or hung store
+# cannot hold the rest past their upstream retention.
+NOON_STORES="silam_dust dmi_harmonie_model_level dmi_harmonie arome_france_0025 arome_france_hd
+  arome_new_caledonia arome_indian_ocean arome_french_guiana arome_caribbean arome_polynesia
+  meps_det"
+#: A store's catch-up is killed after this, so a hang is retried at the next noon.
+NOON_TIMEOUT=23h
 
 lane_loop() {
   local name=$1 cmd=$2 rc
@@ -190,9 +195,13 @@ status)
   done
   ;;
 noon)
-  # flock: a catch-up still running at the next noon is left to finish.
-  exec flock -n "$LOGS/noon.lock" $PIXI run python one_offs/silam_harmonie_catchup.py $NOON_STORES \
-    >> "$LOGS/noon_catchup.log" 2>&1
+  # One flock per store: a store still catching up at the next noon is left to finish.
+  for store in $NOON_STORES; do
+    flock -n "$LOGS/noon_$store.lock" timeout "$NOON_TIMEOUT" \
+      $PIXI run python one_offs/silam_harmonie_catchup.py "=$store" \
+      >> "$LOGS/noon_$store.log" 2>&1 &
+  done
+  wait
   ;;
 *)
   echo "usage: $0 start|stop|status|noon" >&2
