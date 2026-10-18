@@ -424,8 +424,9 @@ class MEPSDetProvider(MetNoProvider):
 
     Each run is downloaded whole (~76 GB) into the partition's temporary directory, which
     is removed once the partition is written. Reading the same fields over OPeNDAP failed
-    most runs with "NetCDF: DAP failure", and thredds.met.no throttles each connection to
-    about 5 MB/s, so the file comes down as parallel byte ranges.
+    most runs with "NetCDF: DAP failure". thredds.met.no throttles each connection to about
+    5 MB/s, so the file comes down as a few parallel byte ranges, about an hour a run; 16
+    at once got the box's address blocked on 2026-10-18.
     """
 
     name = "meps_det"
@@ -433,8 +434,8 @@ class MEPSDetProvider(MetNoProvider):
     store_prefix = "bkr/dmi/meps_model_level.icechunk"
     steps = 3
 
-    #: Concurrent range requests per download.
-    connections = 16
+    #: Concurrent range requests per download. More got the host blocked by thredds.met.no.
+    connections = 4
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
         """Download the run into ``temp_dir``. Empty when the archive does not have it.
