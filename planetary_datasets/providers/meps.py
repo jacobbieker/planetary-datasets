@@ -42,7 +42,7 @@ import xarray as xr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
-from planetary_datasets.common.download import download_many
+from planetary_datasets.common.download import download_many, download_ranged
 from planetary_datasets.config import Config
 
 THREDDS = "https://thredds.met.no/thredds"
@@ -155,6 +155,15 @@ def nordic_analysis_url(date: pd.Timestamp) -> str:
     return (
         f"{THREDDS}/fileServer/metpparchive/{date.year}/{date.month:02}/{date.day:02}/"
         f"met_analysis_1_0km_nordic_{date.strftime('%Y%m%dT%HZ')}.nc"
+    )
+
+
+def meps_det_url(date: pd.Timestamp) -> str:
+    """HTTP download URL for the MEPS 2.5 km deterministic run at ``date``."""
+    return (
+        f"{THREDDS}/fileServer/meps25epsarchive/"
+        f"{date.year}/{date.month:02}/{date.day:02}/"
+        f"meps_det_2_5km_{date.strftime('%Y%m%d')}T{date.strftime('%H')}Z.nc"
     )
 
 
@@ -408,10 +417,15 @@ class AndoyaMEPSPostProcessedProvider(MEPSPostProcessedProvider):
 
 
 class MEPSDetProvider(MetNoProvider):
-    """MEPS 2.5 km deterministic model-level fields, read over OPeNDAP.
+    """MEPS 2.5 km deterministic model-level fields.
 
     Only the hybrid-level variables are kept, and only the first three lead times, which is
     what makes a gapless hourly series out of the three-hourly cycles.
+
+    Each run is downloaded whole (~76 GB) into the partition's temporary directory, which
+    is removed once the partition is written. Reading the same fields over OPeNDAP failed
+    most runs with "NetCDF: DAP failure", and thredds.met.no throttles each connection to
+    about 5 MB/s, so the file comes down as parallel byte ranges.
     """
 
     name = "meps_det"
@@ -419,9 +433,21 @@ class MEPSDetProvider(MetNoProvider):
     store_prefix = "bkr/dmi/meps_model_level.icechunk"
     steps = 3
 
+    #: Concurrent range requests per download.
+    connections = 16
+
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
-        """Return the OPeNDAP endpoint; it is read in place rather than downloaded."""
-        return [meps_det_opendap_url(it)]
+        """Download the run into ``temp_dir``. Empty when the archive does not have it.
+
+        Raises:
+            ValueError: if ``temp_dir`` is not given; a run is too large to keep anywhere
+                that outlives the partition.
+        """
+        if temp_dir is None:
+            raise ValueError(f"{self.name} needs a temp_dir to download {it} into")
+        url = meps_det_url(it)
+        path = download_ranged(url, temp_dir / url.rsplit("/", 1)[-1], connections=self.connections)
+        return [str(path)] if path is not None else []
 
     def process(
         self,
@@ -479,6 +505,7 @@ __all__ = [
     "PROVIDERS",
     "meps_analysis_urls",
     "meps_det_opendap_url",
+    "meps_det_url",
     "nordic_analysis_url",
     "nordic_reflectivity_url",
 ]

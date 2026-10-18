@@ -29,6 +29,7 @@ from planetary_datasets.providers.meps import (
     NordicReflectivityProvider,
     meps_analysis_urls,
     meps_det_opendap_url,
+    meps_det_url,
     nordic_analysis_url,
     nordic_reflectivity_url,
 )
@@ -74,11 +75,21 @@ def write_meps_step(tmp_path, stamp: str, step: int) -> list[str]:
     coords = {"time": time, **_grid()}
 
     hl = xr.Dataset(
-        {"air_temperature_hl": (("time", "height0", "y", "x"), np.zeros((1, 1, NY, NX), "float32"))},
+        {
+            "air_temperature_hl": (
+                ("time", "height0", "y", "x"),
+                np.zeros((1, 1, NY, NX), "float32"),
+            )
+        },
         coords={**coords, "height0": np.array([2.0])},
     )
     pl = xr.Dataset(
-        {"air_temperature_pl": (("time", "pressure", "y", "x"), np.zeros((1, 3, NY, NX), "float32"))},
+        {
+            "air_temperature_pl": (
+                ("time", "pressure", "y", "x"),
+                np.zeros((1, 3, NY, NX), "float32"),
+            )
+        },
         coords={**coords, "pressure": np.array([1000.0, 500.0, 850.0])},
     )
     sfc = xr.Dataset(
@@ -156,9 +167,18 @@ def write_det_model_level(tmp_path, time: pd.Timestamp, steps: int = 3) -> str:
             "/metpparchive/2026/04/05/",
             "met_analysis_1_0km_nordic_20260405T20Z.nc",
         ),
-        (meps_det_opendap_url(pd.Timestamp("2026-04-01T00:00")), "/dodsC/", "meps_det_2_5km_20260401T00Z.nc"),
+        (
+            meps_det_opendap_url(pd.Timestamp("2026-04-01T00:00")),
+            "/dodsC/",
+            "meps_det_2_5km_20260401T00Z.nc",
+        ),
+        (
+            meps_det_url(pd.Timestamp("2026-04-01T03:00")),
+            "/fileServer/meps25epsarchive/2026/04/01/",
+            "meps_det_2_5km_20260401T03Z.nc",
+        ),
     ],
-    ids=["reflectivity-month-nested", "analysis-day-nested", "det-opendap"],
+    ids=["reflectivity-month-nested", "analysis-day-nested", "det-opendap", "det-download"],
 )
 def test_urls_match_the_archive_layout(url, directory, filename):
     assert directory in url
@@ -267,7 +287,9 @@ def test_postprocessed_process_concatenates_hours(tmp_path, local_config):
     files = [write_nordic_analysis(tmp_path, start + pd.Timedelta(h, "h")) for h in range(3)]
     ds = MEPSPostProcessedProvider(config=local_config).process(files, start)
     assert ds.sizes["time"] == 3
-    assert list(pd.DatetimeIndex(ds.time.values)) == [start + pd.Timedelta(h, "h") for h in range(3)]
+    assert list(pd.DatetimeIndex(ds.time.values)) == [
+        start + pd.Timedelta(h, "h") for h in range(3)
+    ]
 
 
 def test_postprocessed_partitions_do_not_overlap(local_config):
@@ -287,6 +309,37 @@ def test_det_process_keeps_hybrid_vars_and_downcasts(tmp_path, local_config):
     assert ds["b"].dtype == np.dtype("float64")
     assert ds["ap"].dtype == np.dtype("float64")
     assert float(ds["ap"].max()) == 20000.75
+
+
+def test_det_fetch_downloads_the_run_into_the_temp_dir(tmp_path, local_config, monkeypatch):
+    calls = []
+
+    def fake_download(url, dest, connections):
+        calls.append((url, dest, connections))
+        dest.write_bytes(b"nc")
+        return dest
+
+    monkeypatch.setattr("planetary_datasets.providers.meps.download_ranged", fake_download)
+    provider = MEPSDetProvider(config=local_config)
+    files = provider.fetch(pd.Timestamp("2026-10-15T15:00"), temp_dir=tmp_path)
+    assert files == [str(tmp_path / "meps_det_2_5km_20261015T15Z.nc")]
+    assert calls[0][0] == meps_det_url(pd.Timestamp("2026-10-15T15:00"))
+    assert calls[0][2] == provider.connections
+
+
+def test_det_fetch_skips_a_run_the_archive_does_not_have(tmp_path, local_config, monkeypatch):
+    monkeypatch.setattr("planetary_datasets.providers.meps.download_ranged", lambda *a, **k: None)
+    assert (
+        MEPSDetProvider(config=local_config).fetch(
+            pd.Timestamp("2026-10-15T15:00"), temp_dir=tmp_path
+        )
+        == []
+    )
+
+
+def test_det_fetch_needs_somewhere_to_download_to(local_config):
+    with pytest.raises(ValueError, match="temp_dir"):
+        MEPSDetProvider(config=local_config).fetch(pd.Timestamp("2026-10-15T15:00"))
 
 
 def test_det_process_finds_levels_without_a_hybrid_coordinate(tmp_path, local_config):
@@ -317,8 +370,12 @@ def test_det_process_rejects_a_file_with_no_model_levels(tmp_path, local_config)
 
 def test_andoya_variants_crop(tmp_path, local_config):
     files = write_meps_analysis(tmp_path)
-    full = MEPSAnalysisProvider(config=local_config).process(files, pd.Timestamp("2026-04-05T03:00"))
-    cropped = AndoyaMEPSProvider(config=local_config).process(files, pd.Timestamp("2026-04-05T03:00"))
+    full = MEPSAnalysisProvider(config=local_config).process(
+        files, pd.Timestamp("2026-04-05T03:00")
+    )
+    cropped = AndoyaMEPSProvider(config=local_config).process(
+        files, pd.Timestamp("2026-04-05T03:00")
+    )
     # The synthetic grid sits inside the box, so nothing is dropped, but the crop must run.
     assert cropped.sizes["y"] <= full.sizes["y"]
     assert float(cropped.latitude.max()) <= ANDOYA.latitude + ANDOYA.lat_pad
@@ -343,7 +400,12 @@ def test_a_local_store_does_not_need_the_private_bucket(monkeypatch, local_confi
 
 
 def test_the_public_providers_never_read_the_private_bucket_variable():
-    for cls in (NordicReflectivityProvider, MEPSAnalysisProvider, MEPSPostProcessedProvider, MEPSDetProvider):
+    for cls in (
+        NordicReflectivityProvider,
+        MEPSAnalysisProvider,
+        MEPSPostProcessedProvider,
+        MEPSDetProvider,
+    ):
         assert cls.bucket_env is None
 
 
