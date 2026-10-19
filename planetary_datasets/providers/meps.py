@@ -436,6 +436,12 @@ class MEPSDetProvider(MetNoProvider):
 
     #: Concurrent range requests per download. More got the host blocked by thredds.met.no.
     connections = 4
+    #: Bytes per range request. thredds.met.no drops long responses part-way (64 MB pieces
+    #: were cut after 3-16 MB), failing whole runs; a short piece usually finishes first.
+    piece_size = 16 * 1024 * 1024
+    #: Attempts per piece, with exponential backoff from ``piece_backoff`` seconds.
+    piece_retries = 10
+    piece_backoff = 5.0
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
         """Download the run into ``temp_dir``. Empty when the archive does not have it.
@@ -447,7 +453,14 @@ class MEPSDetProvider(MetNoProvider):
         if temp_dir is None:
             raise ValueError(f"{self.name} needs a temp_dir to download {it} into")
         url = meps_det_url(it)
-        path = download_ranged(url, temp_dir / url.rsplit("/", 1)[-1], connections=self.connections)
+        path = download_ranged(
+            url,
+            temp_dir / url.rsplit("/", 1)[-1],
+            connections=self.connections,
+            piece_size=self.piece_size,
+            retries=self.piece_retries,
+            backoff=self.piece_backoff,
+        )
         return [str(path)] if path is not None else []
 
     def process(
