@@ -314,8 +314,8 @@ def test_det_process_keeps_hybrid_vars_and_downcasts(tmp_path, local_config):
 def test_det_fetch_downloads_the_run_into_the_temp_dir(tmp_path, local_config, monkeypatch):
     calls = []
 
-    def fake_download(url, dest, connections):
-        calls.append((url, dest, connections))
+    def fake_download(url, dest, connections, **kwargs):
+        calls.append((url, dest, connections, kwargs))
         dest.write_bytes(b"nc")
         return dest
 
@@ -325,6 +325,11 @@ def test_det_fetch_downloads_the_run_into_the_temp_dir(tmp_path, local_config, m
     assert files == [str(tmp_path / "meps_det_2_5km_20261015T15Z.nc")]
     assert calls[0][0] == meps_det_url(pd.Timestamp("2026-10-15T15:00"))
     assert calls[0][2] == provider.connections
+    assert calls[0][3] == {
+        "piece_size": provider.piece_size,
+        "retries": provider.piece_retries,
+        "backoff": provider.piece_backoff,
+    }
 
 
 def test_det_fetch_skips_a_run_the_archive_does_not_have(tmp_path, local_config, monkeypatch):
