@@ -187,14 +187,18 @@ LANES: dict[str, Lane] = {
         for sat in ("n20", "n21", "snpp")
     },
     # AMPS (WRF24, from 2017-10-10T12; DRAKE and NZ from 2020-08-08), first 48 h of each
-    # 00/12 UTC run, to bkr/dmi/amps_<domain>. GDEX archives a run within about a day. d5,
-    # the 0.89 km nest at hours per run, starts from 2024 by request; from 2017 it was years.
+    # 00/12 UTC run, to bkr/dmi/amps_<domain>. GDEX archives a run within about a day. The
+    # nests d3, d5 and d6 start from 2024 by request; from 2017 they were years of backfill.
     **{
         f"amps_{domain}": Lane(
             _provider("amps", "AMPSProvider", domain=domain),
-            {"drake": "2020-08-08", "nz": "2020-08-08", "d5": "2024-01-01"}.get(
-                domain, "2017-10-10T12:00"
-            ),
+            {
+                "drake": "2020-08-08",
+                "nz": "2020-08-08",
+                "d3": "2024-01-01",
+                "d5": "2024-01-01",
+                "d6": "2024-01-01",
+            }.get(domain, "2017-10-10T12:00"),
             "12h",
             36,
         )
