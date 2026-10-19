@@ -206,6 +206,15 @@ LANES: dict[str, Lane] = {
     },
     # A rolling ten-day bucket: anything older has already gone.
     "uk_marine": Lane(_uk_marine, "-10D", "1h", 2),
+    # DWD ICON-D2-RUC, one store per output cadence, read from the local first-hour mirror
+    # that the icon_d2_ruc_mirror lane keeps (DWD keeps about a day). Three hours behind, so
+    # every field of a run has been mirrored before the run is written.
+    **{
+        f"icon_d2_ruc_{timescale}": Lane(
+            _provider("icon", "ICOND2RUCProvider", timescale=timescale), "-2D", "1h", 3
+        )
+        for timescale in ("60min", "15min", "5min")
+    },
     # NOAA OSMC / AOML marine observations, ragged: osmc_all plus one store per platform
     # type. Daily; a day is written 36 h after it starts, so late GTS reports have arrived.
     "osmc_ragged": Lane(_osmc_ragged, "2012-01-01", "1D", 36),

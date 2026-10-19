@@ -106,6 +106,12 @@ declare -A LANES=(
   # AOML / OSMC marine observations: bkr/aoml/v2, 2012 onward, then a pass every two hours.
   [osmc_ragged]="_backfill_lanes.py osmc_ragged --threads 4 --pause 7200"
   [ifs_analysis]="_backfill_lanes.py ifs_analysis --threads 8"
+  # DWD ICON-D2-RUC: a rolling three-day local mirror of each run's first hour (~29 GB a
+  # day), and the three cadence stores written from it. Moved here 2026-10-19.
+  [icon_d2_ruc_mirror]="-m planetary_datasets.providers.icon_d2_ruc_mirror --pause 300"
+  [icon_d2_ruc_60min]="_backfill_lanes.py icon_d2_ruc_60min --threads 4"
+  [icon_d2_ruc_15min]="_backfill_lanes.py icon_d2_ruc_15min --threads 4"
+  [icon_d2_ruc_5min]="_backfill_lanes.py icon_d2_ruc_5min --threads 2"
   [opera_rainfall]="_backfill_lanes.py opera_rainfall --threads 4"
   [opera_dbz]="_backfill_lanes.py opera_dbz --threads 4"
   [metop_sg_mws]="_backfill_lanes.py metop_sg_mws --threads 4"
