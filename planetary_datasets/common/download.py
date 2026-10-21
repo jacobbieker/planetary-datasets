@@ -37,9 +37,10 @@ PERMANENT_HTTP_STATUSES = frozenset({401, 403, 404, 410})
 _T = TypeVar("_T")
 
 #: Least seconds between requests from one process to a host that limits each client
-#: address. GDEX (Apache mod_qos) answers HTTP 500 to everything from an address that
-#: requests faster than it allows, which the backfill box tripped repeatedly.
-HOST_MIN_INTERVAL: dict[str, float] = {"data.gdex.ucar.edu": 2.0}
+#: address. GDEX (Apache mod_qos) answers HTTP 500 (and sometimes a false 404) to
+#: everything from an address that requests faster than it allows, which the backfill box
+#: tripped repeatedly; two seconds apart over three processes was still too fast.
+HOST_MIN_INTERVAL: dict[str, float] = {"data.gdex.ucar.edu": 5.0}
 #: Least base backoff, in seconds, before retrying a failed request to such a host: its
 #: refusal lasts a while, so the default one-second retries only extend it.
 HOST_MIN_BACKOFF: dict[str, float] = {"data.gdex.ucar.edu": 60.0}
@@ -68,6 +69,32 @@ def wait_for_host(url: str) -> None:
         _HOST_NEXT[host] = turn + interval
     if turn > now:
         time.sleep(turn - now)
+
+
+def url_status(url: str, attempts: int = 3, timeout: float = 60.0) -> int | None:
+    """HTTP status of a HEAD request for ``url``, spaced and retried for limited hosts.
+
+    Requests wait their turn with :func:`wait_for_host`. A 5xx, a 429 or a transport error
+    is retried after :func:`host_backoff` (doubling) up to ``attempts`` times.
+
+    Returns:
+        The last status received, or None if no attempt got an answer.
+    """
+    import requests
+
+    status: int | None = None
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(host_backoff(url, 1.0) * 2 ** (attempt - 1))
+        wait_for_host(url)
+        try:
+            status = requests.head(url, allow_redirects=True, timeout=timeout).status_code
+        except requests.RequestException as exc:
+            logger.debug(f"could not probe {url}: {exc}")
+            continue
+        if status < 500 and status != 429:
+            return status
+    return status
 
 
 def host_backoff(url: str, backoff: float) -> float:

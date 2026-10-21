@@ -68,14 +68,13 @@ from typing import Dict, Iterable, List, Sequence
 import icechunk
 import numpy as np
 import pandas as pd
-import requests
 import xarray as xr
 import zarr
 from icechunk.xarray import to_icechunk
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
-from planetary_datasets.common.download import download_one
+from planetary_datasets.common.download import download_one, url_status
 from planetary_datasets.common.staged import StagedFilesMixin
 from planetary_datasets.common.store import (
     STORE_READ_ERRORS,
@@ -291,12 +290,12 @@ def is_restricted_fallback(name: str, cycle) -> bool:
 
 
 def url_is_absent(url: str, timeout: float = 60.0) -> bool:
-    """True when the archive answers 404 for ``url``; False when it has it or is unsure."""
-    try:
-        return requests.head(url, allow_redirects=True, timeout=timeout).status_code == 404
-    except requests.RequestException as exc:
-        logger.debug(f"could not probe {url}: {exc}")
-        return False
+    """True when the archive answers 404 for ``url``; False when it has it or is unsure.
+
+    Spaced and retried like every GDEX request (see
+    :func:`~planetary_datasets.common.download.url_status`).
+    """
+    return url_status(url, timeout=timeout) == 404
 
 
 # ---------------------------------------------------------------------------- decoding

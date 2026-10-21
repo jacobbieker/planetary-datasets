@@ -42,12 +42,10 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
-import time
 from typing import Iterable, List, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
-import requests
 import xarray as xr
 from loguru import logger
 
@@ -55,8 +53,7 @@ from planetary_datasets.base import BaseProvider
 from planetary_datasets.common.download import (
     download_many,
     download_one,
-    host_backoff,
-    wait_for_host,
+    url_status,
 )
 from planetary_datasets.common.generations import GenerationalStoreMixin
 from planetary_datasets.common.lazy_fields import (
@@ -685,11 +682,10 @@ class AMPSProvider(NaiveUTCPartitions, GenerationalStoreMixin, BaseProvider):
 
     @staticmethod
     def _published(url: str) -> bool:
-        """Whether GDEX has ``url``, without downloading it.
+        """Whether GDEX has ``url``, without downloading it. Only a 404 means unpublished.
 
-        Only a 404 means unpublished. Requests are spaced by
-        :func:`~planetary_datasets.common.download.wait_for_host`, and a refusal is retried
-        after GDEX's backoff (1, then 2 minutes) before giving up.
+        Probed with :func:`~planetary_datasets.common.download.url_status`, which spaces
+        requests to GDEX and retries its refusals after backing off.
 
         Raises:
             RuntimeError: If GDEX still does not answer, or answers with any status but 200
@@ -698,22 +694,12 @@ class AMPSProvider(NaiveUTCPartitions, GenerationalStoreMixin, BaseProvider):
                 treated as "nothing to do", a refusing GDEX had each lane skip every run in
                 a few minutes.
         """
-        problem = ""
-        for attempt in range(PUBLISHED_ATTEMPTS):
-            if attempt:
-                time.sleep(host_backoff(url, 0.0) * 2 ** (attempt - 1))
-            wait_for_host(url)
-            try:
-                response = requests.head(url, allow_redirects=True, timeout=60)
-            except requests.RequestException as exc:
-                problem = str(exc)
-                continue
-            if response.status_code == 404:
-                return False
-            if response.status_code == 200:
-                return True
-            problem = f"HTTP {response.status_code}"
-        raise RuntimeError(f"could not check {url}: {problem}")
+        status = url_status(url, attempts=PUBLISHED_ATTEMPTS)
+        if status == 404:
+            return False
+        if status == 200:
+            return True
+        raise RuntimeError(f"could not check {url}: HTTP {status}")
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
         """Download every file of init time ``it``, or nothing at all.
