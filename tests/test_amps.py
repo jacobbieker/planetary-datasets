@@ -443,3 +443,26 @@ def test_an_unreachable_gdex_fails_the_run_instead_of_skipping_it(monkeypatch):
 
 def test_downloads_are_one_at_a_time_by_default():
     assert AMPSProvider().download_workers == 1
+
+
+@pytest.mark.parametrize(("status", "expected"), [(200, True), (404, False)])
+def test_only_200_and_404_answer_whether_a_file_is_published(monkeypatch, status, expected):
+    class Response:
+        status_code = status
+
+    monkeypatch.setattr(
+        "planetary_datasets.providers.amps.requests.head", lambda *a, **k: Response()
+    )
+    assert AMPSProvider._published("https://data.gdex.ucar.edu/d473002/x.grb") is expected
+
+
+@pytest.mark.parametrize("status", [403, 429, 503])
+def test_a_refusal_fails_the_run_instead_of_skipping_it(monkeypatch, status):
+    class Response:
+        status_code = status
+
+    monkeypatch.setattr(
+        "planetary_datasets.providers.amps.requests.head", lambda *a, **k: Response()
+    )
+    with pytest.raises(RuntimeError, match=f"HTTP {status}"):
+        AMPSProvider._published("https://data.gdex.ucar.edu/d473002/x.grb")
