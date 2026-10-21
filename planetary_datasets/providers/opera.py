@@ -156,11 +156,16 @@ class OPERAProvider(LocalArchiveRadarProvider):
 
 
 class OPERARainfallProvider(OPERAProvider):
-    """OPERA rain rate and one-hour accumulation, four 15-minute frames per hour."""
+    """OPERA rain rate and one-hour accumulation, four 15-minute frames per hour.
+
+    An hour missing some frames upstream is kept with the frames it has, as for
+    reflectivity; the missing frame times are simply absent from the time axis.
+    """
 
     name = "opera_rainfall"
     product = "rainfall"
     store_prefix = "bkr/precipradar/opera_rainfall.icechunk"
+    partial_by_default = True
 
 
 class OPERAReflectivityProvider(OPERAProvider):
