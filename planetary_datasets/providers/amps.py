@@ -616,7 +616,8 @@ class AMPSProvider(NaiveUTCPartitions, GenerationalStoreMixin, BaseProvider):
         config: Configuration; defaults to the process-wide one.
         dask_threads: Chunks decoded and written concurrently. Each costs roughly
             3.5x its decoded size (a 21-level field of the 0.89 km nest is 58 MB).
-        download_workers: Concurrent downloads from GDEX.
+        download_workers: Concurrent downloads from GDEX. One by default: GDEX started
+            resetting the backfill box's connections with seven domains at four each.
     """
 
     append_dim = "init_time"
@@ -632,7 +633,7 @@ class AMPSProvider(NaiveUTCPartitions, GenerationalStoreMixin, BaseProvider):
         domain: str = "d1",
         config: Config | None = None,
         dask_threads: int = 4,
-        download_workers: int = 4,
+        download_workers: int = 1,
     ):
         """Set up the provider for one domain; see the class docstring for the arguments.
 
@@ -676,12 +677,17 @@ class AMPSProvider(NaiveUTCPartitions, GenerationalStoreMixin, BaseProvider):
 
     @staticmethod
     def _published(url: str) -> bool:
-        """Whether GDEX has ``url``, without downloading it."""
+        """Whether GDEX has ``url``, without downloading it.
+
+        Raises:
+            RuntimeError: If GDEX does not answer. That fails the partition rather than
+                passing it over as unpublished: treated as "nothing to do", an unreachable
+                GDEX had each lane checking the next run every few seconds.
+        """
         try:
             response = requests.head(url, allow_redirects=True, timeout=60)
         except requests.RequestException as exc:
-            logger.warning(f"could not check {url}: {exc}")
-            return False
+            raise RuntimeError(f"could not check {url}: {exc}") from exc
         return response.status_code == 200
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
