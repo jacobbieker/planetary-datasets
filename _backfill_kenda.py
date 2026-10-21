@@ -13,10 +13,14 @@ has not finished publishing fails to stage and is tried again next pass; staging
 partially would fix the store's schema to a subset of its fields.
 
 One writer per store: nothing else may write the KENDA stores while this runs.
+
+Staged files (about 40 GB a day) are deleted hour by hour at the end of each pass once both
+stores hold that hour; the shared ``horizontal_constants`` file is kept.
 """
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import time
@@ -44,6 +48,35 @@ def stage(it, archive, image: str) -> bool:
         print(f"  {it} not staged: {' | '.join(tail)[:300]}", flush=True)
         return False
     return True
+
+
+#: Staged files carry their reference time: ``kenda-ch1-<YYYYMMDDHHMM>-<lead>-<field>-...``.
+STAGED_HOUR = re.compile(r"^kenda-ch1-(\d{12})-")
+
+
+def discard_stored(providers, archive) -> int:
+    """Delete the staged files of every hour both stores already hold. Returns how many."""
+    import pandas as pd
+
+    by_hour: dict = {}
+    for path in archive.iterdir():
+        match = STAGED_HOUR.match(path.name)
+        if match:
+            by_hour.setdefault(pd.Timestamp(match[1]), []).append(path)
+    if not by_hour:
+        return 0
+    hours = pd.DatetimeIndex(sorted(by_hour))
+    pending = set().union(*(set(p.missing_timesteps(hours)) for p in providers))
+    removed = 0
+    for hour, paths in by_hour.items():
+        if hour in pending:
+            continue
+        for path in paths:
+            path.unlink(missing_ok=True)
+            removed += 1
+    if removed:
+        print(f"discarded {removed} staged file(s) already in both stores", flush=True)
+    return removed
 
 
 def main(argv) -> int:
@@ -93,6 +126,7 @@ def main(argv) -> int:
                         flush=True,
                     )
         print(f"pass done: {written} written, {failed} failed", flush=True)
+        discard_stored(providers, archive)
         if args.once:
             return 1 if failed else 0
         time.sleep(args.pause)
