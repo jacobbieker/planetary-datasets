@@ -47,7 +47,7 @@ declare -A LANES=(
   [uk_marine]="_backfill_lanes.py uk_marine --threads 1 --pause 43200"
   # NCEP ADP upper-air (AMDAR/aircraft + radiosondes) from GDEX d337000, from 1997; decodes
   # with MET pb2nc in the dtcenter/met Docker image.
-  # GDEX-PAUSED [ncep_upper_air]="_backfill_lanes.py ncep_upper_air --threads 2 --pause 21600"
+  [ncep_upper_air]="_backfill_lanes.py ncep_upper_air --threads 2 --pause 21600"
   # MRMS outside CONUS (dynamical.org archives CONUS), SILAM aerosol, MetOp AVHRR and GOME,
   # and the met.no Nordic radar mosaic.
   [mrms_alaska]="_backfill_lanes.py mrms_alaska --threads 2"
@@ -63,12 +63,13 @@ declare -A LANES=(
   # GDEX-PAUSED 2026-10-21: data.gdex.ucar.edu started resetting the box's connections (it
   # still answers other hosts) with nine lanes reading it at once. The AMPS, NCEP upper-air
   # and IFS analysis lanes are paused until it answers again; resume them a few at a time.
+  # Resumed 2026-10-21 once it answered: IFS analysis, NCEP upper air and AMPS d5.
   # AMPS WRF24. The nests d3/d6 (2.67 km) and d5 (0.89 km) backfill from 2024 only; d5
   # resumed 2026-10-18 and d3/d6 2026-10-19 on the 192-vCPU box.
   # GDEX-PAUSED [amps_d1]="_backfill_lanes.py amps_d1 --threads 4 --pause 21600"
   # GDEX-PAUSED [amps_d2]="_backfill_lanes.py amps_d2 --threads 4 --pause 21600"
   # GDEX-PAUSED [amps_d3]="_backfill_lanes.py amps_d3 --threads 8 --pause 21600"
-  # GDEX-PAUSED [amps_d5]="_backfill_lanes.py amps_d5 --threads 8 --pause 21600"
+  [amps_d5]="_backfill_lanes.py amps_d5 --threads 8 --pause 21600"
   # GDEX-PAUSED [amps_d6]="_backfill_lanes.py amps_d6 --threads 4 --pause 21600"
   # GDEX-PAUSED [amps_drake]="_backfill_lanes.py amps_drake --threads 4 --pause 21600"
   # GDEX-PAUSED [amps_nz]="_backfill_lanes.py amps_nz --threads 4 --pause 21600"
@@ -108,7 +109,7 @@ declare -A LANES=(
   [icon_v1_global]="scripts/icon_v1_backfill.py global --skipped-log logs/icon_v1_global_skipped.tsv"
   # AOML / OSMC marine observations: bkr/aoml/v2, 2012 onward, then a pass every two hours.
   [osmc_ragged]="_backfill_lanes.py osmc_ragged --threads 4 --pause 7200"
-  # GDEX-PAUSED [ifs_analysis]="_backfill_lanes.py ifs_analysis --threads 8"
+  [ifs_analysis]="_backfill_lanes.py ifs_analysis --threads 8"
   # DWD ICON-D2-RUC: a rolling three-day local mirror of each run's first hour (~29 GB a
   # day), and the three cadence stores written from it, each every two hours. Moved here
   # 2026-10-19.
