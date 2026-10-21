@@ -679,16 +679,23 @@ class AMPSProvider(NaiveUTCPartitions, GenerationalStoreMixin, BaseProvider):
     def _published(url: str) -> bool:
         """Whether GDEX has ``url``, without downloading it.
 
+        Only a 404 means unpublished.
+
         Raises:
-            RuntimeError: If GDEX does not answer. That fails the partition rather than
-                passing it over as unpublished: treated as "nothing to do", an unreachable
-                GDEX had each lane checking the next run every few seconds.
+            RuntimeError: If GDEX does not answer, or answers with any status but 200 or
+                404 (it refuses a busy client with error statuses). That fails the
+                partition rather than passing it over as unpublished: treated as "nothing
+                to do", a refusing GDEX had each lane skip every run in a few minutes.
         """
         try:
             response = requests.head(url, allow_redirects=True, timeout=60)
         except requests.RequestException as exc:
             raise RuntimeError(f"could not check {url}: {exc}") from exc
-        return response.status_code == 200
+        if response.status_code == 404:
+            return False
+        if response.status_code != 200:
+            raise RuntimeError(f"could not check {url}: HTTP {response.status_code}")
+        return True
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
         """Download every file of init time ``it``, or nothing at all.
