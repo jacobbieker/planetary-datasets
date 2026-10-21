@@ -15,7 +15,7 @@ def test_requests_to_a_limited_host_are_spaced(monkeypatch):
     monkeypatch.setattr(dl, "_HOST_NEXT", {})
     for _ in range(3):
         dl.wait_for_host(GDEX)
-    assert slept == [2.0, 4.0]
+    assert slept == [5.0, 10.0]
 
 
 def test_other_hosts_are_not_delayed(monkeypatch):
