@@ -207,15 +207,15 @@ def test_an_absent_hour_is_nothing_to_do(opera_root):
     assert opera.OPERARainfallProvider().fetch(pd.Timestamp(HOUR)) == []
 
 
-def test_a_partial_staged_hour_is_rejected_by_default(stage):
+def test_a_partial_staged_hour_is_kept_by_default_and_rejected_when_strict(stage):
     gap = HOUR + dt.timedelta(minutes=15)
     stage("rainfall", HOUR, source=FakeOPERA(missing={gap}), allow_partial=True)
-    provider = opera.OPERARainfallProvider()
+    strict = opera.OPERARainfallProvider(allow_partial=False)
     it = pd.Timestamp(HOUR)
 
     with pytest.raises(ValueError, match="06:15"):
-        provider.process(provider.fetch(it), it)
-    partial = opera.OPERARainfallProvider(allow_partial=True).process(provider.fetch(it), it)
+        strict.process(strict.fetch(it), it)
+    partial = opera.OPERARainfallProvider().process(strict.fetch(it), it)
     assert partial.sizes["time"] == 3
 
 
@@ -346,10 +346,10 @@ def test_opera_stores_depend_on_their_downloads_after_key_prefixing():
         assert graph[download] == set()
 
 
-def test_reflectivity_keeps_partial_hours_and_rainfall_does_not():
+def test_both_products_keep_partial_hours_by_default():
     assert opera.OPERAReflectivityProvider().allow_partial is True
-    assert opera.OPERARainfallProvider().allow_partial is False
-    assert opera.OPERAReflectivityProvider(allow_partial=False).allow_partial is False
+    assert opera.OPERARainfallProvider().allow_partial is True
+    assert opera.OPERARainfallProvider(allow_partial=False).allow_partial is False
 
 
 def test_reflectivity_writes_an_hour_with_a_frame_missing(stage):
