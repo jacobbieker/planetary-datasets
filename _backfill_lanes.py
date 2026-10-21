@@ -99,9 +99,8 @@ def _hafs(name: str) -> Callable[[], Any]:
 def _ncep_upper_air():
     from planetary_datasets.providers.observations.ncep_prepbufr import NCEPUpperAirProvider
 
-    # Four cycles decoded at once (MET pb2nc in Docker, ~1 GB each); walking forward lets
-    # the decodes run ahead of the writes.
-    return NCEPUpperAirProvider(prefetch_workers=4)
+    # One cycle staged at a time: GDEX resets the box's connections under heavier load.
+    return NCEPUpperAirProvider(prefetch_workers=1)
 
 
 def _provider(module: str, cls: str, **kwargs) -> Callable[[], Any]:

@@ -428,3 +428,18 @@ def test_float32_fields_are_bit_rounded_except_moisture_geopotential_and_pressur
         "pressure_model_level",
     ):
         assert provider.keepbits_for(exact) is None, exact
+
+
+def test_an_unreachable_gdex_fails_the_run_instead_of_skipping_it(monkeypatch):
+    import requests
+
+    def refuse(*args, **kwargs):
+        raise requests.ConnectionError("Connection reset by peer")
+
+    monkeypatch.setattr("planetary_datasets.providers.amps.requests.head", refuse)
+    with pytest.raises(RuntimeError, match="could not check"):
+        AMPSProvider._published("https://data.gdex.ucar.edu/d473002/x.grb")
+
+
+def test_downloads_are_one_at_a_time_by_default():
+    assert AMPSProvider().download_workers == 1
