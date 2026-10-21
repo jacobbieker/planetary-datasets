@@ -14,6 +14,7 @@ import pathlib
 import threading
 import time
 import traceback
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Iterable, Sequence, TypeVar
 
@@ -34,6 +35,44 @@ PERMANENT_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError)
 PERMANENT_HTTP_STATUSES = frozenset({401, 403, 404, 410})
 
 _T = TypeVar("_T")
+
+#: Least seconds between requests from one process to a host that limits each client
+#: address. GDEX (Apache mod_qos) answers HTTP 500 to everything from an address that
+#: requests faster than it allows, which the backfill box tripped repeatedly.
+HOST_MIN_INTERVAL: dict[str, float] = {"data.gdex.ucar.edu": 2.0}
+#: Least base backoff, in seconds, before retrying a failed request to such a host: its
+#: refusal lasts a while, so the default one-second retries only extend it.
+HOST_MIN_BACKOFF: dict[str, float] = {"data.gdex.ucar.edu": 60.0}
+
+_HOST_NEXT: dict[str, float] = {}
+_HOST_LOCK = threading.Lock()
+
+
+def _host(url: str) -> str:
+    return urllib.parse.urlsplit(url).hostname or ""
+
+
+def wait_for_host(url: str) -> None:
+    """Wait until this process may send another request to ``url``'s host.
+
+    Requests to a host in :data:`HOST_MIN_INTERVAL` are spaced at least that far apart
+    across every thread of the process; other hosts are not delayed.
+    """
+    host = _host(url)
+    interval = HOST_MIN_INTERVAL.get(host)
+    if not interval:
+        return
+    with _HOST_LOCK:
+        now = time.monotonic()
+        turn = max(now, _HOST_NEXT.get(host, 0.0))
+        _HOST_NEXT[host] = turn + interval
+    if turn > now:
+        time.sleep(turn - now)
+
+
+def host_backoff(url: str, backoff: float) -> float:
+    """``backoff``, raised to the host's :data:`HOST_MIN_BACKOFF` where it has one."""
+    return max(backoff, HOST_MIN_BACKOFF.get(_host(url), 0.0))
 
 
 def _is_permanent_error(exc: BaseException) -> bool:
@@ -157,6 +196,7 @@ def download_one(
     open_kwargs = {"timeout": timeout} if timeout is not None else {}
 
     def _attempt() -> pathlib.Path:
+        wait_for_host(url)
         with fsspec.open(url, "rb", **open_kwargs) as src, open(part, "wb") as out:
             while True:
                 chunk = src.read(chunk_size)
@@ -173,7 +213,7 @@ def download_one(
             _attempt,
             url,
             retries=retries,
-            backoff=backoff,
+            backoff=host_backoff(url, backoff),
             on_failure=lambda: part.unlink(missing_ok=True),
         )
     except Exception as exc:  # noqa: BLE001 - any transport error is worth retrying

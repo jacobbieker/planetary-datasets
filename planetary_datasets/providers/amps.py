@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
+import time
 from typing import Iterable, List, Mapping, Sequence
 
 import numpy as np
@@ -51,7 +52,12 @@ import xarray as xr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
-from planetary_datasets.common.download import download_many, download_one
+from planetary_datasets.common.download import (
+    download_many,
+    download_one,
+    host_backoff,
+    wait_for_host,
+)
 from planetary_datasets.common.generations import GenerationalStoreMixin
 from planetary_datasets.common.lazy_fields import (
     FieldVariable,
@@ -63,6 +69,8 @@ from planetary_datasets.providers._timestamps import NaiveUTCPartitions
 from planetary_datasets.providers.regional_lam_common import init_time_download_dir
 
 GDEX_BASE_URL = "https://data.gdex.ucar.edu/d473002/grib/WRF24"
+#: Tries of the publication check before a run is failed.
+PUBLISHED_ATTEMPTS = 3
 
 #: First init time of the WRF24 grid configuration on GDEX.
 WRF24_START = pd.Timestamp("2017-10-10T12:00")
@@ -679,23 +687,33 @@ class AMPSProvider(NaiveUTCPartitions, GenerationalStoreMixin, BaseProvider):
     def _published(url: str) -> bool:
         """Whether GDEX has ``url``, without downloading it.
 
-        Only a 404 means unpublished.
+        Only a 404 means unpublished. Requests are spaced by
+        :func:`~planetary_datasets.common.download.wait_for_host`, and a refusal is retried
+        after GDEX's backoff (1, then 2 minutes) before giving up.
 
         Raises:
-            RuntimeError: If GDEX does not answer, or answers with any status but 200 or
-                404 (it refuses a busy client with error statuses). That fails the
-                partition rather than passing it over as unpublished: treated as "nothing
-                to do", a refusing GDEX had each lane skip every run in a few minutes.
+            RuntimeError: If GDEX still does not answer, or answers with any status but 200
+                or 404 (its mod_qos refuses a client that requests too fast with HTTP 500).
+                That fails the partition rather than passing it over as unpublished:
+                treated as "nothing to do", a refusing GDEX had each lane skip every run in
+                a few minutes.
         """
-        try:
-            response = requests.head(url, allow_redirects=True, timeout=60)
-        except requests.RequestException as exc:
-            raise RuntimeError(f"could not check {url}: {exc}") from exc
-        if response.status_code == 404:
-            return False
-        if response.status_code != 200:
-            raise RuntimeError(f"could not check {url}: HTTP {response.status_code}")
-        return True
+        problem = ""
+        for attempt in range(PUBLISHED_ATTEMPTS):
+            if attempt:
+                time.sleep(host_backoff(url, 0.0) * 2 ** (attempt - 1))
+            wait_for_host(url)
+            try:
+                response = requests.head(url, allow_redirects=True, timeout=60)
+            except requests.RequestException as exc:
+                problem = str(exc)
+                continue
+            if response.status_code == 404:
+                return False
+            if response.status_code == 200:
+                return True
+            problem = f"HTTP {response.status_code}"
+        raise RuntimeError(f"could not check {url}: {problem}")
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
         """Download every file of init time ``it``, or nothing at all.

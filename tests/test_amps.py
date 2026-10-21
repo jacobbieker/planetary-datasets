@@ -430,7 +430,13 @@ def test_float32_fields_are_bit_rounded_except_moisture_geopotential_and_pressur
         assert provider.keepbits_for(exact) is None, exact
 
 
-def test_an_unreachable_gdex_fails_the_run_instead_of_skipping_it(monkeypatch):
+@pytest.fixture
+def no_waiting(monkeypatch):
+    monkeypatch.setattr("planetary_datasets.providers.amps.time.sleep", lambda s: None)
+    monkeypatch.setattr("planetary_datasets.providers.amps.wait_for_host", lambda url: None)
+
+
+def test_an_unreachable_gdex_fails_the_run_instead_of_skipping_it(monkeypatch, no_waiting):
     import requests
 
     def refuse(*args, **kwargs):
@@ -446,7 +452,9 @@ def test_downloads_are_one_at_a_time_by_default():
 
 
 @pytest.mark.parametrize(("status", "expected"), [(200, True), (404, False)])
-def test_only_200_and_404_answer_whether_a_file_is_published(monkeypatch, status, expected):
+def test_only_200_and_404_answer_whether_a_file_is_published(
+    monkeypatch, no_waiting, status, expected
+):
     class Response:
         status_code = status
 
@@ -457,7 +465,7 @@ def test_only_200_and_404_answer_whether_a_file_is_published(monkeypatch, status
 
 
 @pytest.mark.parametrize("status", [403, 429, 503])
-def test_a_refusal_fails_the_run_instead_of_skipping_it(monkeypatch, status):
+def test_a_refusal_fails_the_run_instead_of_skipping_it(monkeypatch, no_waiting, status):
     class Response:
         status_code = status
 
@@ -466,3 +474,20 @@ def test_a_refusal_fails_the_run_instead_of_skipping_it(monkeypatch, status):
     )
     with pytest.raises(RuntimeError, match=f"HTTP {status}"):
         AMPSProvider._published("https://data.gdex.ucar.edu/d473002/x.grb")
+
+
+def test_a_refusal_is_retried_after_backing_off(monkeypatch):
+    statuses = iter([500, 500, 200])
+    slept = []
+
+    class Response:
+        def __init__(self):
+            self.status_code = next(statuses)
+
+    monkeypatch.setattr(
+        "planetary_datasets.providers.amps.requests.head", lambda *a, **k: Response()
+    )
+    monkeypatch.setattr("planetary_datasets.providers.amps.time.sleep", slept.append)
+    monkeypatch.setattr("planetary_datasets.providers.amps.wait_for_host", lambda url: None)
+    assert AMPSProvider._published("https://data.gdex.ucar.edu/d473002/x.grb") is True
+    assert slept == [60.0, 120.0]
