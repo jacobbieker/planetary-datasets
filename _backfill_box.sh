@@ -37,6 +37,12 @@ GUARD_MIN_AVAILABLE_GB=${GUARD_MIN_AVAILABLE_GB:-40}
 #: ... and resume one once this much is available with no such kill for an hour.
 GUARD_RESUME_AVAILABLE_GB=${GUARD_RESUME_AVAILABLE_GB:-150}
 GUARD_QUIET_MINUTES=${GUARD_QUIET_MINUTES:-60}
+#: guard restarts a running lane whose log has been silent for its pause between passes
+#: plus this long: a process can hang without dying (GOME and MTG IRS did, for 40 hours).
+GUARD_STALL_MINUTES=${GUARD_STALL_MINUTES:-180}
+#: Pause between passes for the scripts that do not take --pause (seconds).
+declare -A SCRIPT_PAUSE=([kenda]=1800 [icon_v1_global]=43200 [icon_v1_global_art]=43200
+  [icon_v1_eu_art]=43200)
 #: guard also removes abandoned planetary-datasets-* scratch untouched for this long.
 GUARD_TMP_STALE_MINUTES=${GUARD_TMP_STALE_MINUTES:-360}
 #: Himawari lanes in the order guard pauses them: the extra lanes of each resolution
@@ -266,6 +272,30 @@ guard)
   # without a timestamp) against the counts the previous run saw.
   state=$LOGS/.guard
   mkdir -p "$state"
+  # Hung lanes: alive but silent for longer than they ever wait between passes.
+  now=$(date -u +%s)
+  for name in "${!LANES[@]}" "${!SCRIPTS[@]}"; do
+    running "$name" || continue
+    log=$LOGS/$name.log
+    [[ -f $log ]] || continue
+    cmd="${LANES[$name]:-${SCRIPTS[$name]:-}}"
+    pause=$(grep -oE -- '--(pause|period) [0-9]+' <<< "$cmd" | awk '{print $2}')
+    pause=${pause:-${SCRIPT_PAUSE[$name]:-1800}}
+    last=$(grep -E '^=== ' "$log" | tail -1)
+    # A lane waiting out an unavailable source (exit 3) sleeps a day on purpose.
+    [[ $last == *"exited 3"* ]] && pause=$(( pause > UNAVAILABLE_PAUSE ? pause : UNAVAILABLE_PAUSE ))
+    age=$(( now - $(stat -c %Y "$log") ))
+    (( age > pause + GUARD_STALL_MINUTES * 60 )) || continue
+    if [[ -n ${GUARD_DRY_RUN:-} ]]; then
+      echo "would restart stalled $name (silent $((age / 60)) min)"
+      continue
+    fi
+    kill -- -"$(cat "$LOGS/$name.pid")" 2>/dev/null
+    rm -f "$LOGS/$name.pid"
+    echo "$(date -u '+%F %T') restarted stalled $name (log silent $((age / 60)) min)"
+    restart_stalled=1
+  done
+  [[ -n ${restart_stalled:-} ]] && "$0" start > /dev/null
   # Scratch left by killed processes: planetary-datasets-* temp directories no process
   # holds open and nothing has touched for GUARD_TMP_STALE_MINUTES.
   inuse=$(sudo -n ls -l /proc/[0-9]*/fd /proc/[0-9]*/cwd 2>/dev/null \
