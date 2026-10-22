@@ -171,6 +171,27 @@ def _yearly_times(store_path: str, repo: icechunk.Repository) -> np.ndarray:
     return times
 
 
+def _append_rows(session: icechunk.Session, ds: xr.Dataset) -> None:
+    """Append ``ds`` along ``time`` without reading what the store already holds.
+
+    ``to_icechunk(..., append_dim="time")`` opens the store through xarray, which builds a
+    pandas index from the whole ``time`` coordinate; ``osmc_all`` passed 580 million rows
+    and that read alone took over five minutes, growing with every day appended. Here
+    each array along ``time`` is grown in zarr and the new rows are written as a region,
+    which xarray encodes with the store's own encodings without indexing the rest.
+    """
+    group = zarr.open_group(session.store, mode="a")
+    start = group["time"].shape[0]
+    stop = start + ds.sizes["time"]
+    along = [name for name in ds.variables if "time" in ds[name].dims]
+    for name in along:
+        array = group[name]
+        array.resize((stop, *array.shape[1:]))
+    # Without its index, time is written like any other variable; as an index coordinate a
+    # region write leaves it unwritten.
+    to_icechunk(ds[along].drop_indexes("time"), session, region={"time": slice(start, stop)})
+
+
 def _append_with_ledger(repo: icechunk.Repository, ds: xr.Dataset, day: str, label: str) -> bool:
     """Append one day's rows and add the day to the store's ledger, in one commit.
 
@@ -200,7 +221,7 @@ def _append_with_ledger(repo: icechunk.Repository, ds: xr.Dataset, day: str, lab
             encoding["time"]["chunks"] = (CHUNK_ROWS,)
             to_icechunk(ds, session, encoding=encoding)
         elif rows:
-            to_icechunk(ds, session, append_dim="time")
+            _append_rows(session, ds)
     group = zarr.open_group(session.store, mode="a")
     group.attrs[LEDGER_ATTR] = sorted(set(ledger) | {day})
     session.commit(f"{label}: {rows} observation(s) for {day}")

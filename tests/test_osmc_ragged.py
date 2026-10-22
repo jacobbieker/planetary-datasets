@@ -231,3 +231,28 @@ def test_an_erddap_failure_raises(provider, monkeypatch, tmp_path):
     monkeypatch.setattr(osmc_ragged.requests, "get", lambda url, **kw: _Response(503, b"busy"))
     with pytest.raises(RuntimeError, match="503"):
         provider.fetch(pd.Timestamp("2016-01-01"), temp_dir=tmp_path)
+
+
+def test_appended_days_hold_exactly_the_source_rows(provider, yearly_2012, local_config):
+    days = pd.date_range("2012-01-01", periods=2, freq="D")
+    assert provider.run_range(days) == 2
+
+    full = stored(local_config, osmc_ragged.ALL_STORE)
+    source = yearly_2012.isel(time=slice(0, 24))
+    for name in source.data_vars:
+        np.testing.assert_array_equal(full[name].values, source[name].values, err_msg=name)
+    np.testing.assert_array_equal(full["time"].values, source["time"].values)
+
+
+def test_an_append_does_not_index_the_stored_rows(provider, yearly_2012, local_config, monkeypatch):
+    """Opening the store through xarray reads every stored time: minutes at full size."""
+    assert provider.run_partition(pd.Timestamp("2012-01-01"))
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("an append opened the whole store through xarray")
+
+    monkeypatch.setattr(xr, "open_zarr", refuse)
+    monkeypatch.setattr(xr, "open_dataset", refuse)
+    assert provider.run_partition(pd.Timestamp("2012-01-02"))
+    monkeypatch.undo()
+    assert stored(local_config, osmc_ragged.ALL_STORE).sizes["time"] == 24
