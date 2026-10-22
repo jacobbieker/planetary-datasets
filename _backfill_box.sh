@@ -137,6 +137,11 @@ declare -A SCRIPTS=(
   [sondehub]="_backfill_sondehub.sh"
   # MeteoSwiss KENDA keeps ~a day upstream: a rolling 36 h window every 30 min.
   [kenda]="_backfill_kenda.sh"
+  # ICON-ART and ICON-ART-EU from the Source Cooperative archive, a pass every 12 hours.
+  # NOT YET STARTED (2026-10-22): another host is still writing both stores. Uncomment once
+  # it is stopped; two writers race their commits.
+  # [icon_v1_global_art]="_backfill_icon_global_art.sh"
+  # [icon_v1_eu_art]="_backfill_icon_eu_art.sh"
 )
 
 # The short-retention stores. Their sources keep a few days at most, so they are caught up
