@@ -138,6 +138,19 @@ def plan(
     return list(runs), live_only + sorted(missing - set(live_only))
 
 
+def skipped_archive_runs(path: pathlib.Path) -> set[pd.Timestamp]:
+    """Runs ``path`` (a skipped-run TSV) records as too incomplete in the archive.
+
+    Those are left out by ``--not-skipped``: the archive mirror rarely fills a run in later,
+    so planning them again only puts the same skipped runs at the head of every pass. A run
+    skipped while being read live is not included; DWD may still be publishing it.
+    """
+    if not path.exists():
+        return set()
+    table = pd.read_csv(path, sep="\t", usecols=["init_time", "source"])
+    return {pd.Timestamp(t) for t in table.loc[table["source"] == "archive", "init_time"]}
+
+
 def log_skipped(path: pathlib.Path, completeness: RunCompleteness) -> None:
     """Append one skipped run to the TSV at ``path``, writing a header for a new file."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -252,6 +265,11 @@ def main(argv: list[str] | None = None) -> int:
         help="list each run and report its completeness; write nothing",
     )
     parser.add_argument(
+        "--not-skipped",
+        action="store_true",
+        help="leave out runs --skipped-log already records as incomplete in the archive",
+    )
+    parser.add_argument(
         "--archive-only",
         action="store_true",
         help="consider only archived runs, not those DWD's live server still lists",
@@ -283,6 +301,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     archived, missing = plan(provider, args.start, args.end, live=not args.archive_only)
+    if args.not_skipped:
+        before = skipped_archive_runs(skipped_log)
+        missing = [run for run in missing if run not in before]
     if args.limit is not None:
         missing = missing[: args.limit]
     logger.info(
