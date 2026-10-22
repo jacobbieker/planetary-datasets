@@ -1,5 +1,5 @@
 #!/bin/bash
-# Keep one ICON v1 store current from the Source Cooperative archive: walk it with
+# Keep one ICON v1 store current: walk the archived runs and those DWD still lists with
 # scripts/icon_v1_backfill.py (runs already stored are skipped, runs below its completeness
 # threshold are logged and left for later), then wait PAUSE seconds (12 h) and walk again.
 #

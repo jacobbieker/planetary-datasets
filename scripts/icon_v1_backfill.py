@@ -103,25 +103,39 @@ SKIPPED_COLUMNS = (
 
 
 def plan(
-    provider: ICONV1Provider, start: pd.Timestamp | None, end: pd.Timestamp | None
+    provider: ICONV1Provider,
+    start: pd.Timestamp | None,
+    end: pd.Timestamp | None,
+    live: bool = True,
 ) -> tuple[list[pd.Timestamp], list[pd.Timestamp]]:
-    """The archived runs in ``[start, end]``, and those of them not stored yet, in order.
+    """The runs in ``[start, end]``, and those of them not stored yet, in the order to write.
+
+    Runs come from the archive and, with ``live``, from DWD's live server too, which the
+    provider reads a run from while it is under a day old. Runs only the live server has
+    are written first, newest last: DWD deletes them after about a day, and a long archive
+    backlog walked first would let them expire. The rest follow oldest first. Writing out of
+    order leaves ``init_time`` unsorted until the store's reorder asset runs.
 
     Args:
         provider: Provider of the variant to backfill.
-        start: First run to consider, or None for the archive's first.
-        end: Last run to consider, or None for the archive's last.
+        start: First run to consider, or None for the earliest available.
+        end: Last run to consider, or None for the latest available.
+        live: Also consider runs DWD's live server lists.
 
     Returns:
-        ``(archived, missing)``, both sorted oldest first.
+        ``(available, missing)``: every run in range oldest first, and the missing ones in
+        the order to write them.
     """
-    runs = pd.DatetimeIndex(sorted(list_runs(provider.model, "archive")))
+    archived = set(list_runs(provider.model, "archive"))
+    listed = set(list_runs(provider.model, "live")) if live else set()
+    runs = pd.DatetimeIndex(sorted(archived | listed))
     if start is not None:
         runs = runs[runs >= start]
     if end is not None:
         runs = runs[runs <= end]
-    missing = provider.missing_timesteps(runs) if len(runs) else []
-    return list(runs), sorted(missing)
+    missing = set(provider.missing_timesteps(runs)) if len(runs) else set()
+    live_only = sorted(run for run in missing if run not in archived)
+    return list(runs), live_only + sorted(missing - set(live_only))
 
 
 def log_skipped(path: pathlib.Path, completeness: RunCompleteness) -> None:
@@ -238,6 +252,11 @@ def main(argv: list[str] | None = None) -> int:
         help="list each run and report its completeness; write nothing",
     )
     parser.add_argument(
+        "--archive-only",
+        action="store_true",
+        help="consider only archived runs, not those DWD's live server still lists",
+    )
+    parser.add_argument(
         "--in-process",
         action="store_true",
         help="write every run in this process rather than a fresh one per run",
@@ -263,11 +282,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    archived, missing = plan(provider, args.start, args.end)
+    archived, missing = plan(provider, args.start, args.end, live=not args.archive_only)
     if args.limit is not None:
         missing = missing[: args.limit]
     logger.info(
-        f"{provider.name}: {len(archived)} archived run(s) in range, {len(missing)} to do, "
+        f"{provider.name}: {len(archived)} run(s) in range, {len(missing)} to do, "
         f"stores: {provider.describe_store()}"
     )
     if missing:
