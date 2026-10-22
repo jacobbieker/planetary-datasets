@@ -110,9 +110,6 @@ declare -A LANES=(
   [hafs_a_parent]="_backfill_lanes.py hafs_a_parent --threads 2 --pause 7200"
   [hafs_b_storm]="_backfill_lanes.py hafs_b_storm --threads 2 --pause 7200"
   [hafs_b_parent]="_backfill_lanes.py hafs_b_parent --threads 2 --pause 7200"
-  # ICON v1 Global from the Source Cooperative archive, oldest run first; one fresh worker
-  # per run, incomplete runs skipped and logged. Moved here from aero on 2026-10-16.
-  [icon_v1_global]="scripts/icon_v1_backfill.py global --skipped-log logs/icon_v1_global_skipped.tsv"
   # AOML / OSMC marine observations: bkr/aoml/v2, 2012 onward, then a pass every two hours.
   [osmc_ragged]="_backfill_lanes.py osmc_ragged --threads 4 --pause 7200"
   [ifs_analysis]="_backfill_lanes.py ifs_analysis --threads 8"
@@ -156,11 +153,14 @@ declare -A SCRIPTS=(
   [himawari_500m_0]="_backfill_himawari_500m_0.sh"
   [himawari_500m_1]="_backfill_himawari_500m_1.sh"
   [himawari_500m_2]="_backfill_himawari_500m_2.sh"
-  # ICON-ART and ICON-ART-EU from the Source Cooperative archive, a pass every 12 hours.
-  # NOT YET STARTED (2026-10-22): another host is still writing both stores. Uncomment once
-  # it is stopped; two writers race their commits.
-  # [icon_v1_global_art]="_backfill_icon_global_art.sh"
-  # [icon_v1_eu_art]="_backfill_icon_eu_art.sh"
+  # ICON v1 Global, ICON-ART and ICON-ART-EU: a pass every 12 hours over the runs in the
+  # Source Cooperative archive and those DWD's server still lists (read live, written
+  # first so they cannot expire). One fresh worker per run; incomplete runs skipped and
+  # logged. Global moved here from aero 2026-10-16; the ART stores' previous writer was
+  # stopped 2026-10-22. The ART runs are also mirrored into the archive (icon_v1_mirror).
+  [icon_v1_global]="_backfill_icon_global.sh"
+  [icon_v1_global_art]="_backfill_icon_global_art.sh"
+  [icon_v1_eu_art]="_backfill_icon_eu_art.sh"
 )
 
 # The short-retention stores. Their sources keep a few days at most, so they are caught up
