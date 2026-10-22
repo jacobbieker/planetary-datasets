@@ -450,3 +450,33 @@ def test_by_year_run_leaves_the_live_store_unsuffixed(
     assert closed, "expected at least one closed year window"
     for end, suffix in closed:
         assert suffix == end.isoformat()
+
+
+def test_himawari_accepts_the_thirteen_digit_scan_start_of_the_early_archive():
+    """Himawari-8's first months use a shorter scan-start token than GOES.
+
+    Those files end at whole seconds -- `s2019182013000` -- where every later
+    file and all of GOES ABI carry a tenths digit. Requiring fourteen made
+    every band reject 2019 and report "no combinable days found", so the walk
+    concluded the archive began in 2020 and 2019-07 to 2019-12 was silently
+    unreachable.
+    """
+    import numpy as np
+
+    short = (
+        "s3://noaa-himawari8/AHI-L2-FLDK-ISatSS/2019/07/01/0130/"
+        "OR_HFD-020-B12-M1C14-T001_GH8_s2019182013000_c2020183142000.nc"
+    )
+    long = (
+        "s3://noaa-himawari9/AHI-L2-FLDK-ISatSS/2026/01/02/0130/"
+        "OR_HFD-020-B12-M1C14-T001_GH9_s20260020130000_c20260020135000.nc"
+    )
+
+    # 2019 doy 182 is 2019-07-01; 013000 is 01:30:00.
+    assert himawari_isatss.parse_slot(short) == np.datetime64("2019-07-01T01:30:00", "ns")
+    # The fourteen-digit form still parses, tenths included.
+    assert himawari_isatss.parse_slot(long) == np.datetime64("2026-01-02T01:30:00", "ns")
+
+    # Both forms must also survive the filename match that group_by_slot uses.
+    for url in (short, long):
+        assert himawari_isatss._FILENAME_RE.match(url.rsplit("/", 1)[-1]) is not None
