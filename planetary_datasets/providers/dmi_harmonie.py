@@ -17,6 +17,7 @@ from __future__ import annotations
 import pathlib
 from typing import List
 
+import numpy as np
 import pandas as pd
 import xarray as xr
 from loguru import logger
@@ -53,6 +54,79 @@ _HEIGHT_BY_LEVEL_TYPE = {
 #: Short names that appear on several near-surface level stacks and so need a height
 #: suffix to stay distinct.
 _MULTI_LEVEL_SHORT_NAMES = ("t", "u", "v", "q", "gh", "r", "cc")
+
+
+def hybrid_coefficients(path: str | pathlib.Path) -> tuple[np.ndarray, np.ndarray]:
+    """The half-level coefficients ``(A, B)`` of the hybrid levels in a model-level file.
+
+    HARMONIE's model levels are hybrid sigma-pressure levels: half level ``k`` lies at
+    ``A[k] + B[k] * surface_pressure``, top of the atmosphere first. Each GRIB message of
+    the ``hybrid`` level type carries them in its ``pv`` array, the ``N + 1`` values of
+    ``A`` (Pa) followed by those of ``B``; cfgrib does not expose them.
+
+    Raises:
+        ValueError: If the file has no hybrid-level message with a ``pv`` array.
+    """
+    import eccodes
+
+    with open(path, "rb") as handle:
+        while (message := eccodes.codes_grib_new_from_file(handle)) is not None:
+            try:
+                if eccodes.codes_get(message, "typeOfLevel") == "hybrid" and eccodes.codes_get(
+                    message, "PVPresent"
+                ):
+                    pv = np.asarray(eccodes.codes_get_array(message, "pv"), dtype=np.float64)
+                    half = pv.size // 2
+                    return pv[:half], pv[half:]
+            finally:
+                eccodes.codes_release(message)
+    raise ValueError(f"{path} has no hybrid-level message with pv coefficients")
+
+
+def with_hybrid_coefficients(ds: xr.Dataset, a_half: np.ndarray, b_half: np.ndarray) -> xr.Dataset:
+    """Attach the hybrid coefficients to a model-level dataset as coordinates.
+
+    ``ap_half``/``b_half`` are the GRIB values on a ``hybrid_half`` axis (one more than the
+    levels); ``ap``/``b`` on ``hybrid`` are each full level's mean of its two half levels,
+    so the pressure of a level is ``ap + b * pressure`` (the surface pressure field).
+    """
+    levels = ds.sizes["hybrid"]
+    if a_half.size != levels + 1:
+        raise ValueError(
+            f"{a_half.size} half-level coefficients for {levels} hybrid levels; expected "
+            f"{levels + 1}"
+        )
+    note = "pressure on a level = ap + b * surface pressure; from the GRIB pv array"
+    return ds.assign_coords(
+        ap=(
+            "hybrid",
+            (a_half[:-1] + a_half[1:]) / 2,
+            {"units": "Pa", "long_name": "hybrid A coefficient at full levels", "comment": note},
+        ),
+        b=(
+            "hybrid",
+            (b_half[:-1] + b_half[1:]) / 2,
+            {"units": "1", "long_name": "hybrid B coefficient at full levels", "comment": note},
+        ),
+        ap_half=(
+            "hybrid_half",
+            a_half,
+            {
+                "units": "Pa",
+                "long_name": "hybrid A coefficient at half levels, top first",
+                "comment": note,
+            },
+        ),
+        b_half=(
+            "hybrid_half",
+            b_half,
+            {
+                "units": "1",
+                "long_name": "hybrid B coefficient at half levels, top first",
+                "comment": note,
+            },
+        ),
+    )
 
 
 def _drop_scalar_level_coords(ds: xr.Dataset, keep: tuple[str, ...] = _KEEP_COORDS) -> xr.Dataset:
@@ -127,9 +201,7 @@ def process_surface_file(path: str) -> xr.Dataset:
                 )
         elif any(v in sub_ds.data_vars for v in _MULTI_LEVEL_SHORT_NAMES):
             if "heightAboveGround" in sub_ds.coords:
-                cleaned.append(
-                    _split_by_height(sub_ds, "heightAboveGround", "height_above_ground")
-                )
+                cleaned.append(_split_by_height(sub_ds, "heightAboveGround", "height_above_ground"))
             elif "heightAboveSea" in sub_ds.coords:
                 cleaned.append(_split_by_height(sub_ds, "heightAboveSea", "height_above_sea"))
             elif "hybrid" in sub_ds.coords:
@@ -282,11 +354,22 @@ class DMIHarmonieModelLevelProvider(GenerationalStoreMixin, _DMIHarmonieBase):
     level_types = ("ML",)
     chunks = {"time": 1, "step": 1, "y": -1, "x": -1, "hybrid": -1}
 
+    def process(
+        self,
+        input_files: List[str],
+        it: pd.Timestamp,
+        temp_dir: pathlib.Path | None = None,
+        **kwargs,
+    ) -> xr.Dataset:
+        """The steps of one init time, with the hybrid coefficients as coordinates."""
+        ds = super().process(input_files, it, temp_dir=temp_dir, **kwargs)
+        return with_hybrid_coefficients(ds, *hybrid_coefficients(input_files[0]))
+
     def process_step(self, files: List[str]) -> xr.Dataset:
         """Merge the model-level file of one forecast step."""
         # The local renamer rather than common.rename_vars_by_long_name: it goes through
         # resolve_renames, so a long_name shared by two model-level fields cannot take
         # the whole init time down with it.
-        return _rename_by_long_name(xr.merge(
-            open_grib_datasets(str(files[0])), compat="no_conflicts"
-        ))
+        return _rename_by_long_name(
+            xr.merge(open_grib_datasets(str(files[0])), compat="no_conflicts")
+        )
