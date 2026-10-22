@@ -654,3 +654,89 @@ def test_two_dimensional_grids_fingerprint_only_when_asked():
     assert schema_fingerprint(_curvilinear(60.0), "time", coords) == schema_fingerprint(
         _curvilinear(60.0, noise=1e-6), "time", coords
     )
+
+
+# ---------------------------------------------------------------- HARMONIE hybrid levels
+
+
+def _grib_with_pv(path, a_half, b_half):
+    import eccodes
+
+    message = eccodes.codes_grib_new_from_samples("reduced_gg_ml_grib2")
+    eccodes.codes_set(message, "PVPresent", 1)
+    eccodes.codes_set_array(message, "pv", np.concatenate([a_half, b_half]))
+    with open(path, "wb") as out:
+        eccodes.codes_write(message, out)
+    eccodes.codes_release(message)
+    return path
+
+
+def test_hybrid_coefficients_come_from_the_grib_pv_array(tmp_path):
+    a_half = np.array([0.0, 2718.28, 3747.09, 0.0])
+    b_half = np.array([0.0, 0.0, 0.5, 1.0])
+    path = _grib_with_pv(tmp_path / "ml.grib", a_half, b_half)
+    a, b = dmi.hybrid_coefficients(path)
+    np.testing.assert_allclose(a, a_half, rtol=1e-6)
+    np.testing.assert_allclose(b, b_half, rtol=1e-6)
+
+
+def test_hybrid_coefficients_become_full_and_half_level_coordinates():
+    ds = xr.Dataset(
+        {"temperature": (("hybrid", "y"), np.ones((3, 2)))}, coords={"hybrid": [1, 2, 3]}
+    )
+    out = dmi.with_hybrid_coefficients(
+        ds, np.array([0.0, 100.0, 200.0, 0.0]), np.array([0.0, 0.0, 0.5, 1.0])
+    )
+    np.testing.assert_allclose(out["ap"].values, [50.0, 150.0, 100.0])
+    np.testing.assert_allclose(out["b"].values, [0.0, 0.25, 0.75])
+    assert out["ap_half"].dims == ("hybrid_half",) and out.sizes["hybrid_half"] == 4
+    assert {"ap", "b", "ap_half", "b_half"} <= set(out.coords)
+    assert set(out.data_vars) == {"temperature"}
+
+
+def test_hybrid_coefficients_must_bound_every_level():
+    ds = xr.Dataset({"t": (("hybrid",), np.ones(3))}, coords={"hybrid": [1, 2, 3]})
+    with pytest.raises(ValueError, match="expected 4"):
+        dmi.with_hybrid_coefficients(ds, np.zeros(3), np.zeros(3))
+
+
+def test_existing_model_level_store_gains_the_coefficients_and_stays_one_generation(tmp_path):
+    import importlib.util
+    import pathlib
+
+    import icechunk
+
+    from planetary_datasets.common.generations import schema_fingerprint
+    from planetary_datasets.common.store import write_to_icechunk
+
+    spec = importlib.util.spec_from_file_location(
+        "migrate",
+        pathlib.Path(__file__).resolve().parents[1] / "scripts/add_harmonie_hybrid_coefficients.py",
+    )
+    migrate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migrate)
+
+    a_half, b_half = np.linspace(0, 5000, 5), np.linspace(0, 1, 5)
+
+    def run(time):
+        return xr.Dataset(
+            {"temperature": (("time", "hybrid", "y"), np.ones((1, 4, 2), "float32"))},
+            coords={"time": [pd.Timestamp(time)], "hybrid": [1, 2, 3, 4]},
+        )
+
+    def fingerprint(ds):
+        return schema_fingerprint(ds, "time")
+
+    repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(tmp_path / "s")))
+    assert write_to_icechunk(repo, run("2026-10-20T00:00"), append_dim="time")
+    assert "added" in migrate.add_to_store(repo, a_half, b_half, dry_run=False)
+    assert migrate.add_to_store(repo, a_half, b_half, dry_run=False) == "already has them"
+
+    for time in ("2026-10-20T03:00", "2026-10-20T06:00"):
+        new = dmi.with_hybrid_coefficients(run(time), a_half, b_half)
+        assert write_to_icechunk(repo, new, append_dim="time")
+    stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    assert {"ap", "b", "ap_half", "b_half"} <= set(stored.coords)
+    assert set(stored.data_vars) == {"temperature"}
+    assert fingerprint(stored) == fingerprint(new)
+    assert stored.sizes["time"] == 3
