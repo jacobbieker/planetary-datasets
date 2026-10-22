@@ -26,27 +26,32 @@ LISTINGS=$PWD/data/himawari_listing_cache
 set -a; source .env; set +a
 mkdir -p "$SCRATCH" "$LISTINGS"
 
-month=$NEWEST
-index=0
-while (( month >= OLDEST )); do
-  y=${month:0:4}; m=${month:4:2}
-  if (( index++ % LANES != LANE )); then
+# Walk the months again once the oldest is reached: satellite-consumer exits 0 even when a
+# commit conflict or a crash cuts a month short, so a month is only known complete once a
+# walk over it writes nothing. A complete month costs a listing.
+while true; do
+  month=$NEWEST
+  index=0
+  while (( month >= OLDEST )); do
+    y=${month:0:4}; m=${month:4:2}
+    if (( index++ % LANES != LANE )); then
+      month=$(date -u -d "$y-$m-01 -1 month" '+%Y%m')
+      continue
+    fi
+    start="$y-$m-01T00:00:00Z"
+    end=$(date -u -d "$y-$m-01 +1 month" '+%Y-%m-%dT00:00:00Z')
+    store="s3://us-west-2.opendata.source.coop/bkr/geo/himawari_${RES}m_backfill_${month}.icechunk"
+    low=false; [[ $RES == 500 ]] && low=true
+    echo "=== $(date -u '+%F %T') himawari ${RES}m $month (lane $LANE/$LANES) start -> $store"
+    (cd "$SCRATCH" && SATCONS_SATELLITE=himawari SATCONS_RESOLUTION=$RES \
+      SATCONS_START_TIMESTAMP=$start SATCONS_END_TIMESTAMP=$end SATCONS_RAW_PATH=. \
+      SATCONS_ZARR_PATH=$store SATCONS_ICECHUNK=True SATCONS_LOW_MEMORY=$low \
+      SATCONS_S3_LISTING_CACHE_DIR=$LISTINGS \
+      $PIXI run --manifest-path "$CONSUMER/pyproject.toml" sat-consumer)
+    echo "=== $(date -u '+%F %T') himawari ${RES}m $month exited $?"
+    find "$SCRATCH" -mindepth 1 -delete
     month=$(date -u -d "$y-$m-01 -1 month" '+%Y%m')
-    continue
-  fi
-  start="$y-$m-01T00:00:00Z"
-  end=$(date -u -d "$y-$m-01 +1 month" '+%Y-%m-%dT00:00:00Z')
-  store="s3://us-west-2.opendata.source.coop/bkr/geo/himawari_${RES}m_backfill_${month}.icechunk"
-  low=false; [[ $RES == 500 ]] && low=true
-  echo "=== $(date -u '+%F %T') himawari ${RES}m $month (lane $LANE/$LANES) start -> $store"
-  (cd "$SCRATCH" && SATCONS_SATELLITE=himawari SATCONS_RESOLUTION=$RES \
-    SATCONS_START_TIMESTAMP=$start SATCONS_END_TIMESTAMP=$end SATCONS_RAW_PATH=. \
-    SATCONS_ZARR_PATH=$store SATCONS_ICECHUNK=True SATCONS_LOW_MEMORY=$low \
-    SATCONS_S3_LISTING_CACHE_DIR=$LISTINGS \
-    $PIXI run --manifest-path "$CONSUMER/pyproject.toml" sat-consumer)
-  echo "=== $(date -u '+%F %T') himawari ${RES}m $month exited $?"
-  find "$SCRATCH" -mindepth 1 -delete
-  month=$(date -u -d "$y-$m-01 -1 month" '+%Y%m')
+  done
+  echo "=== $(date -u '+%F %T') himawari ${RES}m lane $LANE/$LANES reached $OLDEST; walking again"
+  sleep 3600
 done
-echo "=== $(date -u '+%F %T') himawari ${RES}m lane $LANE/$LANES reached $OLDEST; idle"
-sleep infinity
