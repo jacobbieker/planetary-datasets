@@ -282,6 +282,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ceiling-gb", type=float, default=4.0, help="memory ceiling per run")
     parser.add_argument("--fetch-workers", type=int, default=8, help="reads per block")
     parser.add_argument(
+        "--live-fetch-workers", type=int, default=4, help="reads per block from DWD's server"
+    )
+    parser.add_argument("--max-workers", type=int, default=4, help="blocks in flight")
+    parser.add_argument(
         "--min-completeness",
         type=float,
         default=DEFAULT_MIN_COMPLETENESS,
@@ -318,6 +322,8 @@ def main(argv: list[str] | None = None) -> int:
         "params": args.params,
         "ceiling_gb": args.ceiling_gb,
         "fetch_workers": args.fetch_workers,
+        "live_fetch_workers": args.live_fetch_workers,
+        "max_workers": args.max_workers,
         "min_completeness": args.min_completeness,
     }
     provider = ICONV1Provider(args.variant, **provider_kwargs)
