@@ -6,10 +6,12 @@
 #     ./_backfill_box.sh status         # which lanes run, and each log's last line
 #     ./_backfill_box.sh stop           # stop every lane
 #     ./_backfill_box.sh noon           # the daily short-retention catch-up (cron, 12:00 UTC)
+#     ./_backfill_box.sh guard          # pause a Himawari lane if memory is short (cron, */10)
 #
 # Crontab on the box:
 #     CRON_TZ=UTC
 #     0 12 * * * <repo>/_backfill_box.sh noon
+#     */10 * * * * <repo>/_backfill_box.sh guard >> ~/backfill-logs/guard.log 2>&1
 #     */15 * * * * <repo>/_backfill_box.sh start >> ~/backfill-logs/box.log 2>&1
 #     @reboot sleep 60 && <repo>/_backfill_box.sh start >> ~/backfill-logs/box.log 2>&1
 #
@@ -29,6 +31,15 @@ LOGS=~/backfill-logs
 PIXI=~/.pixi/bin/pixi
 RETRY_PAUSE=${RETRY_PAUSE:-600}
 UNAVAILABLE_PAUSE=${UNAVAILABLE_PAUSE:-86400}
+#: guard: pause a Himawari lane when less than this much memory is available (GB) ...
+GUARD_MIN_AVAILABLE_GB=${GUARD_MIN_AVAILABLE_GB:-40}
+#: ... or when anything else was killed for memory in the last this-many minutes.
+GUARD_WINDOW_MINUTES=${GUARD_WINDOW_MINUTES:-10}
+#: Himawari lanes in the order guard pauses them: the heaviest (500 m) first.
+GUARD_PAUSE_ORDER="himawari_500m_2 himawari_500m_1 himawari_500m_0
+  himawari_1000m_3 himawari_1000m_2 himawari_1000m_1 himawari_1000m_0
+  himawari_2000m_shards_1 himawari_2000m_shards_0
+  himawari_2000m_3 himawari_2000m_2 himawari_2000m_1 himawari_2000m_0"
 export PYTHONPATH=$PWD
 mkdir -p "$LOGS"
 
@@ -142,6 +153,8 @@ declare -A SCRIPTS=(
   # (bkr/geo/himawari_<res>m_backfill_<YYYYMM>), newest month first, back to 2020-01; each
   # resolution's months are split across its lanes. Only months no other writer has
   # started: 2000m from 2023-12, 1000m from 2024-06, 500m from 2025-11.
+  [himawari_2000m_shards_0]="_backfill_himawari_2000m_shards_0.sh"
+  [himawari_2000m_shards_1]="_backfill_himawari_2000m_shards_1.sh"
   [himawari_2000m_0]="_backfill_himawari_2000m_0.sh"
   [himawari_2000m_1]="_backfill_himawari_2000m_1.sh"
   [himawari_2000m_2]="_backfill_himawari_2000m_2.sh"
@@ -203,6 +216,7 @@ start)
       echo "$name already running"
       continue
     fi
+    [[ -f $LOGS/$name.paused ]] && continue
     # setsid: the loop leads its own process group, so stop can take down the python too.
     setsid bash -c "$(declare -f lane_loop); PIXI=$PIXI RETRY_PAUSE=$RETRY_PAUSE UNAVAILABLE_PAUSE=$UNAVAILABLE_PAUSE lane_loop $name '${LANES[$name]}'" \
       >> "$LOGS/$name.log" 2>&1 < /dev/null &
@@ -214,6 +228,8 @@ start)
       echo "$name already running"
       continue
     fi
+    # Paused by guard (or by hand): rm "$LOGS/<name>.paused" to let it start again.
+    [[ -f $LOGS/$name.paused ]] && continue
     PIXI=$PIXI setsid ./"${SCRIPTS[$name]}" >> "$LOGS/$name.log" 2>&1 < /dev/null &
     echo $! > "$LOGS/$name.pid"
     echo "started $name"
@@ -230,9 +246,44 @@ stop)
 status)
   for name in $(printf '%s\n' "${!LANES[@]}" "${!SCRIPTS[@]}" | sort); do
     state=stopped; running "$name" && state=running
+    [[ -f $LOGS/$name.paused ]] && state=paused
     last=$(grep -E '^\[|pass|exited|caught up|FAILED' "$LOGS/$name.log" 2>/dev/null | tail -1 | cut -c1-110)
     printf '%-50s %-8s %s\n' "$name" "$state" "$last"
   done
+  ;;
+guard)
+  # Run from cron every 10 minutes. If memory is short, or anything other than Himawari was
+  # killed for memory (OOM killer, a lane exiting 137, a MemoryLimitExceeded) in the last
+  # GUARD_WINDOW_MINUTES, pause one more Himawari lane, heaviest first. Paused lanes stay
+  # paused (start skips them) until their .paused file is removed.
+  available=$(awk '/MemAvailable/ {print int($2 / 1048576)}' /proc/meminfo)
+  since=$(date -u -d "-$GUARD_WINDOW_MINUTES min" '+%F %T')
+  reasons=()
+  (( available < GUARD_MIN_AVAILABLE_GB )) && reasons+=("only ${available} GB available")
+  oom=$(sudo -n journalctl -k --since "-$GUARD_WINDOW_MINUTES min" -o cat 2>/dev/null \
+    | grep -oE 'Killed process [0-9]+ \([^)]+\)' | grep -v 'sat-consumer' | head -3 | tr '\n' ' ')
+  [[ -n $oom ]] && reasons+=("OOM killer: $oom")
+  for log in "$LOGS"/*.log; do
+    [[ $(basename "$log") == himawari_* ]] && continue
+    hit=$(tail -n 2000 "$log" | awk -v since="$since" '
+      /^=== [0-9-]+ [0-9:]+ .* exited 137/ && ($2 " " $3) >= since { print "exited 137"; exit }
+      /MemoryLimitExceeded/ && substr($0, 1, 19) >= since { print "MemoryLimitExceeded"; exit }')
+    [[ -n $hit ]] && reasons+=("$(basename "$log" .log): $hit")
+  done
+  (( ${#reasons[@]} )) || exit 0
+  if [[ -n ${GUARD_DRY_RUN:-} ]]; then
+    echo "would pause a Himawari lane (${available} GB available): ${reasons[*]}"
+    exit 0
+  fi
+  for name in $GUARD_PAUSE_ORDER; do
+    [[ -f $LOGS/$name.paused ]] && continue
+    running "$name" || continue
+    echo "$(date -u '+%F %T') pausing $name: ${reasons[*]}" > "$LOGS/$name.paused"
+    kill -- -"$(cat "$LOGS/$name.pid")" 2>/dev/null
+    echo "$(date -u '+%F %T') paused $name (${available} GB available): ${reasons[*]}"
+    exit 0
+  done
+  echo "$(date -u '+%F %T') memory short but no Himawari lane left to pause: ${reasons[*]}"
   ;;
 noon)
   # One flock per store: a store still catching up at the next noon is left to finish.
@@ -244,7 +295,7 @@ noon)
   wait
   ;;
 *)
-  echo "usage: $0 start|stop|status|noon" >&2
+  echo "usage: $0 start|stop|status|noon|guard" >&2
   exit 2
   ;;
 esac
