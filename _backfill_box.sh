@@ -141,6 +141,21 @@ declare -A SCRIPTS=(
   [sondehub]="_backfill_sondehub.sh"
   # MeteoSwiss KENDA keeps ~a day upstream: a rolling 36 h window every 30 min.
   [kenda]="_backfill_kenda.sh"
+  # Himawari AHI real L1b data through ~/satellite-consumer into monthly shards
+  # (bkr/geo/himawari_<res>m_backfill_<YYYYMM>), newest month first, back to 2020-01; each
+  # resolution's months are split across its lanes. Only months no other writer has
+  # started: 2000m from 2023-12, 1000m from 2024-06, 500m from 2025-11.
+  [himawari_2000m_0]="_backfill_himawari_2000m_0.sh"
+  [himawari_2000m_1]="_backfill_himawari_2000m_1.sh"
+  [himawari_2000m_2]="_backfill_himawari_2000m_2.sh"
+  [himawari_2000m_3]="_backfill_himawari_2000m_3.sh"
+  [himawari_1000m_0]="_backfill_himawari_1000m_0.sh"
+  [himawari_1000m_1]="_backfill_himawari_1000m_1.sh"
+  [himawari_1000m_2]="_backfill_himawari_1000m_2.sh"
+  [himawari_1000m_3]="_backfill_himawari_1000m_3.sh"
+  [himawari_500m_0]="_backfill_himawari_500m_0.sh"
+  [himawari_500m_1]="_backfill_himawari_500m_1.sh"
+  [himawari_500m_2]="_backfill_himawari_500m_2.sh"
   # ICON-ART and ICON-ART-EU from the Source Cooperative archive, a pass every 12 hours.
   # NOT YET STARTED (2026-10-22): another host is still writing both stores. Uncomment once
   # it is stopped; two writers race their commits.
