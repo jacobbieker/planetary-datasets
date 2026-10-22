@@ -120,6 +120,10 @@ declare -A LANES=(
   # day), and the three cadence stores written from it, each every two hours. Moved here
   # 2026-10-19.
   [icon_d2_ruc_mirror]="-m planetary_datasets.providers.icon_d2_ruc_mirror --pause 7200"
+  # ICON-ART and ICON-ART-EU: every run DWD lists (about a day) copied whole into the Source
+  # Cooperative archive (bkr/icon/<model>/p/...), which scripts/icon_v1_backfill.py reads.
+  # ~180 GB a day; a pass every three hours so no run expires first.
+  [icon_v1_mirror]="-m planetary_datasets.providers.icon_v1_mirror icon-art icon-art-eu --pause 10800"
   [icon_d2_ruc_60min]="_backfill_lanes.py icon_d2_ruc_60min --threads 4 --pause 7200"
   [icon_d2_ruc_15min]="_backfill_lanes.py icon_d2_ruc_15min --threads 4 --pause 7200"
   [icon_d2_ruc_5min]="_backfill_lanes.py icon_d2_ruc_5min --threads 2 --pause 7200"
