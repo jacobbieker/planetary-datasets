@@ -105,8 +105,15 @@ class BaseProvider(ABC):
         the store for each one is pure overhead.
         """
         if self._repo is None:
-            self._repo = self.config.icechunk_repo(self.store_prefix)
+            self._repo = self.config.icechunk_repo(
+                self.store_prefix, config=self.repository_config()
+            )
         return self._repo
+
+    def repository_config(self) -> icechunk.RepositoryConfig | None:
+        """Repository settings for the handle :meth:`get_icechunk_repo` opens; None for the
+        repository's own. Override for, e.g., manifest splitting."""
+        return None
 
     def missing_timesteps(self, desired: pd.DatetimeIndex) -> List[pd.Timestamp]:
         """Return the timesteps in ``desired`` that are not yet stored."""

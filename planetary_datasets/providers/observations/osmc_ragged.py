@@ -171,14 +171,39 @@ def _yearly_times(store_path: str, repo: icechunk.Repository) -> np.ndarray:
     return times
 
 
+#: Chunks of ``time`` per manifest piece: CHUNK_ROWS (250,000) x 100 = 25 million rows.
+MANIFEST_SPLIT_CHUNKS = 100
+
+
+def repository_config() -> icechunk.RepositoryConfig:
+    """Repository settings for the OSMC stores: manifests split along ``time``.
+
+    Unsplit, every array's manifest lists all of its chunks and a commit rewrites it whole;
+    split, an append rewrites only the last piece, so a commit's work and memory stay
+    bounded however long the store grows.
+    """
+    splitting = icechunk.config.ManifestSplittingConfig.from_dict(
+        {
+            icechunk.config.ManifestSplitCondition.AnyArray(): {
+                icechunk.config.ManifestSplitDimCondition.DimensionName(
+                    "time"
+                ): MANIFEST_SPLIT_CHUNKS
+            }
+        }
+    )
+    return icechunk.RepositoryConfig(manifest=icechunk.config.ManifestConfig(splitting=splitting))
+
+
 def _append_rows(session: icechunk.Session, ds: xr.Dataset) -> None:
     """Append ``ds`` along ``time`` without reading what the store already holds.
 
     ``to_icechunk(..., append_dim="time")`` opens the store through xarray, which builds a
     pandas index from the whole ``time`` coordinate; ``osmc_all`` passed 580 million rows
     and that read alone took over five minutes, growing with every day appended. Here
-    each array along ``time`` is grown in zarr and the new rows are written as a region,
-    which xarray encodes with the store's own encodings without indexing the rest.
+    each array along ``time`` is grown in zarr and the new rows are written as a region.
+    String columns are assigned in zarr directly: xarray reads the whole existing column
+    before writing a region of a variable-length string array (1.35 GB per 20 million
+    rows), which took the lane past 100 GB on the full stores.
     """
     group = zarr.open_group(session.store, mode="a")
     start = group["time"].shape[0]
@@ -187,9 +212,13 @@ def _append_rows(session: icechunk.Session, ds: xr.Dataset) -> None:
     for name in along:
         array = group[name]
         array.resize((stop, *array.shape[1:]))
+    strings = [name for name in along if ds[name].dtype.kind in "OUS"]
+    for name in strings:
+        group[name][start:stop] = np.asarray(ds[name].values, dtype=object)
     # Without its index, time is written like any other variable; as an index coordinate a
     # region write leaves it unwritten.
-    to_icechunk(ds[along].drop_indexes("time"), session, region={"time": slice(start, stop)})
+    rest = ds[[name for name in along if name not in strings]].drop_indexes("time")
+    to_icechunk(rest, session, region={"time": slice(start, stop)})
 
 
 def _append_with_ledger(repo: icechunk.Repository, ds: xr.Dataset, day: str, label: str) -> bool:
@@ -262,8 +291,14 @@ class OSMCRaggedProvider(BaseProvider):
 
     def type_repo(self, slug: str) -> icechunk.Repository:
         if slug not in self._type_repos:
-            self._type_repos[slug] = self.config.icechunk_repo(store_prefix_for(slug))
+            self._type_repos[slug] = self.config.icechunk_repo(
+                store_prefix_for(slug), config=repository_config()
+            )
         return self._type_repos[slug]
+
+    def repository_config(self) -> icechunk.RepositoryConfig:
+        """Manifests split along ``time``; see :func:`repository_config`."""
+        return repository_config()
 
     def missing_timesteps(self, desired) -> List[pd.Timestamp]:
         """Days not yet in ``osmc_all``'s ledger, which is written last for every day."""

@@ -227,11 +227,17 @@ class Config:
             )
         return icechunk.s3_storage(**kwargs, from_env=True)
 
-    def icechunk_repo(self, prefix: str):
-        """Open or create the icechunk repository for a store prefix."""
+    def icechunk_repo(self, prefix: str, config=None):
+        """Open or create the icechunk repository for a store prefix.
+
+        Args:
+            prefix: Store prefix.
+            config: Optional ``icechunk.RepositoryConfig`` for this handle (and for the
+                repository, if this creates it).
+        """
         import icechunk
 
-        return icechunk.Repository.open_or_create(self.icechunk_storage(prefix))
+        return icechunk.Repository.open_or_create(self.icechunk_storage(prefix), config=config)
 
 
 def load_config(env_file: str | os.PathLike | None = None, override: bool = False) -> Config:
