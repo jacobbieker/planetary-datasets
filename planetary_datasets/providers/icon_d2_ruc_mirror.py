@@ -108,6 +108,8 @@ class Mirror:
             max_lead: Last step mirrored, inclusive.
         """
         self.root = pathlib.Path(root)
+        #: Prefix of this mirror's log lines.
+        self.label = "icon_d2_ruc mirror"
         self.base_url = base_url.rstrip("/")
         self.workers = workers
         self.max_lead = max_lead
@@ -159,7 +161,7 @@ class Mirror:
                 ]
             fields = [f for f in pool.map(describe, sorted(parents)) if f is not None]
         logger.info(
-            f"icon_d2_ruc mirror: {len(fields)} field(s), "
+            f"{self.label}: {len(fields)} field(s), "
             f"{sum(len(f.steps) for f in fields)} first-hour file(s) per run"
         )
         self.fields = fields
@@ -215,7 +217,7 @@ class Mirror:
                     shutil.rmtree(run_dir, ignore_errors=True)
                     removed += 1
         if removed:
-            logger.info(f"icon_d2_ruc mirror: pruned {removed} run director(ies) before {cutoff}")
+            logger.info(f"{self.label}: pruned {removed} run director(ies) before {cutoff}")
         return removed
 
     def run_pass(self) -> Dict[pd.Timestamp, Tuple[int, int]]:
@@ -229,7 +231,7 @@ class Mirror:
             results[run] = self.mirror_run(run)
             downloaded, left = results[run]
             if downloaded or left:
-                logger.info(f"icon_d2_ruc mirror: {run}: {downloaded} downloaded, {left} missing")
+                logger.info(f"{self.label}: {run}: {downloaded} downloaded, {left} missing")
         return results
 
 
