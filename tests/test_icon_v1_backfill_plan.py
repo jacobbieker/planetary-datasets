@@ -63,3 +63,14 @@ def test_archive_runs_already_skipped_are_known(tmp_path):
     )
     assert script.skipped_archive_runs(log) == {pd.Timestamp("2025-10-01T00:00")}
     assert script.skipped_archive_runs(tmp_path / "absent.tsv") == set()
+
+
+def test_a_defective_archived_run_is_recorded_as_skipped(tmp_path):
+    script = load_script()
+    log = tmp_path / "skipped.tsv"
+    error = ValueError("truncated GRIB2 message: header says 524830 bytes,\ngot 433851")
+    assert script.is_permanent_failure(error)
+    assert not script.is_permanent_failure(TimeoutError("read timed out"))
+    script.log_failed(log, pd.Timestamp("2025-11-16T00:00"), error)
+    assert script.skipped_archive_runs(log) == {pd.Timestamp("2025-11-16T00:00")}
+    assert "failed: truncated GRIB2 message" in log.read_text().splitlines()[1]

@@ -151,6 +151,39 @@ def skipped_archive_runs(path: pathlib.Path) -> set[pd.Timestamp]:
     return {pd.Timestamp(t) for t in table.loc[table["source"] == "archive", "init_time"]}
 
 
+#: Failures that come from the archived files themselves, so retrying cannot help.
+PERMANENT_FAILURES = ("truncated GRIB2 message",)
+
+
+def is_permanent_failure(error: BaseException) -> bool:
+    """True when ``error`` reports a defect in the files, not a transient read failure."""
+    return any(marker in str(error) for marker in PERMANENT_FAILURES)
+
+
+def log_failed(path: pathlib.Path, init_time: pd.Timestamp, error: BaseException) -> None:
+    """Record an archived run whose files are defective in the skipped-run TSV at ``path``.
+
+    It is then left out by ``--not-skipped`` like an incomplete one; the error goes in the
+    ``most_missing`` column and the counts are left empty.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new = not path.exists()
+    message = " ".join(str(error).split())[:300]
+    with path.open("a", encoding="utf-8") as out:
+        if new:
+            out.write("\t".join(SKIPPED_COLUMNS) + "\n")
+        row = (
+            pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
+            pd.Timestamp(init_time).isoformat(),
+            "archive",
+            "",
+            "",
+            "",
+            f"failed: {message}",
+        )
+        out.write("\t".join(row) + "\n")
+
+
 def log_skipped(path: pathlib.Path, completeness: RunCompleteness) -> None:
     """Append one skipped run to the TSV at ``path``, writing a header for a new file."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -329,6 +362,11 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # noqa: BLE001 - one bad run must not stop the backfill
             failed += 1
             logger.exception(f"{provider.name}: run {it} failed: {exc}")
+            if is_permanent_failure(exc) and provider.source_for(it) == "archive":
+                log_failed(skipped_log, it, exc)
+                logger.warning(
+                    f"{provider.name}: {it} recorded as skipped: its files are defective"
+                )
             # A run that failed while starting a new generation leaves it empty, and
             # the next run of that day would be written into it; stop instead, as the
             # startup check would.
