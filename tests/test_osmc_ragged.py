@@ -256,3 +256,31 @@ def test_an_append_does_not_index_the_stored_rows(provider, yearly_2012, local_c
     assert provider.run_partition(pd.Timestamp("2012-01-02"))
     monkeypatch.undo()
     assert stored(local_config, osmc_ragged.ALL_STORE).sizes["time"] == 24
+
+
+def test_an_append_does_not_read_the_stored_string_columns(
+    provider, yearly_2012, local_config, monkeypatch
+):
+    """xarray reads a whole variable-length string column before writing a region of it."""
+    assert provider.run_partition(pd.Timestamp("2012-01-01"))
+    import xarray.backends.zarr as xzarr
+
+    real = xzarr.ZarrStore.open_store_variable
+
+    def guarded(self, name):
+        variable = real(self, name)
+        if variable.dtype.kind in "OUS":
+            raise AssertionError(f"an append opened the stored string column {name}")
+        return variable
+
+    monkeypatch.setattr(xzarr.ZarrStore, "open_store_variable", guarded)
+    assert provider.run_partition(pd.Timestamp("2012-01-02"))
+    monkeypatch.undo()
+    assert stored(local_config, osmc_ragged.ALL_STORE).sizes["time"] == 24
+
+
+def test_every_osmc_store_splits_its_manifests_along_time(provider):
+    for repo in (provider.get_icechunk_repo(), provider.type_repo("ships")):
+        splitting = repo.config.manifest.splitting
+        assert splitting is not None
+        assert "time" in repr(splitting.split_sizes)

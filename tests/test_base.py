@@ -127,9 +127,9 @@ def test_repo_handle_is_reused_across_partitions(provider, monkeypatch):
     opens = []
     original = Config.icechunk_repo
 
-    def counting(self, prefix):
+    def counting(self, prefix, config=None):
         opens.append(prefix)
-        return original(self, prefix)
+        return original(self, prefix, config=config)
 
     monkeypatch.setattr(Config, "icechunk_repo", counting)
     provider.run_range(THREE_HOURS)
