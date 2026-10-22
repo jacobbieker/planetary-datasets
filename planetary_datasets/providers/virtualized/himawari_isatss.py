@@ -149,9 +149,14 @@ _KEEP_DATA_VARS = frozenset({IMAGE_VAR, "fixedgrid_projection"})
 
 DEFAULT_LOADABLE_VARIABLES: tuple[str, ...] = ("x", "y", "fixedgrid_projection")
 
+#: ``\d{13,14}``, not ``\d{14}``: Himawari-8's earliest files carry a
+#: thirteen-digit scan-start token with no tenths-of-seconds digit --
+#: ``s2019182013000`` -- where every later file, and all of GOES ABI, uses
+#: fourteen. Requiring fourteen made every band reject 2019 and conclude the
+#: archive started in 2020, silently losing 2019-07 to 2019-12.
 _FILENAME_RE = re.compile(
     r"OR_HFD-(?P<res>\d+)-B\d+-M\dC(?P<band>\d+)-T(?P<tile>\d+)_"
-    r"G(?P<sat>H\d)_s(?P<start>\d{14})_"
+    r"G(?P<sat>H\d)_s(?P<start>\d{13,14})_"
 )
 
 RadFValidationError = common.RadFValidationError
@@ -185,11 +190,27 @@ def _filename(url: str) -> str:
 
 
 def parse_slot(url: str) -> np.datetime64:
-    """Parse the sYYYYDDDHHMMSSS filename token into a datetime64[ns].
+    """Parse the scan-start filename token into a datetime64[ns].
 
-    Same token layout as GOES ABI, so the shared parser applies.
+    Fourteen digits (``sYYYYDDDHHMMSST``) is the GOES ABI layout and what
+    Himawari uses from 2020 on, so the shared parser handles it. The first
+    months of the Himawari-8 archive instead carry thirteen digits, ending at
+    whole seconds with no tenths; those are parsed here rather than by
+    relaxing the shared parser, which should stay strict for GOES.
     """
-    return common.parse_scan_start_to_datetime(url)
+    token = _slot_key(url)
+    if len(token) == 14:
+        return common.parse_scan_start_to_datetime(url)
+    date = datetime.date(int(token[0:4]), 1, 1) + datetime.timedelta(
+        days=int(token[4:7]) - 1
+    )
+    return np.datetime64(
+        datetime.datetime(
+            date.year, date.month, date.day,
+            int(token[7:9]), int(token[9:11]), int(token[11:13]),
+        ),
+        "ns",
+    )
 
 
 def _slot_key(url: str) -> str:
