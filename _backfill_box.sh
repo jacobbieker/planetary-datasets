@@ -37,6 +37,8 @@ GUARD_MIN_AVAILABLE_GB=${GUARD_MIN_AVAILABLE_GB:-40}
 #: ... and resume one once this much is available with no such kill for an hour.
 GUARD_RESUME_AVAILABLE_GB=${GUARD_RESUME_AVAILABLE_GB:-150}
 GUARD_QUIET_MINUTES=${GUARD_QUIET_MINUTES:-60}
+#: guard also removes abandoned planetary-datasets-* scratch untouched for this long.
+GUARD_TMP_STALE_MINUTES=${GUARD_TMP_STALE_MINUTES:-360}
 #: Himawari lanes in the order guard pauses them: the extra lanes of each resolution
 #: first, then the last 500 m lane, then the last 1000 m lane. himawari_2000m_0 always
 #: runs. Lanes resume in the reverse order.
@@ -264,6 +266,17 @@ guard)
   # without a timestamp) against the counts the previous run saw.
   state=$LOGS/.guard
   mkdir -p "$state"
+  # Scratch left by killed processes: planetary-datasets-* temp directories no process
+  # holds open and nothing has touched for GUARD_TMP_STALE_MINUTES.
+  inuse=$(sudo -n ls -l /proc/[0-9]*/fd /proc/[0-9]*/cwd 2>/dev/null \
+    | grep -oE '/tmp/planetary-datasets-[A-Za-z0-9_]+' | sort -u)
+  for dir in /tmp/planetary-datasets-*; do
+    [[ -d $dir ]] || continue
+    grep -qx "$dir" <<< "$inuse" && continue
+    [[ -n $(find "$dir" -maxdepth 0 -mmin +"$GUARD_TMP_STALE_MINUTES") ]] || continue
+    [[ -n $(find "$dir" -mmin -"$GUARD_TMP_STALE_MINUTES" -print -quit) ]] && continue
+    rm -rf "$dir" && echo "$(date -u '+%F %T') removed stale scratch $dir"
+  done
   available=$(awk '/MemAvailable/ {print int($2 / 1048576)}' /proc/meminfo)
   reasons=()
   killed=()

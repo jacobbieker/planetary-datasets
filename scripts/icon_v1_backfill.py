@@ -152,7 +152,7 @@ def skipped_archive_runs(path: pathlib.Path) -> set[pd.Timestamp]:
 
 
 #: Failures that come from the archived files themselves, so retrying cannot help.
-PERMANENT_FAILURES = ("truncated GRIB2 message",)
+PERMANENT_FAILURES = ("truncated GRIB2 message", "expected exactly one GRIB2 message")
 
 
 def is_permanent_failure(error: BaseException) -> bool:
