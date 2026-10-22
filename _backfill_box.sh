@@ -41,8 +41,10 @@ GUARD_QUIET_MINUTES=${GUARD_QUIET_MINUTES:-60}
 #: plus this long: a process can hang without dying (GOME and MTG IRS did, for 40 hours).
 GUARD_STALL_MINUTES=${GUARD_STALL_MINUTES:-180}
 #: Pause between passes for the scripts that do not take --pause (seconds).
+#: sondehub waits a day after a complete walk; mars_pipeline can sit silent for hours
+#: while ECMWF works through its queue, and restarting it abandons the queued requests.
 declare -A SCRIPT_PAUSE=([kenda]=1800 [icon_v1_global]=43200 [icon_v1_global_art]=43200
-  [icon_v1_eu_art]=43200)
+  [icon_v1_eu_art]=43200 [sondehub]=86400 [mars_pipeline]=43200)
 #: guard also removes abandoned planetary-datasets-* scratch untouched for this long.
 GUARD_TMP_STALE_MINUTES=${GUARD_TMP_STALE_MINUTES:-360}
 #: Himawari lanes in the order guard pauses them: the extra lanes of each resolution
