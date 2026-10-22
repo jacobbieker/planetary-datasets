@@ -15,9 +15,12 @@ PIXI=${PIXI:-~/.pixi/bin/pixi}
 VARIANT=${1:?usage: $0 <variant>}
 PAUSE=${PAUSE:-43200}
 LIMIT=${LIMIT:-4}
+#: Extra scripts/icon_v1_backfill.py options, e.g. more workers for a large model.
+EXTRA_ARGS=${EXTRA_ARGS:-}
 while true; do
   echo "=== $(date -u '+%F %T') icon_v1_$VARIANT start"
-  todo=$($PIXI run python scripts/icon_v1_backfill.py "$VARIANT" --limit "$LIMIT" --not-skipped \
+  # shellcheck disable=SC2086 # EXTRA_ARGS is a list of options
+  todo=$($PIXI run python scripts/icon_v1_backfill.py "$VARIANT" --limit "$LIMIT" --not-skipped $EXTRA_ARGS \
     --skipped-log "logs/icon_v1_${VARIANT}_skipped.tsv" 2>&1 \
     | tee /dev/stderr | grep -oE '[0-9]+ to do' | head -1)
   echo "=== $(date -u '+%F %T') icon_v1_$VARIANT pass done (${todo:-? to do} at its start)"
