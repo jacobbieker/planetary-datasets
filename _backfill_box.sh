@@ -6,7 +6,7 @@
 #     ./_backfill_box.sh status         # which lanes run, and each log's last line
 #     ./_backfill_box.sh stop           # stop every lane
 #     ./_backfill_box.sh noon           # the daily short-retention catch-up (cron, 12:00 UTC)
-#     ./_backfill_box.sh guard          # pause a Himawari lane if memory is short (cron, */10)
+#     ./_backfill_box.sh guard          # pause/resume Himawari lanes by memory (cron, */10)
 #
 # Crontab on the box:
 #     CRON_TZ=UTC
@@ -31,15 +31,20 @@ LOGS=~/backfill-logs
 PIXI=~/.pixi/bin/pixi
 RETRY_PAUSE=${RETRY_PAUSE:-600}
 UNAVAILABLE_PAUSE=${UNAVAILABLE_PAUSE:-86400}
-#: guard: pause a Himawari lane when less than this much memory is available (GB) ...
+#: guard: pause a Himawari lane when less than this much memory is available (GB), or
+#: when anything else has been killed for memory since the last check ...
 GUARD_MIN_AVAILABLE_GB=${GUARD_MIN_AVAILABLE_GB:-40}
-#: ... or when anything else was killed for memory in the last this-many minutes.
-GUARD_WINDOW_MINUTES=${GUARD_WINDOW_MINUTES:-10}
-#: Himawari lanes in the order guard pauses them: the heaviest (500 m) first.
-GUARD_PAUSE_ORDER="himawari_500m_2 himawari_500m_1 himawari_500m_0
-  himawari_1000m_3 himawari_1000m_2 himawari_1000m_1 himawari_1000m_0
+#: ... and resume one once this much is available with no such kill for an hour.
+GUARD_RESUME_AVAILABLE_GB=${GUARD_RESUME_AVAILABLE_GB:-150}
+GUARD_QUIET_MINUTES=${GUARD_QUIET_MINUTES:-60}
+#: Himawari lanes in the order guard pauses them: the extra lanes of each resolution
+#: first, then the last 500 m lane, then the last 1000 m lane. himawari_2000m_0 always
+#: runs. Lanes resume in the reverse order.
+GUARD_PAUSE_ORDER=${GUARD_PAUSE_ORDER-"himawari_500m_2 himawari_500m_1
+  himawari_1000m_3 himawari_1000m_2 himawari_1000m_1
   himawari_2000m_shards_1 himawari_2000m_shards_0
-  himawari_2000m_3 himawari_2000m_2 himawari_2000m_1 himawari_2000m_0"
+  himawari_2000m_3 himawari_2000m_2 himawari_2000m_1
+  himawari_500m_0 himawari_1000m_0"}
 export PYTHONPATH=$PWD
 mkdir -p "$LOGS"
 
@@ -228,7 +233,8 @@ start)
       echo "$name already running"
       continue
     fi
-    # Paused by guard (or by hand): rm "$LOGS/<name>.paused" to let it start again.
+    # Paused by guard, which resumes it when memory allows; a .paused file starting with
+    # "manual" is left alone by guard (rm it to let the lane start again).
     [[ -f $LOGS/$name.paused ]] && continue
     PIXI=$PIXI setsid ./"${SCRIPTS[$name]}" >> "$LOGS/$name.log" 2>&1 < /dev/null &
     echo $! > "$LOGS/$name.pid"
@@ -252,38 +258,72 @@ status)
   done
   ;;
 guard)
-  # Run from cron every 10 minutes. If memory is short, or anything other than Himawari was
-  # killed for memory (OOM killer, a lane exiting 137, a MemoryLimitExceeded) in the last
-  # GUARD_WINDOW_MINUTES, pause one more Himawari lane, heaviest first. Paused lanes stay
-  # paused (start skips them) until their .paused file is removed.
+  # Run from cron every 10 minutes; see GUARD_*. After pausing a lane, whatever was killed
+  # is restarted straight away. Memory kills of anything but Himawari are
+  # counted per log (OOM killer, a lane exiting 137, MemoryLimitExceeded, which is logged
+  # without a timestamp) against the counts the previous run saw.
+  state=$LOGS/.guard
+  mkdir -p "$state"
   available=$(awk '/MemAvailable/ {print int($2 / 1048576)}' /proc/meminfo)
-  since=$(date -u -d "-$GUARD_WINDOW_MINUTES min" '+%F %T')
   reasons=()
+  killed=()
   (( available < GUARD_MIN_AVAILABLE_GB )) && reasons+=("only ${available} GB available")
-  oom=$(sudo -n journalctl -k --since "-$GUARD_WINDOW_MINUTES min" -o cat 2>/dev/null \
+  oom=$(sudo -n journalctl -k --since "-10 min" -o cat 2>/dev/null \
     | grep -oE 'Killed process [0-9]+ \([^)]+\)' | grep -v 'sat-consumer' | head -3 | tr '\n' ' ')
-  [[ -n $oom ]] && reasons+=("OOM killer: $oom")
+  [[ -n $oom ]] && { reasons+=("OOM killer: $oom"); killed+=(noon); }
   for log in "$LOGS"/*.log; do
-    [[ $(basename "$log") == himawari_* ]] && continue
-    hit=$(tail -n 2000 "$log" | awk -v since="$since" '
-      /^=== [0-9-]+ [0-9:]+ .* exited 137/ && ($2 " " $3) >= since { print "exited 137"; exit }
-      /MemoryLimitExceeded/ && substr($0, 1, 19) >= since { print "MemoryLimitExceeded"; exit }')
-    [[ -n $hit ]] && reasons+=("$(basename "$log" .log): $hit")
+    name=$(basename "$log" .log)
+    [[ $name == himawari_* || $name == guard ]] && continue
+    count=$(grep -cE 'exited 137|MemoryLimitExceeded:' "$log")
+    previous=$(cat "$state/$name.count" 2>/dev/null || echo "$count")
+    echo "$count" > "$state/$name.count"
+    if (( count > previous )); then
+      reasons+=("$name: $((count - previous)) memory kill(s)")
+      [[ $name == noon_* ]] && killed+=(noon) || killed+=("$name")
+    fi
   done
-  (( ${#reasons[@]} )) || exit 0
-  if [[ -n ${GUARD_DRY_RUN:-} ]]; then
-    echo "would pause a Himawari lane (${available} GB available): ${reasons[*]}"
+  if (( ${#reasons[@]} )); then
+    date -u +%s > "$state/last_pressure"
+    [[ -n ${GUARD_DRY_RUN:-} ]] && { echo "would pause (${available} GB): ${reasons[*]}"; exit 0; }
+    paused=""
+    for name in $GUARD_PAUSE_ORDER; do
+      [[ -f $LOGS/$name.paused ]] && continue
+      running "$name" || continue
+      echo "$(date -u '+%F %T') ${reasons[*]}" > "$LOGS/$name.paused"
+      kill -- -"$(cat "$LOGS/$name.pid")" 2>/dev/null
+      echo "$(date -u '+%F %T') paused $name (${available} GB available): ${reasons[*]}"
+      paused=$name
+      break
+    done
+    [[ -z $paused ]] && echo "$(date -u '+%F %T') memory short, only himawari_2000m_0 left: ${reasons[*]}"
+    # Then restart what was killed now, rather than leaving it for its retry pause, its
+    # next pass or the next noon. The noon catch-up is simply run again: each store's lock
+    # leaves any still running alone.
+    for name in $(printf '%s\n' "${killed[@]}" | sort -u); do
+      if [[ $name == noon ]]; then
+        setsid "$0" noon < /dev/null > /dev/null 2>&1 &
+        echo "$(date -u '+%F %T') relaunched the noon catch-up"
+      elif [[ -n ${LANES[$name]:-}${SCRIPTS[$name]:-} ]]; then
+        running "$name" && kill -- -"$(cat "$LOGS/$name.pid")" 2>/dev/null
+        rm -f "$LOGS/$name.pid"
+        echo "$(date -u '+%F %T') restarting $name"
+      fi
+    done
+    (( ${#killed[@]} )) && "$0" start > /dev/null
     exit 0
   fi
-  for name in $GUARD_PAUSE_ORDER; do
-    [[ -f $LOGS/$name.paused ]] && continue
-    running "$name" || continue
-    echo "$(date -u '+%F %T') pausing $name: ${reasons[*]}" > "$LOGS/$name.paused"
-    kill -- -"$(cat "$LOGS/$name.pid")" 2>/dev/null
-    echo "$(date -u '+%F %T') paused $name (${available} GB available): ${reasons[*]}"
+  last=$(cat "$state/last_pressure" 2>/dev/null || echo 0)
+  (( available >= GUARD_RESUME_AVAILABLE_GB )) || exit 0
+  (( $(date -u +%s) - last >= GUARD_QUIET_MINUTES * 60 )) || exit 0
+  for name in $(echo $GUARD_PAUSE_ORDER | tr ' ' '\n' | tac); do
+    [[ -f $LOGS/$name.paused ]] || continue
+    grep -q '^manual' "$LOGS/$name.paused" && continue
+    [[ -n ${GUARD_DRY_RUN:-} ]] && { echo "would resume $name (${available} GB)"; exit 0; }
+    rm -f "$LOGS/$name.paused"
+    "$0" start > /dev/null
+    echo "$(date -u '+%F %T') resumed $name (${available} GB available)"
     exit 0
   done
-  echo "$(date -u '+%F %T') memory short but no Himawari lane left to pause: ${reasons[*]}"
   ;;
 noon)
   # One flock per store: a store still catching up at the next noon is left to finish.
