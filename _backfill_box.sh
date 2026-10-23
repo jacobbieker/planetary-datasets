@@ -45,6 +45,12 @@ GUARD_STALL_MINUTES=${GUARD_STALL_MINUTES:-180}
 #: while ECMWF works through its queue, and restarting it abandons the queued requests.
 declare -A SCRIPT_PAUSE=([kenda]=1800 [icon_v1_global]=43200 [icon_v1_global_art]=43200
   [icon_v1_eu_art]=43200 [sondehub]=86400 [mars_pipeline]=43200)
+#: Lanes whose memory creeps up over a day (the virtual-store writers grow by ~40 GB a
+#: day). guard restarts one once its process holds more than GUARD_LEAKY_GB; a restart
+#: costs at most the run in progress, and frees the memory Himawari would otherwise lose.
+GUARD_LEAKY="hafs_a_parent hafs_a_storm hafs_b_parent hafs_b_storm nam_hawaii
+  hrrr_alaska_sfc hrrr_alaska_prs hrrr_alaska_nat osmc_ragged"
+GUARD_LEAKY_GB=${GUARD_LEAKY_GB:-25}
 #: guard also removes abandoned planetary-datasets-* scratch untouched for this long.
 GUARD_TMP_STALE_MINUTES=${GUARD_TMP_STALE_MINUTES:-360}
 #: Himawari lanes in the order guard pauses them: the extra lanes of each resolution
@@ -275,6 +281,19 @@ guard)
   # without a timestamp) against the counts the previous run saw.
   state=$LOGS/.guard
   mkdir -p "$state"
+  # Lanes known to creep up in memory, restarted before they crowd anything else out.
+  for name in $GUARD_LEAKY; do
+    running "$name" || continue
+    rss=$(pgrep -f "[p]ython _backfill_lanes.py $name " | xargs -r ps -o rss= -p \
+      | awk '{s += $1} END {print int(s / 1048576)}')
+    (( ${rss:-0} > GUARD_LEAKY_GB )) || continue
+    if [[ -n ${GUARD_DRY_RUN:-} ]]; then
+      echo "would restart $name (${rss} GB)"
+      continue
+    fi
+    pkill -f "[p]ython _backfill_lanes.py $name " \
+      && echo "$(date -u '+%F %T') restarted $name to release memory (${rss} GB)"
+  done
   # Hung lanes: alive but silent for longer than they ever wait between passes.
   now=$(date -u +%s)
   for name in "${!LANES[@]}" "${!SCRIPTS[@]}"; do
