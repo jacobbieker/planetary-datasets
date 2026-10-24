@@ -178,6 +178,10 @@ declare -A SCRIPTS=(
   # IODC SEVIRI 1 km: stalled at 2026-06-15 with 2025-12-06..2026-01-01 missing; filled
   # back to 2025-01 and kept current. (iodc_3000m_test is still written live elsewhere.)
   [iodc_1000m_test]="_backfill_iodc_1000m_test.sh"
+  # MSG 0 degree SEVIRI (odegree): both stores began 2025-01-01, stalled at 2026-10-06 and
+  # miss 28% (1 km) and 55% (3 km) of that span; filled back to 2020-01 and kept current.
+  [msg_1000m]="_backfill_msg_1000m.sh"
+  [msg_3000m]="_backfill_msg_3000m.sh"
   # Himawari AHI real L1b data through ~/satellite-consumer into monthly shards
   # (bkr/geo/himawari_<res>m_backfill_<YYYYMM>), newest month first, back to 2020-01; each
   # resolution's months are split across its lanes (finished months cost a listing). Six
