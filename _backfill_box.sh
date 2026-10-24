@@ -182,6 +182,10 @@ declare -A SCRIPTS=(
   # miss 28% (1 km) and 55% (3 km) of that span; filled back to 2020-01 and kept current.
   [msg_1000m]="_backfill_msg_1000m.sh"
   [msg_3000m]="_backfill_msg_3000m.sh"
+  # MSG rapid scan (rss, every 5 minutes): both stores stalled at 2026-10-06 and miss 66%
+  # (1 km) and 78% (3 km) since 2025-01; filled back to their 2025-01 start, kept current.
+  [rss_1000m]="_backfill_rss_1000m.sh"
+  [rss_3000m]="_backfill_rss_3000m.sh"
   # Himawari AHI real L1b data through ~/satellite-consumer into monthly shards
   # (bkr/geo/himawari_<res>m_backfill_<YYYYMM>), newest month first, back to 2020-01; each
   # resolution's months are split across its lanes (finished months cost a listing). Six
