@@ -167,6 +167,14 @@ declare -A SCRIPTS=(
   [sondehub]="_backfill_sondehub.sh"
   # MeteoSwiss KENDA keeps ~a day upstream: a rolling 36 h window every 30 min.
   [kenda]="_backfill_kenda.sh"
+  # MTG FCI (Meteosat-12) satellite-consumer stores, one lane each: every month from now
+  # back to the store's start, filling gaps and then keeping the store current.
+  [mtg_500m]="_backfill_mtg_500m.sh"
+  [mtg_highres_1000m]="_backfill_mtg_highres_1000m.sh"
+  [mtg_1000m]="_backfill_mtg_1000m.sh"
+  # NOT STARTED: another host still writes mtg_2000m live (2026-10-24); a second writer
+  # would race its commits. Enable once that host stops writing it.
+  # [mtg_2000m]="_backfill_mtg_2000m.sh"
   # Himawari AHI real L1b data through ~/satellite-consumer into monthly shards
   # (bkr/geo/himawari_<res>m_backfill_<YYYYMM>), newest month first, back to 2020-01; each
   # resolution's months are split across its lanes (finished months cost a listing). Six
