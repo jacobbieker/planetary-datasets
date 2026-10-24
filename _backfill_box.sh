@@ -53,9 +53,10 @@ GUARD_LEAKY="hafs_a_parent hafs_a_storm hafs_b_parent hafs_b_storm nam_hawaii
 GUARD_LEAKY_GB=${GUARD_LEAKY_GB:-25}
 #: guard also removes abandoned planetary-datasets-* scratch untouched for this long.
 GUARD_TMP_STALE_MINUTES=${GUARD_TMP_STALE_MINUTES:-360}
-#: Himawari lanes in the order guard pauses them: 500 m, then 1000 m; himawari_2000m
-#: always runs. Lanes resume in the reverse order.
-GUARD_PAUSE_ORDER=${GUARD_PAUSE_ORDER-"himawari_500m himawari_1000m"}
+#: Himawari lanes in the order guard pauses them: the extra lanes of each resolution
+#: first, then the last 500 m lane, then the last 1000 m lane; himawari_2000m_0 always
+#: runs. Lanes resume in the reverse order.
+GUARD_PAUSE_ORDER=${GUARD_PAUSE_ORDER-"himawari_500m_3 himawari_500m_2 himawari_500m_1 himawari_1000m_3 himawari_1000m_2 himawari_1000m_1 himawari_2000m_5 himawari_2000m_4 himawari_2000m_3 himawari_2000m_2 himawari_2000m_1 himawari_500m_0 himawari_1000m_0"}
 export PYTHONPATH=$PWD
 mkdir -p "$LOGS"
 
@@ -167,12 +168,23 @@ declare -A SCRIPTS=(
   # MeteoSwiss KENDA keeps ~a day upstream: a rolling 36 h window every 30 min.
   [kenda]="_backfill_kenda.sh"
   # Himawari AHI real L1b data through ~/satellite-consumer into monthly shards
-  # (bkr/geo/himawari_<res>m_backfill_<YYYYMM>), newest month first, back to 2020-01, one
-  # lane per resolution since the box went to 96 vCPUs (2026-10-24); finished months cost a
-  # listing, months the former extra lanes left part-way are resumed when reached.
-  [himawari_2000m]="_backfill_himawari_2000m.sh"
-  [himawari_1000m]="_backfill_himawari_1000m.sh"
-  [himawari_500m]="_backfill_himawari_500m.sh"
+  # (bkr/geo/himawari_<res>m_backfill_<YYYYMM>), newest month first, back to 2020-01; each
+  # resolution's months are split across its lanes (finished months cost a listing). Six
+  # 2000m, four 1000m and four 500m lanes on the 192-vCPU box (2026-10-24).
+  [himawari_2000m_0]="_backfill_himawari_2000m_0.sh"
+  [himawari_2000m_1]="_backfill_himawari_2000m_1.sh"
+  [himawari_2000m_2]="_backfill_himawari_2000m_2.sh"
+  [himawari_2000m_3]="_backfill_himawari_2000m_3.sh"
+  [himawari_2000m_4]="_backfill_himawari_2000m_4.sh"
+  [himawari_2000m_5]="_backfill_himawari_2000m_5.sh"
+  [himawari_1000m_0]="_backfill_himawari_1000m_0.sh"
+  [himawari_1000m_1]="_backfill_himawari_1000m_1.sh"
+  [himawari_1000m_2]="_backfill_himawari_1000m_2.sh"
+  [himawari_1000m_3]="_backfill_himawari_1000m_3.sh"
+  [himawari_500m_0]="_backfill_himawari_500m_0.sh"
+  [himawari_500m_1]="_backfill_himawari_500m_1.sh"
+  [himawari_500m_2]="_backfill_himawari_500m_2.sh"
+  [himawari_500m_3]="_backfill_himawari_500m_3.sh"
   # ICON v1 Global, ICON-ART and ICON-ART-EU: a pass every 12 hours over the runs in the
   # Source Cooperative archive and those DWD's server still lists (read live, written
   # first so they cannot expire). One fresh worker per run; incomplete runs skipped and
@@ -345,7 +357,7 @@ guard)
       paused=$name
       break
     done
-    [[ -z $paused ]] && echo "$(date -u '+%F %T') memory short, only himawari_2000m left: ${reasons[*]}"
+    [[ -z $paused ]] && echo "$(date -u '+%F %T') memory short, only himawari_2000m_0 left: ${reasons[*]}"
     # Then restart what was killed now, rather than leaving it for its retry pause, its
     # next pass or the next noon. The noon catch-up is simply run again: each store's lock
     # leaves any still running alone.
