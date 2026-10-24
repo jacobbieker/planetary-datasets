@@ -123,7 +123,7 @@ declare -A LANES=(
   [jpss_mirs_snd_snpp]="_backfill_lanes.py jpss_mirs_snd_snpp --threads 2"
   # 8 downloads, not 16: EUMETSAT's Data Store throttles a user's concurrent connections, and
   # the MetOp-SG lanes share that allowance.
-  [mtg_irs_l1]="_backfill_mtg_irs.py mtg_irs_l1 --follow --threads 12 --downloads 8"
+  [mtg_irs_l1]="_backfill_mtg_irs.py mtg_irs_l1 --follow --threads 32 --downloads 8"
   [mtg_irs_l1_lac4_hourly]="_backfill_mtg_irs.py mtg_irs_l1_lac4_hourly --follow --threads 12 --downloads 8"
   # GMGSI and GEOS-CF v2 are near-realtime: once caught up, a pass every two hours.
   [gmgsi_v3]="_backfill_gmgsi.py --follow --period 7200"
