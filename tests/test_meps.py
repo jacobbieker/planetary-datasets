@@ -311,40 +311,62 @@ def test_det_process_keeps_hybrid_vars_and_downcasts(tmp_path, local_config):
     assert float(ds["ap"].max()) == 20000.75
 
 
-def test_det_fetch_downloads_the_run_into_the_temp_dir(tmp_path, local_config, monkeypatch):
-    calls = []
+@pytest.mark.parametrize(("status", "expected"), [(200, 1), (404, 0)])
+def test_det_fetch_returns_the_opendap_endpoint_when_the_run_exists(
+    local_config, monkeypatch, status, expected
+):
+    seen = []
 
-    def fake_download(url, dest, connections, **kwargs):
-        calls.append((url, dest, connections, kwargs))
-        dest.write_bytes(b"nc")
-        return dest
+    def fake_status(url, attempts=3):
+        seen.append(url)
+        return status
 
-    monkeypatch.setattr("planetary_datasets.providers.meps.download_ranged", fake_download)
-    provider = MEPSDetProvider(config=local_config)
-    files = provider.fetch(pd.Timestamp("2026-10-15T15:00"), temp_dir=tmp_path)
-    assert files == [str(tmp_path / "meps_det_2_5km_20261015T15Z.nc")]
-    assert calls[0][0] == meps_det_url(pd.Timestamp("2026-10-15T15:00"))
-    assert calls[0][2] == provider.connections
-    assert calls[0][3] == {
-        "piece_size": provider.piece_size,
-        "retries": provider.piece_retries,
-        "backoff": provider.piece_backoff,
-    }
+    monkeypatch.setattr("planetary_datasets.providers.meps.url_status", fake_status)
+    it = pd.Timestamp("2026-10-15T15:00")
+    files = MEPSDetProvider(config=local_config).fetch(it)
+    assert files == [meps_det_opendap_url(it)][:expected]
+    assert seen == [meps_det_opendap_url(it) + ".dds"]
 
 
-def test_det_fetch_skips_a_run_the_archive_does_not_have(tmp_path, local_config, monkeypatch):
-    monkeypatch.setattr("planetary_datasets.providers.meps.download_ranged", lambda *a, **k: None)
-    assert (
-        MEPSDetProvider(config=local_config).fetch(
-            pd.Timestamp("2026-10-15T15:00"), temp_dir=tmp_path
-        )
-        == []
-    )
-
-
-def test_det_fetch_needs_somewhere_to_download_to(local_config):
-    with pytest.raises(ValueError, match="temp_dir"):
+def test_det_fetch_raises_when_the_server_refuses(local_config, monkeypatch):
+    monkeypatch.setattr("planetary_datasets.providers.meps.url_status", lambda url, attempts=3: 503)
+    with pytest.raises(RuntimeError, match="503"):
         MEPSDetProvider(config=local_config).fetch(pd.Timestamp("2026-10-15T15:00"))
+
+
+def test_det_process_reads_each_field_in_level_blocks(tmp_path, local_config, monkeypatch):
+    path = write_det_model_level(tmp_path, pd.Timestamp("2026-04-01T00:00"))
+    provider = MEPSDetProvider(config=local_config)
+    provider.level_block = 1
+    shapes = []
+    real = provider._read
+
+    def counting(da):
+        shapes.append(da.shape)
+        return real(da)
+
+    monkeypatch.setattr(provider, "_read", counting)
+    ds = provider.process([path], pd.Timestamp("2026-04-01T00:00"))
+    assert ds["air_temperature_ml"].dtype == np.dtype("float16")
+    # Three lead times x two levels, one level per request.
+    assert sum(1 for shape in shapes if shape == (1, NY, NX)) == 6
+
+
+def test_det_process_retries_a_failed_block(tmp_path, local_config, monkeypatch):
+    path = write_det_model_level(tmp_path, pd.Timestamp("2026-04-01T00:00"))
+    provider = MEPSDetProvider(config=local_config)
+    monkeypatch.setattr("planetary_datasets.providers.meps.time.sleep", lambda s: None)
+    failures = iter([True])
+    original = xr.DataArray.values
+
+    def flaky(self):
+        if self.name == "air_temperature_ml" and next(failures, False):
+            raise RuntimeError("NetCDF: DAP failure")
+        return original.fget(self)
+
+    monkeypatch.setattr(xr.DataArray, "values", property(flaky, original.fset))
+    ds = provider.process([path], pd.Timestamp("2026-04-01T00:00"))
+    assert float(ds["air_temperature_ml"].max()) == 273.0
 
 
 def test_det_process_finds_levels_without_a_hybrid_coordinate(tmp_path, local_config):
