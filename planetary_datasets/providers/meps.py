@@ -34,6 +34,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import pathlib
+import time
 from typing import List
 
 import numpy as np
@@ -42,7 +43,7 @@ import xarray as xr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
-from planetary_datasets.common.download import download_many, download_ranged
+from planetary_datasets.common.download import download_many, url_status
 from planetary_datasets.config import Config
 
 THREDDS = "https://thredds.met.no/thredds"
@@ -417,51 +418,68 @@ class AndoyaMEPSPostProcessedProvider(MEPSPostProcessedProvider):
 
 
 class MEPSDetProvider(MetNoProvider):
-    """MEPS 2.5 km deterministic model-level fields.
+    """MEPS 2.5 km deterministic model-level fields, read over OPeNDAP.
 
     Only the hybrid-level variables are kept, and only the first three lead times, which is
     what makes a gapless hourly series out of the three-hourly cycles.
 
-    Each run is downloaded whole (~76 GB) into the partition's temporary directory, which
-    is removed once the partition is written. Reading the same fields over OPeNDAP failed
-    most runs with "NetCDF: DAP failure". thredds.met.no throttles each connection to about
-    5 MB/s, so the file comes down as a few parallel byte ranges, about an hour a run; 16
-    at once got the box's address blocked on 2026-10-18.
+    thredds.met.no stopped serving the archive's files over HTTP on 2026-10-22 ("Service
+    Not Allowed: HTTPServer not enabled"), so OPeNDAP is the only way in. Reading a whole
+    field there (~800 MB) failed most runs with "NetCDF: DAP failure"; each field is read
+    one lead time and :attr:`level_block` levels at a time (~50 MB) instead, one request
+    after another, and a failed block is retried on its own after a pause.
     """
 
     name = "meps_det"
     append_dim = "time"
     store_prefix = "bkr/dmi/meps_model_level.icechunk"
     steps = 3
-
-    #: Concurrent range requests per download. More got the host blocked by thredds.met.no.
-    connections = 4
-    #: Bytes per range request. thredds.met.no drops long responses part-way (64 MB pieces
-    #: were cut after 3-16 MB), failing whole runs; a short piece usually finishes first.
-    piece_size = 16 * 1024 * 1024
-    #: Attempts per piece, with exponential backoff from ``piece_backoff`` seconds.
-    piece_retries = 10
-    piece_backoff = 5.0
+    #: Model levels per OPeNDAP request.
+    level_block = 13
+    #: Attempts per block, with exponential backoff from ``block_backoff`` seconds.
+    block_attempts = 6
+    block_backoff = 20.0
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
-        """Download the run into ``temp_dir``. Empty when the archive does not have it.
+        """The run's OPeNDAP endpoint; empty when the archive does not have the run.
 
         Raises:
-            ValueError: if ``temp_dir`` is not given; a run is too large to keep anywhere
-                that outlives the partition.
+            RuntimeError: If the server answers anything but 200 or 404 for the run.
         """
-        if temp_dir is None:
-            raise ValueError(f"{self.name} needs a temp_dir to download {it} into")
-        url = meps_det_url(it)
-        path = download_ranged(
-            url,
-            temp_dir / url.rsplit("/", 1)[-1],
-            connections=self.connections,
-            piece_size=self.piece_size,
-            retries=self.piece_retries,
-            backoff=self.piece_backoff,
-        )
-        return [str(path)] if path is not None else []
+        url = meps_det_opendap_url(it)
+        status = url_status(url + ".dds", attempts=3)
+        if status == 404:
+            return []
+        if status != 200:
+            raise RuntimeError(f"{self.name}: {url} answered HTTP {status}")
+        return [url]
+
+    def _read(self, da: xr.DataArray) -> np.ndarray:
+        """Read ``da`` (one block), retrying OPeNDAP failures with backoff."""
+        for attempt in range(self.block_attempts):
+            try:
+                return np.asarray(da.values)
+            except (OSError, RuntimeError) as exc:
+                if attempt == self.block_attempts - 1:
+                    raise
+                wait = self.block_backoff * 2**attempt
+                logger.warning(f"{self.name}: block read failed ({exc}); retrying in {wait:.0f}s")
+                time.sleep(wait)
+        raise RuntimeError("unreachable")
+
+    def _read_field(self, da: xr.DataArray) -> np.ndarray:
+        """Read a whole field block by block: per lead time, :attr:`level_block` levels."""
+        if "hybrid" not in da.dims or "time" not in da.dims:
+            return self._read(da)
+        out = np.empty(da.shape, dtype=da.dtype)
+        t_axis, h_axis = da.dims.index("time"), da.dims.index("hybrid")
+        for t in range(da.sizes["time"]):
+            for lo in range(0, da.sizes["hybrid"], self.level_block):
+                hi = min(lo + self.level_block, da.sizes["hybrid"])
+                index = [slice(None)] * da.ndim
+                index[t_axis], index[h_axis] = t, slice(lo, hi)
+                out[tuple(index)] = self._read(da.isel(time=t, hybrid=slice(lo, hi)))
+        return out
 
     def process(
         self,
@@ -481,10 +499,10 @@ class MEPSDetProvider(MetNoProvider):
         steps = [s for s in range(self.steps) if s < ds.sizes.get("time", 0)]
         ds = ds.isel(time=steps)
         # One variable at a time: each model-level field is the best part of a gigabyte in
-        # float32 over the real grid, and computing the lot before downcasting would hold
+        # float32 over the real grid, and holding the lot before downcasting would keep
         # twice the final footprint at once.
         for var in list(ds.data_vars):
-            values = ds[var].compute()
+            values = ds[var].copy(data=self._read_field(ds[var]))
             ds[var] = values if var in FLOAT16_SKIP else values.astype("float16")
         return self.finalise(ds)
 
