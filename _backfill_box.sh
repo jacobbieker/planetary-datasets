@@ -183,7 +183,7 @@ declare -A SCRIPTS=(
   [msg_1000m]="_backfill_msg_1000m.sh"
   [msg_3000m]="_backfill_msg_3000m.sh"
   # MSG rapid scan (rss, every 5 minutes): both stores stalled at 2026-10-06 and miss 66%
-  # (1 km) and 78% (3 km) since 2025-01; filled back to their 2025-01 start, kept current.
+  # (1 km) and 78% (3 km) since 2025-01; filled back to 2020-01 by request, kept current.
   [rss_1000m]="_backfill_rss_1000m.sh"
   [rss_3000m]="_backfill_rss_3000m.sh"
   # Himawari AHI real L1b data through ~/satellite-consumer into monthly shards
