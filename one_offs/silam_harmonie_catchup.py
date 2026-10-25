@@ -115,6 +115,9 @@ METOP_SG_LAG_HOURS = 6
 OPERA_IMAGE_ENV = "EARTH2STUDIO_IMAGE"
 OPERA_DEFAULT_IMAGE = "planetary-datasets/earth2studio:latest"
 OPERA_CONTAINER_MEMORY_GB = 6
+#: Seconds one hour's staging container may run. One hung on 2024-07-01 11:00 for hours,
+#: twice, and nothing behind it in the pass moved.
+OPERA_STAGE_TIMEOUT = 1800
 #: Hours staged at once. Each container is capped at OPERA_CONTAINER_MEMORY_GB.
 OPERA_DOWNLOAD_WORKERS = 3
 
@@ -177,10 +180,13 @@ class OperaCatchUp(CatchUp):
         provider = self.provider
         if provider.has_staged(it):
             return True
+        container = f"opera-{provider.product}-{it:%Y%m%d%H}-{os.getpid()}"
         command = [
             "docker",
             "run",
             "--rm",
+            "--name",
+            container,
             "--volume",
             f"{root}:{OPERA_CONTAINER_DIR}",
             "--memory",
@@ -197,7 +203,18 @@ class OperaCatchUp(CatchUp):
             OPERA_CONTAINER_DIR,
             *(["--allow-partial"] if provider.allow_partial else []),
         ]
-        result = subprocess.run(command, capture_output=True, text=True)
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=OPERA_STAGE_TIMEOUT
+            )
+        except subprocess.TimeoutExpired:
+            # Stopping the docker client leaves the container running; remove it too.
+            subprocess.run(["docker", "rm", "-f", container], capture_output=True)
+            logger.warning(
+                f"{provider.name}: staging {it} took over {OPERA_STAGE_TIMEOUT}s; gave up, "
+                "it is retried next pass"
+            )
+            return False
         if result.returncode != 0:
             tail = (result.stderr or result.stdout).strip().splitlines()[-3:]
             logger.warning(f"{provider.name}: staging {it} failed: {' | '.join(tail)}")
