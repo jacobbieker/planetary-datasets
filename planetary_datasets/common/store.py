@@ -67,9 +67,7 @@ def quiet_timedelta_decoding():
     Use it around bespoke ``to_icechunk`` calls that append to a store with a ``step``.
     """
     with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", message=_TIMEDELTA_DECODE_WARNING, category=FutureWarning
-        )
+        warnings.filterwarnings("ignore", message=_TIMEDELTA_DECODE_WARNING, category=FutureWarning)
         yield
 
 
@@ -306,11 +304,19 @@ def missing_timesteps(
     desired: Sequence,
     append_dim: str = "time",
 ) -> list:
-    """Return the subset of ``desired`` that is not yet in the store."""
+    """Return the subset of ``desired`` that is not yet in the store, in order.
+
+    One vectorised membership test: testing each value on its own re-sorted the stored axis
+    every time, which for OPERA rainfall (77,000 hours against 300,000 stored frames) took
+    longer than the lane's stall allowance before a pass could start.
+    """
+    desired = list(desired)
     times = existing_times(repo, append_dim=append_dim)
-    if times.size == 0:
-        return list(desired)
-    return [t for t in desired if not np.isin(getattr(t, "to_numpy", lambda: t)(), times).any()]
+    if times.size == 0 or not desired:
+        return desired
+    values = np.asarray([getattr(t, "to_numpy", lambda t=t: t)() for t in desired])
+    stored = np.isin(values, times)
+    return [t for t, present in zip(desired, stored) if not present]
 
 
 def missing_periods(
@@ -363,9 +369,7 @@ def _axis_arrays(group: zarr.Group, append_dim: str) -> list[tuple[str, zarr.Arr
     return found
 
 
-def unreorderable_reason(
-    repo: icechunk.Repository, append_dim: str = "time"
-) -> str | None:
+def unreorderable_reason(repo: icechunk.Repository, append_dim: str = "time") -> str | None:
     """Why this store's append axis cannot be reordered, or None when it can be.
 
     Reordering remaps chunks through :meth:`icechunk.Session.reindex_array`, which moves
