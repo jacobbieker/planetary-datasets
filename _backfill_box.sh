@@ -221,6 +221,9 @@ declare -A SCRIPTS=(
 NOON_STORES="silam_dust dmi_harmonie_model_level dmi_harmonie arome_france_0025 arome_france_hd
   arome_new_caledonia arome_indian_ocean arome_french_guiana arome_caribbean arome_polynesia
   meps_det"
+#: Himawari lanes paused when the noon catch-up starts (guard resumes them afterwards).
+NOON_MAKE_ROOM="himawari_500m_3 himawari_500m_2 himawari_500m_1 himawari_1000m_3
+  himawari_1000m_2"
 #: A store's catch-up is killed after this, so a hang is retried at the next noon.
 NOON_TIMEOUT=23h
 
@@ -407,6 +410,16 @@ guard)
   done
   ;;
 noon)
+  # The eleven catch-ups start together and peak at ~200 GB (DMI model levels alone budget
+  # ~130 GB), which drove the OOM killer every noon. Make room first: pause the extra
+  # Himawari lanes now; guard resumes them one by one once memory recovers.
+  for name in $NOON_MAKE_ROOM; do
+    [[ -f $LOGS/$name.paused ]] && continue
+    running "$name" || continue
+    echo "noon: $(date -u '+%F %T') paused for the noon catch-up" > "$LOGS/$name.paused"
+    kill -- -"$(cat "$LOGS/$name.pid")" 2>/dev/null
+    echo "$(date -u '+%F %T') paused $name for the noon catch-up" >> "$LOGS/guard.log"
+  done
   # One flock per store: a store still catching up at the next noon is left to finish.
   for store in $NOON_STORES; do
     flock -n "$LOGS/noon_$store.lock" timeout "$NOON_TIMEOUT" \
