@@ -21,7 +21,9 @@ LISTINGS=$PWD/data/satcons_listing_cache
 set -a; source .env; set +a
 mkdir -p "$SCRATCH" "$LISTINGS"
 target="s3://us-west-2.opendata.source.coop/bkr/geo/${STORE}.icechunk"
-low=false; [[ $RES == 500 ]] && low=true
+# Low-memory mode (one worker) for 500 m unless the wrapper says otherwise; SATCONS_MAX_WORKERS
+# and SATCONS_BUFFER_SIZE pass straight through to satellite-consumer when set.
+low=${SATCONS_LOW_MEMORY:-false}; [[ -z ${SATCONS_LOW_MEMORY:-} && $RES == 500 ]] && low=true
 
 while true; do
   month=${FIXED_NEWEST:-$(date -u '+%Y%m')}
