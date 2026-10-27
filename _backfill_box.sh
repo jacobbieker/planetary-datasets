@@ -340,12 +340,17 @@ guard)
   # Scratch left by killed processes: planetary-datasets-* temp directories no process
   # holds open and nothing has touched for GUARD_TMP_STALE_MINUTES.
   inuse=$(sudo -n ls -l /proc/[0-9]*/fd /proc/[0-9]*/cwd 2>/dev/null \
-    | grep -oE '/tmp/planetary-datasets-[A-Za-z0-9_]+' | sort -u)
-  for dir in /tmp/planetary-datasets-*; do
+    | grep -oE '/tmp/(planetary-datasets-[A-Za-z0-9_]+|planetary-datasets/[A-Za-z0-9_.-]+|mtg-irs-[A-Za-z0-9_-]+)' \
+    | sort -u)
+  # Also the providers' scratch_dir (/tmp/planetary-datasets/<name>-*, e.g. a killed SILAM
+  # catch-up's downloads) and MTG IRS prefetch directories left by a restarted lane.
+  for dir in /tmp/planetary-datasets-* /tmp/planetary-datasets/*/ /tmp/mtg-irs-*; do
+    dir=${dir%/}
     [[ -d $dir ]] || continue
     grep -qx "$dir" <<< "$inuse" && continue
     [[ -n $(find "$dir" -maxdepth 0 -mmin +"$GUARD_TMP_STALE_MINUTES") ]] || continue
     [[ -n $(find "$dir" -mmin -"$GUARD_TMP_STALE_MINUTES" -print -quit) ]] && continue
+    [[ -n ${GUARD_DRY_RUN:-} ]] && { echo "would remove stale scratch $dir"; continue; }
     rm -rf "$dir" && echo "$(date -u '+%F %T') removed stale scratch $dir"
   done
   available=$(awk '/MemAvailable/ {print int($2 / 1048576)}' /proc/meminfo)
@@ -417,6 +422,8 @@ noon)
     [[ -f $LOGS/$name.paused ]] && continue
     running "$name" || continue
     echo "noon: $(date -u '+%F %T') paused for the noon catch-up" > "$LOGS/$name.paused"
+    # Count it as memory pressure, so guard waits out its quiet hour before resuming any.
+    mkdir -p "$LOGS/.guard" && date -u +%s > "$LOGS/.guard/last_pressure"
     kill -- -"$(cat "$LOGS/$name.pid")" 2>/dev/null
     echo "$(date -u '+%F %T') paused $name for the noon catch-up" >> "$LOGS/guard.log"
   done
