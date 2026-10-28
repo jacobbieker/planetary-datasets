@@ -184,7 +184,9 @@ def _list_aws_day_uncached(region: str, product: str, day: str) -> frozenset[str
     fs = s3fs.S3FileSystem(anon=True)
     prefix = f"{AWS_BUCKET}/{region}/{product}_00.00/{day}"
     try:
-        keys = fs.ls(prefix, detail=False)
+        # refresh: s3fs shares one instance per process and caches its listings, so the
+        # caching below would otherwise be decided for us.
+        keys = fs.ls(prefix, detail=False, refresh=True)
     except FileNotFoundError:
         logger.debug(f"mrms: no AWS archive at {prefix}")
         return frozenset()
@@ -198,12 +200,13 @@ def list_aws_day(region: str, product: str, day: str) -> frozenset[str]:
     """Filenames on the public bucket for one region, product and ``YYYYMMDD``.
 
     Listing a day once is far cheaper than probing each of up to 720 timesteps, and it
-    stops gaps in the archive from turning into retry storms. A day that is still being
+    stops gaps in the archive from turning into retry storms. A day that may still be
     written to is deliberately not cached: a long-running backfill that reaches today
-    would otherwise keep seeing the listing it took on its first hour.
+    would otherwise keep seeing the listing it took on its first hour. That includes
+    yesterday, whose last hours are published after midnight.
     """
-    today = naive_utc(pd.Timestamp.now("UTC")).strftime("%Y%m%d")
-    if day >= today:
+    yesterday = naive_utc(pd.Timestamp.now("UTC") - pd.Timedelta(1, "D")).strftime("%Y%m%d")
+    if day >= yesterday:
         return _list_aws_day_uncached(region, product, day)
     return _list_aws_day_cached(region, product, day)
 
