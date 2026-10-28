@@ -301,11 +301,13 @@ LANES: dict[str, Lane] = {
     },
     # A rolling ten-day bucket: anything older has already gone.
     "uk_marine": Lane(_uk_marine, "-10D", "1h", 2),
-    # JPSS ATMS SDR, every satellite in one store (NOAA keeps the SDRs). The store holds
-    # 2026-10-02 back; this fills the gap since Dagster stopped and keeps it current.
-    "jpss_atms": Lane(_provider("polar", "JpssAtmsProvider"), "2026-09-25", "1h", 3),
+    # JPSS ATMS SDR, every satellite in one store (NOAA keeps the SDRs). The store is
+    # complete from 2022-11 to 2025-09 and nearly empty since; this fills that and keeps
+    # it current.
+    "jpss_atms": Lane(_provider("polar", "JpssAtmsProvider"), "2025-08-01", "1h", 3),
     # GOES-East GLM 0.1 degree lightning density, staged by the earth2studio image like
-    # the Dagster asset. Same gap as ATMS; 5-minute frames, an hour per partition.
+    # the Dagster asset, which had only just started the store when it stopped on
+    # 2026-10-02. Five-minute frames, an hour per partition.
     "goes_glm_grid_east": Lane(
         _earth2studio("goes_glm_grid_east"), "2026-09-25", "1h", 2, earth2studio=True
     ),
