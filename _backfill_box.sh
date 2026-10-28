@@ -73,6 +73,8 @@ declare -A LANES=(
   [metoffice_nws_ocean_depth_hourly]="_backfill_lanes.py metoffice_nws_ocean_depth_hourly --threads 8"
   # The marine observations: a pass every 12 hours over the bucket's rolling ten days.
   [uk_marine]="_backfill_lanes.py uk_marine --threads 1 --pause 43200"
+  [jpss_atms]="_backfill_lanes.py jpss_atms --threads 4"
+  [goes_glm_grid_east]="_backfill_lanes.py goes_glm_grid_east --threads 2"
   # NCEP ADP upper-air (AMDAR/aircraft + radiosondes) from GDEX d337000, from 1997; decodes
   # with MET pb2nc in the dtcenter/met Docker image.
   [ncep_upper_air]="_backfill_lanes.py ncep_upper_air --threads 2 --pause 21600"

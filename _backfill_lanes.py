@@ -46,6 +46,8 @@ class Lane:
         freq: Partition spacing.
         lag_hours: Hours a partition needs before the source has finished publishing it.
         opera: Stage each hour with the ``docker/earth2studio`` image before writing it.
+        earth2studio: Stage each partition with the same image's earth2studio downloader;
+            the provider is that dataset's publisher.
     """
 
     provider: Callable[[], Any]
@@ -53,6 +55,7 @@ class Lane:
     freq: str
     lag_hours: int = 0
     opera: bool = False
+    earth2studio: bool = False
 
 
 def _metoffice(name: str) -> Callable[[], Any]:
@@ -94,6 +97,99 @@ def _hafs(name: str) -> Callable[[], Any]:
         return HafsVirtualProvider(name)
 
     return build
+
+
+def _earth2studio(name: str) -> Callable[[], Any]:
+    def build():
+        from planetary_datasets.providers.earth2studio_obs import provider_for
+
+        return provider_for(name)
+
+    return build
+
+
+class Earth2StudioStager:
+    """Stages an earth2studio dataset's partitions with the downloader image, as Dagster does.
+
+    Attributes:
+        provider: The dataset's publisher, which knows where a staged partition lands.
+        workers: Partitions staged concurrently, each in its own container.
+    """
+
+    #: Gives up on a partition that has not staged by then; the next pass retries it.
+    timeout = 1800
+
+    def __init__(self, provider, workers: int = 2):
+        self.provider = provider
+        self.workers = workers
+
+    def stage(self, it, root) -> bool:
+        """Stage one partition. True once its manifest is written.
+
+        A partition staged by an earlier, interrupted run is used as it is.
+        """
+        import subprocess
+
+        from planetary_datasets.providers.earth2studio_download import DEFAULT_TARGET
+
+        provider = self.provider
+        if provider.has_staged(it):
+            return True
+        container = f"e2s-{provider.name}-{it:%Y%m%d%H%M}-{os.getpid()}"
+        command = [
+            "docker",
+            "run",
+            "--rm",
+            "--name",
+            container,
+            "--volume",
+            f"{root}:{DEFAULT_TARGET}",
+            "--memory",
+            f"{provider.dataset.memory_gb + 4:g}g",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
+            os.environ.get("EARTH2STUDIO_IMAGE", "planetary-datasets/earth2studio:latest"),
+            "obs",
+            "--dataset",
+            provider.name,
+            "--time",
+            it.strftime("%Y-%m-%dT%H:%M"),
+            "--target",
+            DEFAULT_TARGET,
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            # Stopping the docker client leaves the container running; remove it too.
+            subprocess.run(["docker", "rm", "-f", container], capture_output=True)
+            print(f"WARNING {provider.name}: staging {it} took over {self.timeout}s", flush=True)
+            return False
+        if result.returncode != 0:
+            tail = (result.stderr or result.stdout).strip().splitlines()[-3:]
+            print(f"WARNING {provider.name}: staging {it} failed: {' | '.join(tail)}", flush=True)
+            return False
+        return provider.has_staged(it)
+
+
+def unstored_partitions(provider, partitions) -> list:
+    """The partitions none of whose frames is stored, from one read of the store's axis.
+
+    For stores of sub-partition frames: the store holding the partition's first frame is
+    not enough, since a partition upstream lacks that frame for would be written again
+    every pass.
+    """
+    import pandas as pd
+
+    from planetary_datasets.common.store import existing_times
+
+    stored = pd.DatetimeIndex(existing_times(provider.get_icechunk_repo(), provider.append_dim))
+    stored = stored.sort_values()
+    keep = []
+    for it in partitions:
+        start, end = provider.window(it)
+        if stored.searchsorted(start) == stored.searchsorted(end):
+            keep.append(it)
+    return keep
 
 
 def _ncep_upper_air():
@@ -205,6 +301,16 @@ LANES: dict[str, Lane] = {
     },
     # A rolling ten-day bucket: anything older has already gone.
     "uk_marine": Lane(_uk_marine, "-10D", "1h", 2),
+    # JPSS ATMS SDR, every satellite in one store (NOAA keeps the SDRs). The store is
+    # complete from 2022-11 to 2025-09 and nearly empty since; this fills that and keeps
+    # it current.
+    "jpss_atms": Lane(_provider("polar", "JpssAtmsProvider"), "2025-08-01", "1h", 3),
+    # GOES-East GLM 0.1 degree lightning density, staged by the earth2studio image like
+    # the Dagster asset, which had only just started the store when it stopped on
+    # 2026-10-02. Five-minute frames, an hour per partition.
+    "goes_glm_grid_east": Lane(
+        _earth2studio("goes_glm_grid_east"), "2026-09-25", "1h", 2, earth2studio=True
+    ),
     # DWD ICON-D2-RUC, one store per output cadence, read from the local first-hour mirror
     # that the icon_d2_ruc_mirror lane keeps (DWD keeps about a day). Both run every two
     # hours, so a run can reach the mirror ~3 h after it starts; five hours behind, every
@@ -297,6 +403,8 @@ def main(argv) -> int:
         from one_offs.silam_harmonie_catchup import OperaCatchUp
 
         stager = OperaCatchUp(provider, days=0, freq=lane.freq)
+    elif lane.earth2studio:
+        stager = Earth2StudioStager(provider)
 
     print(f"package : {planetary_datasets.__file__}", flush=True)
     print(f"lane    : {args.lane} ({type(provider).__name__})", flush=True)
@@ -308,6 +416,8 @@ def main(argv) -> int:
         began = time.time()
         hours = window(lane)
         todo = list(provider.missing_timesteps(hours)) if len(hours) else []
+        if lane.earth2studio and todo:
+            todo = unstored_partitions(provider, todo)
         print(
             f"\npass    : {hours[0] if len(hours) else '-'} -> "
             f"{hours[-1] if len(hours) else '-'}, {len(hours)} partition(s), "
