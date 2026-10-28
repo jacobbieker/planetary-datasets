@@ -99,23 +99,28 @@ class FakeS3:
 
     Batch directories live under ``root``; ``ls`` on the bucket lists them and ``ls`` on a
     batch lists its CSVs, both returning the key form s3fs uses (no scheme, bucket first).
+    Like s3fs, a listing is cached unless ``refresh`` is passed.
     """
 
     def __init__(self, root: pathlib.Path):
         self.root = root
         self.listings = 0
+        self.cache: dict[str, list[str]] = {}
 
     def _local(self, key: str) -> pathlib.Path:
         relative = str(key).removeprefix(BUCKET).lstrip("/")
         return self.root / relative if relative else self.root
 
-    def ls(self, path: str, detail: bool = False) -> list[str]:
+    def ls(self, path: str, detail: bool = False, refresh: bool = False) -> list[str]:
         self.listings += 1
+        if not refresh and path in self.cache:
+            return self.cache[path]
         local = self._local(path)
         if not local.is_dir():
             return []
         prefix = str(path).rstrip("/")
-        return sorted(f"{prefix}/{child.name}" for child in local.iterdir())
+        self.cache[path] = sorted(f"{prefix}/{child.name}" for child in local.iterdir())
+        return self.cache[path]
 
     def get(self, key: str, local: str) -> None:
         source = self._local(key)
@@ -184,7 +189,7 @@ def test_qc_code_reduces_a_verdict_object(value, expected):
     "value", ["", None, float("nan"), "{}"], ids=["empty", "none", "nan", "empty-object"]
 )
 def test_an_absent_quality_flag_is_not_good(value):
-    """"We did not check" must not be stored as "we checked and it passed"."""
+    """ "We did not check" must not be stored as "we checked and it passed"."""
     assert np.isnan(qc_code(value))
 
 
@@ -266,6 +271,15 @@ def test_batch_prefix_matches_on_the_window_not_the_publication_time(provider, b
 def test_batch_prefix_is_none_for_an_hour_that_aged_out(provider, bucket):
     bucket(HOUR)
     assert provider.batch_prefix(HOUR - pd.Timedelta(30, "D")) is None
+
+
+def test_batch_prefix_sees_a_batch_published_after_the_first_listing(provider, bucket):
+    first = pd.Timestamp("2026-10-24T18:00")
+    bucket(first)
+    assert provider.batch_prefix(first) is not None
+    later = pd.Timestamp("2026-10-24T19:00")
+    bucket(later)
+    assert provider.batch_prefix(later) is not None
 
 
 def test_a_republished_hour_takes_the_latest_batch(provider, bucket):

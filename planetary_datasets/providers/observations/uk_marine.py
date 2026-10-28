@@ -405,7 +405,9 @@ class UKMarineObservationsProvider(BaseProvider):
         """
         stamp = naive_utc(it).strftime("%Y%m%d%H00")
         try:
-            entries = self.filesystem().ls(BUCKET, detail=False)
+            # refresh: s3fs caches listings per instance, so a long-running lane would never
+            # see the batches published after its first listing.
+            entries = self.filesystem().ls(BUCKET, detail=False, refresh=True)
         except Exception as exc:  # noqa: BLE001 - a listing failure is a fetch failure
             raise RuntimeError(f"{self.name}: could not list s3://{BUCKET}: {exc}") from exc
 
@@ -434,7 +436,9 @@ class UKMarineObservationsProvider(BaseProvider):
         directory.mkdir(parents=True, exist_ok=True)
 
         filesystem = self.filesystem()
-        keys = [k for k in filesystem.ls(prefix, detail=False) if str(k).endswith(".csv")]
+        keys = [
+            k for k in filesystem.ls(prefix, detail=False, refresh=True) if str(k).endswith(".csv")
+        ]
         if not keys:
             logger.warning(f"{self.name}: batch s3://{prefix} holds no CSVs")
             return []
