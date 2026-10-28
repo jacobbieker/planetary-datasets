@@ -91,3 +91,17 @@ def test_the_new_lanes_are_registered():
     assert lanes.LANES["goes_glm_grid_east"].earth2studio
     assert lanes.LANES["goes_glm_grid_west"].earth2studio
     assert not lanes.LANES["jpss_atms"].earth2studio
+
+
+def test_recent_days_come_first_then_the_backlog_oldest_first():
+    now = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
+    days = [now - pd.Timedelta(n, "D") for n in (40, 30, 3, 2, 1)]
+    ordered = lanes.recent_first(sorted(days), 7)
+    assert ordered == [days[4], days[3], days[2], days[0], days[1]]
+
+
+def test_every_earthcare_product_has_one_lane():
+    from planetary_datasets.providers.polar.earthcare import PRODUCTS
+
+    codes = [c for group in lanes.EARTHCARE_LANES.values() for c in group]
+    assert sorted(codes) == sorted(PRODUCTS)

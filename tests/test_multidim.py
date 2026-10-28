@@ -44,9 +44,9 @@ def test_partitions_grow_every_dimension(repo):
 def test_dtypes_are_narrowed_losslessly(repo):
     append_partition(repo, partition(4, 2), "p0", fixed_dims=["bin"])
     ds = read(repo)
-    assert ds["wind_velocity"].dtype == np.int8
+    assert ds["wind_velocity"].dtype == np.int64
     assert ds["wind_time"].dtype == np.float64
-    assert ds["meas_map"].dtype == np.uint8
+    assert ds["meas_map"].dtype == np.uint32
     # Array attributes are kept as (nested) lists, which zarr stores as JSON.
     assert ds.attrs == {"Sources": [["a", "b"]], "mission": "test", "partitions_written": ["p0"]}
 
@@ -58,11 +58,11 @@ def test_a_written_partition_is_skipped(repo):
 
 
 def test_a_value_the_store_dtype_cannot_hold_is_refused(repo):
-    append_partition(repo, partition(4, 2), "p0", fixed_dims=["bin"])
-    wide = partition(2, 1, product="p1")
-    wide["wind_velocity"] = ("wind", np.array([1, 100000], dtype="int64"))
+    halves = xr.Dataset({"v": ("x", np.array([0.5, 1.0, 1.5]))})
+    append_partition(repo, halves, "p0")
+    assert read(repo)["v"].dtype == np.float16
     with pytest.raises(LossyCastError):
-        append_partition(repo, wide, "p1", fixed_dims=["bin"])
+        append_partition(repo, xr.Dataset({"v": ("x", np.array([0.1]))}), "p1")
     assert ledger(repo) == {"p0"}
 
 
@@ -72,3 +72,26 @@ def test_a_changed_fixed_dimension_is_refused(repo):
     other["meas_map"] = (("meas", "bin"), np.ones((1, 4), dtype="uint32"))
     with pytest.raises(ValueError, match="fixed dimension"):
         append_partition(repo, other, "p1", fixed_dims=["bin"])
+
+
+def other_product(n: int) -> xr.Dataset:
+    return xr.Dataset({"b_value": (("b_along", "b_height"), np.full((n, 2), 0.25))})
+
+
+def test_a_second_product_adds_its_own_variables(repo):
+    append_partition(repo, partition(4, 2), "a/p0", fixed_dims=["bin"])
+    assert append_partition(repo, other_product(3), "b/d0", fixed_dims=["b_height"])
+    assert append_partition(repo, other_product(2), "b/d1", fixed_dims=["b_height"])
+    assert append_partition(repo, partition(1, 1, 5.0, "p1"), "a/p1", fixed_dims=["bin"])
+    ds = read(repo)
+    assert ds.sizes["b_along"] == 5 and ds.sizes["wind"] == 5
+    assert ds["b_value"].dtype == np.float16
+    assert ds.attrs["mission"] == "test"
+    assert ledger(repo) == {"a/p0", "a/p1", "b/d0", "b/d1"}
+
+
+def test_a_partially_known_partition_is_refused(repo):
+    append_partition(repo, partition(4, 2), "a/p0", fixed_dims=["bin"])
+    mixed = partition(1, 1, product="p1").assign(extra=("wind", np.ones(1)))
+    with pytest.raises(ValueError, match="differ"):
+        append_partition(repo, mixed, "a/p1", fixed_dims=["bin"])

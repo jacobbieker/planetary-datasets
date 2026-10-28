@@ -76,6 +76,15 @@ declare -A LANES=(
   [jpss_atms]="_backfill_lanes.py jpss_atms --threads 4"
   [goes_glm_grid_east]="_backfill_lanes.py goes_glm_grid_east --threads 2"
   [goes_glm_grid_west]="_backfill_lanes.py goes_glm_grid_west --threads 2"
+  [earthcare_atl_nom]="_backfill_lanes.py earthcare_atl_nom --threads 4"
+  [earthcare_msi_nom]="_backfill_lanes.py earthcare_msi_nom --threads 4"
+  [earthcare_msi_rgr]="_backfill_lanes.py earthcare_msi_rgr --threads 4"
+  [earthcare_cpr_aux]="_backfill_lanes.py earthcare_cpr_aux --threads 4"
+  [earthcare_acm]="_backfill_lanes.py earthcare_acm --threads 4"
+  [earthcare_synergy]="_backfill_lanes.py earthcare_synergy --threads 4"
+  [earthcare_msi_l2]="_backfill_lanes.py earthcare_msi_l2 --threads 4"
+  [earthcare_atl_l2]="_backfill_lanes.py earthcare_atl_l2 --threads 4"
+  [earthcare_cpr_l2]="_backfill_lanes.py earthcare_cpr_l2 --threads 4"
   # NCEP ADP upper-air (AMDAR/aircraft + radiosondes) from GDEX d337000, from 1997; decodes
   # with MET pb2nc in the dtcenter/met Docker image.
   [ncep_upper_air]="_backfill_lanes.py ncep_upper_air --threads 2 --pause 21600"

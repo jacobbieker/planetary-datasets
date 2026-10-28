@@ -21,9 +21,8 @@ from planetary_datasets.common.lossless import (
         (np.array([0.1, 2.0]), "float64"),
         (np.array([9999.0]), "float32"),
         (np.array([1e10]), "float32"),
-        (np.array([0, 200], dtype="int64"), "int16"),
-        (np.array([0, 200], dtype="uint32"), "uint8"),
-        (np.array([-5, 5], dtype="int32"), "int8"),
+        (np.array([0, 200], dtype="int64"), "int64"),
+        (np.array([0, 200], dtype="uint32"), "uint32"),
         (np.array([], dtype="float64"), "float64"),
     ],
 )
@@ -31,6 +30,11 @@ def test_narrowest_dtype_keeps_every_value(values, expected):
     dtype = narrowest_dtype(values)
     assert dtype == np.dtype(expected)
     np.testing.assert_array_equal(values.astype(dtype).astype(values.dtype), values)
+
+
+def test_the_fill_value_must_survive_too():
+    assert narrowest_dtype(np.array([0.5, 1.0]), fill_value=9.969209968386869e36) == np.float32
+    assert narrowest_dtype(np.array([0.5, 1.0]), fill_value=-1.0) == np.float16
 
 
 def test_times_and_strings_are_left_alone():

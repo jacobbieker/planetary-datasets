@@ -197,6 +197,7 @@ def download_one(
     chunk_size: int = CHUNK_SIZE,
     overwrite: bool = False,
     timeout: float | None = None,
+    storage_options: dict[str, Any] | None = None,
 ) -> pathlib.Path | None:
     """Download ``url`` to ``dest``, retrying with exponential backoff.
 
@@ -211,6 +212,8 @@ def download_one(
         chunk_size: Read/write chunk size in bytes.
         overwrite: Re-download even if the destination already exists.
         timeout: Optional per-attempt timeout, passed to fsspec.
+        storage_options: Passed to fsspec, e.g. ``{"headers": {...}}`` for an HTTP
+            bearer token.
     """
     dest = pathlib.Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -221,6 +224,7 @@ def download_one(
 
     part = dest.with_name(dest.name + ".part")
     open_kwargs = {"timeout": timeout} if timeout is not None else {}
+    open_kwargs.update(storage_options or {})
 
     def _attempt() -> pathlib.Path:
         wait_for_host(url)
