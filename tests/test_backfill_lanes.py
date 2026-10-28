@@ -89,4 +89,5 @@ def test_an_already_staged_partition_skips_the_image(monkeypatch, tmp_path):
 
 def test_the_new_lanes_are_registered():
     assert lanes.LANES["goes_glm_grid_east"].earth2studio
+    assert lanes.LANES["goes_glm_grid_west"].earth2studio
     assert not lanes.LANES["jpss_atms"].earth2studio
