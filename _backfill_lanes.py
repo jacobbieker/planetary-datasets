@@ -308,9 +308,13 @@ LANES: dict[str, Lane] = {
     # GOES-East GLM 0.1 degree lightning density, staged by the earth2studio image like
     # the Dagster asset, which had only just started the store when it stopped on
     # 2026-10-02. Five-minute frames, an hour per partition.
-    "goes_glm_grid_east": Lane(
-        _earth2studio("goes_glm_grid_east"), "2026-09-25", "1h", 2, earth2studio=True
-    ),
+    # West never had a store; it starts alongside East.
+    **{
+        f"goes_glm_grid_{slot}": Lane(
+            _earth2studio(f"goes_glm_grid_{slot}"), "2026-09-25", "1h", 2, earth2studio=True
+        )
+        for slot in ("east", "west")
+    },
     # DWD ICON-D2-RUC, one store per output cadence, read from the local first-hour mirror
     # that the icon_d2_ruc_mirror lane keeps (DWD keeps about a day). Both run every two
     # hours, so a run can reach the mirror ~3 h after it starts; five hours behind, every
