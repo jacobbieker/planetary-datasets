@@ -223,7 +223,7 @@ NOON_STORES="silam_dust dmi_harmonie_model_level dmi_harmonie arome_france_0025 
   meps_det"
 #: Himawari lanes paused when the noon catch-up starts (guard resumes them afterwards).
 NOON_MAKE_ROOM="himawari_500m_3 himawari_500m_2 himawari_500m_1 himawari_1000m_3
-  himawari_1000m_2"
+  himawari_1000m_2 himawari_1000m_1 himawari_2000m_5 himawari_2000m_4 himawari_2000m_3"
 #: A store's catch-up is killed after this, so a hang is retried at the next noon.
 NOON_TIMEOUT=23h
 
