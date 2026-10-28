@@ -284,8 +284,6 @@ class TestProcess:
         assert set(ds.data_vars) == {"precipitation_rate"}
 
 
-
-
 def make_partition(stamps) -> xr.Dataset:
     """A flag-and-rate dataset covering ``stamps``, as ``process`` would return it."""
     return xr.concat(
@@ -294,7 +292,8 @@ def make_partition(stamps) -> xr.Dataset:
                 [
                     make_step("precipitation_flag", "int8", s),
                     make_step("precipitation_rate", "float16", s),
-                ], compat="no_conflicts"
+                ],
+                compat="no_conflicts",
             )
             for s in stamps
         ],
@@ -406,3 +405,39 @@ class TestFactories:
     def test_default_providers_rejects_per_store_arguments(self):
         with pytest.raises(TypeError, match="per store"):
             mrms.default_providers(products=("PrecipRate",))
+
+
+class _ListingFS:
+    """An ``s3fs`` stand-in that serves a stale listing unless ``refresh`` is passed."""
+
+    def __init__(self, live):
+        self.live = live
+        self.stale = frozenset()
+
+    def ls(self, prefix, detail=False, refresh=False):
+        names = self.live if refresh else self.stale
+        return [f"{prefix}/{name}" for name in names]
+
+
+def test_listing_a_day_bypasses_the_s3fs_cache(monkeypatch):
+    import s3fs
+
+    fs = _ListingFS({"a.grib2.gz"})
+    monkeypatch.setattr(s3fs, "S3FileSystem", lambda **kwargs: fs)
+    assert mrms._list_aws_day_uncached("ALASKA", "MergedReflectivityQC", "20261028") == {
+        "a.grib2.gz"
+    }
+
+
+def test_yesterday_is_listed_again_rather_than_cached(monkeypatch):
+    calls = []
+
+    def listing(region, product, day):
+        calls.append(day)
+        return frozenset(calls)
+
+    monkeypatch.setattr(mrms, "_list_aws_day_uncached", listing)
+    yesterday = (pd.Timestamp.now("UTC") - pd.Timedelta(1, "D")).strftime("%Y%m%d")
+    mrms.list_aws_day("ALASKA", "MergedReflectivityQC", yesterday)
+    mrms.list_aws_day("ALASKA", "MergedReflectivityQC", yesterday)
+    assert calls == [yesterday, yesterday]
