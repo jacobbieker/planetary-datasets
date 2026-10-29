@@ -121,3 +121,9 @@ def test_every_virtual_pace_product_has_one_lane():
 
     lanes_for = [n for n in lanes.LANES if n.startswith("pace_virtual_")]
     assert sorted(n.removeprefix("pace_virtual_") for n in lanes_for) == sorted(PRODUCTS)
+
+
+def test_a_lane_with_an_end_stops_there():
+    lane = lanes.LANES["aeolus_l2b"]
+    days = lanes.window(lane)
+    assert days[0] == pd.Timestamp("2018-09-03") and days[-1] == pd.Timestamp("2023-07-05")

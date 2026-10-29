@@ -50,6 +50,7 @@ class Lane:
             the provider is that dataset's publisher.
         recent_days: Write the partitions of the last this many days first, newest
             first, before the backlog: a long backfill then keeps the live edge current.
+        end: Last partition, ISO, for a source that has ended (a finished mission).
     """
 
     provider: Callable[[], Any]
@@ -59,6 +60,7 @@ class Lane:
     opera: bool = False
     earth2studio: bool = False
     recent_days: int = 0
+    end: str | None = None
 
 
 def _metoffice(name: str) -> Callable[[], Any]:
@@ -381,6 +383,17 @@ LANES: dict[str, Lane] = {
         0,
         recent_days=90,
     ),
+    # Aeolus (2018-09 to 2023-07) from VirES, one lane per level into bkr/polar/aeolus.
+    **{
+        f"aeolus_{level}": Lane(
+            _provider("polar.aeolus", "AeolusProvider", levels=(level,), workers=16),
+            "2018-09-03",
+            "1D",
+            0,
+            end="2023-07-05",
+        )
+        for level in ("l1b", "l2a", "l2b", "l2c")
+    },
     # SPEXone L1C, copied into the same store (its two-row chunks are too fine to
     # reference). L1 granules are published within days.
     "pace_l1c": Lane(
@@ -476,6 +489,8 @@ def window(lane: Lane):
 
     now = pd.Timestamp.now(tz="UTC").tz_localize(None)
     end = (now - pd.Timedelta(lane.lag_hours, "h")).floor(lane.freq)
+    if lane.end is not None:
+        end = min(end, pd.Timestamp(lane.end))
     if lane.start.startswith("-"):
         start = (now - pd.Timedelta(lane.start[1:])).floor(lane.freq)
     else:
