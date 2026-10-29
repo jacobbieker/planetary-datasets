@@ -66,7 +66,7 @@ def rename_store(prefix: str, dry_run: bool = False, upgrade_v1: bool = False) -
     repo = get_config().icechunk_repo(prefix)
     root = zarr.open_group(repo.readonly_session("main").store, mode="r")
     if root.attrs.get(APPLIED_ATTR):
-        return f"{prefix}: already renamed"
+        return _finish_moves(repo, prefix, names, dict(_paths(root)), dry_run)
     import icechunk
 
     # Moving arrays needs the version 2 format; checked before anything is written, so a
@@ -132,6 +132,15 @@ def rename_store(prefix: str, dry_run: bool = False, upgrade_v1: bool = False) -
         f"naming: dimensions, attributes and units ({len(dims)} dim(s), {len(units)} conversion(s))"
     )
 
+    moves = _move(repo, names, arrays)
+    return (
+        f"{prefix}: renamed {len(moves)} variable(s), {len(dims)} dimension(s), "
+        f"converted {len(units)}"
+    )
+
+
+def _move(repo, names: dict, arrays: dict) -> dict:
+    """Move each array still at its source name to its new name, in one commit."""
     moves = {path: new for path, new in names.items() if path in arrays and path != new}
     if moves:
         rearrange = repo.rearrange_session("main")
@@ -140,10 +149,37 @@ def rename_store(prefix: str, dry_run: bool = False, upgrade_v1: bool = False) -
         for path, new in moves.items():
             rearrange.move(f"/{path}{TEMPORARY}", f"/{new}")
         rearrange.commit(f"naming: {len(moves)} variable(s) renamed")
-    return (
-        f"{prefix}: renamed {len(moves)} variable(s), {len(dims)} dimension(s), "
-        f"converted {len(units)}"
-    )
+    return moves
+
+
+def _finish_moves(repo, prefix: str, names: dict, arrays: dict, dry_run: bool) -> str:
+    """Complete a rename interrupted between its metadata commit and its moves."""
+    if any(path.endswith(TEMPORARY) for path in arrays):
+        raise RuntimeError(f"{prefix}: arrays left at temporary names; inspect by hand")
+    dims = _table(str(STORE_DIMS)).get(prefix, {})
+    for path in arrays:
+        group, _, leaf = path.rpartition("/")
+        if leaf in dims and path not in names:
+            names[path] = f"{group}/{dims[leaf]}" if group else dims[leaf]
+    # An array still at its source path carries that path's own name as its source_name;
+    # one moved there (a swap) carries the other's.
+    pending = {
+        path: new
+        for path, new in names.items()
+        if path in arrays
+        and path != new
+        and arrays[path].attrs.get(SOURCE_NAME_ATTR) == path.rsplit("/", 1)[-1]
+    }
+    if not pending:
+        return f"{prefix}: already renamed"
+    # The moves are one commit, so none of them happened; a target that exists and is not
+    # itself being moved away means the store changed since and needs a person.
+    if any(new in arrays and new not in pending for new in pending.values()):
+        raise RuntimeError(f"{prefix}: some targets already exist; inspect by hand")
+    if dry_run:
+        return f"{prefix}: would finish {len(pending)} interrupted move(s)"
+    _move(repo, pending, arrays)
+    return f"{prefix}: finished {len(pending)} interrupted move(s)"
 
 
 def check_store(prefix: str) -> str | None:

@@ -120,6 +120,21 @@ def test_a_store_is_renamed_without_touching_its_data(tables, repo):
     assert tool.rename_store(PREFIX).endswith("already renamed")
 
 
+def test_a_rename_interrupted_before_its_moves_is_finished(tables, repo, monkeypatch):
+    write_source(repo)
+    move = tool._move
+    monkeypatch.setattr(tool, "_move", lambda *args: {})
+    tool.rename_store(PREFIX)
+    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    assert "tc" in ds and ds.attrs["naming_applied"]
+    monkeypatch.setattr(tool, "_move", move)
+    assert "finished" in tool.rename_store(PREFIX)
+    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    assert ds["air_temperature"].values[0].tolist() == pytest.approx([298.65, 303.15])
+    assert ds["a"].values.tolist() == [2] and ds["b"].values.tolist() == [1]
+    assert tool.rename_store(PREFIX).endswith("already renamed")
+
+
 def test_a_format_1_store_is_skipped_untouched_or_upgraded_and_renamed(
     tables, tmp_path, monkeypatch
 ):
