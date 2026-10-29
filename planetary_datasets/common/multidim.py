@@ -28,7 +28,12 @@ import zarr
 from icechunk.xarray import to_icechunk
 from loguru import logger
 
-from planetary_datasets.common.lossless import cast_exactly, narrowest_dtype, narrowest_dtypes
+from planetary_datasets.common.lossless import (
+    cast_exactly,
+    fits,
+    narrowest_dtype,
+    narrowest_dtypes,
+)
 from planetary_datasets.common.store import (
     STORE_READ_ERRORS,
     StoreReadError,
@@ -257,6 +262,57 @@ def _append(session: icechunk.Session, ds: xr.Dataset, fixed: set[str]) -> None:
             to_icechunk(part, session, region={dim: slice(start, stop)})
 
 
+#: Suffix of an array's wider copy while :func:`widen` replaces it.
+WIDENING = ".__widening"
+
+
+def widen(repo: icechunk.Repository, name: str, dtype: np.dtype, label: str = "store") -> None:
+    """Rewrite array ``name`` in the wider ``dtype``, values unchanged.
+
+    A float's dtype is narrowed from the first partition written; a later one can hold
+    values that need more. The array is copied at the wider dtype, the original removed
+    and the copy moved into its place, which icechunk only allows in a session of its
+    own; a widening interrupted between the two commits is finished by the next call.
+    """
+    from xarray.backends.zarr import FillValueCoder
+
+    copy = name + WIDENING
+    group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    if name in group:
+        session = repo.writable_session("main")
+        group = zarr.open_group(session.store, mode="a")
+        old = group[name]
+        attrs = dict(old.attrs)
+        if "_FillValue" in attrs and old.dtype.kind == "f":
+            value = FillValueCoder.decode(attrs["_FillValue"], old.dtype)
+            attrs["_FillValue"] = FillValueCoder.encode(value, dtype)
+        fill = old.fill_value
+        new = group.create_array(
+            copy,
+            shape=old.shape,
+            chunks=old.chunks,
+            dtype=dtype,
+            serializer=old.serializer,
+            compressors=old.compressors,
+            filters=old.filters,
+            fill_value=None if fill is None else np.asarray(fill).astype(dtype)[()],
+            dimension_names=old.metadata.dimension_names,
+            attributes=attrs,
+        )
+        step = max(1, old.chunks[0]) * 64
+        for start in range(0, old.shape[0], step):
+            new[start : start + step] = old[start : start + step].astype(dtype)
+        del group[name]
+        session.commit(
+            f"{label}: widen {name} to {dtype} (copy)", rebase_with=icechunk.ConflictDetector()
+        )
+    if copy in zarr.open_group(repo.readonly_session("main").store, mode="r"):
+        session = repo.rearrange_session("main")
+        session.move(f"/{copy}", f"/{name}")
+        session.commit(f"{label}: widen {name} to {dtype}", rebase_with=icechunk.ConflictDetector())
+    logger.info(f"{label}: widened {name} to {dtype}")
+
+
 def append_partition(
     repo: icechunk.Repository,
     ds: xr.Dataset,
@@ -317,6 +373,18 @@ def _append_once(
         present = set(group.array_keys()) & set(ds.variables) if exists else set()
         if present:
             dtypes = {name: group[name].dtype for name in present}
+            narrow = {
+                name: dtype
+                for name, dtype in dtypes.items()
+                if dtype.kind == "f"
+                and ds[name].dtype.kind == "f"
+                and not fits(ds[name].values, dtype)
+            }
+            if narrow:
+                # Narrowed from earlier partitions, but this one needs more precision.
+                for name in narrow:
+                    widen(repo, name, np.dtype(ds[name].dtype), label)
+                return _append_once(repo, ds, partition, fixed, label)
             ds = cast_exactly(ds, {k: v for k, v in dtypes.items() if v.kind in "fiu"})
             _append(session, ds, fixed)
         else:
@@ -411,6 +479,7 @@ def concat_frames(
 
 
 __all__ = [
+    "widen",
     "pad_to",
     "pad_value",
     "CHUNK_BYTES",

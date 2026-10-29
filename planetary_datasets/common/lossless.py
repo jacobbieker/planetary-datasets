@@ -70,6 +70,11 @@ def narrowest_dtypes(ds: xr.Dataset, skip: Iterable[str] = ()) -> dict[str, np.d
     }
 
 
+def fits(values: np.ndarray, dtype: np.dtype) -> bool:
+    """True when every value survives a round trip through ``dtype``."""
+    return _round_trips(np.asarray(values), np.dtype(dtype))
+
+
 def cast_exactly(ds: xr.Dataset, dtypes: Mapping[str, np.dtype]) -> xr.Dataset:
     """``ds`` with each variable in ``dtypes`` cast to it, or :class:`LossyCastError`.
 
@@ -95,6 +100,7 @@ __all__ = [
     "FLOAT_LADDER",
     "LossyCastError",
     "cast_exactly",
+    "fits",
     "narrowest_dtype",
     "narrowest_dtypes",
 ]

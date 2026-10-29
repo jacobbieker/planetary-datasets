@@ -57,13 +57,20 @@ def test_a_written_partition_is_skipped(repo):
     assert read(repo).sizes["wind"] == 4
 
 
-def test_a_value_the_store_dtype_cannot_hold_is_refused(repo):
+def test_a_value_the_store_dtype_cannot_hold_widens_it(repo):
     halves = xr.Dataset({"v": ("x", np.array([0.5, 1.0, 1.5]))})
+    halves["v"].attrs["_FillValue"] = -1.0
     append_partition(repo, halves, "p0")
     assert read(repo)["v"].dtype == np.float16
-    with pytest.raises(LossyCastError):
-        append_partition(repo, xr.Dataset({"v": ("x", np.array([0.1]))}), "p1")
-    assert ledger(repo) == {"p0"}
+    append_partition(repo, xr.Dataset({"v": ("x", np.array([0.1]), {"_FillValue": -1.0})}), "p1")
+    stored = read(repo)
+    assert stored["v"].dtype == np.float64
+    assert stored["v"].values.tolist() == [0.5, 1.0, 1.5, 0.1]
+    raw = xr.open_zarr(
+        repo.readonly_session("main").store, consolidated=False, mask_and_scale=False
+    )
+    assert raw["v"].attrs["_FillValue"] == -1.0
+    assert ledger(repo) == {"p0", "p1"}
 
 
 def test_a_wider_fixed_dimension_widens_the_store(repo):
