@@ -87,6 +87,7 @@ REJECTED = {
 }
 #: Attribute of ``<level>_product_name`` listing the level's complete days.
 DAYS_ATTR = "days_complete"
+NO_SUCH_FIELD = re.compile(r"No such field '([^']+)'")
 PRODUCT_TIME = re.compile(r"_(\d{8}T\d{6})(\d{3})?_(\d{8}T\d{6}|\d{9})_")
 
 
@@ -257,6 +258,8 @@ class AeolusProvider(BaseProvider):
             raise ValueError(f"unknown Aeolus levels: {sorted(unknown)}")
         self.levels = [LEVELS[n] for n in names]
         self.workers = workers
+        self._missing: dict[tuple[str, str, str], set[str]] = {}
+        self._missing_lock = threading.Lock()
         self._fields = {level.prefix: catalogue_fields(level.collection) for level in self.levels}
         #: Field names in more than one group of a level (L1B's observation and measurement
         #: groups share ``time``, positions, ...): those take their group as a prefix.
@@ -271,15 +274,26 @@ class AeolusProvider(BaseProvider):
     # ------------------------------------------------------------------ VirES
 
     def _get(self, level: Level, group: str, fields: list[str], start, end) -> xr.Dataset:
-        """One group of one level over ``[start, end)``, read without CF decoding."""
+        """One group of one level over ``[start, end)``, read without CF decoding.
+
+        Which fields exist depends on the product's processing baseline (early L2C lacks
+        dozens), and the server refuses a whole request over one it lacks. Each one it
+        names is dropped and the request retried; what was missing is remembered per
+        level, group and month, so the round trips are paid once.
+        """
         from viresclient import AeolusRequest
 
         (token,) = self.config.credentials.require("vires_token")
-        request = AeolusRequest(token=token, url=VIRES_URL)
-        request.set_collection(level.collection)
-        request.set_fields(**{group: fields})
+        key = (level.prefix, group, f"{pd.Timestamp(start):%Y-%m}")
+        with self._missing_lock:
+            missing = set(self._missing.get(key, ()))
+        wanted = [f for f in fields if f not in missing]
         last: Exception | None = None
-        for attempt in range(1, 6):
+        failures = 0
+        while wanted:
+            request = AeolusRequest(token=token, url=VIRES_URL)
+            request.set_collection(level.collection)
+            request.set_fields(**{group: wanted})
             try:
                 data = request.get_between(
                     f"{pd.Timestamp(start):%Y-%m-%dT%H:%M:%S.%f}"[:-3] + "Z",
@@ -290,10 +304,23 @@ class AeolusProvider(BaseProvider):
                 )
                 break
             except Exception as exc:  # noqa: BLE001 - VirES fails transiently in many ways
-                last = exc
-                logger.debug(f"{self.name}: {level.prefix} {group} attempt {attempt}: {exc}")
+                reason = f"{exc.__context__ or ''} {exc}"
+                absent = NO_SUCH_FIELD.search(reason)
+                if absent and absent.group(1) in wanted:
+                    wanted.remove(absent.group(1))
+                    with self._missing_lock:
+                        self._missing.setdefault(key, set()).add(absent.group(1))
+                    continue
+                last, failures = exc, failures + 1
+                logger.debug(
+                    f"{self.name}: {level.prefix} {group} attempt {failures}: {reason[:200]}"
+                )
+                if failures == 5:
+                    raise RuntimeError(
+                        f"{self.name}: {level.prefix} {group} failed: {reason[:300]}"
+                    ) from last
         else:
-            raise RuntimeError(f"{self.name}: {level.prefix} {group} failed: {last}") from last
+            return xr.Dataset()
         parts = []
         with tempfile.TemporaryDirectory(dir=self.config.scratch_dir) as tmp:
             # A long request comes back split into several files; each keeps its data in

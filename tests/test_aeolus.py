@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from planetary_datasets.providers.polar import aeolus
 from planetary_datasets.providers.polar.aeolus import (
     LEVELS,
     AeolusProvider,
@@ -154,3 +155,46 @@ def test_fields_shared_between_groups_take_the_group_prefix(local_config):
 def test_days_outside_the_mission_are_never_missing(provider):
     days = pd.DatetimeIndex(["2018-08-01", "2024-01-01"])
     assert provider.missing_timesteps(days) == []
+
+
+def test_fields_a_product_lacks_are_dropped_and_remembered(local_config, monkeypatch):
+    import dataclasses
+
+    import viresclient
+
+    config = dataclasses.replace(
+        local_config,
+        credentials=dataclasses.replace(local_config.credentials, vires_token="token"),
+    )
+    made = AeolusProvider(config=config, levels=["l2c"])
+    asked = []
+
+    class Request:
+        def __init__(self, **kwargs):
+            pass
+
+        def set_collection(self, collection):
+            pass
+
+        def set_fields(self, **groups):
+            self.fields = list(next(iter(groups.values())))
+
+        def get_between(self, *args, **kwargs):
+            asked.append(list(self.fields))
+            if "mie_tc_23" in self.fields:
+                try:
+                    raise KeyError("No such field 'mie_tc_23'")
+                except KeyError as inner:
+                    raise RuntimeError("Server error.") from inner
+            raise RuntimeError("stop here")
+
+    monkeypatch.setattr(viresclient, "AeolusRequest", Request)
+    monkeypatch.setattr(aeolus, "VIRES_URL", "x")
+    level = LEVELS["l2c"]
+    with pytest.raises(RuntimeError, match="failed"):
+        made._get(level, "mie_wind_fields", ["a", "mie_tc_23"], "2018-09-27", "2018-09-28")
+    assert asked[0] == ["a", "mie_tc_23"] and asked[1] == ["a"]
+    asked.clear()
+    with pytest.raises(RuntimeError):
+        made._get(level, "mie_wind_fields", ["a", "mie_tc_23"], "2018-09-28", "2018-09-29")
+    assert asked[0] == ["a"]
