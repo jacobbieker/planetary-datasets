@@ -190,7 +190,7 @@ class AromeProvider(BaseProvider):
         else:
             processed = self.process(input_files, it)
 
-        written = self.write_to_icechunk(repo, processed)
+        written = self.write_to_icechunk(repo, self.prepare_names(processed, repo))
         if written:
             removed = cleanup_files(*input_files)
             logger.debug(f"{self.name}: removed {removed} local file(s) for {it}")
@@ -260,9 +260,9 @@ class AromeOverseasProvider(AromeProvider):
                 # the isobaric fields of the other pressure paquets.
                 part = part.drop_vars(["potentialVorticity", "u", "v", "z"], errors="ignore")
             pressure_parts.append(part)
-        pressure = xr.merge(
-            pressure_parts, compat="no_conflicts"
-        ).drop_vars(["time", "step"], errors="ignore")
+        pressure = xr.merge(pressure_parts, compat="no_conflicts").drop_vars(
+            ["time", "step"], errors="ignore"
+        )
 
         surface = xr.merge(
             [
@@ -274,7 +274,8 @@ class AromeOverseasProvider(AromeProvider):
                     dim="valid_time",
                 )
                 for paquet in ("SP1", "SP2")
-            ], compat="no_conflicts"
+            ],
+            compat="no_conflicts",
         )
 
         surface = rename_vars_by_long_name(surface, suffix="_at_surface")
@@ -320,14 +321,12 @@ class AromeFranceProvider(AromeProvider):
         **kwargs,
     ) -> xr.Dataset:
         height = xr.merge(
-            [xr.merge(
-                open_grib_datasets(f)
-            ) for f in _require(input_files, ("HP1", "HP2"), it)], compat="no_conflicts"
+            [xr.merge(open_grib_datasets(f)) for f in _require(input_files, ("HP1", "HP2"), it)],
+            compat="no_conflicts",
         )
         pressure = xr.merge(
-            [xr.merge(
-                open_grib_datasets(f)
-            ) for f in _require(input_files, ("IP1", "IP3"), it)], compat="no_conflicts"
+            [xr.merge(open_grib_datasets(f)) for f in _require(input_files, ("IP1", "IP3"), it)],
+            compat="no_conflicts",
         )
         surface = xr.merge(
             [_open_surface(f) for f in _require(input_files, ("SP1", "SP2", "SP3"), it)],
@@ -384,9 +383,11 @@ class AromeFranceHDProvider(AromeProvider):
         surfaces = []
         for step_token in layout.step_tokens:
             per_step = [f for f in input_files if f"__{step_token}__" in os.path.basename(f)]
-            heights.append(xr.merge(
-                open_grib_datasets(_require(per_step, ("HP1",), it)[0]), compat="no_conflicts"
-            ))
+            heights.append(
+                xr.merge(
+                    open_grib_datasets(_require(per_step, ("HP1",), it)[0]), compat="no_conflicts"
+                )
+            )
             surfaces.append(
                 xr.merge(
                     [_open_surface(f) for f in _require(per_step, ("SP1", "SP2", "SP3"), it)],
@@ -400,9 +401,9 @@ class AromeFranceHDProvider(AromeProvider):
         surface = rename_vars_by_long_name(surface, suffix="_at_surface")
         height = rename_vars_by_long_name(height, suffix="_at_height")
 
-        ds = xr.merge(
-            [surface, height], compat="no_conflicts"
-        ).rename({"heightAboveGround": "height"})
+        ds = xr.merge([surface, height], compat="no_conflicts").rename(
+            {"heightAboveGround": "height"}
+        )
         return _finalise(_step_to_time(ds))
 
 

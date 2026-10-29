@@ -112,7 +112,8 @@ declare -A LANES=(
   [metop_gome]="_backfill_lanes.py metop_gome --threads 2"
   # PAUSED 2026-10-17, by request, to free the CPU for the JPSS and AMPS catch-ups (~1 h per
   # day of radar from 2020). Uncomment to resume; it picks up where it stopped.
-  # [nordic_radar]="_backfill_lanes.py nordic_radar --threads 2 --pause 21600"
+  [nordic_radar]="_backfill_lanes.py nordic_radar --threads 1 --pause 21600"
+  [uk_radar]="_backfill_lanes.py uk_radar --threads 2"
   # GDEX-PAUSED 2026-10-21: data.gdex.ucar.edu started resetting the box's connections (it
   # still answers other hosts) with nine lanes reading it at once. The AMPS, NCEP upper-air
   # and IFS analysis lanes are paused until it answers again; resume them a few at a time.

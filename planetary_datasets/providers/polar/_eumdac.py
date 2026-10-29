@@ -19,6 +19,7 @@ from typing import Any, Iterator, List
 import pandas as pd
 from loguru import logger
 
+from planetary_datasets.common import naming
 from planetary_datasets.common.staged import StagedFilesMixin
 from planetary_datasets.providers.polar._granule import GranuleProvider
 from planetary_datasets.providers.polar.epct_download import stage_dir
@@ -57,9 +58,7 @@ class EumdacProvider(StagedFilesMixin, GranuleProvider):
     def workdir(self, temp_dir: pathlib.Path | None) -> pathlib.Path:
         """Directory to unpack and convert products in for one partition."""
         base = (
-            pathlib.Path(temp_dir)
-            if temp_dir is not None
-            else self.config.scratch_dir / self.name
+            pathlib.Path(temp_dir) if temp_dir is not None else self.config.scratch_dir / self.name
         )
         base.mkdir(parents=True, exist_ok=True)
         return base
@@ -79,12 +78,9 @@ class EumdacProvider(StagedFilesMixin, GranuleProvider):
         """Products whose sensing window overlaps the partition starting at ``it``."""
         start, end = self.partition_window(it)
         collection = self.datastore().get_collection(self.collection_id)
-        products = list(
-            collection.search(dtstart=start.to_pydatetime(), dtend=end.to_pydatetime())
-        )
+        products = list(collection.search(dtstart=start.to_pydatetime(), dtend=end.to_pydatetime()))
         logger.info(
-            f"{self.name}: {len(products)} product(s) in {self.collection_id} "
-            f"for {start} - {end}"
+            f"{self.name}: {len(products)} product(s) in {self.collection_id} for {start} - {end}"
         )
         if self.product_limit is not None:
             products = products[: self.product_limit]
@@ -142,7 +138,12 @@ class EumdacProvider(StagedFilesMixin, GranuleProvider):
         """Write the obs store first, so the primary store only ever holds what it does too."""
         if self.obs_store_prefix is not None:
             obs_repo = self.config.icechunk_repo(self.obs_store_prefix)
-            super().write_to_icechunk(obs_repo, processed)
+            # Named for the obs store, which keeps its own names, from the source dataset.
+            source = getattr(self, "source_processed", processed)
+            obs = naming.prepare_for_store(
+                source, self.obs_store_prefix, naming.stored_arrays(obs_repo)
+            )
+            super().write_to_icechunk(obs_repo, obs)
         return super().write_to_icechunk(repo, processed)
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:

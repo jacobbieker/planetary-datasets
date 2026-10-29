@@ -1,0 +1,2640 @@
+{
+ "bkr/aoml/aoml_2012.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2013.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2014.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2015.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2016.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2017.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2018.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2019.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2020.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2021.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2022.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2023.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2024.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_2025.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_all.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_all_2.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_bouys.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_drifters.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_drifters_2.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_glider.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_moored.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_moored_2.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_ships.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_ships_2.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_shore.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_shore_2.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_station.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_tide.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_volunteerships.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_vosclim.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_weather.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/aoml_weather_2.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "mean_sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "profile_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_all.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_c_man_weather_stations.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_climate_reference_moored_buoys.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_drifting_buoys.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_gliders.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_gloss.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_hurricane_drifters.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_ice_buoys.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_moored_buoys.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_ocean_transport_stations.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_profiling_floats_and_gliders.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_research.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_ship_fishing_vessel.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_ships.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_shore_and_bottom_stations.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_tagged_animal.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_tide_gauge_stations.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_tropical_moored_buoys.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_tsunami_warning_stations.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_uncrewed_surface_vehicle.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_underway_carbon_ships.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_unknown.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_volunteer_observing_ships.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_vosclim.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_weather_and_ocean_obs.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_weather_buoys.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/aoml/v2/osmc_weather_obs.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_level_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "sea_surface_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "sea_water_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Deg C",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/dmi/alaska_hrrr.icechunk": {
+  "geopotential": {
+   "add_offset": 0.0,
+   "from_units": "gpm",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "total_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/dmi/amps_d1.icechunk": {
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/dmi/amps_d2.icechunk": {
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/dmi/amps_d3.icechunk": {
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/dmi/amps_d5.icechunk": {
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/dmi/amps_d6.icechunk": {
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/dmi/amps_drake.icechunk": {
+  "geopotential": {
+   "add_offset": 0.0,
+   "from_units": "gpm",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/dmi/amps_nz.icechunk": {
+  "geopotential": {
+   "add_offset": 0.0,
+   "from_units": "gpm",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/dmi/arome_caribbean.icechunk": {
+  "high_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "low_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "medium_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/dmi/arome_france.icechunk": {
+  "high_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "low_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "medium_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  }
+ },
+ "bkr/dmi/arome_france_0025.icechunk": {
+  "high_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "low_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "medium_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/dmi/arome_french_guiana.icechunk": {
+  "high_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "low_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "medium_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/dmi/arome_indian_ocean.icechunk": {
+  "high_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "low_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "medium_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/dmi/arome_new_caledonia.icechunk": {
+  "high_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "low_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "medium_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/dmi/arome_polynesia.icechunk": {
+  "high_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "low_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "medium_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/dmi/harmonie_greenland_iceland.icechunk": {
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/dmi/harmonie_greenland_iceland_2.icechunk": {
+  "high_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "low_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "medium_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/dmi/harmonie_greenland_iceland_3.icechunk": {
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/dmi/hawaii_nams.icechunk": {
+  "geopotential": {
+   "add_offset": 0.0,
+   "from_units": "gpm",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "total_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  }
+ },
+ "bkr/dmi/kenda_forecast_switzerland.icechunk": {
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/dmi/kenda_forecast_switzerland_20260721T1100.icechunk": {
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/dmi/scotland_woof.icechunk": {
+  "average_snow_temperature": {
+   "add_offset": 273.15,
+   "from_units": "C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/dmi/uk_woof.icechunk": {
+  "average_snow_temperature": {
+   "add_offset": 273.15,
+   "from_units": "C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/dmi/wales_woof.icechunk": {
+  "average_snow_temperature": {
+   "add_offset": 273.15,
+   "from_units": "C",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/gfs/gfs_analysis.icechunk": {
+  "geopotential": {
+   "add_offset": 0.0,
+   "from_units": "gpm",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/gfs/gfs_forecast_6hr.icechunk": {
+  "5_wave_geopotential": {
+   "add_offset": 0.0,
+   "from_units": "gpm",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "geopotential": {
+   "add_offset": 0.0,
+   "from_units": "gpm",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "total_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/gfs/gfs_forecast_6hr_1deg.icechunk": {
+  "5_wave_geopotential": {
+   "add_offset": 0.0,
+   "from_units": "gpm",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "geopotential": {
+   "add_offset": 0.0,
+   "from_units": "gpm",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "total_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/icon/icon_d2_ruc_5min.icechunk": {
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/icon/icon_d2_ruc_60min.icechunk": {
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "high_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "low_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "medium_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "total_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  }
+ },
+ "bkr/icon/icon_d2_ruc_hourly.icechunk": {
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
+  "high_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "low_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "medium_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  },
+  "total_cloud_cover": {
+   "add_offset": 0.0,
+   "from_units": "%",
+   "scale_factor": 0.01,
+   "units": "(0 - 1)"
+  }
+ },
+ "bkr/icon/icon_global_model_level.icechunk": {
+  "total_precipitation": {
+   "add_offset": 0.0,
+   "from_units": "kg m**-2",
+   "scale_factor": 0.001,
+   "units": "m"
+  }
+ },
+ "bkr/metoffice/metoffice_global_deterministic_10km_6hourly_24hr.icechunk": {
+  "geopotential": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/metoffice/metoffice_global_deterministic_10km_6hourly_24hr_07112024.icechunk": {
+  "geopotential": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/metoffice/metoffice_global_deterministic_10km_6hourly_24hr_29092024.icechunk": {
+  "geopotential": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/nsrdb/goes_full_disc_v4.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "surface_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  }
+ },
+ "bkr/nsrdb/himawari7.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "layout_1348x742/air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "layout_1348x742/dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "layout_1348x742/surface_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "surface_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  }
+ },
+ "bkr/nsrdb/himawari8.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "surface_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  }
+ },
+ "bkr/nsrdb/meteosat.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "surface_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  }
+ },
+ "bkr/nsrdb/msg_v4.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "surface_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  }
+ },
+ "bkr/nsrdb/nsrdb_india.icechunk": {
+  "air_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  }
+ },
+ "bkr/nsrdb/polar_v4.icechunk": {
+  "dewpoint_temperature": {
+   "add_offset": 273.15,
+   "from_units": "Celsius",
+   "scale_factor": 1.0,
+   "units": "K"
+  },
+  "surface_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  }
+ },
+ "bkr/obs/igra_v2_16_levels.icechunk": {
+  "geopotential": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  }
+ },
+ "bkr/polar/metop_gome.icechunk": {
+  "cloud_top_pressure": {
+   "add_offset": 0.0,
+   "from_units": "hPa",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  }
+ },
+ "bkr/polar/pace_l2.icechunk": {
+  "spexone_mapol_ocean_ancillary_surface_pressure": {
+   "add_offset": 0.0,
+   "from_units": "mb",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "spexone_rtap_land_surface_pressure": {
+   "add_offset": 0.0,
+   "from_units": "mb",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "spexone_rtap_ocean_surface_pressure": {
+   "add_offset": 0.0,
+   "from_units": "mb",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  }
+ },
+ "bkr/polar/pace_virtual.icechunk": {
+  "harp2_mapol_land_ancillary_surface_pressure": {
+   "add_offset": 0.0,
+   "from_units": "mb",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  },
+  "harp2_mapol_ocean_ancillary_surface_pressure": {
+   "add_offset": 0.0,
+   "from_units": "mb",
+   "scale_factor": 100.0,
+   "units": "Pa"
+  }
+ }
+}

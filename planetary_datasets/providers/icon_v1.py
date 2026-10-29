@@ -1299,7 +1299,8 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             return False
         processed = self.process(input_files, it)
         try:
-            written = self.write_to_icechunk(self.store_for(processed, None), processed)
+            target = self.store_for(processed, None)
+            written = self.write_to_icechunk(target, self.prepare_names(processed, target))
         finally:
             self._runs.pop(it, None)
         logger.info(

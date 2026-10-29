@@ -311,7 +311,12 @@ LANES: dict[str, Lane] = {
     "metop_avhrr": Lane(_provider("polar", "MetopAvhrrProvider"), "2024-01-01", "4h", 6),
     # From 2024, like AVHRR: from 2008 it was 163k hourly partitions, years of backfill.
     "metop_gome": Lane(_provider("polar", "MetopGomeProvider"), "2024-01-01", "1h", 6),
-    "nordic_radar": Lane(_provider("meps", "NordicReflectivityProvider"), "2020-01-01", "1D", 48),
+    # Nordic composite reflectivity (bkr/precipradar/norway_radar): the gap since it
+    # stopped on 2026-09-29, then kept current. thredds.met.no blocks parallel downloads,
+    # so one partition at a time; the 2020 backfill this lane once ran stays off.
+    "nordic_radar": Lane(_provider("meps", "NordicReflectivityProvider"), "2026-09-28", "1D", 48),
+    # Met Office UK composite rain radar, from just before it stopped on 2026-10-15.
+    "uk_radar": Lane(_provider("radar", "UKRadarProvider"), "2026-10-13", "1h", 2),
     # JPSS products NOAA deletes ~90 days after publication (VIIRS M-band SDR, ATMS snowfall
     # rate, MiRS imaging/sounding): a trailing window inside the retention, oldest first.
     **{

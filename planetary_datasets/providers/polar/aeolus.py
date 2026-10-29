@@ -61,6 +61,7 @@ import zarr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
+from planetary_datasets.common import naming
 from planetary_datasets.common.multidim import append_partition
 from planetary_datasets.common.store import STORE_READ_ERRORS
 
@@ -495,8 +496,10 @@ class AeolusProvider(BaseProvider):
             if names:
                 stacked.append(xr.concat([ds[names] for ds in indexed], dim=dim, data_vars="all"))
         ds = xr.merge(stacked, compat="no_conflicts", combine_attrs="override")
+        repo = self.get_icechunk_repo()
+        ds = naming.prepare_for_store(ds, self.store_prefix, naming.stored_arrays(repo), raw=True)
         append_partition(
-            self.get_icechunk_repo(),
+            repo,
             ds,
             None,
             fixed_dims=[d for d in ds.dims if f"{p}_array_" in d],

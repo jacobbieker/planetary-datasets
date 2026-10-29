@@ -49,7 +49,7 @@ import zarr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
-from planetary_datasets.common import multidim
+from planetary_datasets.common import multidim, naming
 from planetary_datasets.common.earthdata import EarthdataS3, granules, s3_url
 from planetary_datasets.common.multidim import append_partition
 from planetary_datasets.common.store import STORE_READ_ERRORS
@@ -262,8 +262,10 @@ class PaceL2Provider(BaseProvider):
             [read_granule(path, product) for path in paths], product.prefix, first_index, "granule"
         )
         p = product.prefix
+        repo = self.get_icechunk_repo()
+        ds = naming.prepare_for_store(ds, self.store_prefix, naming.stored_arrays(repo), raw=True)
         append_partition(
-            self.get_icechunk_repo(),
+            repo,
             ds,
             None,
             fixed_dims=[d for d in ds.dims if d not in (f"{p}_along_track", f"{p}_granule")],

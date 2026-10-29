@@ -41,6 +41,7 @@ from icechunk.xarray import to_icechunk
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
+from planetary_datasets.common import naming
 from planetary_datasets.common.store import (
     STORE_READ_ERRORS,
     StoreReadError,
@@ -212,16 +213,27 @@ def _append_rows(session: icechunk.Session, ds: xr.Dataset) -> None:
     for name in along:
         array = group[name]
         array.resize((stop, *array.shape[1:]))
-    strings = [name for name in along if ds[name].dtype.kind in "OUS"]
-    for name in strings:
-        group[name][start:stop] = np.asarray(ds[name].values, dtype=object)
-    # Without its index, time is written like any other variable; as an index coordinate a
-    # region write leaves it unwritten.
-    rest = ds[[name for name in along if name not in strings]].drop_indexes("time")
-    to_icechunk(rest, session, region={"time": slice(start, stop)})
+    # Values go to zarr as they are: a region write through xarray would re-encode them
+    # with the stored scale_factor/add_offset (the ERA5 unit conversions) and divide them.
+    # Only datetimes need xarray's encoding.
+    times = [name for name in along if ds[name].dtype.kind in "Mm"]
+    for name in along:
+        if name in times:
+            continue
+        values = ds[name].values
+        group[name][start:stop] = (
+            np.asarray(values, dtype=object) if values.dtype.kind in "OUS" else values
+        )
+    if times:
+        # Without its index, time is written like any other variable; as an index
+        # coordinate a region write leaves it unwritten.
+        rest = ds[times].drop_indexes("time")
+        to_icechunk(rest, session, region={"time": slice(start, stop)})
 
 
-def _append_with_ledger(repo: icechunk.Repository, ds: xr.Dataset, day: str, label: str) -> bool:
+def _append_with_ledger(
+    repo: icechunk.Repository, ds: xr.Dataset, day: str, label: str, prefix: str = ALL_STORE
+) -> bool:
     """Append one day's rows and add the day to the store's ledger, in one commit.
 
     Skips (False) when the ledger already lists the day. A day with no rows for an existing
@@ -238,6 +250,8 @@ def _append_with_ledger(repo: icechunk.Repository, ds: xr.Dataset, day: str, lab
         exists, ledger = False, []
     if day in ledger:
         return False
+    stored = set(group.array_keys()) if exists else set()
+    ds = naming.prepare_for_store(ds, prefix, stored, raw=True)
     rows = ds.sizes.get("time", 0)
     if not exists and rows == 0:
         return False
@@ -280,6 +294,8 @@ class OSMCRaggedProvider(BaseProvider):
     name = "osmc_ragged"
     append_dim = "time"
     store_prefix = ALL_STORE
+    #: Each type store is named in ``_append_with_ledger``, writing raw values.
+    names_in_writer = True
     request_timeout = 1800
     write_workers = 8
 
@@ -396,7 +412,9 @@ class OSMCRaggedProvider(BaseProvider):
 
         def write_type(slug: str) -> tuple[str, bool]:
             subset = processed.isel(time=np.flatnonzero(slugs == slug))
-            return slug, _append_with_ledger(self.type_repo(slug), subset, day, f"osmc_{slug}")
+            return slug, _append_with_ledger(
+                self.type_repo(slug), subset, day, f"osmc_{slug}", store_prefix_for(slug)
+            )
 
         with ThreadPoolExecutor(max_workers=self.write_workers) as pool:
             results = dict(pool.map(write_type, sorted(set(slugs))))
@@ -404,4 +422,4 @@ class OSMCRaggedProvider(BaseProvider):
             f"{self.name}: {day} -> {sum(results.values())} type store(s) written, "
             f"{len(results) - sum(results.values())} already held it"
         )
-        return _append_with_ledger(repo, processed, day, "osmc_all")
+        return _append_with_ledger(repo, processed, day, "osmc_all", ALL_STORE)

@@ -35,7 +35,10 @@ while true; do
     now_edge=$(date -u -d '-2 hours' '+%Y-%m-%dT%H:00:00Z')
     [[ $end > $now_edge ]] && end=$now_edge
     echo "=== $(date -u '+%F %T') $STORE $month start -> $target"
-    (cd "$SCRATCH" && SATCONS_SATELLITE=$SAT SATCONS_RESOLUTION=$RES \
+    # The store's readable variable names (planetary_datasets/naming), for satellite-consumer.
+    renames="$PWD/data/satcons_names_${STORE}.json"
+    PYTHONPATH=$PWD $PIXI run python scripts/store_names_json.py "bkr/geo/${STORE}.icechunk" "$renames"
+    (cd "$SCRATCH" && SATCONS_SATELLITE=$SAT SATCONS_RESOLUTION=$RES SATCONS_RENAME_JSON=$renames \
       SATCONS_START_TIMESTAMP=$start SATCONS_END_TIMESTAMP=$end SATCONS_RAW_PATH=. \
       SATCONS_ZARR_PATH=$target SATCONS_ICECHUNK=True SATCONS_LOW_MEMORY=$low \
       SATCONS_S3_LISTING_CACHE_DIR=$LISTINGS \

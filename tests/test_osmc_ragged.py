@@ -284,3 +284,24 @@ def test_every_osmc_store_splits_its_manifests_along_time(provider):
         splitting = repo.config.manifest.splitting
         assert splitting is not None
         assert "time" in repr(splitting.split_sizes)
+
+
+@pytest.mark.store_names
+def test_appended_days_take_the_readable_names_and_decode_in_era5_units(
+    provider, yearly_2012, local_config
+):
+    days = pd.date_range("2012-01-01", periods=2, freq="D")
+    assert provider.run_range(days) == 2
+    source = yearly_2012.isel(time=slice(0, 24))
+    full = stored(local_config, osmc_ragged.ALL_STORE)
+    raw = xr.open_zarr(
+        local_config.icechunk_repo(osmc_ragged.ALL_STORE).readonly_session("main").store,
+        consolidated=False,
+        mask_and_scale=False,
+    )
+    assert "sst" not in full and full["sea_surface_temperature"].attrs["units"] == "K"
+    # Stored exactly as the source had it (degC); decoded in kelvin, across both days.
+    np.testing.assert_array_equal(raw["sea_surface_temperature"].values, source["sst"].values)
+    np.testing.assert_allclose(
+        full["sea_surface_temperature"].values, source["sst"].values.astype("float64") + 273.15
+    )

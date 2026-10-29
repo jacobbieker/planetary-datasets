@@ -43,7 +43,11 @@ while true; do
     store="s3://us-west-2.opendata.source.coop/bkr/geo/himawari_${RES}m_backfill_${month}.icechunk"
     low=false; [[ $RES == 500 ]] && low=true
     echo "=== $(date -u '+%F %T') himawari ${RES}m $month (lane $LANE/$LANES) start -> $store"
-    (cd "$SCRATCH" && SATCONS_SATELLITE=himawari SATCONS_RESOLUTION=$RES \
+    # The shard's readable variable names (planetary_datasets/naming), for satellite-consumer.
+    renames="$PWD/data/satcons_names_himawari_${RES}m_${month}.json"
+    PYTHONPATH=$PWD $PIXI run python scripts/store_names_json.py \
+      "bkr/geo/himawari_${RES}m_backfill_${month}.icechunk" "$renames"
+    (cd "$SCRATCH" && SATCONS_SATELLITE=himawari SATCONS_RESOLUTION=$RES SATCONS_RENAME_JSON=$renames \
       SATCONS_START_TIMESTAMP=$start SATCONS_END_TIMESTAMP=$end SATCONS_RAW_PATH=. \
       SATCONS_ZARR_PATH=$store SATCONS_ICECHUNK=True SATCONS_LOW_MEMORY=$low \
       SATCONS_S3_LISTING_CACHE_DIR=$LISTINGS \
