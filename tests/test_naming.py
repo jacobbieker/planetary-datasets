@@ -18,6 +18,7 @@ from planetary_datasets.common.naming import (
         ("Sea ice albedo - diffusive solar (0.3 - 5.0 m-6)", "sea_ice_albedo_diffusive_solar"),
         ("Latent heat net flux (m)", "latent_heat_net_flux_mean"),
         ("Cloud cover (0 - 400 hPa)", "cloud_cover"),
+        ("Time-maximum 10 metre northward wind gust", "maximum_10m_northward_wind_gust"),
         (
             "downward direct short wave radiation flux at surface mean over forecast time",
             "downward_direct_short_wave_radiation_flux_at_surface_mean",

@@ -17,6 +17,7 @@ import re
 import sys
 
 from planetary_datasets.common.naming import (
+    coordinate_rename,
     geopotential_rename,
     level_qualifier,
     propose,
@@ -114,7 +115,22 @@ def name_store(store: str, arrays: dict, prefixes: list[str]) -> tuple[dict, lis
                 f"{units} -> {converted[2]}" if converted else units,
             )
         )
-    return {o: n for o, (n, _) in proposals.items() if o != n}, rows, conversions
+    dims = {}
+    for path, info in arrays.items():
+        if path == "__error__":
+            continue
+        group = path.rpartition("/")[0]
+        for dim in info.get("dims", []):
+            key = f"{group}/{dim}" if group else dim
+            if dim not in dims:
+                renamed = coordinate_rename(dim, arrays.get(key, {}), [dim])
+                # Never onto a name the store already uses for something else.
+                existing = {p.rsplit("/", 1)[-1] for p in arrays} | {
+                    d for a in arrays.values() if isinstance(a, dict) for d in a.get("dims", [])
+                }
+                if renamed and renamed not in existing:
+                    dims[dim] = renamed
+    return {o: n for o, (n, _) in proposals.items() if o != n}, rows, conversions, dims
 
 
 def family(store: str) -> str:
@@ -131,12 +147,15 @@ def main(scan_path: str, scope_path: str) -> None:
     stores = sorted(set(scope["box"]) | set(scope["static"]))
     mapping: dict[str, dict[str, str]] = {}
     units_out: dict[str, dict] = {}
+    dims_out: dict[str, dict] = {}
     report = collections.defaultdict(list)
     for store in stores:
         arrays = scan.get(store, {})
         if not arrays or "__error__" in arrays:
             continue
-        renamed, rows, conversions = name_store(store, arrays, prefixes.get(store, []))
+        renamed, rows, conversions, dims = name_store(store, arrays, prefixes.get(store, []))
+        if dims:
+            dims_out[store] = dims
         if renamed:
             mapping[store] = renamed
         if conversions:
@@ -146,6 +165,9 @@ def main(scan_path: str, scope_path: str) -> None:
     out.write_text(json.dumps(mapping, indent=1, sort_keys=True) + "\n")
     (out.parent / "store_units.json").write_text(
         json.dumps(units_out, indent=1, sort_keys=True) + "\n"
+    )
+    (out.parent / "store_dims.json").write_text(
+        json.dumps(dims_out, indent=1, sort_keys=True) + "\n"
     )
     lines = [
         "# Variable naming review",
@@ -180,7 +202,9 @@ def main(scan_path: str, scope_path: str) -> None:
     (ROOT / "plans" / "variable_naming_review.md").write_text(text)
     print(
         f"{len(mapping)} stores, {sum(len(m) for m in mapping.values())} renames, "
-        f"{sum(len(u) for u in units_out.values())} unit conversions; rules {dict(rules)}"
+        f"{sum(len(u) for u in units_out.values())} unit conversions, "
+        f"{sum(len(d) for d in dims_out.values())} dimension renames in {len(dims_out)} stores; "
+        f"rules {dict(rules)}"
     )
 
 

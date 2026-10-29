@@ -12,8 +12,24 @@ From a metadata scan of every store in the inventory (778 stores, 38,819 arrays)
 | Static: nothing has committed to them in 14+ days | 416 | yes |
 | Written by another host or Dagster (GOES/Himawari/GK2A virtual, `mtg_2000m`, `iodc_3000m_test`, `gmgsi/gmgsi_v3`, `haziel/*`, GloFAS, GPM, ...) | 192 | **no** — their writers would recreate the old names |
 
-Dimensions and coordinates (`time`, `latitude`, `longitude`, `level`, `step`, ...) keep their names.
 Re-sorting time axes is **not** part of this change.
+
+## Coordinates and dimensions
+
+One name per concept, dimensions renamed with their coordinate variables (842 dimension
+renames in 557 stores, `planetary_datasets/naming/store_dims.json`):
+
+| Concept | Standard | From |
+|---|---|---|
+| valid time | `time` | `t` (305 stores), `Time` |
+| forecast reference / lead time | `init_time` / `step` | `forecast_reference_time`, `forecast_period` |
+| horizontal | `latitude`, `longitude`; projection `x`, `y` | `lat`/`lon`, `x_geostationary`/`y_geostationary`, `projection_x_coordinate`, `xc`/`yc`, WRF `west_east`/`south_north` |
+| pressure levels | `pressure_level` | `level`/`pressure` (when in hPa/Pa), `isobaricInhPa`, `isobar`, `P_Level` |
+| model levels | `model_level`, `model_half_level` | `hybrid`, `hybid`, `bottom_top`, `model_level_half`, `halflevel` |
+| height | `height_above_ground`, `height_above_sea_level` | `height` (m), `hag`, `heightAboveGround`, `asl` |
+| other | `ensemble_member`, `channel`, `cell` | `number`/`member`, `Channel`, ICON's `values` |
+
+A rename that would land on a name the store already uses is skipped.
 
 ## Convention
 
@@ -26,9 +42,12 @@ quantity reads the same from any model.
 Rules, in order (`planetary_datasets/common/naming.py`):
 
 1. Coordinates, grid mappings and bookkeeping are left alone.
-2. Satellite channels: `{reflectance|brightness_temperature}_{wavelength}um`
-   (`brightness_temperature_10_4um`), from per-instrument tables (ABI, AHI, AMI, SEVIRI,
-   FCI, AVHRR); microwave sounders as `channel_05_brightness_temperature`.
+2. Satellite channels keep their channel number:
+   `channel_{number}_{reflectance|brightness_temperature}_{wavelength}um` (GOES `C13` ->
+   `channel_13_brightness_temperature_10_3um`, SEVIRI `IR_108` ->
+   `channel_09_brightness_temperature_10_8um`), from per-instrument tables (ABI, AHI, AMI,
+   SEVIRI, FCI 1-16; AVHRR 1/2/3a/3b/4/5); microwave sounders as
+   `channel_05_brightness_temperature`.
 3. Hand overrides where generic rules disagree between stores (ICON `clch` ->
    `high_cloud_cover`, GEOS `NO2` -> `nitrogen_dioxide`, ...).
 4. Station abbreviations (`atmp` -> `air_temperature`, `ghi` ->
@@ -37,6 +56,11 @@ Rules, in order (`planetary_datasets/common/naming.py`):
    with the variable's own name: GEOS tags everything `northward_wind`), the long name or
    WRF `description` (if it is a name, not a paragraph), the ecCodes name of the short name.
 6. Otherwise the source name tidied into snake case; failing that, kept and flagged.
+
+Long names are shortened to ERA5's where one exists (ICON's time-averaged fluxes take ERA5's
+mean-rate names, `aswdir_s` -> `mean_surface_direct_short_wave_radiation_flux`; `hzerocl`
+-> `zero_degree_level`; `z0` -> `forecast_surface_roughness`), and a generated name over 45
+characters loses to a source name that already reads well (`valid_pixel_count` stays).
 
 Two variables a store would give one name are told apart by what their source names say
 about their level (`_on_model_levels`, `_on_height_levels`, `_at_surface`, ...), then by

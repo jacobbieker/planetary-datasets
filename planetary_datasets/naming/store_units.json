@@ -2368,6 +2368,12 @@
   }
  },
  "bkr/icon/icon_d2_ruc_60min.icechunk": {
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
   "high_cloud_cover": {
    "add_offset": 0.0,
    "from_units": "%",
@@ -2394,6 +2400,12 @@
   }
  },
  "bkr/icon/icon_d2_ruc_hourly.icechunk": {
+  "geopotential_at_surface": {
+   "add_offset": 0.0,
+   "from_units": "m",
+   "scale_factor": 9.80665,
+   "units": "m**2 s**-2"
+  },
   "high_cloud_cover": {
    "add_offset": 0.0,
    "from_units": "%",

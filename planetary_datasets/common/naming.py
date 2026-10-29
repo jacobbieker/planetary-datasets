@@ -145,6 +145,8 @@ def era5ify(name: str) -> str:
     s = re.sub(r"_(mean_over_forecast_time|time_average|time_mean)$", "_mean", s)
     s = re.sub(r"^(\d+)_(\d+)_(?:metre|meter|metres|meters|m)_", r"\1_\2m_", s)
     s = re.sub(r"^(\d+)_(?:metre|meter|metres|meters|m)_", r"\1m_", s)
+    s = re.sub(r"_(\d+)_(?:metre|meter|metres|meters)_", r"_\1m_", s)
+    s = re.sub(r"^time_(maximum|minimum|mean)_", r"\1_", s)
     for pattern, replacement in ERA5_WORDING:
         s = re.sub(pattern, replacement, s)
     return s
@@ -203,137 +205,103 @@ def strip_level_suffix(name: str) -> tuple[str, str]:
     return name, ""
 
 
-#: Satellite imager channels: (quantity, central wavelength in micrometres).
+#: Satellite imager channels: name -> (channel number, quantity, central wavelength in um).
 _REF, _BT = "reflectance", "brightness_temperature"
-CHANNELS: dict[str, tuple[str, float]] = {
-    # GOES ABI
+_ABI = (0.47, 0.64, 0.86, 1.37, 1.6, 2.2, 3.9, 6.2, 6.9, 7.3, 8.4, 9.6, 10.3, 11.2, 12.3, 13.3)
+_AHI = (0.47, 0.51, 0.64, 0.86, 1.6, 2.3, 3.9, 6.2, 6.9, 7.3, 8.6, 9.6, 10.4, 11.2, 12.4, 13.3)
+_AMI = (
+    "VI004",
+    "VI005",
+    "VI006",
+    "VI008",
+    "NR013",
+    "NR016",
+    "SW038",
+    "WV063",
+    "WV069",
+    "WV073",
+    "IR087",
+    "IR096",
+    "IR105",
+    "IR112",
+    "IR123",
+    "IR133",
+)
+_AMI_UM = (0.47, 0.51, 0.64, 0.86, 1.37, 1.6, 3.8, 6.3, 6.9, 7.3, 8.7, 9.6, 10.5, 11.2, 12.3, 13.3)
+_SEVIRI = (
+    "VIS006",
+    "VIS008",
+    "IR_016",
+    "IR_039",
+    "WV_062",
+    "WV_073",
+    "IR_087",
+    "IR_097",
+    "IR_108",
+    "IR_120",
+    "IR_134",
+    "HRV",
+)
+_SEVIRI_UM = (0.6, 0.8, 1.6, 3.9, 6.2, 7.3, 8.7, 9.7, 10.8, 12.0, 13.4, 0.7)
+_FCI = (
+    "vis_04",
+    "vis_05",
+    "vis_06",
+    "vis_08",
+    "vis_09",
+    "nir_13",
+    "nir_16",
+    "nir_22",
+    "ir_38",
+    "wv_63",
+    "wv_73",
+    "ir_87",
+    "ir_97",
+    "ir_105",
+    "ir_123",
+    "ir_133",
+)
+_FCI_UM = (
+    0.44,
+    0.51,
+    0.64,
+    0.86,
+    0.91,
+    1.38,
+    1.61,
+    2.25,
+    3.8,
+    6.3,
+    7.35,
+    8.7,
+    9.66,
+    10.5,
+    12.3,
+    13.3,
+)
+CHANNELS: dict[str, tuple[str, str, float]] = {
+    **{f"C{n:02d}": (f"{n:02d}", _REF if n <= 6 else _BT, w) for n, w in enumerate(_ABI, 1)},
+    **{f"abi{n:02d}c": (f"{n:02d}", _REF if n <= 6 else _BT, w) for n, w in enumerate(_ABI, 1)},
+    **{f"B{n:02d}": (f"{n:02d}", _REF if n <= 6 else _BT, w) for n, w in enumerate(_AHI, 1)},
     **{
-        f"C{n:02d}": (_REF if n <= 6 else _BT, w)
-        for n, w in enumerate(
-            (
-                0.47,
-                0.64,
-                0.86,
-                1.37,
-                1.6,
-                2.2,
-                3.9,
-                6.2,
-                6.9,
-                7.3,
-                8.4,
-                9.6,
-                10.3,
-                11.2,
-                12.3,
-                13.3,
-            ),
-            1,
-        )
+        b: (f"{n:02d}", _REF if n <= 6 else _BT, w)
+        for n, (b, w) in enumerate(zip(_AMI, _AMI_UM), 1)
     },
     **{
-        f"abi{n:02d}c": (_REF if n <= 6 else _BT, w)
-        for n, w in enumerate(
-            (
-                0.47,
-                0.64,
-                0.86,
-                1.37,
-                1.6,
-                2.2,
-                3.9,
-                6.2,
-                6.9,
-                7.3,
-                8.4,
-                9.6,
-                10.3,
-                11.2,
-                12.3,
-                13.3,
-            ),
-            1,
-        )
+        b: (f"{n:02d}", _REF if n in (1, 2, 3, 12) else _BT, w)
+        for n, (b, w) in enumerate(zip(_SEVIRI, _SEVIRI_UM), 1)
     },
-    # Himawari AHI
     **{
-        f"B{n:02d}": (_REF if n <= 6 else _BT, w)
-        for n, w in enumerate(
-            (
-                0.47,
-                0.51,
-                0.64,
-                0.86,
-                1.6,
-                2.3,
-                3.9,
-                6.2,
-                6.9,
-                7.3,
-                8.6,
-                9.6,
-                10.4,
-                11.2,
-                12.4,
-                13.3,
-            ),
-            1,
-        )
+        b: (f"{n:02d}", _REF if n <= 8 else _BT, w)
+        for n, (b, w) in enumerate(zip(_FCI, _FCI_UM), 1)
     },
-    # GK2A AMI
-    "VI004": (_REF, 0.47),
-    "VI005": (_REF, 0.51),
-    "VI006": (_REF, 0.64),
-    "VI008": (_REF, 0.86),
-    "NR013": (_REF, 1.37),
-    "NR016": (_REF, 1.6),
-    "SW038": (_BT, 3.8),
-    "WV063": (_BT, 6.3),
-    "WV069": (_BT, 6.9),
-    "WV073": (_BT, 7.3),
-    "IR087": (_BT, 8.7),
-    "IR096": (_BT, 9.6),
-    "IR105": (_BT, 10.5),
-    "IR112": (_BT, 11.2),
-    "IR123": (_BT, 12.3),
-    "IR133": (_BT, 13.3),
-    # MSG SEVIRI
-    "VIS006": (_REF, 0.6),
-    "VIS008": (_REF, 0.8),
-    "IR_016": (_REF, 1.6),
-    "IR_039": (_BT, 3.9),
-    "WV_062": (_BT, 6.2),
-    "WV_073": (_BT, 7.3),
-    "IR_087": (_BT, 8.7),
-    "IR_097": (_BT, 9.7),
-    "IR_108": (_BT, 10.8),
-    "IR_120": (_BT, 12.0),
-    "IR_134": (_BT, 13.4),
-    "HRV": (_REF, 0.7),
-    # MTG FCI
-    "vis_04": (_REF, 0.44),
-    "vis_05": (_REF, 0.51),
-    "vis_06": (_REF, 0.64),
-    "vis_08": (_REF, 0.86),
-    "vis_09": (_REF, 0.91),
-    "nir_13": (_REF, 1.38),
-    "nir_16": (_REF, 1.61),
-    "nir_22": (_REF, 2.25),
-    "ir_38": (_BT, 3.8),
-    "wv_63": (_BT, 6.3),
-    "wv_73": (_BT, 7.35),
-    "ir_87": (_BT, 8.7),
-    "ir_97": (_BT, 9.66),
-    "ir_105": (_BT, 10.5),
-    "ir_123": (_BT, 12.3),
-    "ir_133": (_BT, 13.3),
-    # MetOp AVHRR
-    "1": (_REF, 0.63),
-    "2": (_REF, 0.86),
-    "3a": (_REF, 1.6),
-    "3b": (_BT, 3.7),
-    "4": (_BT, 10.8),
-    "5": (_BT, 12.0),
+    # MetOp AVHRR: 1, 2, 3a, 3b, 4, 5
+    "1": ("1", _REF, 0.63),
+    "2": ("2", _REF, 0.86),
+    "3a": ("3a", _REF, 1.6),
+    "3b": ("3b", _BT, 3.7),
+    "4": ("4", _BT, 10.8),
+    "5": ("5", _BT, 12.0),
 }
 #: Microwave sounders: channels named by number, frequency kept as an attribute.
 MICROWAVE_STORES = ("jpss_atms",)
@@ -372,6 +340,46 @@ OVERRIDES = {
     "V": "v_component_of_wind",
     "T": "temperature",
     "SLP": "sea_level_pressure",
+    # ERA5's mean-rate parameters, which ICON's time-averaged fluxes are.
+    "aswdir_s": "mean_surface_direct_short_wave_radiation_flux",
+    "aswdifd_s": "mean_surface_diffuse_short_wave_radiation_flux",
+    "aswdifu_s": "mean_surface_upward_short_wave_radiation_flux",
+    "asob_s": "mean_surface_net_short_wave_radiation_flux",
+    "asob_s_cs": "mean_surface_net_short_wave_radiation_flux_clear_sky",
+    "athb_s": "mean_surface_net_long_wave_radiation_flux",
+    "athb_s_cs": "mean_surface_net_long_wave_radiation_flux_clear_sky",
+    "athd_s": "mean_surface_downward_long_wave_radiation_flux",
+    "asob_t": "mean_top_net_short_wave_radiation_flux",
+    "athb_t": "mean_top_net_long_wave_radiation_flux",
+    "alhfl_s": "mean_surface_latent_heat_flux",
+    "ashfl_s": "mean_surface_sensible_heat_flux",
+    "aumfl_s": "mean_eastward_turbulent_surface_stress",
+    "avmfl_s": "mean_northward_turbulent_surface_stress",
+    "tcolg": "total_column_graupel",
+    "tcolr": "total_column_rain_water",
+    "tcols": "total_column_snow_water",
+    "hzerocl": "zero_degree_level",
+    "z0": "forecast_surface_roughness",
+    "sso_stdh": "standard_deviation_of_orography",
+    "rain_con": "convective_rainfall",
+    "rain_gsp": "large_scale_rainfall",
+    "snow_con": "convective_snowfall",
+    "snow_gsp": "large_scale_snowfall",
+    "qv": "specific_humidity",
+    "qc": "specific_cloud_liquid_water_content",
+    "qi": "specific_cloud_ice_water_content",
+    "qr": "specific_rain_water_content",
+    "qs": "specific_snow_water_content",
+    "qg": "specific_graupel_content",
+    "cape_ml": "mixed_layer_convective_available_potential_energy",
+    "cin_ml": "mixed_layer_convective_inhibition",
+    "cape_mu": "most_unstable_convective_available_potential_energy",
+    "cin_mu": "most_unstable_convective_inhibition",
+    "hsurf": "orography",
+    "hhl": "height_of_model_half_levels",
+    "w_so": "soil_moisture",
+    "t_so": "soil_temperature",
+    "w_snow": "snow_water_equivalent",
 }
 
 #: Station and observation abbreviations.
@@ -488,12 +496,89 @@ def _height(leaf: str) -> str:
 
 
 def channel_name(leaf: str) -> str | None:
-    """``ir_10_5_brightness_temperature``-style names for imager channels."""
+    """``channel_13_brightness_temperature_10_3um``-style names for imager channels."""
     hit = CHANNELS.get(leaf) or CHANNELS.get(leaf.upper())
     if hit is None:
         return None
-    quantity, wavelength = hit
-    return f"{quantity}_{f'{wavelength:g}'.replace('.', '_')}um"
+    number, quantity, wavelength = hit
+    return f"channel_{number}_{quantity}_{f'{wavelength:g}'.replace('.', '_')}um"
+
+
+#: Coordinates and dimensions, named the same way everywhere.
+COORDINATE_RENAMES = {
+    "lat": "latitude",
+    "lon": "longitude",
+    "Latitude": "latitude",
+    "Longitude": "longitude",
+    "LAT": "latitude",
+    "LON": "longitude",
+    "nav_lat": "latitude",
+    "nav_lon": "longitude",
+    "forecast_reference_time": "init_time",
+    "reference_time": "init_time",
+    "forecast_period": "step",
+    "lead_time": "step",
+    "isobaricInhPa": "pressure_level",
+    "isobaric": "pressure_level",
+    "plev": "pressure_level",
+    "hybrid": "model_level",
+    "generalVerticalLayer": "model_level",
+    "hybrid_half": "model_half_level",
+    "model_level_half": "model_half_level",
+    "heightAboveGround": "height_above_ground",
+    "number": "ensemble_member",
+    "member": "ensemble_member",
+    "realization": "ensemble_member",
+    # Projection coordinates are x and y everywhere.
+    "x_geostationary": "x",
+    "y_geostationary": "y",
+    "projection_x_coordinate": "x",
+    "projection_y_coordinate": "y",
+    "xc": "x",
+    "yc": "y",
+    # WRF's names.
+    "west_east": "x",
+    "south_north": "y",
+    "west_east_stag": "x_staggered",
+    "south_north_stag": "y_staggered",
+    "bottom_top": "model_level",
+    "bottom_top_stag": "model_half_level",
+    "soil_layers_stag": "soil_level",
+    "Time": "time",
+    # wgrib2/kerchunk level groups (HRRR, NAM, HAFS) and other shorthands.
+    "hag": "height_above_ground",
+    "isobar": "pressure_level",
+    "hybid": "model_level",
+    "asl": "height_above_sea_level",
+    "depth_bls": "depth_below_land_surface",
+    "halflevel": "model_half_level",
+    "Channel": "channel",
+    "P_Level": "pressure_level",
+    "P_Layer": "pressure_layer",
+    # ICON's unstructured grid.
+    "values": "cell",
+}
+
+
+def coordinate_rename(name: str, attrs: Mapping, dims: list[str]) -> str | None:
+    """The standard name of a coordinate or dimension, if it has a different one.
+
+    ``t`` and ``level`` need their units to say what they are: a time axis, pressure levels.
+    """
+    if name in COORDINATE_RENAMES:
+        return COORDINATE_RENAMES[name]
+    units = str(attrs.get("units", ""))
+    if name == "t" and " since " in units:
+        return "time"
+    if (
+        name in ("level", "levels", "lev", "pressure")
+        and name in dims
+        and units.strip().lower() in ("hpa", "pa", "millibars", "mb")
+    ):
+        return "pressure_level"
+    if name == "height" and name in dims and units.strip() == "m":
+        return "height_above_ground"
+    return None
 
 
 def propose(name: str, attrs: Mapping, dims: list[str], store: str = "") -> tuple[str, str]:
@@ -504,6 +589,9 @@ def propose(name: str, attrs: Mapping, dims: list[str], store: str = "") -> tupl
     known; flagged for review).
     """
     leaf = name.rsplit("/", 1)[-1]
+    renamed = coordinate_rename(leaf, attrs, dims)
+    if renamed:
+        return renamed, "coordinate"
     if (
         leaf in COORDINATE_NAMES
         or leaf in dims
@@ -532,8 +620,10 @@ def propose(name: str, attrs: Mapping, dims: list[str], store: str = "") -> tupl
     grib_name = attrs.get("GRIB_name")
 
     def with_height(base: str) -> str:
+        stated = bool(height) and (height in base or f"{height[:-1]}_m_" in base)
         if (
             height
+            and not stated
             and not re.match(r"^\d", base)
             and not any(
                 d in ("height", "pressure_level", "level", "model_level", "isobaricInhPa")
@@ -543,8 +633,23 @@ def propose(name: str, attrs: Mapping, dims: list[str], store: str = "") -> tupl
             return f"{height}_{base}"
         return base
 
+    base_leaf, level_leaf = strip_level_suffix(leaf)
+    if base_leaf in OVERRIDES and level_leaf:
+        return OVERRIDES[base_leaf], "override"
+    tidied_source = era5ify(leaf)
+
+    def shorter(candidate: str, rule: str) -> tuple[str, str]:
+        # A generated name far longer than a source name that already reads well loses.
+        if (
+            len(candidate) > 45
+            and len(tidied_source.split("_")) >= 3
+            and len(tidied_source) < len(candidate)
+        ):
+            return tidied_source, "tidied"
+        return re.sub(r"^(diagnostic|time)_", "", candidate), rule
+
     if grib_name and informative(grib_name):
-        return with_height(era5ify(grib_name)), "grib"
+        return shorter(with_height(era5ify(grib_name)), "grib")
     leaf_words = set(snake(leaf).split("_"))
     if standard in CF_TO_ERA5 and (
         leaf_words & set(standard.split("_"))
@@ -555,11 +660,11 @@ def propose(name: str, attrs: Mapping, dims: list[str], store: str = "") -> tupl
     if long_name and informative(long_name):
         candidate = era5ify(long_name)
         if 2 <= len(candidate.split("_")) and len(candidate) <= 60:
-            return with_height(candidate), "long_name"
+            return shorter(with_height(candidate), "long_name")
     table = eccodes_names()
     known = table.get(leaf) or table.get(leaf.lower())
     if known:
-        return with_height(era5ify(known)), "eccodes"
+        return shorter(with_height(era5ify(known)), "eccodes")
     base, level = strip_level_suffix(leaf)
     known = table.get(base) or table.get(base.lower())
     if known:
@@ -637,7 +742,8 @@ UNIT_CONVERSIONS = {
 GEOPOTENTIAL_RENAMES = (
     (r"^(.*_)?geopotential_height$", r"\1geopotential"),
     (
-        r"^(orography|surface_geopotential_height|terrain_height|model_terrain_height)$",
+        r"^(orography|surface_geopotential_height|terrain_height|model_terrain_height|"
+        r"geometric_height_of_the_earths_surface_above_sea_level)$",
         "geopotential_at_surface",
     ),
 )
