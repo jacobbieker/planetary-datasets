@@ -136,13 +136,20 @@ def _append(session: icechunk.Session, ds: xr.Dataset, fixed: set[str]) -> None:
             if array.shape[0] != start:
                 raise ValueError(f"{name}: {array.shape[0]} rows along {dim}, expected {start}")
             array.resize((stop, *array.shape[1:]))
-        strings = [name for name in names if ds[name].dtype.kind in "OUS"]
-        for name in strings:
-            group[name][start:stop] = np.asarray(ds[name].values, dtype=object)
-        rest = [name for name in names if name not in strings]
-        if rest:
-            part = ds[rest].drop_indexes([n for n in rest if n in ds.indexes], errors="ignore")
-            # The attributes are the store's already; a region write must not restate them.
+        # The values are already in the store's encoding (read raw, cast exactly), so they
+        # go to zarr as they are. A region write through xarray would re-encode them with
+        # the store's attributes: dividing by a stored scale_factor, and putting the fill
+        # value in place of any NaN.
+        times = [name for name in names if ds[name].dtype.kind in "Mm"]
+        for name in names:
+            if name in times:
+                continue
+            values = ds[name].values
+            if values.dtype.kind in "OUS":
+                values = np.asarray(values, dtype=object)
+            group[name][start:stop] = values
+        if times:
+            part = ds[times].drop_indexes([n for n in times if n in ds.indexes], errors="ignore")
             for variable in part.variables.values():
                 variable.attrs = {}
             to_icechunk(part, session, region={dim: slice(start, stop)})

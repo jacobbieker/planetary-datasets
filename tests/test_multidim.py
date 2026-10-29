@@ -95,3 +95,29 @@ def test_a_partially_known_partition_is_refused(repo):
     mixed = partition(1, 1, product="p1").assign(extra=("wind", np.ones(1)))
     with pytest.raises(ValueError, match="differ"):
         append_partition(repo, mixed, "a/p1", fixed_dims=["bin"])
+
+
+def test_appended_rows_are_not_re_encoded_with_the_stores_attributes(repo):
+    """Raw values with a scale factor, and raw NaNs beside a fill value, go in unchanged."""
+
+    def raw(values, nan_too=False):
+        ds = xr.Dataset(
+            {
+                "angle": ("x", np.array(values, dtype="int16")),
+                "level": ("x", np.array([np.nan if nan_too else 1.5, -999.0])),
+            }
+        )
+        ds["angle"].attrs = {"scale_factor": 0.01, "add_offset": 0.0}
+        ds["level"].attrs = {"_FillValue": -999.0, "scale_factor": 2.0}
+        return ds
+
+    append_partition(repo, raw([100, 200]), "p0")
+    append_partition(repo, raw([300, 400], nan_too=True), "p1")
+    stored = xr.open_zarr(
+        repo.readonly_session("main").store, consolidated=False, mask_and_scale=False
+    )
+    assert stored["angle"].values.tolist() == [100, 200, 300, 400]
+    level = stored["level"].values
+    assert level[1] == -999.0 and np.isnan(level[2]) and level[3] == -999.0
+    decoded = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    np.testing.assert_allclose(decoded["angle"].values, [1.0, 2.0, 3.0, 4.0])
