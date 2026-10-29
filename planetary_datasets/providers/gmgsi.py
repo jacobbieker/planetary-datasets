@@ -1,8 +1,8 @@
 """NOAA GMGSI — Global Mosaic of Geostationary Satellite Imagery.
 
 GMGSI stitches the operational geostationary fleet (GOES-East/West, Meteosat, Himawari)
-into a single hourly global image on a common 3000 x 4999 grid. NOAA publishes it to the
-public ``noaa-gmgsi-pds`` bucket in two eras:
+into a single hourly global image. NOAA publishes it to the public ``noaa-gmgsi-pds``
+bucket in two eras:
 
 * **v1** (2021-07-13 onwards) — ``GLOBCOMP<CH>_nc.YYYYMMDDHH``, five channels including the
   shortwave-reflectance ``ssr`` product, no quality flags.
@@ -12,6 +12,22 @@ public ``noaa-gmgsi-pds`` bucket in two eras:
 Both eras are served by the same code path; :class:`GMGSIProvider` handles v3 and
 :class:`GMGSILegacyProvider` handles v1. Imagery is 8-bit, so everything is stored as
 ``uint8`` with a missing-data flag of 255 in the ``*_dqf`` variables.
+
+The grid is not fixed, which is why these providers write *generational* stores (see
+:mod:`planetary_datasets.common.generations`). GMGSI v3 went out on a 3000 x 5000 grid
+until 2026-07-22 14:00 and on a 3000 x 4999 grid from 15:00 that day — one column
+narrower, same extent. An append cannot cross that break: the writer's alignment guard
+refuses a partition whose coordinates do not match the store's, and it refuses by
+returning False, so before this every hour after the change was silently dropped and the
+store simply stopped at 2026-07-22 14:00. Each grid now gets its own store, named after
+the day it appeared::
+
+    bkr/gmgi/gmgsi_v3.icechunk           <- 2025-03-10 17:00 .. 2026-07-22 14:00, xc=5000
+    bkr/gmgi/gmgsi_v3_22072026.icechunk  <- 2026-07-22 15:00 onwards, xc=4999
+
+Readers wanting the whole series open both. Nothing reshapes or regrids the imagery to
+paper over the break: a mosaic is pixel data, and resampling it to keep one store would
+change the values every downstream model trains on.
 """
 
 from __future__ import annotations
@@ -27,6 +43,7 @@ import xarray as xr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
+from planetary_datasets.common.generations import GenerationalStoreMixin
 
 #: Public NOAA Open Data bucket holding the mosaics. No credentials are needed.
 SOURCE_BUCKET = "noaa-gmgsi-pds"
@@ -80,14 +97,19 @@ def _anon_s3():
     return s3fs.S3FileSystem(anon=True)
 
 
-class GMGSIProvider(BaseProvider):
-    """NOAA GMGSI v3 (``v3r0_blend``) hourly global mosaic."""
+class GMGSIProvider(GenerationalStoreMixin, BaseProvider):
+    """NOAA GMGSI v3 (``v3r0_blend``) hourly global mosaic.
+
+    The store written to is chosen by the shape of each hour rather than fixed, so a change
+    to the published grid starts a new generation instead of silently dropping every hour
+    after it. See the module docstring for the 2026-07-22 break.
+    """
 
     name = "gmgsi_v3"
     append_dim = "time"
     # "gmgi" is a typo, but it is the prefix the published store already lives under on
     # source.coop; renaming it would orphan every existing reader.
-    store_prefix = "bkr/gmgi/gmgsi_v3.icechunk"
+    base_store_prefix = "bkr/gmgi/gmgsi_v3.icechunk"
 
     #: Channels to fetch. Override to build a store with a subset.
     channels: Sequence[Channel] = V3_CHANNELS
@@ -174,8 +196,14 @@ class GMGSIProvider(BaseProvider):
 
     def timestamps(self, start=None, end=None, freq: str = "1h") -> pd.DatetimeIndex:
         """Hourly partitions for this era, clipped to when the archive begins."""
-        start = self.archive_start if start is None else max(pd.Timestamp(start), self.archive_start)
-        end = pd.Timestamp.now("UTC").tz_localize(None).floor("h") if end is None else pd.Timestamp(end)
+        start = (
+            self.archive_start if start is None else max(pd.Timestamp(start), self.archive_start)
+        )
+        end = (
+            pd.Timestamp.now("UTC").tz_localize(None).floor("h")
+            if end is None
+            else pd.Timestamp(end)
+        )
         return pd.date_range(start, end, freq=freq)
 
 
@@ -187,7 +215,7 @@ class GMGSILegacyProvider(GMGSIProvider):
     """
 
     name = "gmgsi_v1"
-    store_prefix = "bkr/gmgi/gmgsi.icechunk"
+    base_store_prefix = "bkr/gmgi/gmgsi.icechunk"
     channels: Sequence[Channel] = V1_CHANNELS
     archive_start: pd.Timestamp = V1_START
 
@@ -294,7 +322,11 @@ def rewrite_store_skipping_bad_chunks(
     template.close()
 
     copied = _map(
-        _copy_timestep, [source] * len(good), [destination] * len(good), good, max_workers=max_workers
+        _copy_timestep,
+        [source] * len(good),
+        [destination] * len(good),
+        good,
+        max_workers=max_workers,
     )
 
     # A step that read cleanly during probing should always copy; if one does not, it is
