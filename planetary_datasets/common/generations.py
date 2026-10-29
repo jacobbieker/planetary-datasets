@@ -421,7 +421,12 @@ def resolve_generation(
 
         # Each generation keeps its own readable names (planetary_datasets/naming), so the
         # partition is compared as that generation would store it.
-        named = naming.rename_for_store(ds, prefix)
+        try:
+            named = naming.rename_for_store(ds, prefix)
+        except ValueError as exc:
+            # Its renames collide with names the partition already has: another schema.
+            logger.debug(f"{prefix}: names do not fit the incoming partition ({exc})")
+            continue
         expected = (
             wanted if named is ds else schema_fingerprint(named, append_dim, multi_dim_coords)
         )

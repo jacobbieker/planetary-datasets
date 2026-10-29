@@ -2119,7 +2119,8 @@ class MARSRegridProvider(BaseProvider):
         flat ``values`` dimension is guaranteed self-consistent.
         """
         if self._weights is None:
-            pl = native["pl"].values.astype(np.int64)
+            pl_name = naming.store_names(self.native.store_prefix).get("pl", "pl")
+            pl = native[pl_name].values.astype(np.int64)
             row_start = np.concatenate([[0], np.cumsum(pl)[:-1]])
             row_lat = native["latitude"].values[row_start]
             if not np.all(np.diff(row_lat) < 0):
