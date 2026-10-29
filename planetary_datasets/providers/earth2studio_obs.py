@@ -268,7 +268,7 @@ class GridObsProvider(_StagedMixin, BaseProvider):
             with memory_guard(what=f"{self.name} {start} {pathlib.Path(path).name}"):
                 ds = self.process([path], start)
                 require_dataset_fits(ds, what=f"{self.name} {start}")
-            written = self.write_to_icechunk(repo, ds) or written
+            written = self.write_to_icechunk(repo, self.prepare_names(ds, repo)) or written
         return written
 
 

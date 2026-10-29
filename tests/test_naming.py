@@ -9,6 +9,8 @@ from planetary_datasets.common.naming import (
     unit_conversion,
 )
 
+pytestmark = pytest.mark.store_names
+
 
 @pytest.mark.parametrize(
     "text, expected",

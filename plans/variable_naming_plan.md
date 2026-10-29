@@ -1,6 +1,14 @@
 # Readable, consistent variable names (and ERA5 units) across the stores
 
-Status: **draft for review**. Nothing has been renamed and no lane has been stopped.
+Status: **approved; being applied**.
+
+Changes since review: float16 variables keep their source units (xarray decodes a scale
+factor on float16 in float16: 1013 hPa x 100 overflows, 25.5 degC + 273.15 reads 298.8);
+ICON/KENDA keep `values` and the IFS native stores keep all their dimension names (their
+writers address them by name); the HAFS/HRRR/NAM virtual nests and `obs/sondehub_flights`
+are left for a later pass (their writers compare against a schema of stored names, or live
+outside the repository). Final: 658 stores, 12,472 renames, 405 unit conversions, 1,107
+dimension renames.
 
 ## Scope
 

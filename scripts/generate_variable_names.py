@@ -21,11 +21,19 @@ from planetary_datasets.common.naming import (
     geopotential_rename,
     level_qualifier,
     propose,
+    safe_to_convert,
     snake,
     unit_conversion,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+#: Stores whose writers address their dimensions by name throughout (the MARS ingest and
+#: its regridder read ``values``, ``halflevel`` and ``level``): variables renamed only.
+KEEP_DIMENSIONS = ("bkr/ifs/ifs_native",)
+#: Stores left as they are for now: their writers compare what they write against a schema
+#: of stored names (the HAFS/HRRR/NAM virtual nests), or live outside this repository
+#: (sondehub_icechunk.py on the box). Renaming them needs those writers changed first.
+EXCLUDED = ("bkr/dmi/virtualized/", "bkr/obs/sondehub_flights")
 #: Stores whose variables carry a product prefix, named after it.
 PREFIXED = {
     "bkr/polar/earthcare.icechunk": None,
@@ -63,7 +71,12 @@ def name_store(store: str, arrays: dict, prefixes: list[str]) -> tuple[dict, lis
         ]
         new, rule = propose(rest, info, dims, store)
         heights_as_geopotential = geopotential_rename(new, info.get("units"))
-        if heights_as_geopotential and rule != "coordinate":
+        # Only with its conversion: a float16 height stays a height, in metres.
+        if (
+            heights_as_geopotential
+            and rule != "coordinate"
+            and safe_to_convert(info.get("dtype", ""))
+        ):
             new, rule = heights_as_geopotential, rule + "+geopotential"
         new = f"{prefix}_{new}" if prefix else new
         full = f"{group}/{new}" if group else new
@@ -94,6 +107,13 @@ def name_store(store: str, arrays: dict, prefixes: list[str]) -> tuple[dict, lis
     for old, (new, rule) in sorted(proposals.items()):
         units = arrays[old].get("units")
         converted = unit_conversion(new, units) if rule not in ("coordinate", "kept") else None
+        if converted and not safe_to_convert(arrays[old].get("dtype", "")):
+            # xarray decodes a float16 with a scale factor in float16: 1013 hPa x 100
+            # overflows and 25.5 degC + 273.15 loses its last digit. Left in source units.
+            rows.append(
+                (old, new, f"{rule}+units-kept-float16", arrays[old].get("long_name"), units)
+            )
+            continue
         if converted:
             # Stored as plain numbers, so xarray decodes in float64 whatever the stored dtype:
             # a float16 pressure in hPa times 100 would overflow float16.
@@ -150,10 +170,14 @@ def main(scan_path: str, scope_path: str) -> None:
     dims_out: dict[str, dict] = {}
     report = collections.defaultdict(list)
     for store in stores:
+        if store.startswith(EXCLUDED):
+            continue
         arrays = scan.get(store, {})
         if not arrays or "__error__" in arrays:
             continue
         renamed, rows, conversions, dims = name_store(store, arrays, prefixes.get(store, []))
+        if any(keep in store for keep in KEEP_DIMENSIONS):
+            dims = {}
         if dims:
             dims_out[store] = dims
         if renamed:

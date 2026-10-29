@@ -64,24 +64,19 @@
   "hybrid_half": "model_half_level"
  },
  "bkr/dmi/hawaii_nams.icechunk": {
-  "level": "pressure_level",
-  "values": "cell"
+  "level": "pressure_level"
  },
  "bkr/dmi/kenda_forecast_switzerland.icechunk": {
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/dmi/kenda_forecast_switzerland_20260721T1100.icechunk": {
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/dmi/kenda_switzerland.icechunk": {
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/dmi/kenda_switzerland_20260721T1100.icechunk": {
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/dmi/meps_model_level.icechunk": {
   "hybrid": "model_level"
@@ -105,70 +100,6 @@
   "south_north_stag": "y_staggered",
   "west_east": "x",
   "west_east_stag": "x_staggered"
- },
- "bkr/dmi/virtualized/hafs_a_parent.icechunk": {
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/hafs_a_parent_12102026.icechunk": {
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/hafs_a_parent_20062023.icechunk": {
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/hafs_a_storm.icechunk": {
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/hafs_a_storm_12102026.icechunk": {
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/hafs_a_storm_20062023.icechunk": {
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/hafs_b_parent.icechunk": {
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/hafs_b_parent_12102026.icechunk": {
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/hafs_b_storm.icechunk": {
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/hafs_b_storm_12102026.icechunk": {
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/hrrr_alaska_nat.icechunk": {
-  "hag": "height_above_ground",
-  "hybid": "model_level"
- },
- "bkr/dmi/virtualized/hrrr_alaska_prs.icechunk": {
-  "depth_bls": "depth_below_land_surface",
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/hrrr_alaska_sfc.icechunk": {
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/hrrr_alaska_sfc_02122020.icechunk": {
-  "hag": "height_above_ground",
-  "isobar": "pressure_level"
- },
- "bkr/dmi/virtualized/nam_hawaii.icechunk": {
-  "asl": "height_above_sea_level",
-  "depth_bls": "depth_below_land_surface",
-  "hag": "height_above_ground",
-  "hybid": "model_level",
-  "isobar": "pressure_level"
  },
  "bkr/dmi/wales_woof.icechunk": {
   "Time": "time",
@@ -1738,58 +1669,44 @@
   "yc": "y"
  },
  "bkr/icon/icon_d2_ruc_15min.icechunk": {
-  "level": "pressure_level",
-  "values": "cell"
- },
- "bkr/icon/icon_d2_ruc_5min.icechunk": {
-  "values": "cell"
+  "level": "pressure_level"
  },
  "bkr/icon/icon_d2_ruc_60min.icechunk": {
   "level": "pressure_level",
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/icon/icon_d2_ruc_hourly.icechunk": {
   "level": "pressure_level",
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/icon/icon_eu_art.icechunk": {
   "isobaricInhPa": "pressure_level",
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/icon/icon_eu_art_06102026.icechunk": {
   "isobaricInhPa": "pressure_level",
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/icon/icon_global.icechunk": {
-  "isobaricInhPa": "pressure_level",
-  "values": "cell"
+  "isobaricInhPa": "pressure_level"
  },
  "bkr/icon/icon_global_25082026.icechunk": {
   "isobaricInhPa": "pressure_level",
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/icon/icon_global_art.icechunk": {
   "isobaricInhPa": "pressure_level",
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/icon/icon_global_art_22102026.icechunk": {
   "isobaricInhPa": "pressure_level",
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/icon/icon_global_model_level.icechunk": {
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/icon/icon_global_model_level_half_heights_static.icechunk": {
-  "model_level_half": "model_half_level",
-  "values": "cell"
+  "model_level_half": "model_half_level"
  },
  "bkr/ifs/hres_analysis.icechunk": {
   "level": "pressure_level"
@@ -1799,16 +1716,6 @@
  },
  "bkr/ifs/hres_analysis_1deg.icechunk": {
   "isobaricInhPa": "pressure_level"
- },
- "bkr/ifs/ifs_native.icechunk": {
-  "halflevel": "model_half_level",
-  "values": "cell"
- },
- "bkr/ifs/ifs_native_025.icechunk": {
-  "halflevel": "model_half_level"
- },
- "bkr/ifs/ifs_native_100.icechunk": {
-  "halflevel": "model_half_level"
  },
  "bkr/metoffice/metoffice_global_deterministic_10km.icechunk": {
   "pressure": "pressure_level"

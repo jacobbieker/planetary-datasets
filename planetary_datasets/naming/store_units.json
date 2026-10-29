@@ -2229,14 +2229,6 @@
    "units": "m"
   }
  },
- "bkr/dmi/meps_model_level.icechunk": {
-  "total_cloud_cover": {
-   "add_offset": 0.0,
-   "from_units": "%",
-   "scale_factor": 0.01,
-   "units": "(0 - 1)"
-  }
- },
  "bkr/dmi/scotland_woof.icechunk": {
   "average_snow_temperature": {
    "add_offset": 273.15,
@@ -2275,14 +2267,6 @@
   "geopotential_at_surface": {
    "add_offset": 0.0,
    "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/gfs/gfs.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "gpm",
    "scale_factor": 9.80665,
    "units": "m**2 s**-2"
   }
@@ -2432,67 +2416,11 @@
   }
  },
  "bkr/icon/icon_global_model_level.icechunk": {
-  "high_cloud_cover": {
-   "add_offset": 0.0,
-   "from_units": "%",
-   "scale_factor": 0.01,
-   "units": "(0 - 1)"
-  },
-  "low_cloud_cover": {
-   "add_offset": 0.0,
-   "from_units": "%",
-   "scale_factor": 0.01,
-   "units": "(0 - 1)"
-  },
-  "medium_cloud_cover": {
-   "add_offset": 0.0,
-   "from_units": "%",
-   "scale_factor": 0.01,
-   "units": "(0 - 1)"
-  },
-  "total_cloud_cover": {
-   "add_offset": 0.0,
-   "from_units": "%",
-   "scale_factor": 0.01,
-   "units": "(0 - 1)"
-  },
   "total_precipitation": {
    "add_offset": 0.0,
    "from_units": "kg m**-2",
    "scale_factor": 0.001,
    "units": "m"
-  }
- },
- "bkr/metoffice/metoffice_global_deterministic_10km.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_global_deterministic_10km_07112024.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_global_deterministic_10km_11hour.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_global_deterministic_10km_29092024.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
   }
  },
  "bkr/metoffice/metoffice_global_deterministic_10km_6hourly_24hr.icechunk": {
@@ -2512,126 +2440,6 @@
   }
  },
  "bkr/metoffice/metoffice_global_deterministic_10km_6hourly_24hr_29092024.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_11122025.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_16052025.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_20082025.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_20082025_2.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_20082025_3.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_20082025_4.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_20082025_5.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_20082025_7.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_21012026.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_21082025.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_21082025_1.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_21082025_2.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_21082025_4.icechunk": {
-  "geopotential": {
-   "add_offset": 0.0,
-   "from_units": "m",
-   "scale_factor": 9.80665,
-   "units": "m**2 s**-2"
-  }
- },
- "bkr/metoffice/metoffice_uk_deterministic_2km_29092024.icechunk": {
   "geopotential": {
    "add_offset": 0.0,
    "from_units": "m",
@@ -2785,20 +2593,6 @@
    "from_units": "m",
    "scale_factor": 9.80665,
    "units": "m**2 s**-2"
-  }
- },
- "bkr/obs/sondehub_flights.icechunk": {
-  "air_pressure": {
-   "add_offset": 0.0,
-   "from_units": "hPa",
-   "scale_factor": 100.0,
-   "units": "Pa"
-  },
-  "temperature": {
-   "add_offset": 273.15,
-   "from_units": "degC",
-   "scale_factor": 1.0,
-   "units": "K"
   }
  },
  "bkr/polar/metop_gome.icechunk": {

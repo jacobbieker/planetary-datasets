@@ -60,7 +60,7 @@ import zarr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
-from planetary_datasets.common import multidim
+from planetary_datasets.common import multidim, naming
 from planetary_datasets.common.download import download_one
 from planetary_datasets.common.maap import MaapAuth, search
 from planetary_datasets.common.multidim import append_partition
@@ -391,8 +391,10 @@ class EarthCAREProvider(BaseProvider):
     def _write(self, product: Product, paths: list[pathlib.Path], first_index: int) -> int:
         frames = [read_frame(path, product) for path in paths]
         ds = concat_frames(frames, product, first_index)
+        repo = self.get_icechunk_repo()
+        ds = naming.prepare_for_store(ds, self.store_prefix, naming.stored_arrays(repo), raw=True)
         append_partition(
-            self.get_icechunk_repo(),
+            repo,
             ds,
             None,
             fixed_dims=[

@@ -104,6 +104,12 @@ import dask
 import dask.array as da
 import eccodes as ec
 import icechunk
+
+# numcodecs only lets Blosc use its own threads when called from the main
+# thread, and zarr v3 encodes chunks from worker threads, so without this every
+# chunk compresses single-threaded. A 0.25 degree model level chunk is 569MB;
+# measured, this takes its encode from 12.9s to 9.4s, output byte-identical.
+import numcodecs.blosc  # noqa: E402
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -113,15 +119,10 @@ from icechunk.xarray import to_icechunk
 from loguru import logger
 from zarr.codecs.numcodecs import BitRound
 
-# numcodecs only lets Blosc use its own threads when called from the main
-# thread, and zarr v3 encodes chunks from worker threads, so without this every
-# chunk compresses single-threaded. A 0.25 degree model level chunk is 569MB;
-# measured, this takes its encode from 12.9s to 9.4s, output byte-identical.
-import numcodecs.blosc  # noqa: E402
-
 numcodecs.blosc.use_threads = True
 
 from planetary_datasets.base import BaseProvider
+from planetary_datasets.common import naming
 from planetary_datasets.config import Config, get_config
 from planetary_datasets.memory import (
     BYTES_PER_GB,
@@ -1096,7 +1097,9 @@ class MARSIcechunkProvider(BaseProvider):
 
         known = set(cached["path"].unique())
         if not scan:
-            logger.info(f"Using the cached index only: {len(known)} file(s), {len(cached):,} messages")
+            logger.info(
+                f"Using the cached index only: {len(known)} file(s), {len(cached):,} messages"
+            )
         # In date order across families, so that complete timesteps are
         # indexed -- and can be ingested -- long before the scan finishes.
         todo = sorted(
@@ -1368,6 +1371,10 @@ class MARSIcechunkProvider(BaseProvider):
                 }
             )
 
+        # The store's readable names (planetary_datasets/naming), encodings with them.
+        renamed = {o: n for o, n in naming.store_names(self.store_prefix).items() if o in template}
+        template = template.rename(renamed)
+        encoding = {renamed.get(k, k): v for k, v in encoding.items()}
         template.to_zarr(
             session.store, compute=False, encoding=encoding, zarr_format=3, consolidated=False
         )
@@ -1508,21 +1515,30 @@ class MARSIcechunkProvider(BaseProvider):
             if name in ML_SURFACE_SHORT_NAMES:
                 data_vars[name] = (
                     ("time", "values"),
-                    _delayed_block(rows, (N_VALUES,), "single", self.accuracy, stage, self.mir_processes)[None, :],
+                    _delayed_block(
+                        rows, (N_VALUES,), "single", self.accuracy, stage, self.mir_processes
+                    )[None, :],
                 )
             else:
                 data_vars[name] = (
                     ("time", "level", "values"),
-                    _delayed_block(rows, (N_MODEL_LEVELS, N_VALUES), "level", self.accuracy, stage, self.mir_processes)[
-                        None, :, :
-                    ],
+                    _delayed_block(
+                        rows,
+                        (N_MODEL_LEVELS, N_VALUES),
+                        "level",
+                        self.accuracy,
+                        stage,
+                        self.mir_processes,
+                    )[None, :, :],
                 )
 
         wave = staged[staged["group"] == GROUP_WAVE]
         for name, rows in wave.groupby("short_name", sort=True):
             data_vars[name] = (
                 ("time", "values"),
-                _delayed_block(rows, (N_VALUES,), "single", self.accuracy, stage, self.mir_processes)[None, :],
+                _delayed_block(
+                    rows, (N_VALUES,), "single", self.accuracy, stage, self.mir_processes
+                )[None, :],
             )
 
         spectra = staged[staged["group"] == GROUP_SPECTRA]
@@ -1631,9 +1647,12 @@ class MARSIcechunkProvider(BaseProvider):
                         "weights": provider.weights(grid),
                         "position": int(pd.DatetimeIndex(target["time"].values).get_loc(it)),
                         "names": set(target.data_vars),
+                        # The stores' readable names, from the source's short names.
+                        "renamed": naming.store_names(provider.store_prefix),
                     }
                 )
 
+        native_names = naming.store_names(self.store_prefix)
         for name, array in processed.data_vars.items():
             # The spectra go one direction at a time: slicing the lazy array
             # computes only that direction's block.
@@ -1649,10 +1668,15 @@ class MARSIcechunkProvider(BaseProvider):
                 region = {"time": slice(position, position + 1)}
                 for dim, size in zip(piece.dims[1:], piece.shape[1:]):
                     region[dim] = sel.get(dim, slice(0, size))
-                to_icechunk(xr.Dataset({name: (piece.dims, values)}), session, region=region)
+                to_icechunk(
+                    xr.Dataset({native_names.get(name, name): (piece.dims, values)}),
+                    session,
+                    region=region,
+                )
 
                 for t in targets:
-                    if name not in t["names"]:
+                    stored_name = t["renamed"].get(name, name)
+                    if stored_name not in t["names"]:
                         continue
                     provider = t["provider"]
                     out = regrid_block(t["weights"], values, provider.lats.size, provider.lons.size)
@@ -1662,7 +1686,9 @@ class MARSIcechunkProvider(BaseProvider):
                     target_region["latitude"] = slice(0, provider.lats.size)
                     target_region["longitude"] = slice(0, provider.lons.size)
                     dims = (*piece.dims[:-1], "latitude", "longitude")
-                    to_icechunk(xr.Dataset({name: (dims, out)}), t["session"], region=target_region)
+                    to_icechunk(
+                        xr.Dataset({stored_name: (dims, out)}), t["session"], region=target_region
+                    )
                     del out
                 del values
             logger.debug(f"Wrote {name} for {it}")
@@ -1760,9 +1786,7 @@ class MARSIcechunkProvider(BaseProvider):
         if skip_complete:
             pending = self.pending_groups(wanted)
         else:
-            pending = {
-                it: [g for g in GROUPS if not self.select(g, it).empty] for it in wanted
-            }
+            pending = {it: [g for g in GROUPS if not self.select(g, it).empty] for it in wanted}
         logger.info(f"{len(pending)} of {len(wanted)} timesteps to ingest")
         for it, groups in pending.items():
             if skip_complete:
@@ -1786,9 +1810,7 @@ class MARSIcechunkProvider(BaseProvider):
             # -- one variable, or one spectra direction -- at a time, so the
             # working set is the largest chunk. That is what the peak estimate
             # measures, with concurrency 1 because the compute is synchronous.
-            require_memory(
-                estimate_peak_gb(processed, concurrency=1), what=f"{self.name} {it}"
-            )
+            require_memory(estimate_peak_gb(processed, concurrency=1), what=f"{self.name} {it}")
             logger.debug(
                 f"{it}: {estimate_dataset_gb(processed):.1f} GB of fields, "
                 "written a chunk at a time"
@@ -2102,9 +2124,7 @@ class MARSRegridProvider(BaseProvider):
             row_lat = native["latitude"].values[row_start]
             if not np.all(np.diff(row_lat) < 0):
                 raise ValueError("expected reduced Gaussian rows ordered north to south")
-            self._weights = _REGRID_BUILDERS[self.method](
-                row_lat, row_start, pl, self.resolution
-            )
+            self._weights = _REGRID_BUILDERS[self.method](row_lat, row_start, pl, self.resolution)
             logger.info(
                 f"Built {self.resolution} degree {self.method} weights: "
                 f"{self._weights.shape[0]} target points, {self._weights.nnz:,} nonzeros"
@@ -2273,7 +2293,9 @@ class MARSRegridProvider(BaseProvider):
             f"{self.lats.size} x {self.lons.size} global grid, 90N to 90S and 0E "
             f"eastward, {self._method_phrase()} from the native O1280 store."
         )
-        attrs["source"] = f"{native.attrs.get('source', '')} via {self.native.icechunk_path}".strip()
+        attrs["source"] = (
+            f"{native.attrs.get('source', '')} via {self.native.icechunk_path}".strip()
+        )
         attrs.update(self._method_attrs())
         return attrs
 
@@ -2298,9 +2320,7 @@ class MARSRegridProvider(BaseProvider):
                 "preserved." + missing.format("average")
             )
         else:
-            text = "Bilinear from the octahedral reduced Gaussian grid." + missing.format(
-                "stencil"
-            )
+            text = "Bilinear from the octahedral reduced Gaussian grid." + missing.format("stencil")
         return {"regridding_method": self.method, "regridding": text}
 
     def stored_method(self, repo=None) -> str:
@@ -2571,7 +2591,9 @@ def regrid_timestep(
                 )
                 del out
             del source
-        logger.debug(f"Regridded {name} for {it} onto {[p['provider'].resolution for p in consumers]}")
+        logger.debug(
+            f"Regridded {name} for {it} onto {[p['provider'].resolution for p in consumers]}"
+        )
 
     for plan in plans:
         flags = xr.Dataset(
@@ -2617,9 +2639,7 @@ def run_regrids(
         raise ValueError(f"regrid targets read different native stores: {sorted(native_paths)}")
 
     lead = providers[0]
-    wanted = pd.DatetimeIndex(
-        times if times is not None else lead.native_dataset()["time"].values
-    )
+    wanted = pd.DatetimeIndex(times if times is not None else lead.native_dataset()["time"].values)
     repos = [(_open_regrid_target(provider, wanted), None) for provider in providers]
 
     idle = 0

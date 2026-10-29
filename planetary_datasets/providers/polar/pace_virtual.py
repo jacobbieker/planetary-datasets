@@ -58,6 +58,7 @@ import zarr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
+from planetary_datasets.common import naming
 from planetary_datasets.common.earthdata import EarthdataS3, granules, s3_url
 from planetary_datasets.common.store import STORE_READ_ERRORS
 
@@ -241,6 +242,17 @@ def describe_granule(f: h5py.File, url: str, product: VirtualProduct) -> Granule
     return granule
 
 
+def _conversion_attrs(conversion: dict | None) -> dict:
+    """A store unit conversion as the attributes that decode it (values stay raw)."""
+    if not conversion:
+        return {}
+    return {
+        "scale_factor": float(conversion["scale_factor"]),
+        "add_offset": float(conversion["add_offset"]),
+        "units": conversion["units"],
+    }
+
+
 class PaceVirtualProvider(BaseProvider):
     """References to PACE L1B/L1C and HARP2 MAPOL granules, a day per partition."""
 
@@ -272,6 +284,12 @@ class PaceVirtualProvider(BaseProvider):
         if self._s3 is None:
             self._s3 = EarthdataS3("obdaac", self.config)
         return self._s3
+
+    def _stored(self, name: str) -> str:
+        """An array's name in the store (planetary_datasets/naming)."""
+        if not hasattr(self, "_store_name_map"):
+            self._store_name_map = naming.store_names(self.store_prefix)
+        return self._store_name_map.get(name, name)
 
     def repository_config(self) -> icechunk.RepositoryConfig:
         """The bucket as a virtual chunk container (no credentials), and day-sized manifests."""
@@ -365,7 +383,7 @@ class PaceVirtualProvider(BaseProvider):
                 compressors = (zarr.codecs.ZstdCodec(level=5),)
                 dtype = str if variable.values.dtype.kind == "O" else variable.values.dtype
             group.create_array(
-                f"{p}_{variable.name}",
+                self._stored(f"{p}_{variable.name}"),
                 shape=(0, *shape),
                 chunks=(1, *(max(1, c) for c in chunks)),
                 dtype=dtype,
@@ -373,7 +391,14 @@ class PaceVirtualProvider(BaseProvider):
                 compressors=compressors,
                 fill_value=variable.fill_value,
                 dimension_names=(f"{p}_granule", *(f"{p}_{d}" for d in variable.dims)),
-                attributes=variable.attrs,
+                attributes={
+                    **variable.attrs,
+                    **_conversion_attrs(
+                        naming.store_units(self.store_prefix).get(
+                            self._stored(f"{p}_{variable.name}")
+                        )
+                    ),
+                },
             )
         for name in ("granule_name", "time_coverage_start", "time_coverage_end"):
             group.create_array(
@@ -427,7 +452,7 @@ class PaceVirtualProvider(BaseProvider):
             refs: dict[str, list[icechunk.VirtualChunkSpec]] = {}
             for index, granule in enumerate(batch, start=start):
                 for variable in granule.variables.values():
-                    key = f"{p}_{variable.name}"
+                    key = self._stored(f"{p}_{variable.name}")
                     if key not in arrays:
                         continue
                     array = arrays[key]

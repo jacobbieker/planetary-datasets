@@ -444,6 +444,9 @@ ABBREVIATIONS = {
 }
 #: Metadata names that already read fine.
 KEEP_AS_IS = {
+    "message_type",
+    "report_type",
+    "instrument_type",
     "country",
     "county",
     "state",
@@ -553,8 +556,6 @@ COORDINATE_RENAMES = {
     "Channel": "channel",
     "P_Level": "pressure_level",
     "P_Layer": "pressure_layer",
-    # ICON's unstructured grid.
-    "values": "cell",
 }
 
 
@@ -793,45 +794,203 @@ def unit_conversion(new_name: str, units: object) -> tuple[float, float, str] | 
     return conversion[0], conversion[1], target
 
 
-@functools.lru_cache(maxsize=1)
-def _all_store_names() -> dict[str, dict[str, str]]:
-    if not STORE_NAMES.is_file():
+NAMING_DIR = STORE_NAMES.parent
+STORE_UNITS = NAMING_DIR / "store_units.json"
+STORE_DIMS = NAMING_DIR / "store_dims.json"
+_GENERATION = re.compile(r"(_\d{8}(T\d{4})?|_\d+|_backfill_\d{6})(?=\.icechunk$)")
+
+
+def safe_to_convert(dtype) -> bool:
+    """Whether a stored dtype decodes a scale factor and offset without loss.
+
+    xarray decodes float32 in float32 and integers and float64 in float64, but float16 in
+    float16: 1013.25 hPa x 100 overflows to inf and 25.5 degC + 273.15 reads 298.8.
+    """
+    import numpy as np
+
+    try:
+        return np.dtype(str(dtype)) != np.dtype("float16")
+    except TypeError:
+        return False
+
+
+class UnitConversionError(ValueError):
+    """Values do not survive a store's unit conversion exactly."""
+
+
+@functools.lru_cache(maxsize=None)
+def _table(path: str) -> dict:
+    p = pathlib.Path(path)
+    return json.loads(p.read_text()) if p.is_file() else {}
+
+
+def _family(prefix: str) -> str:
+    return _GENERATION.sub("", prefix.strip("/"))
+
+
+def _lookup(path: pathlib.Path, store_prefix: str) -> dict:
+    """A store's entry, or for a generation not in the table, its family's.
+
+    Empty when ``PLANETARY_DATASETS_KEEP_SOURCE_NAMES`` is set: every store then keeps its
+    source names (the test suite's default).
+    """
+    if os.environ.get("PLANETARY_DATASETS_KEEP_SOURCE_NAMES"):
         return {}
-    return json.loads(STORE_NAMES.read_text())
-
-
-def store_names(store_prefix: str) -> dict[str, str]:
-    """Old name -> new name for one store (empty for a store not renamed)."""
+    table = _table(str(path))
     key = store_prefix.strip("/")
-    names = _all_store_names()
-    if key in names:
-        return names[key]
-    # Generations of a store (``icon_global_25082026``) share the family's names.
-    family = re.sub(r"_\d{8}(T\d{4})?(?=\.icechunk$)|_\d+(?=\.icechunk$)", "", key)
-    return names.get(family, {})
+    if key in table:
+        return table[key]
+    family = _family(key)
+    for other in sorted(table, reverse=True):
+        if _family(other) == family:
+            return table[other]
+    return {}
+
+
+def store_names(store_prefix: str, group: str | None = None) -> dict[str, str]:
+    """Old name -> new name for one store's variables (in ``group``, if given)."""
+    names = _lookup(STORE_NAMES, store_prefix)
+    if group is None:
+        return {o: n for o, n in names.items() if "/" not in o}
+    head = group.strip("/") + "/"
+    return {
+        o[len(head) :]: n[len(head) :]
+        for o, n in names.items()
+        if o.startswith(head) and n.startswith(head)
+    }
+
+
+def store_dims(store_prefix: str) -> dict[str, str]:
+    """Old dimension name -> new for one store."""
+    return _lookup(STORE_DIMS, store_prefix)
+
+
+def store_units(store_prefix: str) -> dict[str, dict]:
+    """New variable name -> {scale_factor, add_offset, units, from_units} for one store."""
+    return _lookup(STORE_UNITS, store_prefix)
+
+
+def stored_arrays(repo, group: str | None = None) -> set[str]:
+    """The array names a store (group) already holds; empty for a new store."""
+    import zarr
+
+    try:
+        root = zarr.open_group(repo.readonly_session("main").store, mode="r")
+        node = root[group.strip("/")] if group else root
+        return set(node.array_keys())
+    except Exception:  # noqa: BLE001 - a new or empty store holds nothing yet
+        return set()
+
+
+def _rename_tokens(text: str, mapping: Mapping[str, str]) -> str:
+    return " ".join(mapping.get(token, token) for token in str(text).split())
+
+
+def prepare_for_store(
+    ds,
+    store_prefix: str,
+    existing: set[str] | None = None,
+    raw: bool = False,
+    group: str | None = None,
+):
+    """``ds`` named, and in units, as ``store_prefix`` stores them.
+
+    Variables and dimensions are renamed by the store's fixed tables, each renamed variable
+    recording ``source_name``. A variable whose units the store converts to ERA5's is
+    handled for its writer:
+
+    ``raw=False`` (written through xarray)
+        Appending to a stored variable, the values are given in ERA5 units: xarray encodes
+        them back with the store's ``scale_factor``/``add_offset``. A variable new to the
+        store carries the conversion as its encoding. Either way the stored values are the
+        source's, checked to survive the round trip exactly.
+    ``raw=True`` (values written as they are)
+        Values are left alone; a variable new to the store gets the conversion as
+        attributes, which is what decodes it.
+
+    Raises:
+        UnitConversionError: A value does not survive the conversion exactly.
+    """
+    import numpy as np
+    import xarray as xr
+
+    if os.environ.get("PLANETARY_DATASETS_KEEP_SOURCE_NAMES"):
+        return ds
+    existing = existing or set()
+    names = {o: n for o, n in store_names(store_prefix, group).items() if o in ds.variables}
+    dims = {o: n for o, n in store_dims(store_prefix).items() if o in ds.dims}
+    # A coordinate named for a renamed dimension goes with it.
+    for old, new in dims.items():
+        if old in ds.variables:
+            names.setdefault(old, new)
+    if names or dims:
+        ds = ds.rename({**dims, **names})
+        renamed = {**names, **dims}
+        for old, new in names.items():
+            ds[new].attrs.setdefault(SOURCE_NAME_ATTR, old)
+        for variable in ds.variables.values():
+            for holder in (variable.attrs, variable.encoding):
+                if "coordinates" in holder:
+                    holder["coordinates"] = _rename_tokens(holder["coordinates"], renamed)
+    for name, conversion in store_units(store_prefix).items():
+        if group is not None:
+            head = group.strip("/") + "/"
+            if not name.startswith(head):
+                continue
+            name = name[len(head) :]
+        if name not in ds.variables:
+            continue
+        scale, offset = float(conversion["scale_factor"]), float(conversion["add_offset"])
+        variable = ds[name].variable
+        if name not in existing and not safe_to_convert(variable.dtype):
+            continue
+        if raw:
+            if name not in existing:
+                variable.attrs.update(
+                    {"scale_factor": scale, "add_offset": offset, "units": conversion["units"]}
+                )
+            continue
+        values = np.asarray(variable.values)
+        era5 = values.astype("float64") * scale + offset
+        with np.errstate(invalid="ignore", over="ignore"):
+            back = ((era5 - offset) / scale).astype(values.dtype)
+        same = np.array_equal(back, values, equal_nan=values.dtype.kind == "f")
+        if not same:
+            raise UnitConversionError(
+                f"{store_prefix}: {name} does not survive {scale} x + {offset} in {values.dtype}"
+            )
+        attrs = {k: v for k, v in variable.attrs.items() if k not in ("scale_factor", "add_offset")}
+        attrs["units"] = conversion["units"]
+        converted = xr.Variable(variable.dims, era5, attrs)
+        if name not in existing:
+            converted.encoding = {
+                **{k: v for k, v in variable.encoding.items() if k in ("_FillValue", "chunks")},
+                "scale_factor": scale,
+                "add_offset": offset,
+                "dtype": values.dtype,
+            }
+        ds[name] = converted
+    return ds
 
 
 def rename_for_store(ds, store_prefix: str):
-    """``ds`` with its variables named as ``store_prefix`` names them.
-
-    Each renamed variable records its source name in ``source_name``.
-    """
-    mapping = {old: new for old, new in store_names(store_prefix).items() if old in ds.variables}
-    if not mapping or os.environ.get("PLANETARY_DATASETS_KEEP_SOURCE_NAMES"):
-        return ds
-    ds = ds.rename(mapping)
-    for old, new in mapping.items():
-        ds[new].attrs.setdefault(SOURCE_NAME_ATTR, old)
-    return ds
+    """``ds`` with its variables and dimensions named as ``store_prefix`` names them."""
+    return prepare_for_store(ds, store_prefix, raw=True)
 
 
 __all__ = [
     "SOURCE_NAME_ATTR",
     "STORE_NAMES",
+    "UnitConversionError",
+    "safe_to_convert",
     "eccodes_names",
     "era5ify",
+    "prepare_for_store",
     "propose",
     "rename_for_store",
     "snake",
+    "store_dims",
     "store_names",
+    "store_units",
+    "stored_arrays",
 ]

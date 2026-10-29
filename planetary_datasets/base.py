@@ -23,6 +23,7 @@ import pandas as pd
 import xarray as xr
 from loguru import logger
 
+from planetary_datasets.common import naming
 from planetary_datasets.common.store import ALIGNMENT_COORDS, axis_is_sorted
 from planetary_datasets.common.store import (
     bitround_dataset as _bitround_dataset,
@@ -58,6 +59,9 @@ class BaseProvider(ABC):
 
     #: Guard the process step with a memory ceiling. Set False for providers that manage
     #: their own memory, such as the virtualized ingests.
+    #: True for a provider whose own writer names the variables (it writes several stores,
+    #: or writes raw values); the shared hook then leaves the dataset alone.
+    names_in_writer: bool = False
     guard_memory: bool = True
 
     #: Coordinates that must match the store exactly before an append. Override to add the
@@ -259,7 +263,20 @@ class BaseProvider(ABC):
             else:
                 processed = self.process(input_files, it, temp_dir=temp_dir)
 
-            return self.write_to_icechunk(self.store_for(processed, repo), processed)
+            target = self.store_for(processed, repo)
+            return self.write_to_icechunk(target, self.prepare_names(processed, target))
+
+    def prepare_names(self, processed: xr.Dataset, repo: icechunk.Repository) -> xr.Dataset:
+        """``processed`` named, and in units, as this provider's store keeps them.
+
+        See :func:`planetary_datasets.common.naming.prepare_for_store`. Taken after
+        :meth:`store_for`, which may roll the store to a new generation. The dataset as the
+        provider made it stays on ``self.source_processed`` for writers with a second store.
+        """
+        self.source_processed = processed
+        if self.names_in_writer:
+            return processed
+        return naming.prepare_for_store(processed, self.store_prefix, naming.stored_arrays(repo))
 
     def describe_store(self) -> str:
         """Where this provider's data lives, for a log line.

@@ -156,7 +156,10 @@ def sample_dataset():
 
     return xr.Dataset(
         {
-            "temperature": (("time", "latitude", "longitude"), np.zeros((1, 4, 5), dtype="float32")),
+            "temperature": (
+                ("time", "latitude", "longitude"),
+                np.zeros((1, 4, 5), dtype="float32"),
+            ),
             "pressure": (("time", "latitude", "longitude"), np.ones((1, 4, 5), dtype="float32")),
         },
         coords={
@@ -165,3 +168,14 @@ def sample_dataset():
             "longitude": np.linspace(0, 20, 5),
         },
     )
+
+
+@pytest.fixture(autouse=True)
+def _source_names(monkeypatch, request):
+    """Providers' tests see source variable names; the naming tests opt into the new ones."""
+    if request.node.get_closest_marker("store_names") is None:
+        monkeypatch.setenv("PLANETARY_DATASETS_KEEP_SOURCE_NAMES", "1")
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "store_names: run with the stores' readable variable names")
