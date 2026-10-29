@@ -8,7 +8,8 @@ ICON/KENDA keep `values` and the IFS native stores keep all their dimension name
 writers address them by name); the HAFS/HRRR/NAM virtual nests and `obs/sondehub_flights`
 are left for a later pass (their writers compare against a schema of stored names, or live
 outside the repository). Final: 658 stores, 12,472 renames, 405 unit conversions, 1,107
-dimension renames.
+dimension renames. The 92 stores still in icechunk format 1 are upgraded to format 2 as
+they are renamed (moving arrays needs it); reading them then needs icechunk >= 2.
 
 ## Scope
 

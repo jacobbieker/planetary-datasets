@@ -52,6 +52,8 @@ import pandas as pd
 import xarray as xr
 from loguru import logger
 
+from planetary_datasets.common import naming
+
 #: ``20092025`` for 20 September 2025: the day the upstream changed shape, which is
 #: what a new store is named after.
 GENERATION_DATE_FORMAT = "%d%m%Y"
@@ -417,7 +419,13 @@ def resolve_generation(
             # unreadable store with more in it.
             continue
 
-        if found == wanted:
+        # Each generation keeps its own readable names (planetary_datasets/naming), so the
+        # partition is compared as that generation would store it.
+        named = naming.rename_for_store(ds, prefix)
+        expected = (
+            wanted if named is ds else schema_fingerprint(named, append_dim, multi_dim_coords)
+        )
+        if found == expected:
             if prefix != base_prefix:
                 logger.debug(f"{base_prefix}: schema matches {prefix}")
             return prefix

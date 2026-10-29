@@ -53,7 +53,7 @@ def plan_store(prefix: str) -> tuple[dict, dict, dict]:
     return names, dims, units
 
 
-def rename_store(prefix: str, dry_run: bool = False) -> str:
+def rename_store(prefix: str, dry_run: bool = False, upgrade_v1: bool = False) -> str:
     """Rename one store. Returns a one-line summary."""
     import zarr
     from zarr.core.buffer import cpu, default_buffer_prototype
@@ -67,6 +67,17 @@ def rename_store(prefix: str, dry_run: bool = False) -> str:
     root = zarr.open_group(repo.readonly_session("main").store, mode="r")
     if root.attrs.get(APPLIED_ATTR):
         return f"{prefix}: already renamed"
+    import icechunk
+
+    # Moving arrays needs the version 2 format; checked before anything is written, so a
+    # store is never left with its metadata renamed and its arrays not.
+    if repo.spec_version == icechunk.SpecVersion.v1:
+        if upgrade_v1:
+            if dry_run:
+                return f"{prefix}: would upgrade to format 2, then rename"
+            repo = icechunk.upgrade_icechunk_repository(repo, dry_run=False)
+        elif names or dims:
+            return f"{prefix}: SKIPPED, icechunk format 1 cannot move arrays (--upgrade-v1)"
     arrays = dict(_paths(root))
     # A coordinate named for a renamed dimension goes with it, in any group.
     for path in arrays:
@@ -167,6 +178,11 @@ def main(argv=None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--check-only", action="store_true")
+    parser.add_argument(
+        "--upgrade-v1",
+        action="store_true",
+        help="upgrade format-1 stores to format 2 first (readers then need icechunk >= 2)",
+    )
     args = parser.parse_args(argv)
     prefixes = args.prefixes or sorted(
         set(_table(str(STORE_NAMES))) | set(_table(str(STORE_DIMS))) | set(_table(str(STORE_UNITS)))
@@ -175,7 +191,11 @@ def main(argv=None) -> int:
 
     def one(prefix):
         try:
-            summary = "checked" if args.check_only else rename_store(prefix, args.dry_run)
+            summary = (
+                "checked"
+                if args.check_only
+                else rename_store(prefix, args.dry_run, args.upgrade_v1)
+            )
             problem = None if args.dry_run else check_store(prefix)
             if problem:
                 failures.append(problem)

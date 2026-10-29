@@ -8,6 +8,7 @@ import pathlib
 
 import icechunk
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 from icechunk.xarray import to_icechunk
@@ -119,6 +120,28 @@ def test_a_store_is_renamed_without_touching_its_data(tables, repo):
     assert tool.rename_store(PREFIX).endswith("already renamed")
 
 
+def test_a_format_1_store_is_skipped_untouched_or_upgraded_and_renamed(
+    tables, tmp_path, monkeypatch
+):
+    storage = icechunk.local_filesystem_storage(str(tmp_path / "v1"))
+    repo = icechunk.Repository.create(storage, spec_version=1)
+
+    class Config:
+        def icechunk_repo(self, prefix):
+            return icechunk.Repository.open(storage)
+
+    monkeypatch.setattr(tool, "get_config", lambda: Config())
+    write_source(repo)
+    assert "SKIPPED" in tool.rename_store(PREFIX)
+    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    assert "tc" in ds and "units" not in ds.attrs and ds["tc"].attrs["units"] == "Deg C"
+    print(tool.rename_store(PREFIX, upgrade_v1=True))
+    upgraded = icechunk.Repository.open(storage)
+    assert upgraded.spec_version == icechunk.SpecVersion.v2
+    ds = xr.open_zarr(upgraded.readonly_session("main").store, consolidated=False)
+    assert ds["air_temperature"].values[0].tolist() == pytest.approx([298.65, 303.15])
+
+
 def test_later_xarray_appends_are_converted_and_round_trip_exactly(tables, repo):
     write_source(repo)
     tool.rename_store(PREFIX)
@@ -170,3 +193,27 @@ def test_float16_is_never_converted(tables):
     prepared = naming.prepare_for_store(incoming, PREFIX, set())
     assert prepared["air_temperature"].dtype == np.float16
     assert "add_offset" not in prepared["air_temperature"].encoding
+
+
+def test_a_renamed_generation_still_matches_its_source_named_partitions(
+    tables, local_config, monkeypatch
+):
+    from planetary_datasets.common.generations import resolve_generation
+
+    base = "bkr/test/gen.icechunk"
+    names = json.loads(naming.STORE_NAMES.read_text())
+    names[base] = {"tc": "air_temperature"}
+    naming.STORE_NAMES.write_text(json.dumps(names))
+    naming._table.cache_clear()
+    stored = xr.Dataset(
+        {"air_temperature": (("time", "x"), np.ones((1, 3), "float32"))},
+        coords={"time": pd.to_datetime(["2026-01-01"]), "x": [0, 1, 2]},
+    )
+    repo = local_config.icechunk_repo(base)
+    session = repo.writable_session("main")
+    to_icechunk(stored, session)
+    session.commit("renamed store")
+    incoming = stored.rename_vars({"air_temperature": "tc"}).assign_coords(
+        time=pd.to_datetime(["2026-01-02"])
+    )
+    assert resolve_generation(local_config, base, incoming, "time") == base
