@@ -186,6 +186,8 @@ declare -A LANES=(
   # Cooperative archive (bkr/icon/<model>/p/...), which scripts/icon_v1_backfill.py reads.
   # ~180 GB a day; a pass every three hours so no run expires first.
   [icon_v1_mirror]="-m planetary_datasets.providers.icon_v1_mirror icon-art icon-art-eu --pause 10800"
+  # WIS2 Global Cache: at 00Z/12Z, the previous 12 h of arrivals as one tar in bkr/obs/wis2.
+  [wis2_archive]="-m planetary_datasets.providers.observations.wis2_archive --follow"
   [icon_d2_ruc_60min]="_backfill_lanes.py icon_d2_ruc_60min --threads 4 --pause 7200"
   [icon_d2_ruc_15min]="_backfill_lanes.py icon_d2_ruc_15min --threads 4 --pause 7200"
   [icon_d2_ruc_5min]="_backfill_lanes.py icon_d2_ruc_5min --threads 2 --pause 7200"
