@@ -66,12 +66,22 @@ def test_a_value_the_store_dtype_cannot_hold_is_refused(repo):
     assert ledger(repo) == {"p0"}
 
 
-def test_a_changed_fixed_dimension_is_refused(repo):
+def test_a_wider_fixed_dimension_widens_the_store(repo):
     append_partition(repo, partition(4, 2), "p0", fixed_dims=["bin"])
-    other = partition(1, 1, product="p1")
-    other["meas_map"] = (("meas", "bin"), np.ones((1, 4), dtype="uint32"))
-    with pytest.raises(ValueError, match="fixed dimension"):
-        append_partition(repo, other, "p1", fixed_dims=["bin"])
+    wider = partition(1, 1, product="p1")
+    wider["meas_map"] = (("meas", "bin"), np.full((1, 4), 7, dtype="uint32"))
+    append_partition(repo, wider, "p1", fixed_dims=["bin"])
+    stored = read(repo)["meas_map"].values
+    assert stored.shape == (3, 4)
+    assert stored[2].tolist() == [7, 7, 7, 7]
+    assert stored[0, :3].tolist() == [1, 1, 1]
+
+
+def test_a_narrower_fixed_dimension_is_padded(repo):
+    append_partition(repo, xr.Dataset({"v": (("x", "lev"), np.ones((1, 3)))}), "p0", ["lev"])
+    append_partition(repo, xr.Dataset({"v": (("x", "lev"), np.full((1, 2), 2.0))}), "p1", ["lev"])
+    v = read(repo)["v"].values
+    assert v[1, :2].tolist() == [2.0, 2.0] and np.isnan(v[1, 2])
 
 
 def other_product(n: int) -> xr.Dataset:
@@ -90,11 +100,20 @@ def test_a_second_product_adds_its_own_variables(repo):
     assert ledger(repo) == {"a/p0", "a/p1", "b/d0", "b/d1"}
 
 
-def test_a_partially_known_partition_is_refused(repo):
+def test_a_variable_new_to_the_store_is_added_with_fill_for_earlier_rows(repo):
     append_partition(repo, partition(4, 2), "a/p0", fixed_dims=["bin"])
-    mixed = partition(1, 1, product="p1").assign(extra=("wind", np.ones(1)))
-    with pytest.raises(ValueError, match="differ"):
-        append_partition(repo, mixed, "a/p1", fixed_dims=["bin"])
+    extra = partition(1, 1, product="p1").assign(extra=("wind", np.array([0.5])))
+    append_partition(repo, extra, "a/p1", fixed_dims=["bin"])
+    values = read(repo)["extra"].values
+    assert np.isnan(values[:4]).all() and values[4] == 0.5
+
+
+def test_a_variable_the_partition_lacks_reads_as_fill(repo):
+    append_partition(repo, partition(4, 2), "a/p0", fixed_dims=["bin"])
+    append_partition(
+        repo, partition(1, 1, product="p1").drop_vars("wind_velocity"), "a/p1", ["bin"]
+    )
+    assert read(repo).sizes["wind"] == 5
 
 
 def test_appended_rows_are_not_re_encoded_with_the_stores_attributes(repo):
@@ -121,3 +140,30 @@ def test_appended_rows_are_not_re_encoded_with_the_stores_attributes(repo):
     assert level[1] == -999.0 and np.isnan(level[2]) and level[3] == -999.0
     decoded = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
     np.testing.assert_allclose(decoded["angle"].values, [1.0, 2.0, 3.0, 4.0])
+
+
+def test_concat_frames_pads_to_the_largest_and_records_each_size():
+    from planetary_datasets.common.multidim import concat_frames
+
+    def frame(n_layers):
+        return xr.Dataset(
+            {
+                "p_x": (("p_along_track", "p_nlayers"), np.ones((2, n_layers), "float32")),
+                "p_name": (("p_frame",), np.array(["f"], dtype=object)),
+            }
+        )
+
+    ds = concat_frames([frame(3), frame(5)], "p", 0)
+    assert ds.sizes["p_nlayers"] == 5
+    assert ds["p_size_nlayers"].values.tolist() == [3, 5]
+    assert np.isnan(ds["p_x"].values[0, 3:]).all()
+
+
+def test_pad_to_pads_every_variable_on_a_dimension_together():
+    from planetary_datasets.common.multidim import pad_to
+
+    ds = xr.Dataset(
+        {"a": (("x", "lev"), np.ones((1, 2))), "b": (("lev",), np.array([1, 2], "int16"))}
+    )
+    out = pad_to(ds, {"lev": 4})
+    assert out.sizes["lev"] == 4 and out["b"].values.tolist() == [1, 2, 0, 0]

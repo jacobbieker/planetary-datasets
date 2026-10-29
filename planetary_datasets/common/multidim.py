@@ -28,7 +28,7 @@ import zarr
 from icechunk.xarray import to_icechunk
 from loguru import logger
 
-from planetary_datasets.common.lossless import cast_exactly, narrowest_dtypes
+from planetary_datasets.common.lossless import cast_exactly, narrowest_dtype, narrowest_dtypes
 from planetary_datasets.common.store import (
     STORE_READ_ERRORS,
     StoreReadError,
@@ -106,35 +106,133 @@ def _array_dims(array: zarr.Array) -> tuple[str, ...]:
     return tuple(array.metadata.dimension_names or ())
 
 
-def _append(session: icechunk.Session, ds: xr.Dataset, fixed: set[str]) -> None:
-    group = zarr.open_group(session.store, mode="a")
-    # The store's variables on this partition's dimensions; other products' are untouched.
-    stored = {
-        name
-        for name in group.array_keys()
-        if set(_array_dims(group[name])) and set(_array_dims(group[name])) <= set(ds.dims)
-    }
-    if set(ds.variables) != stored:
-        raise ValueError(
-            f"partition variables differ from the store's: "
-            f"new {sorted(set(ds.variables) - stored)}, absent {sorted(stored - set(ds.variables))}"
+def pad_value(attrs: Mapping, dtype: np.dtype, array_fill=None):
+    """What padding is filled with: the variable's fill value, else the array's, else
+    NaN for floats, "" for strings and 0 for anything else."""
+    if "_FillValue" in attrs and attrs["_FillValue"] is not None:
+        return attrs["_FillValue"]
+    if array_fill is not None:
+        return array_fill
+    if dtype.kind == "f":
+        return np.nan
+    if dtype.kind in "OUS":
+        return ""
+    return 0
+
+
+def pad_to(ds: xr.Dataset, sizes: Mapping[str, int]) -> xr.Dataset:
+    """``ds`` with every variable padded at the end of each dimension in ``sizes``."""
+    variables = {}
+    changed = False
+    for name, variable in ds.variables.items():
+        widths = [(0, max(0, sizes.get(d, n) - n)) for d, n in zip(variable.dims, variable.shape)]
+        if any(w[1] for w in widths):
+            values = variable.values
+            fill = pad_value(variable.attrs, values.dtype)
+            if values.dtype.kind in "OUS":
+                values = values.astype(object)
+            variable = xr.Variable(
+                variable.dims, np.pad(values, widths, constant_values=fill), variable.attrs
+            )
+            changed = True
+        variables[name] = variable
+    # Built in one go: padding variable by variable leaves a dimension at two sizes.
+    return xr.Dataset(variables, attrs=ds.attrs) if changed else ds
+
+
+def _stored_size(group: zarr.Group, dim: str) -> int | None:
+    for name in group.array_keys():
+        dims = _array_dims(group[name])
+        if dim in dims:
+            return group[name].shape[dims.index(dim)]
+    return None
+
+
+def _grow_dim(group: zarr.Group, dim: str, size: int) -> None:
+    """Widen every stored array on ``dim`` to ``size``; the new positions read as fill."""
+    for name in group.array_keys():
+        array = group[name]
+        dims = _array_dims(array)
+        if dim in dims and array.shape[dims.index(dim)] < size:
+            shape = list(array.shape)
+            shape[dims.index(dim)] = size
+            array.resize(tuple(shape))
+
+
+def _create_array(group: zarr.Group, name: str, variable: xr.Variable, rows: int) -> None:
+    """A variable new to the store, ``rows`` long already (those rows read as fill)."""
+    from xarray.backends.zarr import FillValueCoder
+
+    attrs = json_safe_attrs({k: v for k, v in variable.attrs.items() if k != "_FillValue"})
+    fill = variable.attrs.get("_FillValue")
+    strings = variable.dtype.kind in "OUS"
+    if fill is not None and not strings:
+        fill = np.asarray(fill).astype(variable.dtype)[()]
+        attrs["_FillValue"] = (
+            FillValueCoder.encode(fill, variable.dtype)
+            if variable.dtype.kind == "f"
+            else fill.item()
         )
+    if variable.dtype.kind in "Mm":
+        raise NotImplementedError(f"{name}: cannot add a datetime variable to an existing store")
+    group.create_array(
+        name,
+        shape=(rows, *variable.shape[1:]),
+        chunks=(_chunk_rows(variable), *variable.shape[1:]),
+        dtype=str if strings else variable.dtype,
+        compressors=()
+        if strings
+        else (zarr.codecs.BloscCodec(cname="zstd", clevel=CLEVEL, shuffle="bitshuffle"),),
+        # Without a fill value of its own, a float's earlier rows read as NaN, not 0.
+        fill_value=None
+        if strings
+        else (np.nan if fill is None and variable.dtype.kind == "f" else fill),
+        dimension_names=variable.dims,
+        attributes=attrs,
+    )
+
+
+def _append(session: icechunk.Session, ds: xr.Dataset, fixed: set[str]) -> None:
+    """Append ``ds`` along each of its growing dimensions.
+
+    The partition and the store are reconciled first: a fixed dimension larger in the
+    partition widens the store's arrays, and one smaller in the partition is padded. A
+    variable the store lacks is created (earlier rows read as fill); one the partition
+    lacks is extended with fill. Products' processing baselines differ in exactly these
+    ways (EarthCARE's height grid went from 241 to 242 levels).
+    """
+    group = zarr.open_group(session.store, mode="a")
+    targets = {}
     for dim in fixed:
-        for name in ds.variables:
-            if dim in ds[name].dims:
-                axis = ds[name].dims.index(dim)
-                if group[name].shape[axis] != ds.sizes[dim]:
-                    raise ValueError(f"{name}: fixed dimension {dim} changed size")
+        stored = _stored_size(group, dim)
+        targets[dim] = max(ds.sizes[dim], stored or 0)
+        if stored is not None and targets[dim] > stored:
+            _grow_dim(group, dim, targets[dim])
+    ds = pad_to(ds, targets)
     for dim in ds.dims:
         if dim in fixed or not ds.sizes[dim]:
             continue
-        names = _growing_variables(ds, dim)
-        start = group[names[0]].shape[0]
+        existing = [n for n in group.array_keys() if _array_dims(group[n])[:1] == (dim,)]
+        start = group[existing[0]].shape[0] if existing else 0
+        for name in existing:
+            if group[name].shape[0] != start:
+                raise ValueError(
+                    f"{name}: {group[name].shape[0]} rows along {dim}, expected {start}"
+                )
         stop = start + ds.sizes[dim]
+        names = _growing_variables(ds, dim)
         for name in names:
+            if name not in group:
+                variable = ds[name].variable
+                if variable.dtype.kind == "f":
+                    narrowed = narrowest_dtype(variable.values, variable.attrs.get("_FillValue"))
+                    variable = cast_exactly(xr.Dataset({name: variable}), {name: narrowed})[
+                        name
+                    ].variable
+                _create_array(group, name, variable, start)
+                existing.append(name)
+        for name in existing:
             array = group[name]
-            if array.shape[0] != start:
-                raise ValueError(f"{name}: {array.shape[0]} rows along {dim}, expected {start}")
             array.resize((stop, *array.shape[1:]))
         # The values are already in the store's encoding (read raw, cast exactly), so they
         # go to zarr as they are. A region write through xarray would re-encode them with
@@ -147,6 +245,10 @@ def _append(session: icechunk.Session, ds: xr.Dataset, fixed: set[str]) -> None:
             values = ds[name].values
             if values.dtype.kind in "OUS":
                 values = np.asarray(values, dtype=object)
+            elif group[name].dtype != values.dtype:
+                values = cast_exactly(xr.Dataset({name: ds[name]}), {name: group[name].dtype})[
+                    name
+                ].values
             group[name][start:stop] = values
         if times:
             part = ds[times].drop_indexes([n for n in times if n in ds.indexes], errors="ignore")
@@ -262,12 +364,40 @@ def concat_frames(
     its file's position in the store counting from ``first_index``.
     """
     along, per = f"{prefix}_along_track", f"{prefix}_{frame}"
+    secondary = sorted({d for ds in frames for d in ds.dims} - {along, per})
+    largest = {d: max(ds.sizes.get(d, 0) for ds in frames) for d in secondary}
     with_index = []
     for offset, ds in enumerate(frames):
         index = np.full(ds.sizes[along], first_index + offset, dtype="uint32")
-        with_index.append(ds.assign({f"{prefix}_{frame}_index": ((along,), index)}))
-    track = [n for n in with_index[0].variables if with_index[0][n].dims[:1] == (along,)]
-    rest = [n for n in with_index[0].variables if n not in track]
+        sizes = {
+            f"{prefix}_size_{d.removeprefix(prefix + '_')}": (
+                (per,),
+                np.array([ds.sizes.get(d, 0)], "uint32"),
+            )
+            for d in secondary
+        }
+        ds = ds.assign({f"{prefix}_{frame}_index": ((along,), index), **sizes})
+        with_index.append(pad_to(ds, largest))
+    names = list(dict.fromkeys(n for d in with_index for n in d.variables))
+    track = [n for n in names if next(d[n] for d in with_index if n in d).dims[:1] == (along,)]
+    rest = [n for n in names if n not in track]
+    # A variable some files lack is given fill there, so the files concatenate.
+    for i, d in enumerate(with_index):
+        missing = {}
+        for n in names:
+            if n in d:
+                continue
+            like = next(o[n] for o in with_index if n in o)
+            rows = d.sizes[along] if n in track else 1
+            shape = (rows, *like.shape[1:])
+            fill = pad_value(like.attrs, like.dtype)
+            missing[n] = xr.Variable(
+                like.dims,
+                np.full(shape, fill, dtype=object if like.dtype.kind in "OUS" else like.dtype),
+                like.attrs,
+            )
+        if missing:
+            with_index[i] = d.assign(missing)
     return xr.merge(
         [
             xr.concat([d[track] for d in with_index], dim=along, data_vars="all"),
@@ -281,6 +411,8 @@ def concat_frames(
 
 
 __all__ = [
+    "pad_to",
+    "pad_value",
     "CHUNK_BYTES",
     "concat_frames",
     "LEDGER_ATTR",
