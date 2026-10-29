@@ -87,6 +87,8 @@ declare -A LANES=(
   [earthcare_atl_l2]="_backfill_lanes.py earthcare_atl_l2 --threads 4"
   [earthcare_cpr_l2]="_backfill_lanes.py earthcare_cpr_l2 --threads 4"
   [pace_l2]="_backfill_lanes.py pace_l2 --threads 4"
+  # Copernicus Sentinel-4 L2 (EUMETSAT Data Store): exits 3 until the products are published.
+  [sentinel4_l2]="_backfill_lanes.py sentinel4_l2 --threads 4 --pause 3600"
   [pace_l2_mapol]="_backfill_lanes.py pace_l2_mapol --threads 4"
   [pace_l1c]="_backfill_lanes.py pace_l1c --threads 4"
   [aeolus_l1b]="_backfill_lanes.py aeolus_l1b --threads 2"
