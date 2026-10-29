@@ -1,0 +1,323 @@
+"""AERONET archive stores: parsing, naming, the ragged layout and its de-duplication.
+
+No network: the files and web responses are small fakes in AERONET's formats.
+"""
+
+from __future__ import annotations
+
+import io
+import tarfile
+
+import numpy as np
+import pandas as pd
+import pytest
+import xarray as xr
+
+from planetary_datasets.providers.observations import aeronet_archive as aeronet
+from planetary_datasets.providers.observations.aeronet_archive import (
+    PRODUCTS,
+    AeronetStore,
+    column_name,
+    parse_table,
+)
+
+HEAD = [
+    "AERONET Version 3",
+    "{site}",
+    "Version 3: AOD Level 2.0",
+    "The following data are automatically cloud cleared and quality assured.",
+    "Contact: PI=Jane Doe; PI Email=jane@example.org",
+    "All Points,UNITS can be found at,,, https://aeronet.gsfc.nasa.gov/new_web/units.html",
+]
+COLUMNS = (
+    "Date(dd:mm:yyyy),Time(hh:mm:ss),Day_of_Year,Day_of_Year(Fraction),AOD_500nm,AOD_Empty,"
+    "AOD_Empty,Precipitable_Water(cm),440-870_Angstrom_Exponent,N[AOD_500nm],Data_Quality_Level"
+)
+
+
+def aod_file(site: str, rows: list[str]) -> str:
+    return "\n".join([*(h.format(site=site) for h in HEAD), COLUMNS, *rows]) + "\n"
+
+
+ROWS = [
+    "21:06:1993,13:31:51,172,172.563785,0.065048,-999.,-999.,1.989356,0.727492,12,lev20",
+    "21:06:1993,13:46:51,172,172.574201,0.070000,-999.,-999.,2.001000,-999.000000,0,lev20",
+]
+
+
+@pytest.fixture
+def sites() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "New_Site_ID": ["SAM0001BRA", "NAM0002USA"],
+            "Latitude(decimal_degrees)": ["-15.555244", "32.233002"],
+            "Longitude(decimal_degrees)": ["-56.070214", "-110.953003"],
+            "Altitude(Meters)": ["234.000000", "779.000000"],
+            "Land_Use_type": ["Urban_and_Built-Up", "Open_Shrublands"],
+        },
+        index=pd.Index(["Cuiaba", "Tucson"], name="Name"),
+    )
+
+
+# --- names --------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("column", "name", "units"),
+    [
+        ("AOD_1640nm", "aerosol_optical_depth_1640nm", None),
+        ("440-870_Angstrom_Exponent", "angstrom_exponent_440_870nm", None),
+        ("440-675_Angstrom_Exponent[Polar]", "angstrom_exponent_440_675nm_polar", None),
+        ("Precipitable_Water(cm)", "total_column_water_vapour", "cm"),
+        ("NUM_DAYS[AOD_500nm]", "number_of_days_aerosol_optical_depth_500nm", None),
+        (
+            "N[Single_Scattering_Albedo[440nm]]",
+            "number_of_points_single_scattering_albedo_440nm",
+            None,
+        ),
+        ("Total_AOD_500nm[tau_a]", "total_aerosol_optical_depth_500nm", None),
+        ("FineModeFraction_500nm[eta]", "fine_mode_fraction_500nm", None),
+        ("VolC-C", "volume_concentration_coarse", None),
+        ("Lwn_f/Q[412nm]", "normalized_water_leaving_radiance_f_over_q_412nm", None),
+        ("0.050000", "volume_size_distribution_at_0_05um", "um3 um-2"),
+        ("3.000000[440nm]-Total", "phase_function_total_440nm_at_3_degrees", None),
+        (
+            "Exact_Wavelengths_of_AOD(um)_1640nm",
+            "exact_wavelengths_of_aerosol_optical_depth_1640nm",
+            "um",
+        ),
+        ("Site_Latitude(Degrees)", "latitude", "degrees"),
+    ],
+)
+def test_columns_get_readable_names_and_units(column, name, units):
+    assert column_name(column) == (name, units)
+
+
+def test_every_store_lives_under_bkr_obs_aeronet():
+    assert len(PRODUCTS) == 76
+    assert all(p.store_prefix.startswith("bkr/obs/aeronet/") for p in PRODUCTS.values())
+    assert PRODUCTS["aod_level20_all_points"].bulk == "AOD/AOD_Level20_All_Points_V3.tar.gz"
+    assert PRODUCTS["aod_level10_all_points"].bulk is None
+    assert PRODUCTS["tot_level15_daily"].web == ("TOT15=1&AVG=20",)
+    pfn = PRODUCTS["inversion_hybrid_phase_functions_level20_all_points"]
+    assert pfn.inversion and len(pfn.web) == 3
+    assert PRODUCTS["inversion_almucantar_level20_all_points"].bulk == (
+        "INV/INV_Level2_All_Points_V3.tar.gz"
+    )
+
+
+# --- parsing ------------------------------------------------------------------------------
+
+
+def test_a_bulk_file_parses_into_typed_columns():
+    table = parse_table(aod_file("Cuiaba", ROWS))
+    rows = table.rows
+    assert table.site == "Cuiaba"
+    assert table.principal_investigators == "PI=Jane Doe; PI Email=jane@example.org"
+    assert rows["time"].tolist() == [
+        pd.Timestamp("1993-06-21 13:31:51"),
+        pd.Timestamp("1993-06-21 13:46:51"),
+    ]
+    # Six published decimals survive float32; the fraction of a day needs float64.
+    assert rows["aerosol_optical_depth_500nm"].dtype == np.float32
+    assert rows["day_of_year_fraction"].dtype == np.float64
+    assert rows["number_of_points_aerosol_optical_depth_500nm"].dtype == np.int32
+    assert rows["data_quality_level"].tolist() == [20, 20]
+    assert {"aerosol_optical_depth_empty", "aerosol_optical_depth_empty_2"} <= set(rows)
+    attrs = table.attrs["total_column_water_vapour"]
+    assert attrs["scale_factor"] == 10.0 and attrs["units"] == "kg m-2"
+    assert attrs["source_units"] == "cm" and attrs["_FillValue"] == -999.0
+    assert table.attrs["data_quality_level"]["flag_meanings"] == "lev10 lev15 lev20"
+
+
+def test_float32_only_when_it_reprints_the_published_text():
+    rows = ROWS[:1] + ["21:06:1993,13:46:51,172,172.574201,123.456789,-999.,-999.,2.0,1.0,1,lev20"]
+    table = parse_table(aod_file("Cuiaba", rows))
+    assert table.rows["aerosol_optical_depth_500nm"].dtype == np.float64
+    assert table.rows["aerosol_optical_depth_500nm"].iloc[1] == 123.456789
+
+
+def test_monthly_daily_and_ocean_colour_dates():
+    monthly = "\n".join(
+        [*(h.format(site="Cuiaba") for h in HEAD), "Month,AOD_500nm,N[AOD_500nm]", "1993-JUN,0.1,3"]
+    )
+    assert parse_table(monthly).rows["time"].iloc[0] == pd.Timestamp("1993-06-01")
+    ocean = "\n".join(
+        [
+            *(h.format(site="Venise") for h in HEAD),
+            "Date(dd-mm-yyyy),Time(hh:mm:ss),Lw[412nm],AERONET_Site_Name,Last_Date_Processed",
+            "20:04:2002,12:00:00,0.614370,Venise,10:05:2024,",
+        ]
+    )
+    table = parse_table(ocean)
+    assert table.rows["time"].iloc[0] == pd.Timestamp("2002-04-20 12:00")
+    assert table.rows["last_processing_time"].iloc[0] == pd.Timestamp("2024-05-10")
+    assert table.rows["site_name"].tolist() == ["Venise"]
+    assert table.site is None
+
+
+def test_a_value_outside_a_vocabulary_is_refused():
+    with pytest.raises(ValueError, match="vocabulary"):
+        parse_table(aod_file("Cuiaba", [ROWS[0].replace("lev20", "lev99")]))
+
+
+# --- stores -------------------------------------------------------------------------------
+
+
+def stored(store: AeronetStore) -> xr.Dataset:
+    return xr.open_zarr(store.repo.readonly_session("main").store, consolidated=False)
+
+
+def test_rows_append_once_and_decode(local_config, sites):
+    product = PRODUCTS["aod_level20_all_points"]
+    store = AeronetStore(product, local_config, sites)
+    assert store.append([parse_table(aod_file("Cuiaba", ROWS))]) == 2
+    # The same rows again, and one new row from a new site, through a fresh store object.
+    tucson = ["01:07:1994,10:00:00,182,182.416667,0.2,-999.,-999.,1.5,1.2,4,lev20"]
+    again = AeronetStore(product, local_config, sites)
+    tables = [parse_table(aod_file("Cuiaba", ROWS)), parse_table(aod_file("Tucson", tucson))]
+    assert again.append(tables) == 1
+
+    ds = stored(store)
+    assert ds.sizes == {"observation": 3, "site": 2}
+    assert ds["site_name"].values.tolist() == ["Cuiaba", "Tucson"]
+    assert ds["site_index"].values.tolist() == [0, 0, 1]
+    assert ds["site_latitude"].values.tolist() == [-15.555244, 32.233002]
+    assert ds["principal_investigators"].values[0].startswith("PI=Jane Doe")
+    assert ds["time"].values[2] == np.datetime64("1994-07-01T10:00:00")
+    # -999 reads as missing; precipitable water decodes in ERA5's kg m-2.
+    assert np.isnan(ds["angstrom_exponent_440_870nm"].values[1])
+    assert ds["total_column_water_vapour"].values[0] == pytest.approx(19.89356, rel=1e-6)
+    raw = xr.open_zarr(
+        store.repo.readonly_session("main").store, consolidated=False, mask_and_scale=False
+    )
+    assert raw["total_column_water_vapour"].values[0] == pytest.approx(1.989356)
+    assert raw["aerosol_optical_depth_500nm"].values[0] == np.float32(0.065048)
+
+
+def test_a_web_response_shares_the_bulk_store(local_config, sites):
+    product = PRODUCTS["aod_level20_all_points"]
+    AeronetStore(product, local_config, sites).append([parse_table(aod_file("Cuiaba", ROWS))])
+    web = "\n".join(
+        [
+            "AERONET Data Download (Version 3 Direct Sun)",
+            *HEAD[0:1],
+            *HEAD[2:4],
+            "Contact: Please visit https://aeronet.gsfc.nasa.gov/new_web/data_usage.html",
+            "AERONET_Site," + COLUMNS,
+            "Cuiaba," + ROWS[1],
+            "Tucson,02:07:1994,10:00:00,183,183.416667,0.3,-999.,-999.,1.4,1.1,5,lev20",
+        ]
+    )
+    store = AeronetStore(product, local_config, sites)
+    assert store.append([parse_table(web)]) == 1
+    assert stored(store)["site_index"].values.tolist() == [0, 0, 1]
+
+
+def test_phase_function_modes_are_distinct_rows(local_config, sites):
+    columns = "Site,Date(dd:mm:yyyy),Time(hh:mm:ss),3.000000[440nm]-Total,Phase_Function_Mode"
+    text = "\n".join(
+        [
+            *(h.format(site="Cuiaba") for h in HEAD),
+            columns,
+            "Cuiaba,20:06:1993,18:58:26,0.806450,Total",
+            "Cuiaba,20:06:1993,18:58:26,0.400000,Fine",
+        ]
+    )
+    product = PRODUCTS["inversion_almucantar_phase_functions_level20_all_points"]
+    store = AeronetStore(product, local_config, sites)
+    assert store.append([parse_table(text)]) == 2
+    assert AeronetStore(product, local_config, sites).append([parse_table(text)]) == 0
+    assert stored(store)["phase_function_mode"].values.tolist() == [0, 1]
+
+
+# --- lanes --------------------------------------------------------------------------------
+
+
+def test_a_tarball_is_read_when_new_or_stale():
+    now = pd.Timestamp("2026-10-29")
+    assert aeronet.due(set(), "2026-10-24", now)
+    assert not aeronet.due({"bulk:2026-10-24"}, "2026-10-24", now)
+    assert not aeronet.due({"bulk:2026-10-17"}, "2026-10-24", now)
+    assert aeronet.due({"bulk:2026-07-01"}, "2026-10-24", now)
+
+
+def test_the_bulk_lane_reads_a_tarball_into_its_store(local_config, sites, monkeypatch):
+    downloaded = []
+
+    def fake_download(url, dest, **kwargs):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        downloaded.append(dest)
+        with tarfile.open(dest, "w:gz") as archive:
+            for name, rows in (("Cuiaba", ROWS), ("Tucson", ROWS[:1])):
+                data = aod_file(name, rows).encode("latin-1")
+                info = tarfile.TarInfo(f"AOD/AOD20/ALL_POINTS/19930101_20261024_{name}.lev20")
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+        return dest
+
+    monkeypatch.setattr(aeronet, "download_one", fake_download)
+    monkeypatch.setattr(aeronet, "published", lambda url, session=None: ("2026-10-24", 1))
+    product = PRODUCTS["aod_level20_all_points"]
+    assert aeronet.run_bulk([product], local_config, sites) == 3
+    store = AeronetStore(product, local_config, sites)
+    assert "bulk:2026-10-24" in store.ledger()
+    assert aeronet.run_bulk([product], local_config, sites) == 0
+    assert downloaded and not downloaded[0].exists(), "the tarball is removed once read"
+
+
+class FakeSession:
+    def __init__(self, text: str):
+        self.text, self.urls = text, []
+
+    def get(self, url, **kwargs):
+        self.urls.append(url)
+        response = type("Response", (), {})()
+        response.text = self.text if "day=1&" in url else "AERONET Data Download\n"
+        response.raise_for_status = lambda: None
+        return response
+
+
+def test_the_history_walk_ledgers_only_whole_months(local_config, sites, monkeypatch):
+    text = "\n".join(
+        [
+            "AERONET Data Download (Version 3 Direct Sun)",
+            "AERONET Version 3",
+            "Version 3: AOD Level 1.0",
+            "unscreened",
+            "Contact: see the web site",
+            "AERONET_Site," + COLUMNS,
+            "Cuiaba,01:06:1993,13:31:51,152,152.563785,0.1,-999.,-999.,1.9,0.7,3,lev10",
+        ]
+    )
+    session = FakeSession(text)
+    monkeypatch.setattr(aeronet.requests, "Session", lambda: session)
+    product = PRODUCTS["aod_level10_all_points"]
+    june = list(pd.date_range("1993-06-01", "1993-06-30"))
+    assert aeronet.run_web([product], june, local_config, sites, ledger_months=True) == 1
+    assert "web:1993-06" in AeronetStore(product, local_config, sites).ledger()
+    asked = len(session.urls)
+    aeronet.run_web([product], june, local_config, sites, ledger_months=True)
+    assert len(session.urls) == asked, "a ledgered month is not asked for again"
+    july = list(pd.date_range("1993-07-01", "1993-07-10"))
+    aeronet.run_web([product], july, local_config, sites, ledger_months=True)
+    assert "web:1993-07" not in AeronetStore(product, local_config, sites).ledger()
+
+
+def test_a_lane_rereads_a_store_another_lane_wrote(local_config, sites):
+    product = PRODUCTS["aod_level20_all_points"]
+    first = AeronetStore(product, local_config, sites)
+    second = AeronetStore(product, local_config, sites)
+    assert first.append([parse_table(aod_file("Cuiaba", ROWS[:1]))]) == 1
+    tucson = ["01:07:1994,10:00:00,182,182.416667,0.2,-999.,-999.,1.5,1.2,4,lev20"]
+    assert second.append([parse_table(aod_file("Tucson", tucson))]) == 1
+    # first's view is stale: Tucson already took index 1 and Cuiaba's row is stored.
+    assert (
+        first.append(
+            [parse_table(aod_file("Cuiaba", ROWS)), parse_table(aod_file("Tucson", tucson))]
+        )
+        == 1
+    )
+    ds = stored(first)
+    assert ds["site_name"].values.tolist() == ["Cuiaba", "Tucson"]
+    assert ds["site_index"].values.tolist() == [0, 1, 0]

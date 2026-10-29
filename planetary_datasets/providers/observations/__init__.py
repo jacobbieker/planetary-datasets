@@ -8,6 +8,7 @@ hit an endpoint per station or per partition, assemble dataframes, reshape into 
 Module                        Provider                    Partition   Credentials
 ============================  ==========================  ==========  ==============
 :mod:`~.aeronet`              ``AeronetProvider``         day         none
+:mod:`~.aeronet_archive`      (lanes; ragged stores)      tarball     none
 :mod:`~.asos`                 ``ASOSOneMinuteProvider``   day         none
 :mod:`~.ghcn`                 ``GHCNHourlyProvider``      quarter     none
 :mod:`~.gnss`                 ``GNSSProvider``            month       CDS
