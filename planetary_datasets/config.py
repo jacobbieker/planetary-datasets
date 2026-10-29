@@ -92,6 +92,7 @@ class Credentials:
     hf_token: str | None = None
     destine_pat: str | None = None
     vires_token: str | None = None
+    maap_offline_token: str | None = None
 
     def require(self, *names: str) -> tuple[str, ...]:
         """Return the named credentials, raising if any are unset."""
@@ -292,6 +293,7 @@ def load_config(env_file: str | os.PathLike | None = None, override: bool = Fals
             hf_token=_env("HF_TOKEN"),
             destine_pat=_env("DESTINE_PAT"),
             vires_token=_env("VIRES_TOKEN"),
+            maap_offline_token=_env("MAAP_OFFLINE_TOKEN"),
         ),
     )
 

@@ -48,6 +48,8 @@ class Lane:
         opera: Stage each hour with the ``docker/earth2studio`` image before writing it.
         earth2studio: Stage each partition with the same image's earth2studio downloader;
             the provider is that dataset's publisher.
+        recent_days: Write the partitions of the last this many days first, newest
+            first, before the backlog: a long backfill then keeps the live edge current.
     """
 
     provider: Callable[[], Any]
@@ -56,6 +58,7 @@ class Lane:
     lag_hours: int = 0
     opera: bool = False
     earth2studio: bool = False
+    recent_days: int = 0
 
 
 def _metoffice(name: str) -> Callable[[], Any]:
@@ -171,6 +174,15 @@ class Earth2StudioStager:
         return provider.has_staged(it)
 
 
+def recent_first(partitions: list, days: int) -> list:
+    """The last ``days`` days' partitions newest first, then the rest oldest first."""
+    import pandas as pd
+
+    cutoff = pd.Timestamp.now(tz="UTC").tz_localize(None) - pd.Timedelta(days, "D")
+    recent = sorted((it for it in partitions if it >= cutoff), reverse=True)
+    return recent + [it for it in partitions if it < cutoff]
+
+
 def unstored_partitions(provider, partitions) -> list:
     """The partitions none of whose frames is stored, from one read of the store's axis.
 
@@ -190,6 +202,29 @@ def unstored_partitions(provider, partitions) -> list:
         if stored.searchsorted(start) == stored.searchsorted(end):
             keep.append(it)
     return keep
+
+
+#: EarthCARE products per lane, grouped to roughly equal daily volume (L1 ~57 GB/day,
+#: L2 ~37 GB/day in all).
+EARTHCARE_LANES = {
+    "atl_nom": ("ATL_NOM_1B",),
+    "msi_nom": ("MSI_NOM_1B",),
+    "msi_rgr": ("MSI_RGR_1C",),
+    "cpr_aux": ("CPR_NOM_1B", "AUX_JSG_1D"),
+    "acm": ("ACM_CAP_2B", "ACM_COM_2B"),
+    "synergy": ("ACM_RT__2B", "ALL_3D__2B", "ALL_DF__2B", "AC__TC__2B"),
+    "msi_l2": ("MSI_CM__2A", "MSI_COP_2A", "MSI_AOT_2A"),
+    "atl_l2": (
+        "ATL_EBD_2A",
+        "ATL_AER_2A",
+        "ATL_ICE_2A",
+        "ATL_TC__2A",
+        "ATL_ALD_2A",
+        "ATL_CTH_2A",
+        "ATL_FM__2A",
+    ),
+    "cpr_l2": ("CPR_CD__2A", "CPR_CLD_2A", "CPR_FMR_2A", "CPR_TC__2A", "AM__ACD_2B", "AM__CTH_2B"),
+}
 
 
 def _ncep_upper_air():
@@ -301,6 +336,20 @@ LANES: dict[str, Lane] = {
     },
     # A rolling ten-day bucket: anything older has already gone.
     "uk_marine": Lane(_uk_marine, "-10D", "1h", 2),
+    # EarthCARE, every validated L1 and L2 product, into one store. The products are split
+    # over lanes of roughly equal volume, each writing only its own products' variables;
+    # the store takes their commits side by side. A day's frames are all published within
+    # about two days, so the last week is written first.
+    **{
+        f"earthcare_{group}": Lane(
+            _provider("polar.earthcare", "EarthCAREProvider", products=codes, download_workers=16),
+            "2024-08-11",
+            "1D",
+            0,
+            recent_days=7,
+        )
+        for group, codes in EARTHCARE_LANES.items()
+    },
     # JPSS ATMS SDR, every satellite in one store (NOAA keeps the SDRs). The store is
     # complete from 2022-11 to 2025-09 and nearly empty since; this fills that and keeps
     # it current.
@@ -422,6 +471,8 @@ def main(argv) -> int:
         todo = list(provider.missing_timesteps(hours)) if len(hours) else []
         if lane.earth2studio and todo:
             todo = unstored_partitions(provider, todo)
+        if lane.recent_days and todo:
+            todo = recent_first(todo, lane.recent_days)
         print(
             f"\npass    : {hours[0] if len(hours) else '-'} -> "
             f"{hours[-1] if len(hours) else '-'}, {len(hours)} partition(s), "
