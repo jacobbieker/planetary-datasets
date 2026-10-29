@@ -3,9 +3,9 @@
 WIS2 has no aircraft topic of its own yet: aircraft reports reach the Global Cache as GTS
 bulletins relayed into WIS2, ``IUA``\\ *A2ii* BUFR bulletins under
 ``data/<relay>/data/core/I/U/A/<A2>/<ii>/<CCCC>/`` (in October 2026 only the JMA relay
-carries them: ~4,600 bulletins and ~3.7 MB per 12 hours, E-AMDAR from EGRR and the Hong
-Kong, Korean and New Zealand programmes). Each bulletin holds one or more BUFR messages,
-each a few reports (subsets), in one of two layouts:
+carries them: ~5,000 bulletins and ~4 MB per 12 hours, about 50,000 reports, 5% of them
+repeats; E-AMDAR via EGRR, then JMA, Hong Kong, Korea and New Zealand). Each bulletin holds
+one or more BUFR messages, each a few reports (subsets), in one of two layouts:
 
 * the AMDAR template 3-11-010 (identity, time, position, flight level and GNSS altitude,
   phase of flight, wind, temperature, humidity, icing, turbulence/EDR), or
@@ -364,23 +364,39 @@ def _time(row: dict) -> np.datetime64 | None:
         return None
 
 
-def _decimals(values: np.ndarray) -> np.ndarray:
-    return np.round(values, 6)
-
-
 def _float_column(values: list) -> np.ndarray:
-    """float32 when it reproduces every value at BUFR precision (six decimals), else float64."""
+    """float32 when it reproduces every value to 10 significant digits, else float64.
+
+    ecCodes scales BUFR integers into doubles (278.4 K arrives as 278.40000000000003); ten
+    digits is past any BUFR element's precision, so a float32 that prints back as the same
+    ten-digit value loses nothing.
+    """
     wide = np.array([np.nan if v is None else v for v in values], dtype="float64")
     narrow = wide.astype("float32")
-    with np.errstate(invalid="ignore"):
-        same = np.array_equal(
-            _decimals(narrow.astype("float64")), _decimals(wide), equal_nan=True
-        ) and np.array_equal(
-            np.array([float(repr(np.float32(v))) if np.isfinite(v) else np.nan for v in narrow]),
-            _decimals(wide),
-            equal_nan=True,
-        )
-    return narrow if same else wide
+    exact = all(
+        float(str(n)) == float(f"{w:.10g}") for w, n in zip(wide.tolist(), narrow) if np.isfinite(w)
+    )
+    return narrow if exact else wide
+
+
+#: Times are stored as these (int64, CF-decoded by xarray), so every window's values go
+#: to the store as they are rather than re-encoded against units chosen by the first.
+TIME_UNITS = "seconds since 1970-01-01 00:00:00"
+TIME_FILL = int(np.iinfo("int64").min)
+
+
+def _seconds(values: list, attrs: dict) -> xr.Variable:
+    stamps = np.array(
+        [np.datetime64("NaT", "s") if v is None else np.datetime64(v, "s") for v in values],
+        dtype="datetime64[s]",
+    )
+    seconds = stamps.astype("int64")
+    seconds[np.isnat(stamps)] = TIME_FILL
+    return xr.Variable(
+        "observation",
+        seconds,
+        {**attrs, "units": TIME_UNITS, "calendar": "proleptic_gregorian", "_FillValue": TIME_FILL},
+    )
 
 
 def to_dataset(rows: Sequence[dict]) -> xr.Dataset:
@@ -392,24 +408,16 @@ def to_dataset(rows: Sequence[dict]) -> xr.Dataset:
             np.array([r["report_id"] for r in rows], dtype="int64"),
             {"long_name": "hash of aircraft, time, position and flight level (deduplication)"},
         ),
-        "time": xr.Variable(
-            dim,
-            np.array([r["time"] for r in rows], dtype="datetime64[s]"),
-            {"standard_name": "time", "long_name": "observation time"},
+        "time": _seconds(
+            [r["time"] for r in rows], {"standard_name": "time", "long_name": "observation time"}
         ),
-        "arrival_time": xr.Variable(
-            dim,
-            np.array(
-                [
-                    np.datetime64(
-                        r["arrival_time"].astimezone(dt.timezone.utc).replace(tzinfo=None), "s"
-                    )
-                    if r.get("arrival_time") is not None
-                    else np.datetime64("NaT", "s")
-                    for r in rows
-                ],
-                dtype="datetime64[s]",
-            ),
+        "arrival_time": _seconds(
+            [
+                None
+                if r.get("arrival_time") is None
+                else r["arrival_time"].astimezone(dt.timezone.utc).replace(tzinfo=None)
+                for r in rows
+            ],
             {"long_name": "time the bulletin arrived in the WIS2 Global Cache"},
         ),
     }

@@ -21,10 +21,20 @@ each is appended to the tar as it arrives, the tar itself being written straight
 multipart upload whose parts go up in parallel. Memory is bounded by the bytes allowed in
 flight and the parts awaiting upload.
 
-Run once for a given window end, or keep the 00Z/12Z schedule::
+Archive targets (:mod:`~planetary_datasets.providers.observations.wis2_targets`) build
+stores from the same stream: each registered target is handed the objects it wants as
+they go into the tar and appends what it decoded once the tar is complete (aircraft
+reports, ``bkr/obs/wis2_aircraft.icechunk``, for one). A target's failure never fails the
+tar.
+
+Run once for a given window end, or keep the 00Z/12Z schedule; run the targets over
+windows already archived::
 
     python -m planetary_datasets.providers.observations.wis2_archive --end 2026-10-29T12:00
     python -m planetary_datasets.providers.observations.wis2_archive --follow
+    python -m planetary_datasets.providers.observations.wis2_archive \
+        --from-tar bkr/obs/wis2/wis2_20261027T1200Z.tar --targets aircraft
+    python -m planetary_datasets.providers.observations.wis2_archive --all-archived
 """
 
 from __future__ import annotations
