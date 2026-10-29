@@ -61,6 +61,7 @@ from planetary_datasets.base import BaseProvider
 from planetary_datasets.common import naming
 from planetary_datasets.common.earthdata import EarthdataS3, granules, s3_url
 from planetary_datasets.common.store import STORE_READ_ERRORS
+from planetary_datasets.providers.polar.pace import day_epoch, rebase_day_seconds
 
 BUCKET_PREFIX = "s3://ob-cumulus-prod-public/"
 REGION = "us-west-2"
@@ -221,6 +222,10 @@ def describe_granule(f: h5py.File, url: str, product: VirtualProduct) -> Granule
         offset = dataset.id.get_offset() if contiguous else None
         if product.track in dims and offset is not None and dataset.dtype.kind in "iuf":
             variable.offset = offset
+            if day_epoch(variable.attrs) is not None:
+                # Referenced bytes cannot be rebased; units that differ per granule would
+                # decode every granule onto the first one's day, so they are not CF units.
+                variable.attrs["units"] = "seconds of the day time_coverage_start falls on"
         else:
             values = np.asarray(dataset[()])
             if values.dtype.kind in "SO":
@@ -237,6 +242,9 @@ def describe_granule(f: h5py.File, url: str, product: VirtualProduct) -> Granule
                 if values.dtype.kind in "iuf" and pad[axis][1]:
                     filler = variable.fill_value if variable.fill_value is not None else 0
                     values = np.pad(values, pad, constant_values=filler)
+            rebased = rebase_day_seconds(values, variable.attrs, variable.fill_value)
+            if rebased is not None:
+                values, variable.attrs = rebased
             variable.values = values
         granule.variables[name] = variable
     return granule

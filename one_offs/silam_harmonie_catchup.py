@@ -69,6 +69,7 @@ from planetary_datasets.providers.opera import (
     OPERAReflectivityProvider,
 )
 from planetary_datasets.providers.opera_download import DEFAULT_TARGET as OPERA_CONTAINER_DIR
+from planetary_datasets.providers.opera_download import EXIT_UNAVAILABLE as OPERA_EXIT_UNAVAILABLE
 from planetary_datasets.providers.polar.metop_sg import (
     MetopSgMetimageProvider,
     MetopSgMwsProvider,
@@ -215,11 +216,36 @@ class OperaCatchUp(CatchUp):
                 "it is retried next pass"
             )
             return False
+        if result.returncode == OPERA_EXIT_UNAVAILABLE:
+            self.mark_unavailable(it, root)
+            logger.info(f"{provider.name}: the archive has nothing for {it}; not asked again")
+            return False
         if result.returncode != 0:
             tail = (result.stderr or result.stdout).strip().splitlines()[-3:]
             logger.warning(f"{provider.name}: staging {it} failed: {' | '.join(tail)}")
             return False
         return provider.has_staged(it)
+
+    def ledger(self, root: pathlib.Path) -> pathlib.Path:
+        """Hours the archive has no file for, one ISO timestamp per line.
+
+        Delete the file to have them asked for again.
+        """
+        return root / self.provider.product / "unavailable.txt"
+
+    def unavailable(self, root: pathlib.Path) -> set[pd.Timestamp]:
+        """The hours in :meth:`ledger`."""
+        path = self.ledger(root)
+        if not path.exists():
+            return set()
+        return {pd.Timestamp(line) for line in path.read_text().split() if line}
+
+    def mark_unavailable(self, it: pd.Timestamp, root: pathlib.Path) -> None:
+        """Add ``it`` to :meth:`ledger`."""
+        path = self.ledger(root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as ledger:
+            ledger.write(f"{pd.Timestamp(it).isoformat()}\n")
 
     def run(self, times: pd.DatetimeIndex) -> int:
         """Stage and write each missing hour, a batch of ``workers`` hours at a time.
@@ -230,8 +256,12 @@ class OperaCatchUp(CatchUp):
         provider = self.provider
         root = provider.archive_root.expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
-        missing = provider.missing_timesteps(times)
-        logger.info(f"{provider.name}: {len(missing)} hours to stage under {root}")
+        skip = self.unavailable(root)
+        missing = [it for it in provider.missing_timesteps(times) if pd.Timestamp(it) not in skip]
+        logger.info(
+            f"{provider.name}: {len(missing)} hours to stage under {root} "
+            f"({len(skip)} the archive does not have, skipped)"
+        )
 
         written = 0
         with ThreadPoolExecutor(max_workers=self.workers) as pool:

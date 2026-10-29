@@ -103,6 +103,14 @@ class IncompleteHour(RuntimeError):
     """Some of an hour's frames could not be fetched."""
 
 
+class HourUnavailable(IncompleteHour):
+    """The archive has no file for any frame of the hour: not an error worth retrying."""
+
+
+#: Exit status when the archive has nothing for the hour, so the caller can stop asking.
+EXIT_UNAVAILABLE = 3
+
+
 def staged_path(target: str | os.PathLike, product: str, hour: dt.datetime) -> pathlib.Path:
     """Where an hour of ``product`` is staged under ``target``."""
     return (
@@ -120,38 +128,87 @@ def _opera_source():
     return OPERA(cache=False, verbose=False)
 
 
+def _not_found(exc: BaseException) -> bool:
+    """Whether ``exc`` (or what it wraps) says the archive has no such file."""
+    while exc is not None:
+        if isinstance(exc, FileNotFoundError):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
 def fetch_hour(
     product: Product, hour: dt.datetime, source: Callable | None = None
-) -> tuple[Any, list[dt.datetime]]:
+) -> tuple[Any, list[dt.datetime], list[tuple[dt.datetime, str]], bool]:
     """Fetch every frame of one hour.
 
     The whole hour is requested in one call, which earth2studio fetches concurrently.
-    Only if that fails is it retried frame by frame, so that a single frame missing from
-    the archive is reported by name instead of failing the hour anonymously.
+    Only if that fails is it retried frame by frame, and a frame that fails is retried
+    variable by variable: the archive can lack one quantity of a frame and not the other
+    (before 2024 whole hours have the rain rate but no accumulation), and a variable it
+    lacks is filled with NaN rather than losing the frame.
 
     Returns:
-        The hour as an ``xarray.Dataset`` (``None`` if no frame could be fetched), and
-        the frame times that could not be.
+        The hour as an ``xarray.Dataset`` (``None`` if no frame could be fetched), the
+        frame times with nothing at all, the ``(time, variable)`` pairs filled with NaN,
+        and whether every failure was the archive reporting a file it does not have.
     """
+    import numpy as np
     import xarray as xr
 
     source = source or _opera_source()
     lexicon = list(product.variables.values())
     frames = product.frame_times(hour)
     missing: list[dt.datetime] = []
+    gaps: list[tuple[dt.datetime, str]] = []
+    absent = True
     try:
         array = source(frames, lexicon)
     except Exception as exc:  # noqa: BLE001 - earth2studio surfaces I/O errors as many types
         logger.warning(f"OPERA {product.name} {hour:%Y-%m-%dT%H}: {exc}; retrying per frame")
-        parts = []
+        absent &= _not_found(exc)
+        found: dict[tuple[dt.datetime, str], Any] = {}
         for when in frames:
             try:
-                parts.append(source([when], lexicon))
+                whole = source([when], lexicon)
+                for code in lexicon:
+                    found[when, code] = whole.sel(variable=[code])
+                continue
             except Exception as frame_exc:  # noqa: BLE001 - as above
-                logger.warning(f"OPERA {product.name} {when:%Y-%m-%dT%H:%M}: {frame_exc}")
+                absent &= _not_found(frame_exc)
+            for code in lexicon if len(lexicon) > 1 else ():
+                try:
+                    found[when, code] = source([when], [code])
+                except Exception as var_exc:  # noqa: BLE001 - as above
+                    absent &= _not_found(var_exc)
+            if not any((when, code) in found for code in lexicon):
+                logger.warning(f"OPERA {product.name} {when:%Y-%m-%dT%H:%M}: no file at all")
                 missing.append(when)
-        if not parts:
-            return None, missing
+        if not found:
+            return None, missing, gaps, absent
+        # A variable a frame lacks takes the shape of the same variable elsewhere in the
+        # hour, else of the frame's other variables; it never invents a grid.
+        templates = {code: a for (_, code), a in found.items()}
+        parts = []
+        for when in frames:
+            if when in missing:
+                continue
+            pieces = []
+            for code in lexicon:
+                piece = found.get((when, code))
+                if piece is None:
+                    like = templates.get(code)
+                    if like is None:
+                        like = next(a for (t, _), a in found.items() if t == when)
+                    piece = xr.full_like(like, np.nan, dtype="float32").assign_coords(
+                        time=[when], variable=[code]
+                    )
+                    gaps.append((when, code))
+                    logger.warning(
+                        f"OPERA {product.name} {when:%Y-%m-%dT%H:%M}: no {code}; filled with NaN"
+                    )
+                pieces.append(piece)
+            parts.append(xr.concat(pieces, dim="variable", join="exact", coords="minimal"))
         # Every frame carries the same grid; compare it once rather than per frame.
         array = xr.concat(parts, dim="time", join="exact", coords="minimal", compat="override")
 
@@ -166,7 +223,7 @@ def fetch_hour(
         product=product.name,
         crs=("+proj=laea +lat_0=55.0 +lon_0=10.0 +x_0=1950000.0 +y_0=-2100000.0 +ellps=WGS84"),
     )
-    return ds, missing
+    return ds, missing, gaps, False
 
 
 def download_opera(
@@ -199,9 +256,11 @@ def download_opera(
     if hour < spec.earliest:
         raise ValueError(f"OPERA {product} is only staged from {spec.earliest:%Y-%m-%d}")
 
-    ds, missing = fetch_hour(spec, hour, source)
+    ds, missing, gaps, absent = fetch_hour(spec, hour, source)
     label = f"OPERA {product} {hour:%Y-%m-%dT%H:%M}"
     if ds is None:
+        if absent:
+            raise HourUnavailable(f"{label}: no frames could be fetched; the archive has none")
         raise IncompleteHour(f"{label}: no frames could be fetched")
     if missing and not allow_partial:
         raise IncompleteHour(
@@ -216,6 +275,7 @@ def download_opera(
         "path": str(path),
         "frames": int(ds.sizes["time"]),
         "missing_frames": [f"{t:%H:%M}" for t in missing],
+        "filled_variables": [f"{t:%H:%M} {code}" for t, code in gaps],
         "grid": [int(ds.sizes["y"]), int(ds.sizes["x"])],
     }
     logger.info(f"{label}: staged {summary}")
@@ -247,7 +307,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if not os.environ.get("DAGSTER_PIPES_CONTEXT"):
-        run()
+        try:
+            run()
+        except HourUnavailable as exc:
+            logger.warning(str(exc))
+            return EXIT_UNAVAILABLE
         return 0
 
     from dagster_pipes import open_dagster_pipes

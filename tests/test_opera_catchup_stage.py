@@ -37,3 +37,15 @@ def test_a_hung_container_is_removed_and_the_hour_left_for_next_pass(monkeypatch
     assert stager.stage(pd.Timestamp("2024-07-01T11:00"), tmp_path) is False
     name = calls[0][calls[0].index("--name") + 1]
     assert calls[1] == ["docker", "rm", "-f", name]
+
+
+def test_an_hour_the_archive_lacks_is_ledgered_and_skipped(monkeypatch, tmp_path):
+    def run(command, **kwargs):
+        return subprocess.CompletedProcess(command, catchup.OPERA_EXIT_UNAVAILABLE, "", "")
+
+    monkeypatch.setattr(catchup.subprocess, "run", run)
+    stager = catchup.OperaCatchUp(Provider(), days=0, freq="1h")
+    gone = pd.Timestamp("2025-05-13T07:00")
+    assert stager.stage(gone, tmp_path) is False
+    assert stager.unavailable(tmp_path) == {gone}
+    assert stager.ledger(tmp_path) == tmp_path / "rainfall" / "unavailable.txt"

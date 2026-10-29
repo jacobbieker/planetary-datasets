@@ -13449,7 +13449,6 @@
  "bkr/polar/pace_l2.icechunk": {
   "harp2_cloud_gpc_cloud_top_pressure": "harp2_cloud_gpc_air_pressure_at_the_cloud_top",
   "harp2_cloud_gpc_cloud_top_temperature": "harp2_cloud_gpc_air_temperature_at_the_cloud_top",
-  "harp2_cloud_gpc_nadir_view_time": "harp2_cloud_gpc_bin_was_viewed_at_nadir_view",
   "spexone_l1c_aolp": "spexone_l1c_angle_of_linear_polarization",
   "spexone_l1c_aolp_stdev": "spexone_l1c_standard_deviation_of_aolp_in_bin",
   "spexone_l1c_dolp": "spexone_l1c_degree_of_linear_polarization",
@@ -13462,7 +13461,6 @@
   "spexone_l1c_intensity_bandpass": "spexone_l1c_intensity_field_bandpass_at_each_view",
   "spexone_l1c_intensity_f0": "spexone_l1c_intensity_band_solar_irradiance",
   "spexone_l1c_intensity_wavelength": "spexone_l1c_intensity_field_center_wavelengths_at_each_view",
-  "spexone_l1c_nadir_view_time": "spexone_l1c_bin_was_viewed_at_nadir_view",
   "spexone_l1c_polarization_bandpass": "spexone_l1c_polarization_field_bandpasses_at_each_view",
   "spexone_l1c_polarization_f0": "spexone_l1c_polarization_band_solar_irradiance",
   "spexone_l1c_polarization_wavelength": "spexone_l1c_polarization_field_wavelengths_at_each_view",
@@ -13634,7 +13632,6 @@
   "harp2_l1c_intensity_bandpass": "harp2_l1c_intensity_field_bandpass_at_each_view",
   "harp2_l1c_intensity_f0": "harp2_l1c_intensity_band_solar_irradiance",
   "harp2_l1c_intensity_wavelength": "harp2_l1c_intensity_field_center_wavelengths_at_each_view",
-  "harp2_l1c_nadir_view_time": "harp2_l1c_bin_was_viewed_at_nadir_view",
   "harp2_l1c_polarization_bandpass": "harp2_l1c_polarization_field_bandpasses_at_each_view",
   "harp2_l1c_polarization_f0": "harp2_l1c_polarization_band_solar_irradiance",
   "harp2_l1c_polarization_wavelength": "harp2_l1c_polarization_field_center_wavelengths_at_each_view",

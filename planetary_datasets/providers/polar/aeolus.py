@@ -62,7 +62,7 @@ from loguru import logger
 
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common import naming
-from planetary_datasets.common.multidim import append_partition
+from planetary_datasets.common.multidim import append_partition, pad_value
 from planetary_datasets.common.store import STORE_READ_ERRORS
 
 VIRES_URL = "https://aeolus.services/ows"
@@ -263,6 +263,19 @@ def _read_raw_locked(path: pathlib.Path, netCDF4) -> list[xr.Dataset]:
     if not out:
         out.append(xr.Dataset(attrs={"Sources": listed}))
     return out
+
+
+def _with_fields(ds: xr.Dataset, templates: dict[str, xr.DataArray]) -> xr.Dataset:
+    """``ds`` with each field of ``templates`` it lacks added as fill, sized to ``ds``."""
+    added = {}
+    for name, like in templates.items():
+        if name in ds:
+            continue
+        shape = tuple(ds.sizes.get(d, like.sizes[d]) for d in like.dims)
+        fill = pad_value(like.attrs, like.dtype)
+        dtype = object if like.dtype.kind in "OUST" else like.dtype
+        added[name] = xr.Variable(like.dims, np.full(shape, fill, dtype=dtype), like.attrs)
+    return ds.assign(added) if added else ds
 
 
 class AeolusProvider(BaseProvider):
@@ -492,9 +505,22 @@ class AeolusProvider(BaseProvider):
         stacked = []
         dims = list(dict.fromkeys(d for ds in indexed for d in ds.dims if f"{p}_array_" not in d))
         for dim in dims:
-            names = [n for n in indexed[0].data_vars if indexed[0][n].dims[:1] == (dim,)]
+            # Products of different baselines carry different fields, and one with no rows
+            # in a group has none of its fields at all: stack the products that have the
+            # dimension, each given the fields it lacks as fill.
+            having = [ds for ds in indexed if dim in ds.dims]
+            names = list(
+                dict.fromkeys(n for ds in having for n in ds.data_vars if ds[n].dims[:1] == (dim,))
+            )
             if names:
-                stacked.append(xr.concat([ds[names] for ds in indexed], dim=dim, data_vars="all"))
+                templates = {n: next(ds[n] for ds in having if n in ds) for n in names}
+                stacked.append(
+                    xr.concat(
+                        [_with_fields(ds, templates)[names] for ds in having],
+                        dim=dim,
+                        data_vars="all",
+                    )
+                )
         ds = xr.merge(stacked, compat="no_conflicts", combine_attrs="override")
         repo = self.get_icechunk_repo()
         ds = naming.prepare_for_store(ds, self.store_prefix, naming.stored_arrays(repo), raw=True)

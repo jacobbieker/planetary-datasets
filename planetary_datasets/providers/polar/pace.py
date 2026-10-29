@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -90,6 +91,48 @@ BATCH_BYTES = 3 * 2**30
 GRANULE_ATTRS = ("time_coverage_start", "time_coverage_end", "date_created", "processing_version")
 
 
+#: The fixed epoch day-relative times are rebased to.
+TIME_EPOCH = "1970-01-01"
+#: Units of a time counted from its own granule's day, which differs granule to granule.
+DAY_SECONDS = re.compile(r"^seconds since (\d{4}-\d{2}-\d{2})(?:[ T]00:00(?::00(?:\.0+)?)?)?$")
+
+
+def day_epoch(attrs: dict) -> pd.Timestamp | None:
+    """The day a ``seconds since <day>`` time counts from.
+
+    None for any other units, and for :data:`TIME_EPOCH` itself, which is already fixed.
+    """
+    match = DAY_SECONDS.match(str(attrs.get("units", "")).strip())
+    if not match or pd.Timestamp(match.group(1)) == pd.Timestamp(TIME_EPOCH):
+        return None
+    return pd.Timestamp(match.group(1))
+
+
+def rebase_day_seconds(
+    values: np.ndarray, attrs: dict, fill=None
+) -> tuple[np.ndarray, dict] | None:
+    """Seconds from the granule's day as seconds since :data:`TIME_EPOCH`.
+
+    PACE stamps times like ``nadir_view_time`` as seconds of the granule's start day, so
+    each granule has its own units; appended to one array under the first granule's units
+    they would all read as that day. Fill values are left as they are.
+
+    Returns:
+        The rebased values and attributes, or None if ``attrs`` are not such a time.
+    """
+    day = day_epoch(attrs)
+    if day is None or values.dtype.kind != "f":
+        return None
+    out = values.astype("float64", copy=True)
+    valid = np.isfinite(out)
+    if fill is not None:
+        valid &= out != fill
+    out[valid] += (day - pd.Timestamp(TIME_EPOCH)).total_seconds()
+    attrs = {k: v for k, v in attrs.items() if k not in ("valid_min", "valid_max")}
+    attrs["units"] = f"seconds since {TIME_EPOCH}"
+    return out, attrs
+
+
 def _decode_strings(values: np.ndarray) -> np.ndarray:
     if values.dtype.kind == "S":
         return np.char.decode(values, "utf-8", errors="replace").astype(object)
@@ -145,6 +188,9 @@ def read_granule(path: pathlib.Path, product: Product) -> xr.Dataset:
             label = name if seen[name] == 1 else f"{group.rsplit('/', 1)[-1]}_{name}"
             values = _decode_strings(variable.values)
             attrs = dict(variable.attrs)
+            rebased = rebase_day_seconds(values, attrs, attrs.get("_FillValue"))
+            if rebased is not None:
+                values, attrs = rebased
             if track in variable.dims:
                 order = [track, *[d for d in variable.dims if d != track]]
                 moved = xr.Variable(variable.dims, values, attrs).transpose(*order)
