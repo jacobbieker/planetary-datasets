@@ -54,10 +54,15 @@ CLEVEL = 5
 COMMIT_ATTEMPTS = 5
 
 
-def ledger(repo: icechunk.Repository) -> set[str]:
-    """Partitions a store holds, from its ledger; empty for a store not created yet."""
+def _open(store, group: str | None, mode: str) -> zarr.Group:
+    """The store's root group, or ``group`` within it."""
+    return zarr.open_group(store, path=group or "", mode=mode)
+
+
+def ledger(repo: icechunk.Repository, group: str | None = None) -> set[str]:
+    """Partitions a store (or ``group``) holds, from its ledger; empty if not created yet."""
     try:
-        group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+        group = _open(repo.readonly_session("main").store, group, "r")
     except (*STORE_READ_ERRORS, zarr.errors.GroupNotFoundError):
         return set()
     return set(group.attrs.get(LEDGER_ATTR, []))
@@ -197,7 +202,9 @@ def _create_array(group: zarr.Group, name: str, variable: xr.Variable, rows: int
     )
 
 
-def _append(session: icechunk.Session, ds: xr.Dataset, fixed: set[str]) -> None:
+def _append(
+    session: icechunk.Session, ds: xr.Dataset, fixed: set[str], path: str | None = None
+) -> None:
     """Append ``ds`` along each of its growing dimensions.
 
     The partition and the store are reconciled first: a fixed dimension larger in the
@@ -206,7 +213,7 @@ def _append(session: icechunk.Session, ds: xr.Dataset, fixed: set[str]) -> None:
     lacks is extended with fill. Products' processing baselines differ in exactly these
     ways (EarthCARE's height grid went from 241 to 242 levels).
     """
-    group = zarr.open_group(session.store, mode="a")
+    group = _open(session.store, path, "a")
     targets = {}
     for dim in fixed:
         stored = _stored_size(group, dim)
@@ -259,14 +266,20 @@ def _append(session: icechunk.Session, ds: xr.Dataset, fixed: set[str]) -> None:
             part = ds[times].drop_indexes([n for n in times if n in ds.indexes], errors="ignore")
             for variable in part.variables.values():
                 variable.attrs = {}
-            to_icechunk(part, session, region={dim: slice(start, stop)})
+            to_icechunk(part, session, region={dim: slice(start, stop)}, group=path)
 
 
 #: Suffix of an array's wider copy while :func:`widen` replaces it.
 WIDENING = ".__widening"
 
 
-def widen(repo: icechunk.Repository, name: str, dtype: np.dtype, label: str = "store") -> None:
+def widen(
+    repo: icechunk.Repository,
+    name: str,
+    dtype: np.dtype,
+    label: str = "store",
+    group: str | None = None,
+) -> None:
     """Rewrite array ``name`` in the wider ``dtype``, values unchanged.
 
     A float's dtype is narrowed from the first partition written; a later one can hold
@@ -277,10 +290,12 @@ def widen(repo: icechunk.Repository, name: str, dtype: np.dtype, label: str = "s
     from xarray.backends.zarr import FillValueCoder
 
     copy = name + WIDENING
-    group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    path = group
+    prefix = f"/{path}/" if path else "/"
+    group = _open(repo.readonly_session("main").store, path, "r")
     if name in group:
         session = repo.writable_session("main")
-        group = zarr.open_group(session.store, mode="a")
+        group = _open(session.store, path, "a")
         old = group[name]
         attrs = dict(old.attrs)
         if "_FillValue" in attrs and old.dtype.kind == "f":
@@ -306,9 +321,9 @@ def widen(repo: icechunk.Repository, name: str, dtype: np.dtype, label: str = "s
         session.commit(
             f"{label}: widen {name} to {dtype} (copy)", rebase_with=icechunk.ConflictDetector()
         )
-    if copy in zarr.open_group(repo.readonly_session("main").store, mode="r"):
+    if copy in _open(repo.readonly_session("main").store, path, "r"):
         session = repo.rearrange_session("main")
-        session.move(f"/{copy}", f"/{name}")
+        session.move(f"{prefix}{copy}", f"{prefix}{name}")
         session.commit(f"{label}: widen {name} to {dtype}", rebase_with=icechunk.ConflictDetector())
     logger.info(f"{label}: widened {name} to {dtype}")
 
@@ -319,6 +334,7 @@ def append_partition(
     partition: str | None,
     fixed_dims: Iterable[str] = (),
     label: str = "store",
+    group: str | None = None,
 ) -> bool:
     """Write one partition's rows along every dimension and add it to the ledger.
 
@@ -328,7 +344,8 @@ def append_partition(
 
     Returns False, writing nothing, when the ledger already lists ``partition``. With
     ``partition=None`` the ledger is neither checked nor updated: the caller keeps track of
-    what it has written some other way.
+    what it has written some other way. With ``group``, the rows, and the ledger, go to that
+    group of the store; writers of different groups rebase over each other's commits.
 
     Raises:
         LossyCastError: A value does not fit the store's dtype exactly.
@@ -336,7 +353,7 @@ def append_partition(
     """
     for attempt in range(1, COMMIT_ATTEMPTS + 1):
         try:
-            return _append_once(repo, ds, partition, set(fixed_dims), label)
+            return _append_once(repo, ds, partition, set(fixed_dims), label, group)
         except (icechunk.ConflictError, icechunk.RebaseFailedError) as exc:
             if attempt == COMMIT_ATTEMPTS:
                 raise
@@ -351,6 +368,7 @@ def _append_once(
     partition: str | None,
     fixed: set[str],
     label: str,
+    path: str | None = None,
 ) -> bool:
     ds = ds.drop_indexes(list(ds.indexes))
     clash = [d for d in ds.dims if d in ds.variables and d not in ds.coords]
@@ -358,11 +376,13 @@ def _append_once(
         raise ValueError(f"variables named like dimensions: {clash}")
     session = repo.writable_session("main")
     try:
-        group = zarr.open_group(session.store, mode="r")
+        group = _open(session.store, path, "r")
         exists = bool(list(group.array_keys()))
         attrs = dict(group.attrs) if exists else {}
     except (*STORE_READ_ERRORS, zarr.errors.GroupNotFoundError) as exc:
-        if has_committed_data(repo):
+        # A group not created yet is expected in a store that holds others.
+        missing_group = path and isinstance(exc, zarr.errors.GroupNotFoundError)
+        if not missing_group and has_committed_data(repo):
             raise StoreReadError(f"{label}: store holds data but could not be read: {exc}") from exc
         exists, attrs = False, {}
     written = list(attrs.get(LEDGER_ATTR, []))
@@ -383,10 +403,10 @@ def _append_once(
             if narrow:
                 # Narrowed from earlier partitions, but this one needs more precision.
                 for name in narrow:
-                    widen(repo, name, np.dtype(ds[name].dtype), label)
-                return _append_once(repo, ds, partition, fixed, label)
+                    widen(repo, name, np.dtype(ds[name].dtype), label, path)
+                return _append_once(repo, ds, partition, fixed, label, path)
             ds = cast_exactly(ds, {k: v for k, v in dtypes.items() if v.kind in "fiu"})
-            _append(session, ds, fixed)
+            _append(session, ds, fixed, path)
         else:
             # A new store, or variables new to it (another product sharing the store):
             # their dtypes are decided now, from this partition.
@@ -395,8 +415,8 @@ def _append_once(
                 variable.attrs = json_safe_attrs(variable.attrs)
             ds.attrs = json_safe_attrs(ds.attrs) if not exists else {}
             mode = "a" if exists else "w-"
-            to_icechunk(ds, session, mode=mode, encoding=_encoding(ds, fixed))
-    group = zarr.open_group(session.store, mode="a")
+            to_icechunk(ds, session, mode=mode, encoding=_encoding(ds, fixed), group=path)
+    group = _open(session.store, path, "a")
     # Adding variables with xarray replaces the group's attributes; put them back. Left
     # alone when unchanged, so writers of different variables never touch shared metadata.
     if partition is not None:
@@ -411,15 +431,26 @@ def _append_once(
     return True
 
 
-def mark_written(repo: icechunk.Repository, partition: str, label: str = "store") -> None:
-    """Add ``partition`` to the ledger of an existing store without writing rows."""
-    session = repo.writable_session("main")
-    group = zarr.open_group(session.store, mode="a")
-    written = set(group.attrs.get(LEDGER_ATTR, []))
-    if partition in written:
-        return
-    group.attrs[LEDGER_ATTR] = sorted(written | {partition})
-    session.commit(f"{label}: {partition} complete")
+def mark_written(
+    repo: icechunk.Repository, partition: str, label: str = "store", group: str | None = None
+) -> None:
+    """Add ``partition`` to the ledger of an existing store (or ``group``) without rows."""
+    for attempt in range(1, COMMIT_ATTEMPTS + 1):
+        session = repo.writable_session("main")
+        node = _open(session.store, group, "a")
+        written = set(node.attrs.get(LEDGER_ATTR, []))
+        if partition in written:
+            return
+        node.attrs[LEDGER_ATTR] = sorted(written | {partition})
+        try:
+            session.commit(
+                f"{label}: {partition} complete", rebase_with=icechunk.ConflictDetector()
+            )
+            return
+        except (icechunk.ConflictError, icechunk.RebaseFailedError):
+            if attempt == COMMIT_ATTEMPTS:
+                raise
+            time.sleep(attempt)
 
 
 def concat_frames(

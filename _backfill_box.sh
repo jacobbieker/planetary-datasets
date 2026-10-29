@@ -167,12 +167,13 @@ declare -A LANES=(
   [hafs_b_parent]="_backfill_lanes.py hafs_b_parent --threads 2 --pause 7200"
   # AOML / OSMC marine observations: bkr/aoml/v2, 2012 onward, then a pass every two hours.
   [osmc_ragged]="_backfill_lanes.py osmc_ragged --threads 4 --pause 7200"
-  # NASA AERONET (bkr/obs/aeronet/*.icechunk, 76 stores). bulk reads the all-sites tarballs
-  # (~130 GB, smallest first, again every 90 days); recent keeps every web product's last
-  # week current; revisit re-reads a year of Level 2.0, which arrives months late; history
-  # fills every web product up to the recent window (web-only ones from 1993, the rest from
-  # their last tarball). One server:
-  # each lane makes one request at a time, and the lanes take turns at each store.
+  # NASA AERONET, all-points products: one store, bkr/obs/aeronet.icechunk, a group per
+  # product (27). bulk reads the all-sites tarballs (~75 GB, smallest first, again every 90
+  # days); recent keeps every web product's last week current; revisit re-reads a year of
+  # Level 2.0, which arrives months late; history fills every web product up to the recent
+  # window (web-only ones from 1993, the rest from their last tarball). One server: each
+  # lane makes one request at a time. Lanes commit to the store concurrently, rebasing over
+  # each other; a per-group lock serialises writers of the same group.
   [aeronet_bulk]="-m planetary_datasets.providers.observations.aeronet_archive bulk --pause 86400"
   [aeronet_recent]="-m planetary_datasets.providers.observations.aeronet_archive recent --pause 21600"
   [aeronet_revisit]="-m planetary_datasets.providers.observations.aeronet_archive revisit --pause 604800"
