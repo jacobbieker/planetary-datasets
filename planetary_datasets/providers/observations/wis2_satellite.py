@@ -939,7 +939,9 @@ class SatelliteTarget(ArchiveTarget):
             if paths:
                 ensure_root(repo)
             counts = {group: Counter() for group in paths}
-            with concurrent.futures.ThreadPoolExecutor(WRITE_THREADS) as writers:
+            # icechunk's local filesystem storage is not safe for concurrent commits.
+            threads = 1 if self.config.icechunk_local_path else WRITE_THREADS
+            with concurrent.futures.ThreadPoolExecutor(threads) as writers:
                 futures = {
                     group: writers.submit(
                         write_group,
