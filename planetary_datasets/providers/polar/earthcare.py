@@ -59,6 +59,7 @@ import zarr
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
+from planetary_datasets.common import multidim
 from planetary_datasets.common.download import download_one
 from planetary_datasets.common.maap import MaapAuth, search
 from planetary_datasets.common.multidim import append_partition
@@ -269,24 +270,7 @@ def read_frame(path: pathlib.Path, product: Product) -> xr.Dataset:
 
 def concat_frames(frames: list[xr.Dataset], product: Product, first_index: int) -> xr.Dataset:
     """Frames of one product, end to end, with each track row's frame index."""
-    p = product.prefix
-    along, frame = f"{p}_along_track", f"{p}_frame"
-    with_index = []
-    for offset, ds in enumerate(frames):
-        index = np.full(ds.sizes[along], first_index + offset, dtype="uint32")
-        with_index.append(ds.assign({f"{p}_frame_index": ((along,), index)}))
-    track = [n for n in with_index[0].variables if with_index[0][n].dims[:1] == (along,)]
-    per_frame = [n for n in with_index[0].variables if n not in track]
-    return xr.merge(
-        [
-            xr.concat([d[track] for d in with_index], dim=along, data_vars="all"),
-            xr.concat([d[per_frame] for d in with_index], dim=frame, data_vars="all"),
-        ],
-        compat="no_conflicts",
-        # Variable attributes carry the fill values, units and scale factors xarray
-        # decodes with; "drop" here would drop them along with the dataset's.
-        combine_attrs="override",
-    )
+    return multidim.concat_frames(frames, product.prefix, first_index)
 
 
 class EarthCAREProvider(BaseProvider):

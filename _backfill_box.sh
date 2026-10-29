@@ -85,6 +85,8 @@ declare -A LANES=(
   [earthcare_msi_l2]="_backfill_lanes.py earthcare_msi_l2 --threads 4"
   [earthcare_atl_l2]="_backfill_lanes.py earthcare_atl_l2 --threads 4"
   [earthcare_cpr_l2]="_backfill_lanes.py earthcare_cpr_l2 --threads 4"
+  [pace_l2]="_backfill_lanes.py pace_l2 --threads 4"
+  [pace_l2_mapol]="_backfill_lanes.py pace_l2_mapol --threads 4"
   # NCEP ADP upper-air (AMDAR/aircraft + radiosondes) from GDEX d337000, from 1997; decodes
   # with MET pb2nc in the dtcenter/met Docker image.
   [ncep_upper_air]="_backfill_lanes.py ncep_upper_air --threads 2 --pause 21600"

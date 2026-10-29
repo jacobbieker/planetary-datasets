@@ -105,3 +105,12 @@ def test_every_earthcare_product_has_one_lane():
 
     codes = [c for group in lanes.EARTHCARE_LANES.values() for c in group]
     assert sorted(codes) == sorted(PRODUCTS)
+
+
+def test_every_pace_l2_product_has_one_lane():
+    from planetary_datasets.providers.polar.pace import PRODUCTS
+
+    codes = []
+    for name in ("pace_l2", "pace_l2_mapol"):
+        codes += list(lanes.LANES[name].provider().products)
+    assert sorted(p.prefix for p in codes) == sorted(PRODUCTS)

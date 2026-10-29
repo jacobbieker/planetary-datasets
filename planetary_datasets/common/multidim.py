@@ -245,8 +245,37 @@ def mark_written(repo: icechunk.Repository, partition: str, label: str = "store"
     session.commit(f"{label}: {partition} complete")
 
 
+def concat_frames(
+    frames: list[xr.Dataset], prefix: str, first_index: int, frame: str = "frame"
+) -> xr.Dataset:
+    """Files of one product end to end along ``<prefix>_along_track``.
+
+    Each file's variables are expected on ``<prefix>_along_track`` (first) or on
+    ``<prefix>_<frame>``, one row per file. Every track row gets ``<prefix>_<frame>_index``,
+    its file's position in the store counting from ``first_index``.
+    """
+    along, per = f"{prefix}_along_track", f"{prefix}_{frame}"
+    with_index = []
+    for offset, ds in enumerate(frames):
+        index = np.full(ds.sizes[along], first_index + offset, dtype="uint32")
+        with_index.append(ds.assign({f"{prefix}_{frame}_index": ((along,), index)}))
+    track = [n for n in with_index[0].variables if with_index[0][n].dims[:1] == (along,)]
+    rest = [n for n in with_index[0].variables if n not in track]
+    return xr.merge(
+        [
+            xr.concat([d[track] for d in with_index], dim=along, data_vars="all"),
+            xr.concat([d[rest] for d in with_index], dim=per, data_vars="all"),
+        ],
+        compat="no_conflicts",
+        # Variable attributes carry the fill values, units and scale factors xarray
+        # decodes with; "drop" here would drop them along with the dataset's.
+        combine_attrs="override",
+    )
+
+
 __all__ = [
     "CHUNK_BYTES",
+    "concat_frames",
     "LEDGER_ATTR",
     "append_partition",
     "json_safe_attrs",

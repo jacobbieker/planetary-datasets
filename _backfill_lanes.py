@@ -350,6 +350,26 @@ LANES: dict[str, Lane] = {
         )
         for group, codes in EARTHCARE_LANES.items()
     },
+    # PACE SPEXone and HARP2 aerosol and cloud retrievals, copied into one store. They
+    # are published about two months late, so the last 90 days go first.
+    "pace_l2": Lane(
+        _provider(
+            "polar.pace",
+            "PaceL2Provider",
+            products=("spexone_rtap_land", "spexone_rtap_ocean", "harp2_cloud_gpc"),
+        ),
+        "2024-02-23",
+        "1D",
+        0,
+        recent_days=90,
+    ),
+    "pace_l2_mapol": Lane(
+        _provider("polar.pace", "PaceL2Provider", products=("spexone_mapol_ocean",)),
+        "2024-02-23",
+        "1D",
+        0,
+        recent_days=90,
+    ),
     # JPSS ATMS SDR, every satellite in one store (NOAA keeps the SDRs). The store is
     # complete from 2022-11 to 2025-09 and nearly empty since; this fills that and keeps
     # it current.
