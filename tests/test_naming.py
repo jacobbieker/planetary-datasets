@@ -39,7 +39,7 @@ def test_era5ify(text, expected):
             {"long_name": "brightness_temperature"},
             ["t", "y", "x"],
             "bkr/geo/goes-east_2000m.icechunk",
-            "brightness_temperature_10_3um",
+            "channel_13_brightness_temperature_10_3um",
         ),
         (
             "14",
@@ -90,3 +90,52 @@ def test_heights_become_geopotential():
     assert geopotential_rename("orography", "m") == "geopotential_at_surface"
     assert geopotential_rename("geopotential_height", "m**2 s**-2") is None
     assert unit_conversion("geopotential", "gpm") == (9.80665, 0.0, "m**2 s**-2")
+
+
+@pytest.mark.parametrize(
+    "name, attrs, dims, store, expected",
+    [
+        (
+            "IR_108",
+            {},
+            ["time", "y", "x"],
+            "bkr/geo/msg_3000m.icechunk",
+            "channel_09_brightness_temperature_10_8um",
+        ),
+        (
+            "ir_105",
+            {},
+            ["time", "y", "x"],
+            "bkr/geo/mtg_1000m.icechunk",
+            "channel_14_brightness_temperature_10_5um",
+        ),
+        (
+            "3a",
+            {},
+            ["time", "y", "x"],
+            "bkr/polar/metop_avhrr.icechunk",
+            "channel_3a_reflectance_1_6um",
+        ),
+        ("lat", {}, ["lat"], "bkr/x.icechunk", "latitude"),
+        ("t", {"units": "minutes since 2025-01-01"}, ["t"], "bkr/geo/x.icechunk", "time"),
+        ("hybrid", {}, ["hybrid"], "bkr/x.icechunk", "model_level"),
+        ("x_geostationary", {"units": "meter"}, ["x_geostationary"], "bkr/geo/x.icechunk", "x"),
+        ("level", {"units": "hPa"}, ["level"], "bkr/x.icechunk", "pressure_level"),
+        (
+            "aswdir_s",
+            {},
+            ["time", "values"],
+            "bkr/icon/x.icechunk",
+            "mean_surface_direct_short_wave_radiation_flux",
+        ),
+        (
+            "valid_pixel_count",
+            {"long_name": "number of good and conditionally usable pixels"},
+            ["t"],
+            "bkr/geo/goes16_radf_C01.icechunk",
+            "valid_pixel_count",
+        ),
+    ],
+)
+def test_channels_coordinates_and_short_names(name, attrs, dims, store, expected):
+    assert propose(name, attrs, dims, store)[0] == expected
