@@ -119,7 +119,21 @@ def test_heights_become_geopotential():
         ("lat", {}, ["lat"], "bkr/x.icechunk", "latitude"),
         ("t", {"units": "minutes since 2025-01-01"}, ["t"], "bkr/geo/x.icechunk", "time"),
         ("hybrid", {}, ["hybrid"], "bkr/x.icechunk", "model_level"),
-        ("x_geostationary", {"units": "meter"}, ["x_geostationary"], "bkr/geo/x.icechunk", "x"),
+        (
+            "x_geostationary",
+            {"units": "meter"},
+            ["x_geostationary"],
+            "bkr/geo/x.icechunk",
+            "geostationary_x",
+        ),
+        (
+            "y",
+            {"units": "microradian"},
+            ["y"],
+            "bkr/geo/virtualized/himawari9_isatss_C13.icechunk",
+            "geostationary_y",
+        ),
+        ("x", {"units": "m"}, ["x"], "bkr/metoffice/metoffice_uk_deterministic_2km.icechunk", "x"),
         ("level", {"units": "hPa"}, ["level"], "bkr/x.icechunk", "pressure_level"),
         (
             "aswdir_s",
@@ -139,3 +153,7 @@ def test_heights_become_geopotential():
 )
 def test_channels_coordinates_and_short_names(name, attrs, dims, store, expected):
     assert propose(name, attrs, dims, store)[0] == expected
+
+
+def test_model_grids_in_virtual_stores_keep_x_and_y():
+    assert propose("x", {}, ["x"], "bkr/dmi/virtualized/hafs_a_parent.icechunk")[0] == "x"

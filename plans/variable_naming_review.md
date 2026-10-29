@@ -1,6 +1,6 @@
 # Variable naming review
 
-676 stores renamed, 13985 variables. One table per store family (its first store); `kept` and `clash` rows need a look.
+676 stores renamed, 14503 variables. One table per store family (its first store); `kept` and `clash` rows need a look.
 
 Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, grib 1242, channel 944, cf 905, clash 885, abbreviation 790, override 424, abbreviation+units 217, cf+units 73, grib+units 42, long_name+units 24, cf+geopotential+units 23, override+units 14, tidied+units 14, long_name+geopotential+units 12, grib+geopotential+units 11, override+geopotential+units 2
 
@@ -4051,8 +4051,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `VI004` | `channel_01_reflectance_0_47um` | channel |  |  |
 | `VI005` | `channel_02_reflectance_0_51um` | channel |  |  |
 | `VI008` | `channel_04_reflectance_0_86um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/gk2a_1000m_test (1 store(s))
 
@@ -4061,8 +4061,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `VI004` | `channel_01_reflectance_0_47um` | channel |  |  |
 | `VI005` | `channel_02_reflectance_0_51um` | channel |  |  |
 | `VI008` | `channel_04_reflectance_0_86um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/gk2a_2000m (1 store(s))
 
@@ -4080,8 +4080,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `WV063` | `channel_08_brightness_temperature_6_3um` | channel |  |  |
 | `WV069` | `channel_09_brightness_temperature_6_9um` | channel |  |  |
 | `WV073` | `channel_10_brightness_temperature_7_3um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/gk2a_2000m_test (1 store(s))
 
@@ -4099,24 +4099,24 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `WV063` | `channel_08_brightness_temperature_6_3um` | channel |  |  |
 | `WV069` | `channel_09_brightness_temperature_6_9um` | channel |  |  |
 | `WV073` | `channel_10_brightness_temperature_7_3um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/gk2a_500m (1 store(s))
 
 | old | new | rule | long_name | units |
 |---|---|---|---|---|
 | `VI006` | `channel_03_reflectance_0_64um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/gk2a_500m_test (1 store(s))
 
 | old | new | rule | long_name | units |
 |---|---|---|---|---|
 | `VI006` | `channel_03_reflectance_0_64um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/goes-east_1000m (1 store(s))
 
@@ -4125,8 +4125,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `C01` | `channel_01_reflectance_0_47um` | channel | Bidirectional Reflectance | % |
 | `C03` | `channel_03_reflectance_0_86um` | channel | Bidirectional Reflectance | % |
 | `C05` | `channel_05_reflectance_1_6um` | channel | Bidirectional Reflectance | % |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/goes-east_2000m (1 store(s))
 
@@ -4144,8 +4144,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `C14` | `channel_14_brightness_temperature_11_2um` | channel | Brightness Temperature | K |
 | `C15` | `channel_15_brightness_temperature_12_3um` | channel | Brightness Temperature | K |
 | `C16` | `channel_16_brightness_temperature_13_3um` | channel | Brightness Temperature | K |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/goes-east_2000m_test (1 store(s))
 
@@ -4163,16 +4163,16 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `C14` | `channel_14_brightness_temperature_11_2um` | channel |  |  |
 | `C15` | `channel_15_brightness_temperature_12_3um` | channel |  |  |
 | `C16` | `channel_16_brightness_temperature_13_3um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/goes-east_500m (1 store(s))
 
 | old | new | rule | long_name | units |
 |---|---|---|---|---|
 | `C02` | `channel_02_reflectance_0_64um` | channel | Bidirectional Reflectance | % |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/goes-west_1000m (1 store(s))
 
@@ -4181,8 +4181,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `C01` | `channel_01_reflectance_0_47um` | channel | Bidirectional Reflectance | % |
 | `C03` | `channel_03_reflectance_0_86um` | channel | Bidirectional Reflectance | % |
 | `C05` | `channel_05_reflectance_1_6um` | channel | Bidirectional Reflectance | % |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/goes-west_2000m (1 store(s))
 
@@ -4200,16 +4200,16 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `C14` | `channel_14_brightness_temperature_11_2um` | channel | Brightness Temperature | K |
 | `C15` | `channel_15_brightness_temperature_12_3um` | channel | Brightness Temperature | K |
 | `C16` | `channel_16_brightness_temperature_13_3um` | channel | Brightness Temperature | K |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/goes-west_500m (1 store(s))
 
 | old | new | rule | long_name | units |
 |---|---|---|---|---|
 | `C02` | `channel_02_reflectance_0_64um` | channel | Bidirectional Reflectance | % |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/goes16_radf_C* (16 store(s))
 
@@ -4231,8 +4231,10 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `t` | `time` | coordinate | J2000 epoch mid-point between the start and end image scan i | seconds since 2000-01-01T12:00:00 |
 | `t_star_look` | `j2000_epoch_time_of_star_observed_in_seconds` | long_name | J2000 epoch time of star observed in seconds | seconds since 2000-01-01T12:00:00 |
 | `undersaturated_pixel_count` | `number_of_undersaturated_pixels` | long_name | number of undersaturated pixels | count |
+| `x` | `geostationary_x` | coordinate | GOES fixed grid projection x-coordinate | rad |
 | `x_coord` | `goes_fixed_grid_projection_x_coordinate` | long_name | GOES fixed grid projection x-coordinate | rad |
 | `x_image` | `goes_r_fixed_grid_projection_x_coordinate_center_of_image` | long_name | GOES-R fixed grid projection x-coordinate center of image | rad |
+| `y` | `geostationary_y` | coordinate | GOES fixed grid projection y-coordinate | rad |
 | `y_coord` | `goes_fixed_grid_projection_y_coordinate` | long_name | GOES fixed grid projection y-coordinate | rad |
 | `y_image` | `goes_r_fixed_grid_projection_y_coordinate_center_of_image` | long_name | GOES-R fixed grid projection y-coordinate center of image | rad |
 
@@ -4254,8 +4256,10 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `t` | `time` | coordinate | Scan start and end times in seconds since epoch (2000-01-01  | seconds since 2000-01-01T12:00:00 |
 | `t_star_look` | `j2000_epoch_time_of_star_observed_in_seconds` | long_name | J2000 epoch time of star observed in seconds | seconds since 2000-01-01T12:00:00 |
 | `undersaturated_pixel_count` | `number_of_undersaturated_pixels` | long_name | number of undersaturated pixels | count |
+| `x` | `geostationary_x` | coordinate | GOES fixed grid projection x-coordinate | rad |
 | `x_coord` | `goes_fixed_grid_projection_x_coordinate` | long_name | GOES fixed grid projection x-coordinate | rad |
 | `x_image` | `x_image` | clash | GOES-R fixed grid projection x-coordinate center of image | rad |
+| `y` | `geostationary_y` | coordinate | GOES fixed grid projection y-coordinate | rad |
 | `y_coord` | `goes_fixed_grid_projection_y_coordinate` | long_name | GOES fixed grid projection y-coordinate | rad |
 | `y_image` | `y_image` | clash | GOES-R fixed grid projection x-coordinate center of image | rad |
 
@@ -4278,8 +4282,10 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `saturated_pixel_count` | `number_of_saturated_pixels` | long_name | number of saturated pixels | count |
 | `t` | `time` | coordinate | J2000 epoch mid-point between the start and end image scan i | seconds since 2000-01-01T12:00:00 |
 | `undersaturated_pixel_count` | `number_of_undersaturated_pixels` | long_name | number of undersaturated pixels | count |
+| `x` | `geostationary_x` | coordinate | GOES fixed grid projection x-coordinate | rad |
 | `x_coord` | `goes_fixed_grid_projection_x_coordinate` | long_name | GOES fixed grid projection x-coordinate | rad |
 | `x_image` | `goes_r_fixed_grid_projection_x_coordinate_center_of_image` | long_name | GOES-R fixed grid projection x-coordinate center of image | rad |
+| `y` | `geostationary_y` | coordinate | GOES fixed grid projection y-coordinate | rad |
 | `y_coord` | `goes_fixed_grid_projection_y_coordinate` | long_name | GOES fixed grid projection y-coordinate | rad |
 | `y_image` | `goes_r_fixed_grid_projection_y_coordinate_center_of_image` | long_name | GOES-R fixed grid projection y-coordinate center of image | rad |
 
@@ -4303,8 +4309,10 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `t` | `time` | coordinate | J2000 epoch mid-point between the start and end image scan i | seconds since 2000-01-01T12:00:00 |
 | `t_star_look` | `j2000_epoch_time_of_star_observed_in_seconds` | long_name | J2000 epoch time of star observed in seconds | seconds since 2000-01-01T12:00:00 |
 | `undersaturated_pixel_count` | `number_of_undersaturated_pixels` | long_name | number of undersaturated pixels | count |
+| `x` | `geostationary_x` | coordinate | GOES fixed grid projection x-coordinate | rad |
 | `x_coord` | `goes_fixed_grid_projection_x_coordinate` | long_name | GOES fixed grid projection x-coordinate | rad |
 | `x_image` | `goes_r_fixed_grid_projection_x_coordinate_center_of_image` | long_name | GOES-R fixed grid projection x-coordinate center of image | rad |
+| `y` | `geostationary_y` | coordinate | GOES fixed grid projection y-coordinate | rad |
 | `y_coord` | `goes_fixed_grid_projection_y_coordinate` | long_name | GOES fixed grid projection y-coordinate | rad |
 | `y_image` | `goes_r_fixed_grid_projection_y_coordinate_center_of_image` | long_name | GOES-R fixed grid projection y-coordinate center of image | rad |
 
@@ -4315,8 +4323,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `B01` | `channel_01_reflectance_0_47um` | channel |  | % |
 | `B02` | `channel_02_reflectance_0_51um` | channel |  | % |
 | `B04` | `channel_04_reflectance_0_86um` | channel |  | % |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/himawari_2000m (48 store(s))
 
@@ -4334,40 +4342,40 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `B14` | `channel_14_brightness_temperature_11_2um` | channel |  |  |
 | `B15` | `channel_15_brightness_temperature_12_4um` | channel |  |  |
 | `B16` | `channel_16_brightness_temperature_13_3um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/himawari_500m (28 store(s))
 
 | old | new | rule | long_name | units |
 |---|---|---|---|---|
 | `B03` | `channel_03_reflectance_0_64um` | channel |  | % |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/iodc_1000m (1 store(s))
 
 | old | new | rule | long_name | units |
 |---|---|---|---|---|
 | `HRV` | `channel_12_reflectance_0_7um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/iodc_1000m_test (1 store(s))
 
 | old | new | rule | long_name | units |
 |---|---|---|---|---|
 | `HRV` | `channel_12_reflectance_0_7um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/msg_1000m (1 store(s))
 
 | old | new | rule | long_name | units |
 |---|---|---|---|---|
 | `HRV` | `channel_12_reflectance_0_7um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/msg_3000m (1 store(s))
 
@@ -4384,8 +4392,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `VIS008` | `channel_02_reflectance_0_8um` | channel |  |  |
 | `WV_062` | `channel_05_brightness_temperature_6_2um` | channel |  |  |
 | `WV_073` | `channel_06_brightness_temperature_7_3um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/mtg_1000m (1 store(s))
 
@@ -4399,8 +4407,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `vis_06` | `channel_03_reflectance_0_64um` | channel |  |  |
 | `vis_08` | `channel_04_reflectance_0_86um` | channel |  |  |
 | `vis_09` | `channel_05_reflectance_0_91um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/mtg_500m (1 store(s))
 
@@ -4408,8 +4416,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 |---|---|---|---|---|
 | `nir_22` | `channel_08_reflectance_2_25um` | channel |  |  |
 | `vis_06` | `channel_03_reflectance_0_64um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/mtg_highres_1000m (1 store(s))
 
@@ -4417,8 +4425,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 |---|---|---|---|---|
 | `ir_105` | `channel_14_brightness_temperature_10_5um` | channel |  |  |
 | `ir_38` | `channel_09_brightness_temperature_3_8um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/mtg_irs_l1 (1 store(s))
 
@@ -4443,8 +4451,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 |---|---|---|---|---|
 | `ir_105` | `channel_14_brightness_temperature_10_5um` | channel |  | K |
 | `ir_38` | `channel_09_brightness_temperature_3_8um` | channel |  | K |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/odegree-12-highres_500m (1 store(s))
 
@@ -4452,8 +4460,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 |---|---|---|---|---|
 | `nir_22` | `channel_08_reflectance_2_25um` | channel |  | % |
 | `vis_06` | `channel_03_reflectance_0_64um` | channel |  | % |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/odegree-12_1000m (1 store(s))
 
@@ -4467,8 +4475,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `vis_06` | `channel_03_reflectance_0_64um` | channel |  | % |
 | `vis_08` | `channel_04_reflectance_0_86um` | channel |  | % |
 | `vis_09` | `channel_05_reflectance_0_91um` | channel |  | % |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/odegree-12_2000m (1 store(s))
 
@@ -4482,8 +4490,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `ir_97` | `channel_13_brightness_temperature_9_66um` | channel |  | K |
 | `wv_63` | `channel_10_brightness_temperature_6_3um` | channel |  | K |
 | `wv_73` | `channel_11_brightness_temperature_7_35um` | channel |  | K |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/odegree_3000m (1 store(s))
 
@@ -4500,16 +4508,16 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `VIS008` | `channel_02_reflectance_0_8um` | channel |  | % |
 | `WV_062` | `channel_05_brightness_temperature_6_2um` | channel |  | K |
 | `WV_073` | `channel_06_brightness_temperature_7_3um` | channel |  | K |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/rss_1000m (1 store(s))
 
 | old | new | rule | long_name | units |
 |---|---|---|---|---|
 | `HRV` | `channel_12_reflectance_0_7um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/rss_3000m (1 store(s))
 
@@ -4526,8 +4534,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `VIS008` | `channel_02_reflectance_0_8um` | channel |  |  |
 | `WV_062` | `channel_05_brightness_temperature_6_2um` | channel |  |  |
 | `WV_073` | `channel_06_brightness_temperature_7_3um` | channel |  |  |
-| `x_geostationary` | `x` | coordinate |  | meter |
-| `y_geostationary` | `y` | coordinate |  | meter |
+| `x_geostationary` | `geostationary_x` | coordinate |  | meter |
+| `y_geostationary` | `geostationary_y` | coordinate |  | meter |
 
 ## bkr/geo/virtualized/gk2a_ami_fd_ir087 (3 store(s))
 
@@ -4661,8 +4669,10 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `t` | `time` | coordinate | J2000 epoch mid-point between the start and end image scan i | seconds since 2000-01-01T12:00:00 |
 | `t_star_look` | `j2000_epoch_time_of_star_observed_in_seconds` | long_name | J2000 epoch time of star observed in seconds | seconds since 2000-01-01T12:00:00 |
 | `undersaturated_pixel_count` | `number_of_undersaturated_pixels` | long_name | number of undersaturated pixels | count |
+| `x` | `geostationary_x` | coordinate | GOES fixed grid projection x-coordinate | rad |
 | `x_coord` | `goes_fixed_grid_projection_x_coordinate` | long_name | GOES fixed grid projection x-coordinate | rad |
 | `x_image` | `goes_r_fixed_grid_projection_x_coordinate_center_of_image` | long_name | GOES-R fixed grid projection x-coordinate center of image | rad |
+| `y` | `geostationary_y` | coordinate | GOES fixed grid projection y-coordinate | rad |
 | `y_coord` | `goes_fixed_grid_projection_y_coordinate` | long_name | GOES fixed grid projection y-coordinate | rad |
 | `y_image` | `goes_r_fixed_grid_projection_y_coordinate_center_of_image` | long_name | GOES-R fixed grid projection y-coordinate center of image | rad |
 
@@ -4686,8 +4696,10 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `t` | `time` | coordinate | J2000 epoch mid-point between the start and end image scan i | seconds since 2000-01-01T12:00:00 |
 | `t_star_look` | `j2000_epoch_time_of_star_observed_in_seconds` | long_name | J2000 epoch time of star observed in seconds | seconds since 2000-01-01T12:00:00 |
 | `undersaturated_pixel_count` | `number_of_undersaturated_pixels` | long_name | number of undersaturated pixels | count |
+| `x` | `geostationary_x` | coordinate | GOES fixed grid projection x-coordinate | rad |
 | `x_coord` | `goes_fixed_grid_projection_x_coordinate` | long_name | GOES fixed grid projection x-coordinate | rad |
 | `x_image` | `goes_r_fixed_grid_projection_x_coordinate_center_of_image` | long_name | GOES-R fixed grid projection x-coordinate center of image | rad |
+| `y` | `geostationary_y` | coordinate | GOES fixed grid projection y-coordinate | rad |
 | `y_coord` | `goes_fixed_grid_projection_y_coordinate` | long_name | GOES fixed grid projection y-coordinate | rad |
 | `y_image` | `goes_r_fixed_grid_projection_y_coordinate_center_of_image` | long_name | GOES-R fixed grid projection y-coordinate center of image | rad |
 
@@ -4710,8 +4722,10 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `saturated_pixel_count` | `number_of_saturated_pixels` | long_name | number of saturated pixels | count |
 | `t` | `time` | coordinate | J2000 epoch mid-point between the start and end image scan i | seconds since 2000-01-01T12:00:00 |
 | `undersaturated_pixel_count` | `number_of_undersaturated_pixels` | long_name | number of undersaturated pixels | count |
+| `x` | `geostationary_x` | coordinate | GOES fixed grid projection x-coordinate | rad |
 | `x_coord` | `goes_fixed_grid_projection_x_coordinate` | long_name | GOES fixed grid projection x-coordinate | rad |
 | `x_image` | `goes_r_fixed_grid_projection_x_coordinate_center_of_image` | long_name | GOES-R fixed grid projection x-coordinate center of image | rad |
+| `y` | `geostationary_y` | coordinate | GOES fixed grid projection y-coordinate | rad |
 | `y_coord` | `goes_fixed_grid_projection_y_coordinate` | long_name | GOES fixed grid projection y-coordinate | rad |
 | `y_image` | `goes_r_fixed_grid_projection_y_coordinate_center_of_image` | long_name | GOES-R fixed grid projection y-coordinate center of image | rad |
 
@@ -4735,8 +4749,10 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `t` | `time` | coordinate | J2000 epoch mid-point between the start and end image scan i | seconds since 2000-01-01T12:00:00 |
 | `t_star_look` | `j2000_epoch_time_of_star_observed_in_seconds` | long_name | J2000 epoch time of star observed in seconds | seconds since 2000-01-01T12:00:00 |
 | `undersaturated_pixel_count` | `number_of_undersaturated_pixels` | long_name | number of undersaturated pixels | count |
+| `x` | `geostationary_x` | coordinate | GOES fixed grid projection x-coordinate | rad |
 | `x_coord` | `goes_fixed_grid_projection_x_coordinate` | long_name | GOES fixed grid projection x-coordinate | rad |
 | `x_image` | `goes_r_fixed_grid_projection_x_coordinate_center_of_image` | long_name | GOES-R fixed grid projection x-coordinate center of image | rad |
+| `y` | `geostationary_y` | coordinate | GOES fixed grid projection y-coordinate | rad |
 | `y_coord` | `goes_fixed_grid_projection_y_coordinate` | long_name | GOES fixed grid projection y-coordinate | rad |
 | `y_image` | `goes_r_fixed_grid_projection_y_coordinate_center_of_image` | long_name | GOES-R fixed grid projection y-coordinate center of image | rad |
 
@@ -4746,6 +4762,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 |---|---|---|---|---|
 | `Sectorized_CMI` | `sectorized_cmi` | tidied |  | 1 |
 | `t` | `time` | coordinate | scene start time | minutes since 2022-01-01 00:00:00 |
+| `x` | `geostationary_x` | coordinate |  | microradian |
+| `y` | `geostationary_y` | coordinate |  | microradian |
 
 ## bkr/geo/virtualized/himawari9_isatss_C* (15 store(s))
 
@@ -4753,6 +4771,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 |---|---|---|---|---|
 | `Sectorized_CMI` | `sectorized_cmi` | tidied |  | 1 |
 | `t` | `time` | coordinate | scene start time | minutes since 2025-01-01 00:00:00 |
+| `x` | `geostationary_x` | coordinate |  | microradian |
+| `y` | `geostationary_y` | coordinate |  | microradian |
 
 ## bkr/geos/geos_15min (1 store(s))
 
@@ -6264,6 +6284,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `abi14c` | `channel_14_brightness_temperature_11_2um` | channel |  |  |
 | `abi15c` | `channel_15_brightness_temperature_12_3um` | channel |  |  |
 | `abi16c` | `channel_16_brightness_temperature_13_3um` | channel |  |  |
+| `x` | `geostationary_x` | coordinate |  |  |
+| `y` | `geostationary_y` | coordinate |  |  |
 
 ## bkr/obs/goes_west_pacus (1 store(s))
 
@@ -6285,6 +6307,8 @@ Rules: coordinate 10468, tidied 10164, long_name 5792, kept 2340, eccodes 2152, 
 | `abi14c` | `channel_14_brightness_temperature_11_2um` | channel |  |  |
 | `abi15c` | `channel_15_brightness_temperature_12_3um` | channel |  |  |
 | `abi16c` | `channel_16_brightness_temperature_13_3um` | channel |  |  |
+| `x` | `geostationary_x` | coordinate |  |  |
+| `y` | `geostationary_y` | coordinate |  |  |
 
 ## bkr/obs/igra_v2_16_levels (1 store(s))
 

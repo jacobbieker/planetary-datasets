@@ -530,8 +530,8 @@ COORDINATE_RENAMES = {
     "member": "ensemble_member",
     "realization": "ensemble_member",
     # Projection coordinates are x and y everywhere.
-    "x_geostationary": "x",
-    "y_geostationary": "y",
+    "x_geostationary": "geostationary_x",
+    "y_geostationary": "geostationary_y",
     "projection_x_coordinate": "x",
     "projection_y_coordinate": "y",
     "xc": "x",
@@ -560,14 +560,27 @@ COORDINATE_RENAMES = {
 }
 
 
-def coordinate_rename(name: str, attrs: Mapping, dims: list[str]) -> str | None:
+#: Units of a geostationary scan-angle coordinate.
+SCAN_ANGLE_UNITS = {"rad", "radian", "radians", "microradian", "microradians", "urad"}
+#: Stores whose x and y are geostationary scan coordinates whatever their units say.
+GEOSTATIONARY_STORES = re.compile(r"(^|/)geo/|goes_(east|west)_(conus|pacus)")
+
+
+def coordinate_rename(name: str, attrs: Mapping, dims: list[str], store: str = "") -> str | None:
     """The standard name of a coordinate or dimension, if it has a different one.
 
     ``t`` and ``level`` need their units to say what they are: a time axis, pressure levels.
+    A geostationary imager's ``x`` and ``y`` are scan angles (or metres along the scan),
+    not a map projection's, and say so: ``geostationary_x``, ``geostationary_y``.
     """
     if name in COORDINATE_RENAMES:
         return COORDINATE_RENAMES[name]
     units = str(attrs.get("units", ""))
+    if name in ("x", "y") and (
+        units.strip().lower() in SCAN_ANGLE_UNITS
+        or (GEOSTATIONARY_STORES.search(store) and "gmgsi" not in store)
+    ):
+        return f"geostationary_{name}"
     if name == "t" and " since " in units:
         return "time"
     if (
@@ -589,7 +602,7 @@ def propose(name: str, attrs: Mapping, dims: list[str], store: str = "") -> tupl
     known; flagged for review).
     """
     leaf = name.rsplit("/", 1)[-1]
-    renamed = coordinate_rename(leaf, attrs, dims)
+    renamed = coordinate_rename(leaf, attrs, dims, store)
     if renamed:
         return renamed, "coordinate"
     if (

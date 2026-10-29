@@ -16,14 +16,15 @@ Re-sorting time axes is **not** part of this change.
 
 ## Coordinates and dimensions
 
-One name per concept, dimensions renamed with their coordinate variables (842 dimension
-renames in 557 stores, `planetary_datasets/naming/store_dims.json`):
+One name per concept, dimensions renamed with their coordinate variables (1,458 dimension
+renames in 560 stores, `planetary_datasets/naming/store_dims.json`):
 
 | Concept | Standard | From |
 |---|---|---|
 | valid time | `time` | `t` (305 stores), `Time` |
 | forecast reference / lead time | `init_time` / `step` | `forecast_reference_time`, `forecast_period` |
-| horizontal | `latitude`, `longitude`; projection `x`, `y` | `lat`/`lon`, `x_geostationary`/`y_geostationary`, `projection_x_coordinate`, `xc`/`yc`, WRF `west_east`/`south_north` |
+| horizontal | `latitude`, `longitude`; projection `x`, `y` | `lat`/`lon`, Met Office `projection_x_coordinate`, GMGSI `xc`/`yc`, WRF `west_east`/`south_north` |
+| geostationary scan coordinates | `geostationary_x`, `geostationary_y` | `x_geostationary`/`y_geostationary` (satellite-consumer, metres along the scan) and the `x`/`y` (radians) of the GOES/Himawari/GK2A virtual and CONUS/PACUS stores: 456 stores |
 | pressure levels | `pressure_level` | `level`/`pressure` (when in hPa/Pa), `isobaricInhPa`, `isobar`, `P_Level` |
 | model levels | `model_level`, `model_half_level` | `hybrid`, `hybid`, `bottom_top`, `model_level_half`, `halflevel` |
 | height | `height_above_ground`, `height_above_sea_level` | `height` (m), `hag`, `heightAboveGround`, `asl` |

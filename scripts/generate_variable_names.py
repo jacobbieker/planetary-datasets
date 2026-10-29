@@ -123,7 +123,7 @@ def name_store(store: str, arrays: dict, prefixes: list[str]) -> tuple[dict, lis
         for dim in info.get("dims", []):
             key = f"{group}/{dim}" if group else dim
             if dim not in dims:
-                renamed = coordinate_rename(dim, arrays.get(key, {}), [dim])
+                renamed = coordinate_rename(dim, arrays.get(key, {}), [dim], store)
                 # Never onto a name the store already uses for something else.
                 existing = {p.rsplit("/", 1)[-1] for p in arrays} | {
                     d for a in arrays.values() if isinstance(a, dict) for d in a.get("dims", [])
