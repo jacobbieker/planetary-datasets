@@ -113,6 +113,8 @@ igra = ">=23.5, <24"
 # GOES, GK-2A and Himawari through.
 virtualizarr = { version = ">=2.7.3,<3", extras = ["all-parsers"] }
 obspec-utils = ">=0.9, <1"
+# VirES for Aeolus (providers/polar/aeolus.py).
+viresclient = ">=0.16, <1"
 ecmwf-api-client = ">=1.6.3, <2"
 gpm-api = ">=0.4, <0.5"
 meteora = ">=0.2.0"
