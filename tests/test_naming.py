@@ -159,3 +159,20 @@ def test_channels_coordinates_and_short_names(name, attrs, dims, store, expected
 
 def test_model_grids_in_virtual_stores_keep_x_and_y():
     assert propose("x", {}, ["x"], "bkr/dmi/virtualized/hafs_a_parent.icechunk")[0] == "x"
+
+
+def test_hpa_to_pa_conversion_is_exact_or_within_one_float64_ulp():
+    import numpy as np
+
+    from planetary_datasets.common.naming import exact_preimage
+
+    rng = np.random.default_rng(0)
+    hpa = np.concatenate([rng.uniform(100, 1100, 100_000), [1013.3, 0.1, np.nan]])
+    pa = exact_preimage(hpa, 100.0, 0.0)
+    back = pa / 100.0
+    assert np.all((np.abs(back - hpa) <= np.spacing(hpa)) | np.isnan(hpa))
+    # float32 sources must round-trip exactly, and do.
+    f32 = hpa.astype("float32")
+    assert np.array_equal(
+        (exact_preimage(f32, 100.0, 0.0) / 100).astype("float32"), f32, equal_nan=True
+    )

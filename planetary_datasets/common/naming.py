@@ -888,6 +888,34 @@ def _rename_tokens(text: str, mapping: Mapping[str, str]) -> str:
     return " ".join(mapping.get(token, token) for token in str(text).split())
 
 
+def exact_preimage(values, scale: float, offset: float):
+    """ERA5-unit values that xarray encodes back to ``values``, or None if it loses any.
+
+    xarray stores ``(x - offset) / scale`` in the source dtype. For every dtype but
+    float64 that must give back the source's values exactly. A float64 cannot always: no
+    float64 x makes x / 100 equal some 15% of float64 hPa values (x 100 then / 100 moves
+    them one unit in the last place, about 1e-16 relative), so for float64 a difference
+    of at most one unit in the last place is accepted, far below any measurement's
+    precision; anything more is refused.
+    """
+    import numpy as np
+
+    values = np.asarray(values)
+    era5 = values.astype("float64") * scale + offset
+    with np.errstate(invalid="ignore", over="ignore"):
+        back = ((era5 - offset) / scale).astype(values.dtype)
+    if values.dtype.kind == "f":
+        same = (back == values) | (np.isnan(back) & np.isnan(values))
+    else:
+        same = back == values
+    if same.all():
+        return era5
+    if values.dtype != np.float64:
+        return None
+    off = np.abs(back[~same] - values[~same]) / np.spacing(np.abs(values[~same]))
+    return era5 if np.all(off <= 1) else None
+
+
 def prepare_for_store(
     ds,
     store_prefix: str,
@@ -953,11 +981,8 @@ def prepare_for_store(
                 )
             continue
         values = np.asarray(variable.values)
-        era5 = values.astype("float64") * scale + offset
-        with np.errstate(invalid="ignore", over="ignore"):
-            back = ((era5 - offset) / scale).astype(values.dtype)
-        same = np.array_equal(back, values, equal_nan=values.dtype.kind == "f")
-        if not same:
+        era5 = exact_preimage(values, scale, offset)
+        if era5 is None:
             raise UnitConversionError(
                 f"{store_prefix}: {name} does not survive {scale} x + {offset} in {values.dtype}"
             )
