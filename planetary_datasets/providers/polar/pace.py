@@ -1,4 +1,4 @@
-"""NASA PACE: SPEXone and HARP2 aerosol and cloud retrievals, copied into one store.
+"""NASA PACE: SPEXone and HARP2 aerosol and cloud retrievals (and SPEXone L1C), copied.
 
 PACE's two multi-angle polarimeters each have L2 retrievals, one netCDF granule per five
 minutes of the orbit, in OB.DAAC's Earthdata Cloud bucket. That bucket needs an Earthdata
@@ -72,6 +72,9 @@ PRODUCTS = {
         Product("spexone_rtap_ocean", "PACE_SPEXONE_L2_AER_RTAPOCEAN", "4.0"),
         Product("spexone_mapol_ocean", "PACE_SPEXONE_L2_MAPOL_OCEAN", "4.0"),
         Product("harp2_cloud_gpc", "PACE_HARP2_L2_CLOUD_GPC", "4.0"),
+        # SPEXone's radiances are chunked every two rows in the source files, too finely
+        # to reference (pace_virtual), so they are copied with the retrievals.
+        Product("spexone_l1c", "PACE_SPEXONE_L1C_SCI", "4"),
     )
 }
 

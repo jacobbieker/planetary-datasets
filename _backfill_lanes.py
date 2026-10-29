@@ -370,6 +370,33 @@ LANES: dict[str, Lane] = {
         0,
         recent_days=90,
     ),
+    # SPEXone L1C, copied into the same store (its two-row chunks are too fine to
+    # reference). L1 granules are published within days.
+    "pace_l1c": Lane(
+        _provider("polar.pace", "PaceL2Provider", products=("spexone_l1c",)),
+        "2024-02-23",
+        "1D",
+        0,
+        recent_days=7,
+    ),
+    # References to HARP2 L1C/L1B, SPEXone L1B and HARP2 MAPOL in OB.DAAC's bucket, one
+    # lane per product, sharing bkr/polar/pace_virtual.icechunk.
+    **{
+        f"pace_virtual_{prefix}": Lane(
+            _provider("polar.pace_virtual", "PaceVirtualProvider", products=(prefix,)),
+            "2024-02-23",
+            "1D",
+            0,
+            recent_days=90 if "mapol" in prefix else 7,
+        )
+        for prefix in (
+            "harp2_l1c",
+            "harp2_l1b",
+            "spexone_l1b",
+            "harp2_mapol_land",
+            "harp2_mapol_ocean",
+        )
+    },
     # JPSS ATMS SDR, every satellite in one store (NOAA keeps the SDRs). The store is
     # complete from 2022-11 to 2025-09 and nearly empty since; this fills that and keeps
     # it current.

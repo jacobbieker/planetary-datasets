@@ -111,6 +111,13 @@ def test_every_pace_l2_product_has_one_lane():
     from planetary_datasets.providers.polar.pace import PRODUCTS
 
     codes = []
-    for name in ("pace_l2", "pace_l2_mapol"):
+    for name in ("pace_l2", "pace_l2_mapol", "pace_l1c"):
         codes += list(lanes.LANES[name].provider().products)
     assert sorted(p.prefix for p in codes) == sorted(PRODUCTS)
+
+
+def test_every_virtual_pace_product_has_one_lane():
+    from planetary_datasets.providers.polar.pace_virtual import PRODUCTS
+
+    lanes_for = [n for n in lanes.LANES if n.startswith("pace_virtual_")]
+    assert sorted(n.removeprefix("pace_virtual_") for n in lanes_for) == sorted(PRODUCTS)
