@@ -227,6 +227,12 @@ EARTHCARE_LANES = {
 }
 
 
+#: The L1 lanes move ~57 GB a day between them and are download-bound at ~0.5 MB/s per
+#: MAAP stream, so they run three times the streams of the L2 lanes.
+EARTHCARE_L1 = ("atl_nom", "msi_nom", "msi_rgr", "cpr_aux")
+EARTHCARE_L1_WORKERS = 48
+
+
 def _ncep_upper_air():
     from planetary_datasets.providers.observations.ncep_prepbufr import NCEPUpperAirProvider
 
@@ -342,7 +348,12 @@ LANES: dict[str, Lane] = {
     # about two days, so the last week is written first.
     **{
         f"earthcare_{group}": Lane(
-            _provider("polar.earthcare", "EarthCAREProvider", products=codes, download_workers=16),
+            _provider(
+                "polar.earthcare",
+                "EarthCAREProvider",
+                products=codes,
+                download_workers=EARTHCARE_L1_WORKERS if group in EARTHCARE_L1 else 16,
+            ),
             "2024-08-11",
             "1D",
             0,
