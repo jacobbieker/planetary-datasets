@@ -349,3 +349,17 @@ def test_a_running_month_is_read_but_not_ledgered_until_it_ends():
     running = pd.Series(pd.date_range("2026-10-01", "2026-10-21"))
     assert not aeronet._whole_month("2026-10", running)
     assert aeronet._whole_month("2026-09", pd.Series(pd.date_range("2026-09-12", "2026-09-30")))
+
+
+def test_a_header_with_a_trailing_separator_and_shorter_rows_parses():
+    """SDA daily: the header ends in a comma (35 names, the last empty), rows have 34."""
+    from planetary_datasets.providers.observations.aeronet_archive import parse_table
+
+    header = (
+        "AERONET_Site,Date_(dd:mm:yyyy),Time_(hh:mm:ss),Day_of_Year,"
+        "Total_AOD_500nm[tau_a],Data_Quality_Level,AERONET_Instrument_Number,"
+        "AERONET_Site_Name,Site_Latitude(Degrees),Site_Longitude(Degrees),Site_Elevation(m),"
+    )
+    row = "Lulin,22:10:2026,00:00:00,295,0.123456,lev10,1564,Lulin,23.468611,120.873611,2868.000000"
+    table = parse_table("\n".join(["Version 3: SDA", "Level 1.0", header, row, row]))
+    assert len(table.rows) == 2
