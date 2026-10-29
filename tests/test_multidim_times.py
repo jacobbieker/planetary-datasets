@@ -35,8 +35,7 @@ def test_later_appends_keep_sub_day_times_exactly(tmp_path):
 
 
 def test_missing_times_are_stored_as_the_declared_fill(tmp_path):
-    """xarray 2025.12 cannot decode an integer time column holding NaT at all (any
-    units, any fill), so this checks what is stored: exact nanoseconds and the fill."""
+    """Stored: exact nanoseconds and the declared fill; read back as NaT (xarray >= 2026.9)."""
     repo = _repo(tmp_path)
     first = _times("2026-10-01T00:00:00.5")
     later = np.array(["2026-10-02T03:04:05.000000006", "NaT"], dtype="datetime64[ns]")
@@ -46,6 +45,10 @@ def test_missing_times_are_stored_as_the_declared_fill(tmp_path):
     expected = np.concatenate([first, later]).view("int64")
     assert array[:].tolist() == expected.tolist()
     assert array.attrs["_FillValue"] == multidim.NAT == expected[-1]
+    if tuple(int(p) for p in xr.__version__.split(".")[:2]) >= (2026, 9):
+        # Older xarray cannot decode an integer time column holding NaT at all.
+        got = _read(repo)["when"].values
+        assert np.array_equal(got[:2], np.concatenate([first, later[:1]])) and np.isnat(got[2])
 
 
 def test_a_store_in_whole_day_units_is_rescaled_before_finer_times_append(tmp_path):
