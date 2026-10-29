@@ -164,6 +164,35 @@ def sources(ds: xr.Dataset) -> list[tuple[str, ...]]:
     return [tuple(str(v) for v in row) for row in raw] if raw.size else []
 
 
+def split_whole(ds: xr.Dataset, listed: list[str], product: str) -> xr.Dataset:
+    """``product``'s rows of a whole-product answer that returned several products.
+
+    Whole products come one after another in ``Sources`` order, and their ids (grouping
+    ids, observation numbers) restart with each, so a product starts wherever an id
+    goes down.
+
+    Raises:
+        ValueError: No id along a dimension resets once per product.
+    """
+    keep = listed.index(product)
+    selections = {}
+    for dim in ds.dims:
+        if dim.startswith("array_") or not ds.sizes[dim]:
+            continue
+        cuts = None
+        for variable in ds.data_vars.values():
+            if variable.dims != (dim,) or variable.dtype.kind not in "iu":
+                continue
+            resets = np.flatnonzero(np.diff(variable.values.astype("int64")) < 0) + 1
+            if len(resets) == len(listed) - 1:
+                cuts = [0, *resets.tolist(), ds.sizes[dim]]
+                break
+        if cuts is None:
+            raise ValueError(f"{product}: no id along {dim} splits {listed}")
+        selections[dim] = slice(cuts[keep], cuts[keep + 1])
+    return ds.isel(selections)
+
+
 def _units() -> dict[str, str]:
     """Units by field name, from viresclient's catalogue: VirES files carry none."""
     import viresclient
@@ -306,10 +335,23 @@ class AeolusProvider(BaseProvider):
             except Exception as exc:  # noqa: BLE001 - VirES fails transiently in many ways
                 reason = f"{exc.__context__ or ''} {exc}"
                 absent = NO_SUCH_FIELD.search(reason)
-                if absent and absent.group(1) in wanted:
-                    wanted.remove(absent.group(1))
+                if absent:
+                    name = absent.group(1)
+                    # A field the product lacks, or one a requested field depends on
+                    # (L2A's sca_mask needs SCA_time_obs): drop it, or its dependants.
+                    stem = name.split("_")[0].lower()
+                    drop = (
+                        [name]
+                        if name in wanted
+                        else [f for f in wanted if f.lower().startswith(stem + "_")]
+                    )
+                    if not drop:
+                        logger.debug(f"{self.name}: {level.prefix} {group} unavailable ({name})")
+                        return xr.Dataset()
+                    for field in drop:
+                        wanted.remove(field)
                     with self._missing_lock:
-                        self._missing.setdefault(key, set()).add(absent.group(1))
+                        self._missing.setdefault(key, set()).update(drop)
                     continue
                 last, failures = exc, failures + 1
                 logger.debug(
@@ -371,8 +413,12 @@ class AeolusProvider(BaseProvider):
             if group in level.whole:
                 ds = self._get(level, group, fields, middle, middle + pd.Timedelta(1, "s"))
                 listed = [s[0] for s in sources(ds)]
-                if listed and listed != [product]:
-                    raise ValueError(f"{product}: {group} came from {listed}")
+                if listed and product not in listed:
+                    # A product inside another (early in the mission, some last seconds):
+                    # it has no rows of its own in this group.
+                    continue
+                if len(listed) > 1:
+                    ds = split_whole(ds, listed, product)
             else:
                 ds = self._get(level, group, fields, start, end)
             for name, b, v in sources(ds):
@@ -529,6 +575,7 @@ __all__ = [
     "LEVELS",
     "Level",
     "catalogue_fields",
+    "split_whole",
     "product_span",
     "sources",
 ]

@@ -132,18 +132,19 @@ def test_a_day_is_written_once_and_decodes(provider):
     assert provider.missing_timesteps(pd.DatetimeIndex([day])) == []
 
 
-def test_a_whole_product_answer_from_another_product_is_refused(provider):
+def test_a_product_another_answers_for_has_no_rows_in_that_group(provider):
     real = provider._get
 
-    def wrong(level, group, fields, start, end):
+    def other(level, group, fields, start, end):
         ds = real(level, group, fields, start, end)
         if group in level.whole:
             ds.attrs["Sources"] = [(L2B_B, "2B16", "03.90")]
         return ds
 
-    provider._get = wrong
-    with pytest.raises(ValueError, match="came from"):
-        provider.fetch_product(LEVELS["l2b"], L2B_A, product_span(L2B_B)[0])
+    provider._get = other
+    ds = provider.fetch_product(LEVELS["l2b"], L2B_A, product_span(L2B_B)[0])
+    assert "l2b_mie_grouping_id" not in ds
+    assert ds.sizes["l2b_mie_wind_data"] > 0
 
 
 def test_fields_shared_between_groups_take_the_group_prefix(local_config):
@@ -198,3 +199,13 @@ def test_fields_a_product_lacks_are_dropped_and_remembered(local_config, monkeyp
     with pytest.raises(RuntimeError):
         made._get(level, "mie_wind_fields", ["a", "mie_tc_23"], "2018-09-28", "2018-09-29")
     assert asked[0] == ["a"]
+
+
+def test_split_whole_keeps_the_products_own_rows():
+    from planetary_datasets.providers.polar.aeolus import split_whole
+
+    ds = xr.Dataset({"mie_grouping_id": ("g", np.array([1, 2, 3, 1, 2], dtype="uint16"))})
+    own = split_whole(ds, [L2B_A, L2B_B], L2B_B)
+    assert own["mie_grouping_id"].values.tolist() == [1, 2]
+    with pytest.raises(ValueError):
+        split_whole(ds, [L2B_A, L2B_B, L2B_C], L2B_B)
