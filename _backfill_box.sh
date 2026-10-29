@@ -100,6 +100,8 @@ declare -A LANES=(
   [pace_virtual_spexone_l1b]="_backfill_lanes.py pace_virtual_spexone_l1b --threads 2"
   [pace_virtual_harp2_mapol_land]="_backfill_lanes.py pace_virtual_harp2_mapol_land --threads 2"
   [pace_virtual_harp2_mapol_ocean]="_backfill_lanes.py pace_virtual_harp2_mapol_ocean --threads 2"
+  [tempo_cloud_l3]="_backfill_lanes.py tempo_cloud_l3 --threads 4"
+  [tempo_aerosol_l3]="_backfill_lanes.py tempo_aerosol_l3 --threads 4"
   # NCEP ADP upper-air (AMDAR/aircraft + radiosondes) from GDEX d337000, from 1997; decodes
   # with MET pb2nc in the dtcenter/met Docker image.
   [ncep_upper_air]="_backfill_lanes.py ncep_upper_air --threads 2 --pause 21600"

@@ -1,6 +1,7 @@
 """NASA Earthdata: CMR granule search and temporary S3 credentials for Earthdata Cloud.
 
-Earthdata Cloud buckets (``ob-cumulus-prod-public`` for OB.DAAC, among others) are in
+Earthdata Cloud buckets (``ob-cumulus-prod-public`` for OB.DAAC, ``asdc-prod-protected``
+for LaRC ASDC, among others) are in
 us-west-2 and cannot be read anonymously: a DAAC hands out S3 keys valid for an hour in
 exchange for an Earthdata login (``EARTHDATA_USERNAME`` / ``EARTHDATA_PASSWORD``). They
 are fetched here as needed and never written anywhere, stores included.
@@ -22,7 +23,11 @@ from planetary_datasets.config import Config, MissingCredential, get_config
 
 CMR_GRANULES = "https://cmr.earthdata.nasa.gov/search/granules.json"
 #: S3 credential endpoints per DAAC.
-S3_CREDENTIALS = {"obdaac": "https://obdaac-tea.earthdatacloud.nasa.gov/s3credentials"}
+S3_CREDENTIALS = {
+    "obdaac": "https://obdaac-tea.earthdatacloud.nasa.gov/s3credentials",
+    # LaRC ASDC (TEMPO, ...): the ``asdc-prod-protected`` bucket.
+    "asdc": "https://data.asdc.earthdata.nasa.gov/s3credentials",
+}
 #: Refresh S3 credentials this long before they expire.
 REFRESH_MARGIN_S = 600
 PAGE_SIZE = 2000

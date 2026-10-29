@@ -412,6 +412,18 @@ LANES: dict[str, Lane] = {
         )
         for level in ("l1b", "l2a", "l2b", "l2c")
     },
+    # NASA TEMPO L3 cloud (CLDO4) and aerosol (O3TOT's UV aerosol index) scans, one lane
+    # per group of bkr/geo/tempo.icechunk. Published within a day; the last week first.
+    **{
+        f"tempo_{group}": Lane(
+            _provider("tempo", "TempoL3Provider", products=(group,)),
+            "2023-08-02",
+            "1D",
+            12,
+            recent_days=7,
+        )
+        for group in ("cloud_l3", "aerosol_l3")
+    },
     # SPEXone L1C, copied into the same store (its two-row chunks are too fine to
     # reference). L1 granules are published within days.
     "pace_l1c": Lane(
