@@ -200,10 +200,10 @@ def check_store(prefix: str) -> str | None:
                 store,
                 group=group or None,
                 consolidated=False,
-                chunks=None,
+                chunks={},
                 decode_times=True,
-                # Names, dimensions and attributes decode without reading any data; indexing
-                # a large observation store would load every row.
+                # Lazily, so names, dimensions and attributes decode without reading data;
+                # indexing or eagerly decoding a large observation store loads every row.
                 create_default_indexes=False,
             ).close()
         except Exception as exc:  # noqa: BLE001 - reported, not raised
