@@ -197,7 +197,14 @@ def check_store(prefix: str) -> str | None:
             if not list(node.array_keys()):
                 continue
             xr.open_zarr(
-                store, group=group or None, consolidated=False, chunks=None, decode_times=True
+                store,
+                group=group or None,
+                consolidated=False,
+                chunks=None,
+                decode_times=True,
+                # Names, dimensions and attributes decode without reading any data; indexing
+                # a large observation store would load every row.
+                create_default_indexes=False,
             ).close()
         except Exception as exc:  # noqa: BLE001 - reported, not raised
             message = str(exc).splitlines()[0][:200]
