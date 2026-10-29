@@ -452,6 +452,9 @@ def parse_table(text: str) -> Table:
     index = _header_index(lines)
     head = lines[:index]
     columns = [c.strip() for c in lines[index].split(",")]
+    # A header ending in a separator (SDA daily) names an empty last column no row has.
+    while columns and not columns[-1]:
+        columns.pop()
     lowered = [c.lower() for c in columns]
     # Some rows end with a separator; anything past the named columns is dropped.
     body = "\n".join(line for line in lines[index + 1 :] if line.strip() and "<" not in line)
@@ -463,16 +466,18 @@ def parse_table(text: str) -> Table:
         or c == "month"
         or c.startswith(("date", "time", "last_"))
     }
+    # Rows may carry fewer fields than the header (read as missing) or a trailing
+    # separator (dropped), so read as wide as the widest row and keep the named columns.
+    width = max([len(columns)] + [line.count(",") + 1 for line in body.splitlines()])
     frame = pd.read_csv(
         io.StringIO(body),
         header=None,
-        names=range(len(columns)),
-        usecols=range(len(columns)),
+        names=range(width),
         dtype={i: str for i in textual},
         keep_default_na=False,
         na_values={i: [""] for i in range(len(columns)) if i not in textual},
         skipinitialspace=True,
-    )
+    )[list(range(len(columns)))]
     places = max((len(d) for d in DECIMALS.findall(body)), default=0)
     out: dict[str, np.ndarray] = {}
     attrs: dict[str, dict] = {}
