@@ -122,3 +122,33 @@ def test_a_settled_day_is_recorded_complete(provider, monkeypatch):
     monkeypatch.setattr(pace, "SETTLE_DAYS", -10)
     provider.run_partition(day)
     assert provider.missing_timesteps(pd.DatetimeIndex([day])) == []
+
+
+def test_cmr_5xx_is_retried(monkeypatch):
+    from planetary_datasets.common import earthdata
+
+    calls = []
+
+    class Response:
+        def __init__(self, status):
+            self.status_code = status
+            self.headers = {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"feed": {"entry": [{"time_start": "2026-08-20T00:30:00Z", "links": []}]}}
+
+    class Session:
+        def get(self, *args, **kwargs):
+            calls.append(1)
+            return Response(502 if len(calls) == 1 else 200)
+
+    monkeypatch.setattr(earthdata.time, "sleep", lambda s: None)
+    found = list(
+        earthdata.granules(
+            "X", "1", pd.Timestamp("2026-08-20"), pd.Timestamp("2026-08-21"), Session()
+        )
+    )
+    assert len(found) == 1 and len(calls) == 2

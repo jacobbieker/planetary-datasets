@@ -90,8 +90,7 @@ def granules(
     }
     headers: dict[str, str] = {}
     while True:
-        response = http.get(CMR_GRANULES, params=params, headers=headers, timeout=120)
-        response.raise_for_status()
+        response = _get_with_retries(http, params, headers)
         entries = response.json()["feed"]["entry"]
         for entry in entries:
             if start <= pd.Timestamp(entry["time_start"]).tz_convert(None) < end:
@@ -100,6 +99,26 @@ def granules(
         if not after or len(entries) < PAGE_SIZE:
             return
         headers = {"CMR-Search-After": after}
+
+
+def _get_with_retries(
+    http: requests.Session, params: dict, headers: dict, attempts: int = 5
+) -> requests.Response:
+    """GET a CMR page, riding out its occasional 5xx and dropped connections."""
+    for attempt in range(1, attempts + 1):
+        try:
+            response = http.get(CMR_GRANULES, params=params, headers=headers, timeout=120)
+            if response.status_code < 500:
+                response.raise_for_status()
+                return response
+            error: Exception = requests.HTTPError(f"CMR {response.status_code}")
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            error = exc
+        if attempt == attempts:
+            raise error
+        logger.debug(f"earthdata: CMR attempt {attempt} failed ({error}); retrying")
+        time.sleep(5 * 2 ** (attempt - 1))
+    raise AssertionError("unreachable")
 
 
 def s3_url(entry: dict[str, Any]) -> str:
