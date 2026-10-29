@@ -1,25 +1,29 @@
-"""NASA AERONET sun photometer observations as ragged Icechunk stores.
+"""NASA AERONET sun photometer observations in one ragged Icechunk store.
 
 AERONET publishes every Version 3 product two ways: weekly "all sites" tarballs of one text
 file per site (``/data_push/V3/``), and a web service answering a time window for every
-site at once (``/cgi-bin/print_web_data_v3`` and ``print_web_data_inv_v3``). Each product,
-quality level and averaging gets a store of its own under ``bkr/obs/aeronet/``, for
-example ``aod_level20_all_points.icechunk``; see :data:`PRODUCTS`.
+site at once (``/cgi-bin/print_web_data_v3`` and ``print_web_data_inv_v3``). Only the
+unaveraged ("all points") products are archived, all in ``bkr/obs/aeronet.icechunk``, one
+zarr group per product and quality level (``/aod_level20``, ``/sda_level15``,
+``/inversion_almucantar_phase_functions_level20``, ...; see :data:`PRODUCTS`). The whole
+store opens with ``xarray.open_datatree(store, engine="zarr", consolidated=False)``, one
+product with ``xarray.open_zarr(store, group="aod_level20", consolidated=False)``.
 
-Layout. One row per observation along ``observation``; the sites along ``site``, with their
-AERONET name, identifier, location, land use and principal investigators. ``site_index``
-ties a row to its site. A store opens with ``xarray.open_zarr``. Columns keep their values
-exactly as published: every number is stored in the narrowest type that reprints the
-published text (float32 where it does, else float64, ``-999`` declared as the fill value),
-counts as integers, dates as datetimes, and the few text columns with a fixed vocabulary
-(quality level, phase function mode, scan type) as CF flag codes. Names are readable
-snake case (``aerosol_optical_depth_500nm``, ``number_of_points_...``), each variable
-keeping the original column header as ``long_name``. The raw polarized principal plane
-files have no header row and are not archived.
+Layout. In each group, one row per observation along ``observation`` and the sites along
+``site``, with their AERONET name, identifier, location, land use and principal
+investigators; ``site_index`` ties a row to its site. Groups have their own dimensions:
+products differ in rows and sites. Columns keep their values exactly as published: every
+number is stored in the narrowest type that reprints the published text (float32 where it
+does, else float64, ``-999`` declared as the fill value), counts as integers, dates as
+datetimes, and the few text columns with a fixed vocabulary (quality level, phase function
+mode, scan type) as CF flag codes. Names are readable snake case
+(``aerosol_optical_depth_500nm``, ``number_of_points_...``), each variable keeping the
+original column header as ``long_name``. The raw polarized principal plane files have no
+header row and are not archived.
 
-Sources and revisions. The tarballs, about 130 GB compressed and slow to fetch, are read
+Sources and revisions. The tarballs, about 75 GB compressed and slow to fetch, are read
 once for the history and again every :data:`BULK_REFRESH_DAYS`. The web service keeps the
-stores current: the last :data:`RECENT_DAYS` days of every web product every few hours,
+groups current: the last :data:`RECENT_DAYS` days of every web product every few hours,
 and the Level 2.0 products over the past :data:`REVISIT_DAYS` days weekly, since Level 2.0
 is only released once an instrument's post-deployment calibration is in, months later.
 The history lane fills everything else up to the recent window: Level 1.0 and the total
@@ -31,14 +35,16 @@ AOD averaged onto an hourly ``(time, station)`` grid for the Dagster assets. Thi
 archives everything AERONET publishes, unaveraged.
 
 Lanes (``python -m planetary_datasets.providers.observations.aeronet_archive MODE``):
-``bulk``, ``recent``, ``revisit`` and ``history``, as above. Each makes one request at a
-time; a per-store lock lets them share stores, a lane re-reading what a store holds when
-another has written it since.
+``bulk``, ``recent``, ``revisit`` and ``history``, as above, each one request at a time.
+They share the store, each commit rebasing over the others' (they touch different groups,
+or one group in turn: a per-group lock on the machine serialises writers of a group). Each
+group's ledger of what has been read whole (``bulk:<day>``, ``web:<month>``) is in its own
+attributes.
 
 A row is identified by its site, time and, where present, phase function mode, scan type,
 measurement type and instrument; a row already stored is never written again, so sources
 overlap freely. A value AERONET revises after it is stored (Level 1.5 can change until
-Level 2.0 is out) is not rewritten: the stores keep the first published value, and Level
+Level 2.0 is out) is not rewritten: the store keeps the first published value, and Level
 2.0 is the final one.
 """
 
@@ -73,7 +79,7 @@ BULK_URL = f"{BASE_URL}/data_push/V3/"
 WEB_URL = f"{BASE_URL}/cgi-bin/print_web_data_v3"
 WEB_INV_URL = f"{BASE_URL}/cgi-bin/print_web_data_inv_v3"
 SITES_URL = f"{BASE_URL}/aeronet_locations_extended_v3.txt"
-STORE_BASE = "bkr/obs/aeronet"
+STORE_PREFIX = "bkr/obs/aeronet.icechunk"
 
 #: Days of every web product re-read each pass.
 RECENT_DAYS = 7
@@ -98,10 +104,10 @@ HEADERS = {"User-Agent": "planetary-datasets AERONET archiver (bkr/obs on Source
 
 @dataclasses.dataclass(frozen=True)
 class Product:
-    """One store: a product at one quality level and averaging.
+    """One group of the store: a product at one quality level, all points.
 
     Attributes:
-        key: Store name, e.g. ``aod_level20_all_points``.
+        key: Group name, e.g. ``aod_level20``.
         bulk: Tarball path under :data:`BULK_URL`, if AERONET publishes one.
         web: Web service queries (one per request) for a day of every site, if served.
         inversion: Whether the queries go to the inversion web service.
@@ -113,84 +119,60 @@ class Product:
     inversion: bool = False
 
     @property
-    def store_prefix(self) -> str:
-        """Where the store lives in the bucket."""
-        return f"{STORE_BASE}/{self.key}.icechunk"
-
-    @property
     def level(self) -> str:
         """The quality level: ``10``, ``15`` or ``20``."""
         return re.search(r"level(\d+)", self.key).group(1)
 
 
-AVERAGING = {
-    "all_points": ("All_Points", "10"),
-    "daily": ("Daily", "20"),
-    "monthly": ("Monthly", None),
-}
-
-
 def _products() -> dict[str, Product]:
     products = []
     # Direct sun: AOD and SDA as tarballs at Levels 1.5 and 2.0; Level 1.0 and the total
-    # optical depth only through the web service, which has no monthly averages.
+    # optical depth only through the web service.
     for family, web_name in (("aod", "AOD"), ("sda", "SDA")):
         for level in ("10", "15", "20"):
-            for averaging, (bulk_name, avg) in AVERAGING.items():
-                bulk = None
-                if level != "10":
-                    bulk = f"{web_name}/{web_name}_Level{level}_{bulk_name}_V3.tar.gz"
-                web = (f"{web_name}{level}=1&AVG={avg}",) if avg else ()
-                if bulk or web:
-                    products.append(Product(f"{family}_level{level}_{averaging}", bulk, web))
+            bulk = None
+            if level != "10":
+                bulk = f"{web_name}/{web_name}_Level{level}_All_Points_V3.tar.gz"
+            products.append(
+                Product(f"{family}_level{level}", bulk, (f"{web_name}{level}=1&AVG=10",))
+            )
     for level in ("10", "15", "20"):
-        for averaging, (_, avg) in AVERAGING.items():
-            if avg:
-                products.append(
-                    Product(f"tot_level{level}_{averaging}", None, (f"TOT{level}=1&AVG={avg}",))
-                )
+        products.append(Product(f"tot_level{level}", None, (f"TOT{level}=1&AVG=10",)))
     # Inversions: almucantar and hybrid scans, each with phase functions and polarized
-    # variants. The web service serves the non-polarized ones (phase functions all points
-    # only, one request per mode).
+    # variants. The web service serves the non-polarized ones, phase functions one request
+    # per mode.
     for scan, directory, web_name in (("almucantar", "INV", "ALM"), ("hybrid", "INV_HYB", "HYB")):
-        stem = "INV" if scan == "almucantar" else "INV_HYB"
         for pfn in (False, True):
             for polar in (False, True):
                 for level, bulk_level in (("15", "15"), ("20", "2")):
-                    for averaging, (bulk_name, avg) in AVERAGING.items():
-                        parts = [stem] + (["PFN"] if pfn else []) + (["Polar"] if polar else [])
-                        bulk = (
-                            f"{directory}/{'_'.join(parts)}_Level{bulk_level}_{bulk_name}_V3.tar.gz"
+                    parts = [directory] + (["PFN"] if pfn else []) + (["Polar"] if polar else [])
+                    bulk = f"{directory}/{'_'.join(parts)}_Level{bulk_level}_All_Points_V3.tar.gz"
+                    key = (
+                        f"inversion_{scan}"
+                        + ("_phase_functions" if pfn else "")
+                        + ("_polarized" if polar else "")
+                        + f"_level{level}"
+                    )
+                    web: tuple[str, ...] = ()
+                    if not polar:
+                        web = (
+                            tuple(
+                                f"product=PFN&AVG=10&{web_name}{level}=1&pfn_type={t}"
+                                for t in (0, 1, 2)
+                            )
+                            if pfn
+                            else (f"product=ALL&AVG=10&{web_name}{level}=1",)
                         )
-                        key = (
-                            f"inversion_{scan}"
-                            + ("_phase_functions" if pfn else "")
-                            + ("_polarized" if polar else "")
-                            + f"_level{level}_{averaging}"
-                        )
-                        web: tuple[str, ...] = ()
-                        if not polar and avg:
-                            if pfn and avg == "10":
-                                web = tuple(
-                                    f"product=PFN&AVG=10&{web_name}{level}=1&pfn_type={t}"
-                                    for t in (0, 1, 2)
-                                )
-                            elif not pfn:
-                                web = (f"product=ALL&AVG={avg}&{web_name}{level}=1",)
-                        products.append(Product(key, bulk, web, inversion=True))
+                    products.append(Product(key, bulk, web, inversion=True))
     # Ocean colour (AERONET-OC) water-leaving radiances.
     for level in ("15", "20"):
-        for averaging, (bulk_name, _) in AVERAGING.items():
-            products.append(
-                Product(
-                    f"ocean_colour_level{level}_{averaging}",
-                    f"LWN/LWN_Level{level}_{bulk_name}_V3.tar.gz",
-                )
-            )
+        products.append(
+            Product(f"ocean_colour_level{level}", f"LWN/LWN_Level{level}_All_Points_V3.tar.gz")
+        )
     return {p.key: p for p in products}
 
 
-#: Every store, by key.
+#: Every group, by key.
 PRODUCTS: dict[str, Product] = _products()
 
 
@@ -404,9 +386,7 @@ class Table:
 def _header_index(lines: Sequence[str]) -> int:
     for i, line in enumerate(lines[:20]):
         first = line.split(",", 1)[0].strip()
-        if line.count(",") >= 1 and (
-            first.startswith("Date") or first in ("Month",) or first.lower() in SITE_COLUMNS
-        ):
+        if line.count(",") >= 1 and (first.startswith("Date") or first.lower() in SITE_COLUMNS):
             return i
     raise ValueError("no column header in the first 20 lines")
 
@@ -452,7 +432,7 @@ def parse_table(text: str) -> Table:
     index = _header_index(lines)
     head = lines[:index]
     columns = [c.strip() for c in lines[index].split(",")]
-    # A header ending in a separator (SDA daily) names an empty last column no row has.
+    # A header ending in a separator names an empty last column no row has.
     while columns and not columns[-1]:
         columns.pop()
     lowered = [c.lower() for c in columns]
@@ -461,10 +441,7 @@ def parse_table(text: str) -> Table:
     textual = {
         i
         for i, c in enumerate(lowered)
-        if c in SITE_COLUMNS
-        or c in CATEGORY_COLUMNS
-        or c == "month"
-        or c.startswith(("date", "time", "last_"))
+        if c in SITE_COLUMNS or c in CATEGORY_COLUMNS or c.startswith(("date", "time", "last_"))
     }
     # Rows may carry fewer fields than the header (read as missing) or a trailing
     # separator (dropped), so read as wide as the widest row and keep the named columns.
@@ -492,17 +469,10 @@ def parse_table(text: str) -> Table:
     used: set[int] = set()
     date = find("date(dd:mm:yyyy)", "date_(dd:mm:yyyy)", "date(dd-mm-yyyy)")
     clock = find("time(hh:mm:ss)", "time_(hh:mm:ss)")
-    month = find("month")
-    if date is not None:
-        out["time"] = _times(frame[date], frame[clock] if clock is not None else None)
-        used |= {date} | ({clock} if clock is not None else set())
-    elif month is not None:
-        out["time"] = pd.to_datetime(frame[month].str.strip(), format="%Y-%b").to_numpy(
-            "datetime64[s]"
-        )
-        used.add(month)
-    else:
+    if date is None:
         raise ValueError("no date column")
+    out["time"] = _times(frame[date], frame[clock] if clock is not None else None)
+    used |= {date} | ({clock} if clock is not None else set())
     attrs["time"] = {"long_name": "observation time (UTC)"}
     processed = find(
         "last_processing_date(dd:mm:yyyy)", "last_date_processed", "last_processing_date"
@@ -607,42 +577,97 @@ SITE_VARIABLES = {
 # ---------------------------------------------------------------------------- stores
 
 
-class AeronetStore:
-    """One product's store: what it holds, and appending rows it does not.
+ROOT_ATTRS = {
+    "title": "NASA AERONET Version 3, every all-points product",
+    "source": "NASA AERONET, https://aeronet.gsfc.nasa.gov",
+    "conventions": "CF-1.10",
+    "layout": (
+        "One group per product and quality level (e.g. /aod_level20, /sda_level15, "
+        "/tot_level10, /inversion_almucantar_level20, "
+        "/inversion_hybrid_phase_functions_polarized_level15, /ocean_colour_level20). In each "
+        "group one row per observation along `observation` and one per site along `site`; "
+        "`site_index` gives a row's site. Groups have their own dimensions. Open the whole "
+        'store with xarray.open_datatree(store, engine="zarr", consolidated=False), one '
+        'product with xarray.open_zarr(store, group="aod_level20", consolidated=False).'
+    ),
+    "comment": "Values as published, -999 the fill value; the first published value is kept.",
+    "citation": (
+        "Cite AERONET and the sites' principal investigators: "
+        "https://aeronet.gsfc.nasa.gov/new_web/data_usage.html"
+    ),
+}
 
-    The sites and the identity of every stored row are read once, on first use, and kept
-    up to date as rows are appended, so a run reads the store's arrays once.
+
+def ensure_root(repo: icechunk.Repository) -> None:
+    """Create the store's root group with :data:`ROOT_ATTRS`, once.
+
+    Done before any product group is written: a group's writer then never touches the
+    root, and writers of different groups rebase cleanly over each other.
+    """
+    for attempt in range(1, 6):
+        try:
+            root = zarr.open_group(repo.readonly_session("main").store, mode="r")
+            if dict(root.attrs) == ROOT_ATTRS:
+                return
+        except (zarr.errors.GroupNotFoundError, FileNotFoundError):
+            pass
+        session = repo.writable_session("main")
+        root = zarr.open_group(session.store, mode="a")
+        root.attrs.update(ROOT_ATTRS)
+        try:
+            session.commit("aeronet: root group", rebase_with=icechunk.ConflictDetector())
+            return
+        except (icechunk.ConflictError, icechunk.RebaseFailedError):
+            if attempt == 5:
+                raise
+            time.sleep(attempt)
+
+
+class AeronetStore:
+    """One product's group of the store: what it holds, and appending rows it does not.
+
+    The sites and the identity of every stored row are read once, on first use, and again
+    only when the group has grown since (another lane wrote it), so a run reads the
+    group's arrays once.
     """
 
     def __init__(self, product: Product, config: Config, sites: pd.DataFrame | None = None):
-        """Open ``product``'s store; ``sites`` (:func:`site_list`) fills in new sites."""
+        """Open ``product``'s group; ``sites`` (:func:`site_list`) fills in new sites."""
         self.product = product
         self.config = config
-        self.repo = config.icechunk_repo(product.store_prefix)
+        self.repo = config.icechunk_repo(STORE_PREFIX)
         self.site_table = sites
         self._sites: dict[str, int] | None = None
         self._keys: np.ndarray | None = None
-        self._seen: str | None = None
+        self._seen: tuple[int, int] | None = None
+
+    @property
+    def path(self) -> str:
+        """The product's group within the store."""
+        return self.product.key
 
     # -- reading
 
     def _group(self) -> zarr.Group | None:
         try:
-            group = zarr.open_group(self.repo.readonly_session("main").store, mode="r")
+            group = zarr.open_group(
+                self.repo.readonly_session("main").store, path=self.path, mode="r"
+            )
         except (zarr.errors.GroupNotFoundError, FileNotFoundError):
             return None
         return group if list(group.array_keys()) else None
 
-    def _tip(self) -> str | None:
-        try:
-            return self.repo.lookup_branch("main")
-        except icechunk.IcechunkError:
-            return None
+    def _size(self, group: zarr.Group | None = None) -> tuple[int, int]:
+        """Rows and sites the group holds: a cheap read that changes with every append."""
+        group = group if group is not None else self._group()
+        if group is None:
+            return (0, 0)
+        return (group["site_index"].shape[0], group["site_name"].shape[0])
 
     @contextlib.contextmanager
     def _locked(self) -> Iterator[None]:
         """Hold the store's lock: the lanes of one machine write it one at a time."""
-        path = pathlib.Path(self.config.data_dir) / "aeronet" / "locks" / f"{self.product.key}.lock"
+        path = pathlib.Path(self.config.data_dir) / "aeronet" / "locks" / f"{self.path}.lock"
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
@@ -652,12 +677,12 @@ class AeronetStore:
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
     def _load(self) -> None:
-        tip = self._tip()
-        if self._sites is not None and tip == self._seen:
-            return
-        # First use, or another lane wrote since: what the store holds is read afresh.
-        self._seen = tip
         group = self._group()
+        size = self._size(group)
+        if self._sites is not None and size == self._seen:
+            return
+        # First use, or another lane wrote since: what the group holds is read afresh.
+        self._seen = size
         if group is None:
             self._sites, self._keys = {}, np.empty(0, "uint64")
             return
@@ -675,7 +700,7 @@ class AeronetStore:
 
     def ledger(self) -> set[str]:
         """Tarballs (``bulk:<day>``) and history months (``web:<month>``) read whole."""
-        return multidim.ledger(self.repo)
+        return multidim.ledger(self.repo, self.path)
 
     # -- writing
 
@@ -705,8 +730,14 @@ class AeronetStore:
         with self._locked():
             self._load()
             written = self._append(tables)
-            self._seen = self._tip()
+            self._seen = self._size()
         return written
+
+    def mark(self, entry: str) -> None:
+        """Add ``entry`` (``bulk:<day>``, ``web:<month>``) to the group's ledger."""
+        if self._group() is not None:
+            with self._locked():
+                multidim.mark_written(self.repo, entry, label=self.path, group=self.path)
 
     def _append(self, tables: Sequence[Table]) -> int:
         frames, attrs, pis = [], {}, {}
@@ -756,7 +787,8 @@ class AeronetStore:
                 rows["site_index"].map(lambda i: renumber.get(i, i)).astype("uint16")
             )
         ds = self._dataset(rows, attrs, self._site_rows(new_sites, pis))
-        multidim.append_partition(self.repo, ds, None, label=self.product.key)
+        ensure_root(self.repo)
+        multidim.append_partition(self.repo, ds, None, label=self.path, group=self.path)
         self._keys = np.union1d(self._keys, keys[keep])
         self._sites.update({s: first + i for i, s in enumerate(new_sites)})
         return len(rows)
@@ -787,7 +819,7 @@ class AeronetStore:
         product = self.product
         ds = xr.Dataset(variables)
         ds.attrs = {
-            "title": f"AERONET Version 3 {product.key.replace('_', ' ')}",
+            "title": f"AERONET Version 3 {product.key.replace('_', ' ')}, all points",
             "source": "NASA AERONET, https://aeronet.gsfc.nasa.gov",
             "conventions": "CF-1.10",
             "comment": (
@@ -848,7 +880,7 @@ def published(url: str, session: requests.Session | None = None) -> tuple[str, i
 
 
 def due(ledger: set[str], published: str, now: pd.Timestamp) -> bool:
-    """Whether a tarball published on ``published`` should be read into a store."""
+    """Whether a tarball published on ``published`` should be read into its group."""
     reads = sorted(p.removeprefix("bulk:") for p in ledger if p.startswith("bulk:"))
     if not reads:
         return True
@@ -879,7 +911,7 @@ def run_bulk(
         day, size = published(url, session)
         if due(store.ledger(), day, now):
             queue.append((size, product.key, product, store, url, day))
-    # Smallest first: most stores are online long before the largest tarball is in.
+    # Smallest first: most groups are filled long before the largest tarball is in.
     for size, _, product, store, url, day in sorted(queue):
         dest = scratch / pathlib.Path(product.bulk).name
         logger.info(f"aeronet {product.key}: reading {url} ({size / 1e9:.1f} GB, {day})")
@@ -894,8 +926,7 @@ def run_bulk(
                 written += store.append(batch)
                 batch, rows = [], 0
         written += store.append(batch)
-        if store._group() is not None:
-            multidim.mark_written(store.repo, f"bulk:{day}", label=product.key)
+        store.mark(f"bulk:{day}")
         dest.unlink(missing_ok=True)
     return written
 
@@ -971,9 +1002,8 @@ def run_web(
             for day in group:
                 tables += fetch_web(product, pd.Timestamp(day), session)
             written += store.append(tables)
-            whole = ledger_months and _whole_month(month, group)
-            if whole and store._group() is not None:
-                multidim.mark_written(store.repo, f"web:{month}", label=product.key)
+            if ledger_months and _whole_month(month, group):
+                store.mark(f"web:{month}")
     return written
 
 
