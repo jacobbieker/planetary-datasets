@@ -209,3 +209,40 @@ def test_split_whole_keeps_the_products_own_rows():
     assert own["mie_grouping_id"].values.tolist() == [1, 2]
     with pytest.raises(ValueError):
         split_whole(ds, [L2B_A, L2B_B, L2B_C], L2B_B)
+
+
+def test_products_lacking_a_field_or_a_whole_group_still_stack(provider):
+    """Baselines differ in fields, and a product can have no rows in a group at all."""
+    p = LEVELS["l2b"].prefix
+
+    def product(n, with_extra=True, with_group=True):
+        ds = xr.Dataset(
+            {
+                f"{p}_mie_wind_result_COG_time": (f"{p}_mie_wind_data", np.arange(n, dtype="f8")),
+                f"{p}_mie_wind_data_product_index": (
+                    f"{p}_mie_wind_data",
+                    np.zeros(n, dtype="uint32"),
+                ),
+            }
+        )
+        if with_extra:
+            ds[f"{p}_mie_wind_result_flag"] = (f"{p}_mie_wind_data", np.ones(n, dtype="uint8"))
+        if with_group:
+            ds[f"{p}_mie_grouping_id"] = (f"{p}_mie_grouping_data", np.arange(2, dtype="uint16"))
+            ds[f"{p}_mie_grouping_data_product_index"] = (
+                f"{p}_mie_grouping_data",
+                np.zeros(2, dtype="uint32"),
+            )
+        ds[f"{p}_product_name"] = (f"{p}_product", np.array([f"P{n}"], dtype=object))
+        return ds
+
+    products = [product(3), product(2, with_extra=False), product(4, with_group=False)]
+    provider._write(LEVELS["l2b"], products, 0)
+    ds = xr.open_zarr(
+        provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
+    )
+    assert ds.sizes[f"{p}_mie_wind_data"] == 9
+    assert ds[f"{p}_mie_wind_data_product_index"].values.tolist() == [0] * 3 + [1] * 2 + [2] * 4
+    flags = ds[f"{p}_mie_wind_result_flag"].values
+    assert flags[:3].tolist() == [1, 1, 1] and flags[5:].tolist() == [1, 1, 1, 1]
+    assert ds[f"{p}_mie_grouping_data_product_index"].values.tolist() == [0, 0, 1, 1]

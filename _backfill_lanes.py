@@ -549,6 +549,10 @@ def main(argv) -> int:
         todo = list(provider.missing_timesteps(hours)) if len(hours) else []
         if lane.earth2studio and todo:
             todo = unstored_partitions(provider, todo)
+        if lane.opera and todo:
+            # Hours the archive answered with no file at all are not asked for again.
+            skip = stager.unavailable(provider.archive_root.expanduser().resolve())
+            todo = [it for it in todo if pd.Timestamp(it) not in skip]
         if lane.recent_days and todo:
             todo = recent_first(todo, lane.recent_days)
         print(

@@ -308,6 +308,8 @@ MICROWAVE_STORES = ("jpss_atms",)
 
 #: Source names whose generic rules disagree between stores, fixed by hand.
 OVERRIDES = {
+    # PACE's long name ("Time bin was viewed at nadir view") reads worse than the name.
+    "nadir_view_time": "nadir_view_time",
     "clch": "high_cloud_cover",
     "clcm": "medium_cloud_cover",
     "clcl": "low_cloud_cover",

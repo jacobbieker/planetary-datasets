@@ -17,7 +17,9 @@ FILL = np.float32(-32767.0)
 LAND = PRODUCTS["spexone_rtap_land"]
 
 
-def write_granule(directory: pathlib.Path, name: str, lines: int = 4) -> pathlib.Path:
+def write_granule(
+    directory: pathlib.Path, name: str, lines: int = 4, nadir_day: str | None = None
+) -> pathlib.Path:
     """A SPEXone L2-shaped granule: geolocation, retrievals, a band table, a name clash."""
     path = directory / name
     geo = xr.Dataset(
@@ -29,6 +31,15 @@ def write_granule(directory: pathlib.Path, name: str, lines: int = 4) -> pathlib
             "quality": (("number_of_lines", "pixels_per_line"), np.ones((lines, 3), "int8")),
         }
     )
+    if nadir_day:
+        # Seconds of the granule's own day, as PACE stamps them; the last line is fill.
+        seconds = np.arange(lines, dtype="float64") + 85000.0
+        seconds[-1] = -32767.0
+        geo["nadir_view_time"] = ("number_of_lines", seconds)
+        geo["nadir_view_time"].attrs.update(
+            units=f"seconds since {nadir_day}", valid_min=0.0, valid_max=172800.0
+        )
+        geo["nadir_view_time"].encoding["_FillValue"] = -32767.0
     aot = np.full((lines, 3, 2), 0.25, dtype="float32")
     aot[0, 0, 0] = FILL
     phys = xr.Dataset(
@@ -152,3 +163,77 @@ def test_cmr_5xx_is_retried(monkeypatch):
         )
     )
     assert len(found) == 1 and len(calls) == 2
+
+
+def test_day_relative_times_are_rebased_to_a_fixed_epoch(tmp_path):
+    path = write_granule(
+        tmp_path, "PACE_SPEXONE.20260820T002957.L2.RTAP_LAND.V4_0.nc", 3, nadir_day="2026-08-20"
+    )
+    ds = read_granule(path, LAND)
+    times = ds["spexone_rtap_land_nadir_view_time"]
+    assert times.attrs["units"] == "seconds since 1970-01-01"
+    assert "valid_max" not in times.attrs
+    day = (pd.Timestamp("2026-08-20") - pd.Timestamp("1970-01-01")).total_seconds()
+    assert times.values.tolist() == [day + 85000.0, day + 85001.0, -32767.0]
+    decoded = xr.decode_cf(ds[["spexone_rtap_land_nadir_view_time"]])
+    first = decoded["spexone_rtap_land_nadir_view_time"].values[0]
+    assert first == np.datetime64("2026-08-20T23:36:40")
+
+
+def test_the_repair_rebases_stored_rows_by_their_granules_day(tmp_path, monkeypatch):
+    import importlib.util
+
+    import icechunk
+    import zarr
+
+    spec = importlib.util.spec_from_file_location(
+        "repair_pace_day_seconds",
+        pathlib.Path(__file__).resolve().parents[1] / "scripts/repair_pace_day_seconds.py",
+    )
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(tmp_path / "s")))
+
+    class Config:
+        def icechunk_repo(self, prefix):
+            return repo
+
+    monkeypatch.setattr(tool, "get_config", lambda: Config())
+    session = repo.writable_session("main")
+    root = zarr.open_group(session.store, mode="a")
+    p = "spexone_l1c"
+    stale = root.create_array(
+        f"{p}_bin_was_viewed_at_nadir_view",
+        shape=(5,),
+        dtype="float64",
+        dimension_names=(f"{p}_along_track",),
+        attributes={
+            "units": "seconds since 2026-10-29",
+            "valid_max": 172800.0,
+            "_FillValue": -32767.0,
+            "source_name": f"{p}_nadir_view_time",
+        },
+    )
+    day2 = (pd.Timestamp("2026-10-28") - pd.Timestamp("1970-01-01")).total_seconds()
+    # Two rows of the 29th, one of the 28th still day-relative, a fill, and a row a fixed
+    # writer already rebased.
+    stale[:] = [100.0, 200.0, 86500.0, -32767.0, day2 + 300.0]
+    index = root.create_array(
+        f"{p}_granule_index", shape=(5,), dtype="int32", dimension_names=(f"{p}_along_track",)
+    )
+    index[:] = [0, 0, 1, 1, 1]
+    starts = root.create_array(
+        f"{p}_time_coverage_start", shape=(2,), dtype=str, dimension_names=(f"{p}_granule",)
+    )
+    starts[:] = np.array(["2026-10-29T00:01:52Z", "2026-10-28T23:56:52Z"], dtype=object)
+    session.commit("stale")
+
+    tool.repair("bkr/polar/pace_l2.icechunk")
+    root = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    assert f"{p}_bin_was_viewed_at_nadir_view" not in root
+    fixed = root[f"{p}_nadir_view_time"]
+    day1 = (pd.Timestamp("2026-10-29") - pd.Timestamp("1970-01-01")).total_seconds()
+    assert fixed[:].tolist() == [day1 + 100, day1 + 200, day2 + 86500, -32767.0, day2 + 300]
+    assert fixed.attrs["units"] == "seconds since 1970-01-01"
+    assert "valid_max" not in fixed.attrs and "source_name" not in fixed.attrs
+    assert tool.repair("bkr/polar/pace_l2.icechunk") == []

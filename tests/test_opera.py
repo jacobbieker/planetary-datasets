@@ -15,22 +15,30 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-
 from helpers import assert_pipes_accepts, read_store
+
 from planetary_datasets.providers import opera, opera_download
 from planetary_datasets.providers.opera_download import (
+    EXIT_UNAVAILABLE,
     PRODUCTS,
+    HourUnavailable,
     IncompleteHour,
     download_opera,
     staged_path,
 )
 
 HOUR = dt.datetime(2026, 9, 29, 6)
+#: The fake fills each quantity with the frame's minute plus its index here.
+CODES = ["tprate", "tp01", "refc"]
 NY, NX = 6, 5
 
 
 class FakeOPERA:
-    """Mimics ``earth2studio.data.OPERA.__call__``, which fails whole if any frame does."""
+    """Mimics ``earth2studio.data.OPERA.__call__``, which fails whole if any file is missing.
+
+    ``missing`` holds frame times with no file at all, and ``(time, code)`` pairs for a
+    frame that lacks one quantity.
+    """
 
     def __init__(self, missing: set[dt.datetime] = frozenset()):
         self.missing = set(missing)
@@ -38,13 +46,18 @@ class FakeOPERA:
 
     def __call__(self, time, variable):
         self.calls.append((list(time), list(variable)))
-        absent = [t for t in time if t in self.missing]
+        absent = [t for t in time if t in self.missing] + [
+            (t, v) for t in time for v in variable if (t, v) in self.missing
+        ]
         if absent:
             raise FileNotFoundError(f"no composite at {absent[0]}")
         data = np.stack(
             [
                 np.stack(
-                    [np.full((NY, NX), t.minute + i, dtype="float32") for i in range(len(variable))]
+                    [
+                        np.full((NY, NX), t.minute + CODES.index(v), dtype="float32")
+                        for v in variable
+                    ]
                 )
                 for t in time
             ]
@@ -149,13 +162,55 @@ def test_a_missing_frame_fails_the_hour_unless_allowed(tmp_path):
     source = FakeOPERA(missing={gap})
     summary = download_opera("rainfall", HOUR, tmp_path, source=source, allow_partial=True)
     assert summary["frames"] == 3 and summary["missing_frames"] == ["06:30"]
-    assert len(source.calls) == 1 + 4, "the whole hour, then frame by frame to find the gap"
+    assert len(source.calls) == 1 + 4 + 2, (
+        "the whole hour, frame by frame to find the gap, then the gap's quantities one by one"
+    )
+
+
+def test_a_quantity_missing_from_every_frame_is_filled_and_the_rest_kept(tmp_path):
+    """Before 2024 whole hours have the rain rate and no accumulation file."""
+    frames = PRODUCTS["rainfall"].frame_times(HOUR)
+    source = FakeOPERA(missing={(t, "tp01") for t in frames})
+    summary = download_opera("rainfall", HOUR, tmp_path, source=source, allow_partial=True)
+    assert summary["frames"] == 4 and summary["missing_frames"] == []
+    assert summary["filled_variables"] == [f"{t:%H:%M} tp01" for t in frames]
+    with xr.open_dataset(summary["path"]) as ds:
+        np.testing.assert_array_equal(ds["rainfall_rate"].isel(y=0, x=0), [0, 15, 30, 45])
+        assert ds["accumulated_rainfall_1hour"].isnull().all()
+
+
+def test_a_frame_with_nothing_is_dropped_while_one_quantity_short_is_filled(tmp_path):
+    first, second = HOUR, HOUR + dt.timedelta(minutes=15)
+    source = FakeOPERA(missing={first, (second, "tprate")})
+    summary = download_opera("rainfall", HOUR, tmp_path, source=source, allow_partial=True)
+    assert summary["missing_frames"] == ["06:00"]
+    assert summary["filled_variables"] == ["06:15 tprate"]
+    with xr.open_dataset(summary["path"]) as ds:
+        assert ds.sizes["time"] == 3
+        assert np.isnan(ds["rainfall_rate"].isel(time=0, y=0, x=0))
+        assert ds["accumulated_rainfall_1hour"].isel(time=0, y=0, x=0) == 16
+
+
+def test_an_hour_the_archive_lacks_exits_as_unavailable(tmp_path, monkeypatch):
+    missing = set(PRODUCTS["rainfall"].frame_times(HOUR))
+    monkeypatch.setattr(opera_download, "_opera_source", lambda: FakeOPERA(missing=missing))
+    argv = ["--product", "rainfall", "--time", "2026-09-29T06:00", "--target", str(tmp_path)]
+    assert opera_download.main([*argv, "--allow-partial"]) == EXIT_UNAVAILABLE
+
+
+def test_a_failure_other_than_a_missing_file_is_not_unavailable(tmp_path):
+    def broken(time, variable):
+        raise ConnectionError("reset by peer")
+
+    with pytest.raises(IncompleteHour) as raised:
+        download_opera("rainfall", HOUR, tmp_path, source=broken, allow_partial=True)
+    assert not isinstance(raised.value, HourUnavailable)
 
 
 @pytest.mark.parametrize(
     ("product", "hour", "missing", "error", "match"),
     [
-        ("dbz", HOUR, set(PRODUCTS["dbz"].frame_times(HOUR)), IncompleteHour, "no frames"),
+        ("dbz", HOUR, set(PRODUCTS["dbz"].frame_times(HOUR)), HourUnavailable, "no frames"),
         ("dbz", dt.datetime(2024, 6, 30, 23), set(), ValueError, "only staged from 2024-07-01"),
         ("rainfall", "2026-09-29T06:15", set(), ValueError, "start of an hour"),
     ],
