@@ -196,6 +196,8 @@ def check_store(prefix: str) -> str | None:
             node = root[group] if group else root
             if not list(node.array_keys()):
                 continue
+            # xarray reads string arrays whole to make them objects; renaming leaves them be.
+            strings = [name for name, array in node.arrays() if array.dtype.kind in "OTSU"]
             xr.open_zarr(
                 store,
                 group=group or None,
@@ -205,6 +207,7 @@ def check_store(prefix: str) -> str | None:
                 # Lazily, so names, dimensions and attributes decode without reading data;
                 # indexing or eagerly decoding a large observation store loads every row.
                 create_default_indexes=False,
+                drop_variables=strings,
             ).close()
         except Exception as exc:  # noqa: BLE001 - reported, not raised
             message = str(exc).splitlines()[0][:200]
