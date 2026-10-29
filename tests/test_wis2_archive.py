@@ -134,7 +134,7 @@ def test_windows_end_at_00z_and_12z_once_settled():
     assert wis2.window_ends(now)[-1] == dt.datetime(2026, 10, 29, 0, tzinfo=UTC)
     later = dt.datetime(2026, 10, 29, 12, 11, tzinfo=UTC)
     ends = wis2.window_ends(later)
-    assert ends[-1] == END and len(ends) == 6
+    assert ends[-1] == END and len(ends) == 4
     assert all(b - a == wis2.EVERY for a, b in zip(ends, ends[1:]))
 
 

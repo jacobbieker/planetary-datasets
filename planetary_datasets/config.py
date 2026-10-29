@@ -238,7 +238,12 @@ class Config:
         """
         import icechunk
 
-        return icechunk.Repository.open_or_create(self.icechunk_storage(prefix), config=config)
+        storage = self.icechunk_storage(prefix)
+        try:
+            return icechunk.Repository.open_or_create(storage, config=config)
+        except icechunk.ConflictError:
+            # Another writer created it between this one finding nothing and creating.
+            return icechunk.Repository.open(storage, config=config)
 
 
 def load_config(env_file: str | os.PathLike | None = None, override: bool = False) -> Config:
