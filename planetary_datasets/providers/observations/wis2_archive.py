@@ -57,9 +57,9 @@ EVERY = dt.timedelta(hours=12)
 LOOKBACK = EVERY
 #: How long after a window ends before it is archived, so late listings settle.
 SETTLE = dt.timedelta(minutes=10)
-#: Window ends still worth archiving when a run was missed: the cache has kept about five
-#: days, so a window ending three days ago is still whole.
-CATCH_UP = dt.timedelta(days=3)
+#: Window ends still worth archiving when a run was missed. The cache keeps objects for
+#: about two and a half days (a few stragglers longer), so older windows are mostly gone.
+CATCH_UP = dt.timedelta(days=2)
 
 #: Directories listed, and objects fetched, at once.
 LIST_WORKERS = 256
