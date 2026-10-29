@@ -222,3 +222,29 @@ def _config():
         memory_ceiling_gb=None,
         credentials=Credentials(),
     )
+
+
+def test_targets_get_plain_bytes_from_the_archives_obstore_buffers():
+    """The archive streams obstore ``Bytes``; BUFR splitting needs ``bytes`` methods."""
+    import obstore
+    from obstore.store import MemoryStore
+
+    from planetary_datasets.providers.observations.wis2_targets import Router
+
+    store = MemoryStore()
+    obstore.put(store, "k", b"xxBUFR")
+    body = obstore.get(store, "k").bytes()
+    assert not isinstance(body, bytes)
+    seen = []
+
+    class Target:
+        name = "t"
+
+        def wants(self, key, size):
+            return True
+
+        def feed(self, key, data, arrived):
+            seen.append((type(data), data.find(b"BUFR")))
+
+    Router([Target(), Target()])("k", 6, body, None)
+    assert seen == [(bytes, 2), (bytes, 2)]

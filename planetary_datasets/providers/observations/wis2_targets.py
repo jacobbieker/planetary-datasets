@@ -206,10 +206,15 @@ class Router:
         self.targets = targets
 
     def __call__(self, key: str, size: int, body: bytes, arrived: dt.datetime | None) -> None:
+        data = None
         for target in self.targets:
             try:
                 if target.wants(key, size):
-                    target.feed(key, body, arrived)
+                    # The archive fetches into obstore's Bytes, which has no bytes methods;
+                    # targets get plain bytes, copied once and only for objects they want.
+                    if data is None:
+                        data = body if isinstance(body, bytes) else bytes(body)
+                    target.feed(key, data, arrived)
             except Exception as exc:  # noqa: BLE001 - a target never fails the archive
                 logger.warning(f"wis2 {target.name}: {key}: {exc}")
 
