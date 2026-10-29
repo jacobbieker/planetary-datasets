@@ -2,17 +2,17 @@
 
 The WMO WIS2 Global Cache (``s3://wis2globalcache``, us-east-1, anonymous) holds the
 GRIB, BUFR and NetCDF that WIS2 nodes publish, a day or so each before it ages out: a few
-million objects of ~120 kB on average. Every 12 hours this takes everything that arrived
-in the preceding 25 hours (an hour's overlap, so nothing falls between two archives) and
-streams it into one tar on Source Cooperative::
+million objects of ~120 kB on average. At 00Z and 12Z this takes everything that arrived
+in the preceding 12 hours and streams it into one tar on Source Cooperative::
 
-    bkr/obs/wis2/wis2_20261029T1200Z.tar            <- arrivals 2026-10-28T11:00Z..12:00Z
+    bkr/obs/wis2/wis2_20261029T1200Z.tar            <- arrivals 2026-10-29T00:00Z..12:00Z
     bkr/obs/wis2/wis2_20261029T1200Z.tar.index.csv.gz
 
-named for the end of its window. Members keep their bucket keys
+named for the end of its window. Consecutive windows meet without overlapping (an object
+belongs to the window its arrival time falls in, start inclusive, end exclusive), so each
+arrival is in exactly one archive. Members keep their bucket keys
 (``data/<centre>/data/core/...``) and arrival times as their mtimes; the index lists each
-key, size, arrival time and ETag. Files that arrive more than once (a 13-hour overlap
-between consecutive windows, by design) are in both archives.
+key, size, arrival time and ETag.
 
 Nothing is staged on disk. The cache is listed and read with ``obstore`` (Rust, so a
 single asyncio loop keeps hundreds of requests going without contending for the GIL):
@@ -51,13 +51,15 @@ from planetary_datasets.config import Config, get_config
 SOURCE_BUCKET = "wis2globalcache"
 SOURCE_REGION = "us-east-1"
 DEST_PREFIX = "bkr/obs/wis2"
-#: Hours of arrivals each archive covers, and how often one is made.
-LOOKBACK = dt.timedelta(hours=25)
+#: How often an archive is made (at 00Z and 12Z), and the arrivals each covers: the same,
+#: so the windows tile time without gaps or overlaps.
 EVERY = dt.timedelta(hours=12)
+LOOKBACK = EVERY
 #: How long after a window ends before it is archived, so late listings settle.
 SETTLE = dt.timedelta(minutes=10)
-#: Window ends still worth archiving when a run was missed (the cache keeps a few days).
-CATCH_UP = dt.timedelta(days=2)
+#: Window ends still worth archiving when a run was missed: the cache has kept about five
+#: days, so a window ending three days ago is still whole.
+CATCH_UP = dt.timedelta(days=3)
 
 #: Directories listed, and objects fetched, at once.
 LIST_WORKERS = 256
@@ -391,7 +393,7 @@ def exists(client, bucket: str, key: str) -> bool:
 
 
 def archive(end: dt.datetime, config: Config | None = None, force: bool = False) -> Summary:
-    """Archive the arrivals of the 25 hours before ``end`` (UTC)."""
+    """Archive the arrivals of the 12 hours before ``end`` (UTC)."""
     config = config or get_config()
     end = end.astimezone(dt.timezone.utc) if end.tzinfo else end.replace(tzinfo=dt.timezone.utc)
     start = end - LOOKBACK
