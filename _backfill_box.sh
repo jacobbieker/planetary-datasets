@@ -51,8 +51,9 @@ declare -A SCRIPT_PAUSE=([kenda]=1800 [icon_v1_global]=43200 [icon_v1_global_art
 GUARD_LEAKY="hafs_a_parent hafs_a_storm hafs_b_parent hafs_b_storm nam_hawaii
   hrrr_alaska_sfc hrrr_alaska_prs hrrr_alaska_nat osmc_ragged"
 GUARD_LEAKY_GB=${GUARD_LEAKY_GB:-25}
-#: guard also removes abandoned planetary-datasets-* scratch untouched for this long.
-GUARD_TMP_STALE_MINUTES=${GUARD_TMP_STALE_MINUTES:-360}
+#: guard also removes abandoned planetary-datasets-* scratch untouched for this long, and
+#: at once any whose .pid names a process that has exited.
+GUARD_TMP_STALE_MINUTES=${GUARD_TMP_STALE_MINUTES:-120}
 #: Himawari lanes in the order guard pauses them: the extra lanes of each resolution
 #: first, then the last 500 m lane, then the last 1000 m lane; himawari_2000m_0 always
 #: runs. Lanes resume in the reverse order.
@@ -368,6 +369,13 @@ guard)
     dir=${dir%/}
     [[ -d $dir ]] || continue
     grep -qx "$dir" <<< "$inuse" && continue
+    if [[ -f $dir/.pid ]]; then
+      # The owner recorded itself (EarthCARE, PACE): gone the moment it is.
+      kill -0 "$(cat "$dir/.pid")" 2> /dev/null && continue
+      [[ -n ${GUARD_DRY_RUN:-} ]] && { echo "would remove orphaned scratch $dir"; continue; }
+      rm -rf "$dir" && echo "$(date -u '+%F %T') removed orphaned scratch $dir"
+      continue
+    fi
     [[ -n $(find "$dir" -maxdepth 0 -mmin +"$GUARD_TMP_STALE_MINUTES") ]] || continue
     [[ -n $(find "$dir" -mmin -"$GUARD_TMP_STALE_MINUTES" -print -quit) ]] && continue
     [[ -n ${GUARD_DRY_RUN:-} ]] && { echo "would remove stale scratch $dir"; continue; }

@@ -106,9 +106,20 @@ def search(
         params["filter"] = " AND ".join(f"{k}='{v}'" for k, v in filters.items())
     url: str | None = f"{CATALOGUE_URL}/collections/{collection}/items"
     while url:
-        response = http.get(
-            url, params=params, headers={"Accept": "application/geo+json"}, timeout=300
-        )
+        for attempt in range(1, 6):
+            try:
+                response = http.get(
+                    url, params=params, headers={"Accept": "application/geo+json"}, timeout=300
+                )
+                if response.status_code < 500:
+                    break
+                error: Exception = requests.HTTPError(f"MAAP catalogue {response.status_code}")
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                error = exc
+            if attempt == 5:
+                raise error
+            logger.debug(f"maap: catalogue attempt {attempt} failed ({error}); retrying")
+            time.sleep(5 * 2 ** (attempt - 1))
         response.raise_for_status()
         page = response.json()
         yield from page.get("features", [])

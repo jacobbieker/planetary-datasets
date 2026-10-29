@@ -31,6 +31,7 @@ Source: https://pace.oceansciences.org/data_table.htm
 
 from __future__ import annotations
 
+import os
 import pathlib
 import shutil
 import tempfile
@@ -285,6 +286,9 @@ class PaceL2Provider(BaseProvider):
             scratch = pathlib.Path(
                 tempfile.mkdtemp(prefix=f"pace-{product.prefix}-", dir=self.config.scratch_dir)
             )
+            # The box guard removes scratch whose owner has died (a killed or restarted lane
+            # never reaches the cleanup below).
+            (scratch / ".pid").write_text(str(os.getpid()))
             try:
                 futures = [pool.submit(self._download, url, scratch) for url in todo]
                 batch: list[pathlib.Path] = []

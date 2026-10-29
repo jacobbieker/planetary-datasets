@@ -41,6 +41,7 @@ Source: https://earth.esa.int/eogateway/missions/earthcare/data
 from __future__ import annotations
 
 import collections
+import os
 import pathlib
 import re
 import shutil
@@ -414,6 +415,9 @@ class EarthCAREProvider(BaseProvider):
         scratch = pathlib.Path(
             tempfile.mkdtemp(prefix=f"earthcare-{product.prefix}-", dir=self.config.scratch_dir)
         )
+        # The box guard removes scratch whose owner has died (a killed or restarted lane
+        # never reaches the cleanup below).
+        (scratch / ".pid").write_text(str(os.getpid()))
         written = 0
         try:
             futures = [pool.submit(self._download, item, scratch) for item in todo]
