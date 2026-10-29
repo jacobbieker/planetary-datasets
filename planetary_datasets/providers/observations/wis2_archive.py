@@ -36,17 +36,23 @@ import datetime as dt
 import gzip
 import io
 import queue
+import re
 import sys
 import tarfile
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Iterator, Sequence
 
 from loguru import logger
 
 from planetary_datasets.config import Config, get_config
+from planetary_datasets.providers.observations.wis2_targets import (
+    Router,
+    build_targets,
+    run_targets,
+)
 
 SOURCE_BUCKET = "wis2globalcache"
 SOURCE_REGION = "us-east-1"
@@ -343,14 +349,19 @@ class Summary:
     gone: int = 0
     bytes: int = 0
     seconds: float = 0.0
+    targets: dict = field(default_factory=dict)
 
 
 def write_archive(
     entries: Sequence[Entry],
     fetch: Callable[[Sequence[Entry]], Iterator[tuple[Entry, bytes | None]]],
     out: io.RawIOBase,
+    observe: Callable[[str, int, bytes, dt.datetime], None] | None = None,
 ) -> tuple[int, int, int, bytes]:
     """Stream ``entries`` into an uncompressed tar on ``out``.
+
+    ``observe(key, size, body, arrived)`` sees every file written (the archive targets'
+    :class:`~planetary_datasets.providers.observations.wis2_targets.Router`).
 
     Returns:
         Files written, files gone before they could be fetched, payload bytes, and the
@@ -372,6 +383,8 @@ def write_archive(
                 info.mtime = entry.modified.timestamp()
                 info.mode = 0o644
                 tar.addfile(info, io.BytesIO(body))
+                if observe is not None:
+                    observe(entry.key, len(body), body, entry.modified)
                 rows.writerow([entry.key, len(body), entry.modified.isoformat(), entry.etag])
                 files += 1
                 payload += len(body)
@@ -392,8 +405,24 @@ def exists(client, bucket: str, key: str) -> bool:
         raise
 
 
-def archive(end: dt.datetime, config: Config | None = None, force: bool = False) -> Summary:
-    """Archive the arrivals of the 12 hours before ``end`` (UTC)."""
+def partition_name(tar_key: str) -> str:
+    """The ledger entry the archive targets record a window under: the tar's stem."""
+    return tar_key.rsplit("/", 1)[-1].removesuffix(".tar")
+
+
+def archive(
+    end: dt.datetime,
+    config: Config | None = None,
+    force: bool = False,
+    targets: Sequence[str] | None = None,
+) -> Summary:
+    """Archive the arrivals of the 12 hours before ``end`` (UTC).
+
+    The archive targets named in ``targets`` (all registered when None, none when empty)
+    are fed every file as it streams and finished once the tar is complete; a target's
+    failure is logged and never fails the tar. When the tar exists already nothing runs:
+    use :func:`targets_from_tar` for that window.
+    """
     config = config or get_config()
     end = end.astimezone(dt.timezone.utc) if end.tzinfo else end.replace(tzinfo=dt.timezone.utc)
     start = end - LOOKBACK
@@ -411,9 +440,12 @@ def archive(end: dt.datetime, config: Config | None = None, force: bool = False)
         f"wis2: {len(entries):,} object(s), {total / 1e9:.1f} GB arrived "
         f"{start:%Y-%m-%dT%H:%MZ}..{end:%Y-%m-%dT%H:%MZ} (listed in {time.time() - began:.0f}s)"
     )
+    built = _build_targets(config, targets)
     out = MultipartWriter(dest, config.bucket, key)
     try:
-        files, gone, payload, index = write_archive(entries, lambda es: fetch_all(source, es), out)
+        files, gone, payload, index = write_archive(
+            entries, lambda es: fetch_all(source, es), out, observe=Router(built) if built else None
+        )
         out.close()
     except BaseException:
         out.abort()
@@ -426,16 +458,73 @@ def archive(end: dt.datetime, config: Config | None = None, force: bool = False)
         f"({out.written / 1e9:.1f} GB tar), {gone:,} gone before fetching, "
         f"in {summary.seconds / 60:.1f} min"
     )
+    if built:
+        summary.targets = run_targets(built, start, end, partition_name(key))
     return summary
 
 
-def follow(config: Config | None = None) -> None:
+def _build_targets(config: Config, names: Sequence[str] | None) -> list:
+    """The archive targets to run; none (logged) if they cannot be built."""
+    if names is not None and not names:
+        return []
+    try:
+        return build_targets(config, names)
+    except Exception as exc:  # noqa: BLE001 - targets never stop the archive
+        logger.exception(f"wis2: archive targets not built: {exc}")
+        return []
+
+
+def targets_from_tar(
+    tar_key: str, config: Config | None = None, targets: Sequence[str] | None = None
+) -> dict[str, dict]:
+    """Run the archive targets over a window already archived at ``tar_key``.
+
+    The tar is streamed from Source Cooperative; only the files a target wants are read
+    into memory.
+    """
+    config = config or get_config()
+    built = _build_targets(config, targets)
+    if not built:
+        return {}
+    route = Router(built)
+    body = dest_client(config).get_object(Bucket=config.bucket, Key=tar_key)["Body"]
+    with tarfile.open(fileobj=body, mode="r|") as tar:
+        for member in tar:
+            if not member.isfile() or not any(t.wants(member.name, member.size) for t in built):
+                continue
+            arrived = dt.datetime.fromtimestamp(member.mtime, dt.timezone.utc)
+            route(member.name, member.size, tar.extractfile(member).read(), arrived)
+    end = _window_end(tar_key)
+    start = end - LOOKBACK if end else None
+    return run_targets(built, start, end, partition_name(tar_key))
+
+
+def _window_end(tar_key: str) -> dt.datetime | None:
+    match = re.search(r"wis2_(\d{8}T\d{4})Z\.tar$", tar_key)
+    if not match:
+        return None
+    return dt.datetime.strptime(match[1], "%Y%m%dT%H%M").replace(tzinfo=dt.timezone.utc)
+
+
+def archived_tars(config: Config | None = None) -> list[str]:
+    """Keys of the archives on Source Cooperative, oldest first."""
+    config = config or get_config()
+    client = dest_client(config)
+    keys = []
+    for page in client.get_paginator("list_objects_v2").paginate(
+        Bucket=config.bucket, Prefix=f"{DEST_PREFIX}/"
+    ):
+        keys += [o["Key"] for o in page.get("Contents", []) if o["Key"].endswith(".tar")]
+    return sorted(keys)
+
+
+def follow(config: Config | None = None, targets: Sequence[str] | None = None) -> None:
     """Archive each settled 00Z/12Z window not yet archived, forever."""
     while True:
         now = dt.datetime.now(dt.timezone.utc)
         for end in window_ends(now):
             try:
-                archive(end, config)
+                archive(end, config, targets=targets)
             except Exception as exc:  # noqa: BLE001 - the next window must still be tried
                 logger.exception(f"wis2: archive ending {end:%Y-%m-%dT%H:%MZ} failed: {exc}")
         now = dt.datetime.now(dt.timezone.utc)
@@ -452,12 +541,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--end", help="window end, UTC ISO 8601 (e.g. 2026-10-29T12:00)")
     group.add_argument("--follow", action="store_true", help="keep the 00Z/12Z schedule")
+    group.add_argument("--from-tar", help="run the archive targets over an archived window")
+    group.add_argument(
+        "--all-archived", action="store_true", help="run the targets over every archived window"
+    )
     parser.add_argument("--force", action="store_true", help="rewrite an existing archive")
+    parser.add_argument(
+        "--targets",
+        help="comma-separated archive targets (default: all registered; 'none' for none)",
+    )
     args = parser.parse_args(argv)
+    targets = None
+    if args.targets is not None:
+        targets = [] if args.targets == "none" else [t for t in args.targets.split(",") if t]
     if args.follow:
-        follow()
-        return 0
-    archive(dt.datetime.fromisoformat(args.end), force=args.force)
+        follow(targets=targets)
+    elif args.from_tar or args.all_archived:
+        for key in [args.from_tar] if args.from_tar else archived_tars():
+            try:
+                targets_from_tar(key, targets=targets)
+            except Exception as exc:  # noqa: BLE001 - the next archive must still be tried
+                logger.exception(f"wis2: targets over {key} failed: {exc}")
+    else:
+        archive(dt.datetime.fromisoformat(args.end), force=args.force, targets=targets)
     return 0
 
 
