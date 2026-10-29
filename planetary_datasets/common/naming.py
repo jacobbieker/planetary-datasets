@@ -530,8 +530,6 @@ COORDINATE_RENAMES = {
     "member": "ensemble_member",
     "realization": "ensemble_member",
     # Projection coordinates are x and y everywhere.
-    "x_geostationary": "geostationary_x",
-    "y_geostationary": "geostationary_y",
     "projection_x_coordinate": "x",
     "projection_y_coordinate": "y",
     "xc": "x",
@@ -571,7 +569,7 @@ def coordinate_rename(name: str, attrs: Mapping, dims: list[str], store: str = "
 
     ``t`` and ``level`` need their units to say what they are: a time axis, pressure levels.
     A geostationary imager's ``x`` and ``y`` are scan angles (or metres along the scan),
-    not a map projection's, and say so: ``geostationary_x``, ``geostationary_y``.
+    not a map projection's, and say so: ``x_geostationary``, ``y_geostationary``.
     """
     if name in COORDINATE_RENAMES:
         return COORDINATE_RENAMES[name]
@@ -580,7 +578,7 @@ def coordinate_rename(name: str, attrs: Mapping, dims: list[str], store: str = "
         units.strip().lower() in SCAN_ANGLE_UNITS
         or (GEOSTATIONARY_STORES.search(store) and "gmgsi" not in store)
     ):
-        return f"geostationary_{name}"
+        return f"{name}_geostationary"
     if name == "t" and " since " in units:
         return "time"
     if (

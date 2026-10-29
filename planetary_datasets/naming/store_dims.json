@@ -180,2126 +180,1534 @@
   "west_east": "x",
   "west_east_stag": "x_staggered"
  },
- "bkr/geo/gk2a_1000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/gk2a_1000m_test.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/gk2a_2000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/gk2a_2000m_test.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/gk2a_500m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/gk2a_500m_test.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/goes-east_1000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/goes-east_2000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/goes-east_2000m_test.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/goes-east_500m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/goes-west_1000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/goes-west_2000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/goes-west_500m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
  "bkr/geo/goes16_radf_C01.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C02.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C04.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C05.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C06.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C07.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C10.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C11.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C12.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C13.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C14.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C15.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes16_radf_C16.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C01.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C04.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C05.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C06.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C07.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C10.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C11.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C12.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C13.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C14.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C15.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes17_radf_C16.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C01.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C02.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C04.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C05.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C06.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C07.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C10.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C11.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C12.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C13.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C14.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C15.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes18_radf_C16.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C01.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C02.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C04.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C04_2026-07-09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C05.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C06.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C06_2026-07-09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C07.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C07_2026-07-09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C08_2026-07-09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C09_2026-07-09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C10.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C10_2026-07-09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C11.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C11_2026-07-09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C12.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C12_2026-07-09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C13.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C13_2026-07-09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C14.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C14_2026-07-09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C15.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C15_2026-07-09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C16.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/goes19_radf_C16_2026-07-09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
- },
- "bkr/geo/himawari_1000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202202.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202205.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202206.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202207.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202209.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202210.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202211.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202212.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202301.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202302.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202303.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202304.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202305.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202306.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202307.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202308.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202309.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202310.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202311.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202312.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202401.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202402.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202403.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202404.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202405.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202406.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202407.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202408.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202409.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202410.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202411.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202412.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202501.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202502.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202503.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202504.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202505.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202506.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202507.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202508.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202509.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202510.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202511.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_1000m_backfill_202512.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202109.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202203.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202204.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202205.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202206.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202207.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202208.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202209.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202210.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202211.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202212.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202301.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202302.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202303.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202304.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202305.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202306.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202307.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202308.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202309.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202310.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202311.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202312.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202401.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202402.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202403.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202404.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202405.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202406.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202407.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202408.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202409.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202410.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202411.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202412.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202501.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202502.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202503.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202504.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202505.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202506.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202507.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202508.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202509.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202510.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202511.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_2000m_backfill_202512.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202309.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202311.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202312.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202401.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202402.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202403.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202404.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202405.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202406.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202407.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202408.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202409.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202410.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202411.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202412.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202501.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202502.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202503.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202504.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202505.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202506.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202507.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202508.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202509.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202510.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202511.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/himawari_500m_backfill_202512.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/iodc_1000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/iodc_1000m_test.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/msg_1000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/msg_3000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/mtg_1000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/mtg_500m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/mtg_highres_1000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/mtg_irs_l1.icechunk": {
-  "x": "geostationary_x",
-  "y": "geostationary_y"
- },
- "bkr/geo/odegree-12-highres_1000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/odegree-12-highres_500m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/odegree-12_1000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/odegree-12_2000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/odegree_3000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/rss_1000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
- },
- "bkr/geo/rss_3000m.icechunk": {
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir087_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir087_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir087_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir096_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir096_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir096_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir105_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir105_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir105_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir112_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir112_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir112_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir123_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir123_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir123_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir133_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir133_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir133_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_nr013_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_nr013_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_nr013_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_nr016_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_nr016_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_nr016_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_sw038_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_sw038_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_sw038_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_vi004_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_vi004_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_vi004_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_vi005_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_vi005_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_vi005_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_vi006_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_vi006_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_vi006_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_vi008_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_vi008_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_vi008_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_wv063_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_wv063_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_wv063_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_wv069_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_wv069_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_wv069_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_wv073_2023-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_wv073_2024-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_wv073_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C01.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C01_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C01_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C02.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C03_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C03_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C04.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C04_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C04_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C05.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C05_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C05_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C06.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C06_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C06_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C07.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C07_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C07_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C08_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C08_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C09_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C09_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C10.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C10_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C10_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C11.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C11_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C11_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C12.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C12_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C12_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C13.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C13_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C13_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C14.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C14_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C14_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C15.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C15_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C15_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C16.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C16_2018-01-03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes16_radf_C16_2024-12-28.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C01.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C01_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C02.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C02_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C03.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C03_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C04.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C04_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C05.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C05_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C06.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C06_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C07.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C07_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C08_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C09.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C09_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C10.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C10_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C11.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C11_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C12.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C12_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C13.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C13_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C14.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C14_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C15.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C15_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C16.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes17_radf_C16_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C01_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C01_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C03_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C03_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C04_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C04_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C05_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C05_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C06_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C06_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C07_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C07_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C08_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C08_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C09_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C09_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C10_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C10_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C11_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C11_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C12_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C12_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C13_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C13_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C14_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C14_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C15_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C15_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C16_2023-03-26.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes18_radf_C16_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C01_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C03_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C04_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C05_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C06_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C07_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C08_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C09_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C10_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C11_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C12_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C13_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C14_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C15_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/goes19_radf_C16_2026-07-08.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C01_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C01_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C02_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C02_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C03_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C03_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C04_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C04_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C05_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C05_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C05_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C06_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C06_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C06_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C07_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C07_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C07_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C08_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C08_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C08_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C09_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C09_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C09_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C10_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C10_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C10_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C11_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C11_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C11_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C12_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C12_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C12_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C13_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C13_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C13_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C14_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C14_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C14_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C15_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C15_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C15_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C16_2021-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C16_2022-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C16_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C01_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C02_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C04_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C05_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C06_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C07_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C08_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C09_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C10_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C11_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C12_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C13_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C14_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C15_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C16_2025-12-31.icechunk": {
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/gfs/gfs.icechunk": {
   "level": "pressure_level"
@@ -2534,12 +1942,12 @@
   "projection_y_coordinate": "y"
  },
  "bkr/obs/goes_east_conus.icechunk": {
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/obs/goes_west_pacus.icechunk": {
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/obs/igra_v2_16_levels.icechunk": {
   "level": "pressure_level"

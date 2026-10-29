@@ -4071,16 +4071,12 @@
  "bkr/geo/gk2a_1000m.icechunk": {
   "VI004": "channel_01_reflectance_0_47um",
   "VI005": "channel_02_reflectance_0_51um",
-  "VI008": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "VI008": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/gk2a_1000m_test.icechunk": {
   "VI004": "channel_01_reflectance_0_47um",
   "VI005": "channel_02_reflectance_0_51um",
-  "VI008": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "VI008": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/gk2a_2000m.icechunk": {
   "IR087": "channel_11_brightness_temperature_8_7um",
@@ -4094,9 +4090,7 @@
   "SW038": "channel_07_brightness_temperature_3_8um",
   "WV063": "channel_08_brightness_temperature_6_3um",
   "WV069": "channel_09_brightness_temperature_6_9um",
-  "WV073": "channel_10_brightness_temperature_7_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "WV073": "channel_10_brightness_temperature_7_3um"
  },
  "bkr/geo/gk2a_2000m_test.icechunk": {
   "IR087": "channel_11_brightness_temperature_8_7um",
@@ -4110,26 +4104,18 @@
   "SW038": "channel_07_brightness_temperature_3_8um",
   "WV063": "channel_08_brightness_temperature_6_3um",
   "WV069": "channel_09_brightness_temperature_6_9um",
-  "WV073": "channel_10_brightness_temperature_7_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "WV073": "channel_10_brightness_temperature_7_3um"
  },
  "bkr/geo/gk2a_500m.icechunk": {
-  "VI006": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "VI006": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/gk2a_500m_test.icechunk": {
-  "VI006": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "VI006": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/goes-east_1000m.icechunk": {
   "C01": "channel_01_reflectance_0_47um",
   "C03": "channel_03_reflectance_0_86um",
-  "C05": "channel_05_reflectance_1_6um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "C05": "channel_05_reflectance_1_6um"
  },
  "bkr/geo/goes-east_2000m.icechunk": {
   "C04": "channel_04_reflectance_1_37um",
@@ -4143,9 +4129,7 @@
   "C13": "channel_13_brightness_temperature_10_3um",
   "C14": "channel_14_brightness_temperature_11_2um",
   "C15": "channel_15_brightness_temperature_12_3um",
-  "C16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "C16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/goes-east_2000m_test.icechunk": {
   "C04": "channel_04_reflectance_1_37um",
@@ -4159,21 +4143,15 @@
   "C13": "channel_13_brightness_temperature_10_3um",
   "C14": "channel_14_brightness_temperature_11_2um",
   "C15": "channel_15_brightness_temperature_12_3um",
-  "C16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "C16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/goes-east_500m.icechunk": {
-  "C02": "channel_02_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "C02": "channel_02_reflectance_0_64um"
  },
  "bkr/geo/goes-west_1000m.icechunk": {
   "C01": "channel_01_reflectance_0_47um",
   "C03": "channel_03_reflectance_0_86um",
-  "C05": "channel_05_reflectance_1_6um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "C05": "channel_05_reflectance_1_6um"
  },
  "bkr/geo/goes-west_2000m.icechunk": {
   "C04": "channel_04_reflectance_1_37um",
@@ -4187,14 +4165,10 @@
   "C13": "channel_13_brightness_temperature_10_3um",
   "C14": "channel_14_brightness_temperature_11_2um",
   "C15": "channel_15_brightness_temperature_12_3um",
-  "C16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "C16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/goes-west_500m.icechunk": {
-  "C02": "channel_02_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "C02": "channel_02_reflectance_0_64um"
  },
  "bkr/geo/goes16_radf_C01.icechunk": {
   "DQF": "abi_l1b_radiances_data_quality_flags",
@@ -4211,10 +4185,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4233,10 +4207,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4255,10 +4229,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4277,10 +4251,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4299,10 +4273,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4321,10 +4295,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4343,10 +4317,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4365,10 +4339,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4387,10 +4361,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4409,10 +4383,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4431,10 +4405,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4453,10 +4427,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4475,10 +4449,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4497,10 +4471,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4519,10 +4493,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4541,10 +4515,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4561,9 +4535,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C03.icechunk": {
@@ -4579,9 +4553,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C04.icechunk": {
@@ -4597,9 +4571,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C05.icechunk": {
@@ -4615,9 +4589,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C06.icechunk": {
@@ -4633,9 +4607,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C07.icechunk": {
@@ -4651,9 +4625,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C08.icechunk": {
@@ -4669,9 +4643,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C09.icechunk": {
@@ -4687,9 +4661,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C10.icechunk": {
@@ -4705,9 +4679,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C11.icechunk": {
@@ -4723,9 +4697,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C12.icechunk": {
@@ -4741,9 +4715,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C13.icechunk": {
@@ -4759,9 +4733,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C14.icechunk": {
@@ -4777,9 +4751,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C15.icechunk": {
@@ -4795,9 +4769,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes17_radf_C16.icechunk": {
@@ -4813,9 +4787,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/goes18_radf_C01.icechunk": {
@@ -4832,10 +4806,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4853,10 +4827,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4874,10 +4848,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4895,10 +4869,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4916,10 +4890,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4937,10 +4911,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4958,10 +4932,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -4979,10 +4953,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5000,10 +4974,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5021,10 +4995,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5042,10 +5016,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5063,10 +5037,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5084,10 +5058,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5105,10 +5079,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5126,10 +5100,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5147,10 +5121,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5169,10 +5143,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5191,10 +5165,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5213,10 +5187,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5235,10 +5209,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5257,10 +5231,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5279,10 +5253,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5301,10 +5275,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5323,10 +5297,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5345,10 +5319,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5367,10 +5341,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5389,10 +5363,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5411,10 +5385,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5433,10 +5407,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5455,10 +5429,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5477,10 +5451,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5499,10 +5473,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5521,10 +5495,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5543,10 +5517,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5565,10 +5539,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5587,10 +5561,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5609,10 +5583,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5631,10 +5605,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5653,10 +5627,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5675,10 +5649,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5697,10 +5671,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5719,10 +5693,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5741,10 +5715,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -5763,327 +5737,237 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
  "bkr/geo/himawari_1000m.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202202.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202205.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202206.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202207.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202209.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202210.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202211.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202212.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202301.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202302.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202303.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202304.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202305.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202306.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202307.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202308.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202309.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202310.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202311.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202312.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202401.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202402.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202403.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202404.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202405.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202406.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202407.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202408.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202409.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202410.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202411.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202412.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202501.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202502.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202503.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202504.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202505.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202506.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202507.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202508.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202509.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202510.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202511.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_1000m_backfill_202512.icechunk": {
   "B01": "channel_01_reflectance_0_47um",
   "B02": "channel_02_reflectance_0_51um",
-  "B04": "channel_04_reflectance_0_86um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B04": "channel_04_reflectance_0_86um"
  },
  "bkr/geo/himawari_2000m.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6097,9 +5981,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202109.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6113,9 +5995,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202203.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6129,9 +6009,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202204.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6145,9 +6023,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202205.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6161,9 +6037,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202206.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6177,9 +6051,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202207.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6193,9 +6065,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202208.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6209,9 +6079,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202209.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6225,9 +6093,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202210.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6241,9 +6107,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202211.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6257,9 +6121,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202212.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6273,9 +6135,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202301.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6289,9 +6149,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202302.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6305,9 +6163,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202303.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6321,9 +6177,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202304.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6337,9 +6191,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202305.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6353,9 +6205,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202306.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6369,9 +6219,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202307.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6385,9 +6233,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202308.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6401,9 +6247,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202309.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6417,9 +6261,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202310.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6433,9 +6275,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202311.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6449,9 +6289,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202312.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6465,9 +6303,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202401.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6481,9 +6317,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202402.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6497,9 +6331,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202403.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6513,9 +6345,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202404.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6529,9 +6359,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202405.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6545,9 +6373,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202406.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6561,9 +6387,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202407.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6577,9 +6401,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202408.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6593,9 +6415,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202409.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6609,9 +6429,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202410.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6625,9 +6443,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202411.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6641,9 +6457,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202412.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6657,9 +6471,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202501.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6673,9 +6485,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202502.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6689,9 +6499,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202503.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6705,9 +6513,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202504.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6721,9 +6527,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202505.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6737,9 +6541,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202506.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6753,9 +6555,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202507.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6769,9 +6569,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202508.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6785,9 +6583,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202509.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6801,9 +6597,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202510.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6817,9 +6611,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202511.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6833,9 +6625,7 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_2000m_backfill_202512.icechunk": {
   "B05": "channel_05_reflectance_1_6um",
@@ -6849,164 +6639,100 @@
   "B13": "channel_13_brightness_temperature_10_4um",
   "B14": "channel_14_brightness_temperature_11_2um",
   "B15": "channel_15_brightness_temperature_12_4um",
-  "B16": "channel_16_brightness_temperature_13_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B16": "channel_16_brightness_temperature_13_3um"
  },
  "bkr/geo/himawari_500m.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202309.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202311.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202312.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202401.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202402.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202403.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202404.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202405.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202406.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202407.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202408.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202409.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202410.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202411.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202412.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202501.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202502.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202503.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202504.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202505.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202506.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202507.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202508.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202509.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202510.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202511.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/himawari_500m_backfill_202512.icechunk": {
-  "B03": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "B03": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/iodc_1000m.icechunk": {
-  "HRV": "channel_12_reflectance_0_7um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "HRV": "channel_12_reflectance_0_7um"
  },
  "bkr/geo/iodc_1000m_test.icechunk": {
-  "HRV": "channel_12_reflectance_0_7um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "HRV": "channel_12_reflectance_0_7um"
  },
  "bkr/geo/msg_1000m.icechunk": {
-  "HRV": "channel_12_reflectance_0_7um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "HRV": "channel_12_reflectance_0_7um"
  },
  "bkr/geo/msg_3000m.icechunk": {
   "IR_016": "channel_03_reflectance_1_6um",
@@ -7019,9 +6745,7 @@
   "VIS006": "channel_01_reflectance_0_6um",
   "VIS008": "channel_02_reflectance_0_8um",
   "WV_062": "channel_05_brightness_temperature_6_2um",
-  "WV_073": "channel_06_brightness_temperature_7_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "WV_073": "channel_06_brightness_temperature_7_3um"
  },
  "bkr/geo/mtg_1000m.icechunk": {
   "nir_13": "channel_06_reflectance_1_38um",
@@ -7031,21 +6755,15 @@
   "vis_05": "channel_02_reflectance_0_51um",
   "vis_06": "channel_03_reflectance_0_64um",
   "vis_08": "channel_04_reflectance_0_86um",
-  "vis_09": "channel_05_reflectance_0_91um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "vis_09": "channel_05_reflectance_0_91um"
  },
  "bkr/geo/mtg_500m.icechunk": {
   "nir_22": "channel_08_reflectance_2_25um",
-  "vis_06": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "vis_06": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/mtg_highres_1000m.icechunk": {
   "ir_105": "channel_14_brightness_temperature_10_5um",
-  "ir_38": "channel_09_brightness_temperature_3_8um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "ir_38": "channel_09_brightness_temperature_3_8um"
  },
  "bkr/geo/mtg_irs_l1.icechunk": {
   "cloud_fraction": "cloud_fraction_for_spatial_sample",
@@ -7057,15 +6775,11 @@
  },
  "bkr/geo/odegree-12-highres_1000m.icechunk": {
   "ir_105": "channel_14_brightness_temperature_10_5um",
-  "ir_38": "channel_09_brightness_temperature_3_8um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "ir_38": "channel_09_brightness_temperature_3_8um"
  },
  "bkr/geo/odegree-12-highres_500m.icechunk": {
   "nir_22": "channel_08_reflectance_2_25um",
-  "vis_06": "channel_03_reflectance_0_64um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "vis_06": "channel_03_reflectance_0_64um"
  },
  "bkr/geo/odegree-12_1000m.icechunk": {
   "nir_13": "channel_06_reflectance_1_38um",
@@ -7075,9 +6789,7 @@
   "vis_05": "channel_02_reflectance_0_51um",
   "vis_06": "channel_03_reflectance_0_64um",
   "vis_08": "channel_04_reflectance_0_86um",
-  "vis_09": "channel_05_reflectance_0_91um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "vis_09": "channel_05_reflectance_0_91um"
  },
  "bkr/geo/odegree-12_2000m.icechunk": {
   "ir_105": "channel_14_brightness_temperature_10_5um",
@@ -7087,9 +6799,7 @@
   "ir_87": "channel_12_brightness_temperature_8_7um",
   "ir_97": "channel_13_brightness_temperature_9_66um",
   "wv_63": "channel_10_brightness_temperature_6_3um",
-  "wv_73": "channel_11_brightness_temperature_7_35um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "wv_73": "channel_11_brightness_temperature_7_35um"
  },
  "bkr/geo/odegree_3000m.icechunk": {
   "IR_016": "channel_03_reflectance_1_6um",
@@ -7102,14 +6812,10 @@
   "VIS006": "channel_01_reflectance_0_6um",
   "VIS008": "channel_02_reflectance_0_8um",
   "WV_062": "channel_05_brightness_temperature_6_2um",
-  "WV_073": "channel_06_brightness_temperature_7_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "WV_073": "channel_06_brightness_temperature_7_3um"
  },
  "bkr/geo/rss_1000m.icechunk": {
-  "HRV": "channel_12_reflectance_0_7um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "HRV": "channel_12_reflectance_0_7um"
  },
  "bkr/geo/rss_3000m.icechunk": {
   "IR_016": "channel_03_reflectance_1_6um",
@@ -7122,9 +6828,7 @@
   "VIS006": "channel_01_reflectance_0_6um",
   "VIS008": "channel_02_reflectance_0_8um",
   "WV_062": "channel_05_brightness_temperature_6_2um",
-  "WV_073": "channel_06_brightness_temperature_7_3um",
-  "x_geostationary": "geostationary_x",
-  "y_geostationary": "geostationary_y"
+  "WV_073": "channel_06_brightness_temperature_7_3um"
  },
  "bkr/geo/virtualized/gk2a_ami_fd_ir087_2023-12-31.icechunk": {
   "t": "time",
@@ -7333,10 +7037,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7355,10 +7059,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7375,9 +7079,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C02.icechunk": {
@@ -7395,10 +7099,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7417,10 +7121,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7439,10 +7143,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7459,9 +7163,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C04.icechunk": {
@@ -7479,10 +7183,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7501,10 +7205,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7521,9 +7225,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C05.icechunk": {
@@ -7541,10 +7245,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7563,10 +7267,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7583,9 +7287,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C06.icechunk": {
@@ -7603,10 +7307,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7625,10 +7329,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7645,9 +7349,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C07.icechunk": {
@@ -7665,10 +7369,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7687,10 +7391,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7707,9 +7411,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C08.icechunk": {
@@ -7727,10 +7431,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7749,10 +7453,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7769,9 +7473,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C09.icechunk": {
@@ -7789,10 +7493,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7811,10 +7515,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7831,9 +7535,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C10.icechunk": {
@@ -7851,10 +7555,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7873,10 +7577,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7893,9 +7597,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C11.icechunk": {
@@ -7913,10 +7617,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7935,10 +7639,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7955,9 +7659,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C12.icechunk": {
@@ -7975,10 +7679,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -7997,10 +7701,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8017,9 +7721,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C13.icechunk": {
@@ -8037,10 +7741,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8059,10 +7763,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8079,9 +7783,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C14.icechunk": {
@@ -8099,10 +7803,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8121,10 +7825,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8141,9 +7845,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C15.icechunk": {
@@ -8161,10 +7865,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8183,10 +7887,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8203,9 +7907,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes16_radf_C16.icechunk": {
@@ -8223,10 +7927,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8245,10 +7949,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8265,9 +7969,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C01.icechunk": {
@@ -8285,10 +7989,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8305,9 +8009,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C02.icechunk": {
@@ -8325,10 +8029,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8345,9 +8049,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C03.icechunk": {
@@ -8365,10 +8069,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8385,9 +8089,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C04.icechunk": {
@@ -8405,10 +8109,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8425,9 +8129,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C05.icechunk": {
@@ -8445,10 +8149,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8465,9 +8169,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C06.icechunk": {
@@ -8485,10 +8189,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8505,9 +8209,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C07.icechunk": {
@@ -8525,10 +8229,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8545,9 +8249,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C08.icechunk": {
@@ -8565,10 +8269,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8585,9 +8289,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C09.icechunk": {
@@ -8605,10 +8309,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8625,9 +8329,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C10.icechunk": {
@@ -8645,10 +8349,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8665,9 +8369,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C11.icechunk": {
@@ -8685,10 +8389,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8705,9 +8409,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C12.icechunk": {
@@ -8725,10 +8429,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8745,9 +8449,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C13.icechunk": {
@@ -8765,10 +8469,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8785,9 +8489,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C14.icechunk": {
@@ -8805,10 +8509,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8825,9 +8529,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C15.icechunk": {
@@ -8845,10 +8549,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8865,9 +8569,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes17_radf_C16.icechunk": {
@@ -8885,10 +8589,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8905,9 +8609,9 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate"
  },
  "bkr/geo/virtualized/goes18_radf_C01_2023-03-26.icechunk": {
@@ -8924,10 +8628,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8945,10 +8649,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8966,10 +8670,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -8987,10 +8691,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9008,10 +8712,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9029,10 +8733,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9050,10 +8754,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9071,10 +8775,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9092,10 +8796,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9113,10 +8817,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9134,10 +8838,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9155,10 +8859,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9176,10 +8880,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9197,10 +8901,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9218,10 +8922,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9239,10 +8943,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9260,10 +8964,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9281,10 +8985,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9302,10 +9006,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9323,10 +9027,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9344,10 +9048,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9365,10 +9069,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9386,10 +9090,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9407,10 +9111,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9428,10 +9132,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9449,10 +9153,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9470,10 +9174,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9491,10 +9195,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9512,10 +9216,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9533,10 +9237,10 @@
   "saturated_pixel_count": "number_of_saturated_pixels",
   "t": "time",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9555,10 +9259,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9577,10 +9281,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9599,10 +9303,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9621,10 +9325,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9643,10 +9347,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9665,10 +9369,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9687,10 +9391,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9709,10 +9413,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9731,10 +9435,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9753,10 +9457,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9775,10 +9479,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9797,10 +9501,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9819,10 +9523,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9841,10 +9545,10 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
@@ -9863,366 +9567,366 @@
   "t": "time",
   "t_star_look": "j2000_epoch_time_of_star_observed_in_seconds",
   "undersaturated_pixel_count": "number_of_undersaturated_pixels",
-  "x": "geostationary_x",
+  "x": "x_geostationary",
   "x_coord": "goes_fixed_grid_projection_x_coordinate",
   "x_image": "goes_r_fixed_grid_projection_x_coordinate_center_of_image",
-  "y": "geostationary_y",
+  "y": "y_geostationary",
   "y_coord": "goes_fixed_grid_projection_y_coordinate",
   "y_image": "goes_r_fixed_grid_projection_y_coordinate_center_of_image"
  },
  "bkr/geo/virtualized/himawari8_isatss_C01_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C01_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C02_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C02_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C03_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C03_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C04_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C04_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C05_2021-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C05_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C05_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C06_2021-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C06_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C06_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C07_2021-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C07_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C07_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C08_2021-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C08_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C08_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C09_2021-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C09_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C09_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C10_2021-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C10_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C10_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C11_2021-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C11_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C11_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C12_2021-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C12_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C12_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C13_2021-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C13_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C13_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C14_2021-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C14_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C14_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C15_2021-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C15_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C15_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C16_2021-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C16_2022-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari8_isatss_C16_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C01_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C02_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C04_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C05_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C06_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C07_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C08_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C09_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C10_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C11_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C12_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C13_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C14_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C15_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geo/virtualized/himawari9_isatss_C16_2025-12-31.icechunk": {
   "Sectorized_CMI": "sectorized_cmi",
   "t": "time",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/geos/geos_15min.icechunk": {
   "CO": "carbon_monoxide",
@@ -12591,8 +12295,8 @@
   "abi14c": "channel_14_brightness_temperature_11_2um",
   "abi15c": "channel_15_brightness_temperature_12_3um",
   "abi16c": "channel_16_brightness_temperature_13_3um",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/obs/goes_west_pacus.icechunk": {
   "abi01c": "channel_01_reflectance_0_47um",
@@ -12611,8 +12315,8 @@
   "abi14c": "channel_14_brightness_temperature_11_2um",
   "abi15c": "channel_15_brightness_temperature_12_3um",
   "abi16c": "channel_16_brightness_temperature_13_3um",
-  "x": "geostationary_x",
-  "y": "geostationary_y"
+  "x": "x_geostationary",
+  "y": "y_geostationary"
  },
  "bkr/obs/igra_v2_16_levels.icechunk": {
   "flag_int": "flag_interpolation",
