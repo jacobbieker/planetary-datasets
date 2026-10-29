@@ -6,8 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-
 from helpers import read_store
+
 from planetary_datasets.providers import gmgsi
 from planetary_datasets.providers.gmgsi import (
     V1_CHANNELS,
@@ -64,7 +64,11 @@ def processed(provider, v3_files):
 
 def test_stores_resolve_locally_and_legacy_has_its_own_prefix(provider, local_config, tmp_path):
     assert provider.store_path.startswith(str(tmp_path))
-    assert GMGSILegacyProvider(config=local_config).store_prefix != GMGSIProvider.store_prefix
+    legacy = GMGSILegacyProvider(config=local_config)
+    # Compared on the instances: `store_prefix` is a property now that these pick their
+    # generation per partition, so reading it off the class gives the descriptor.
+    assert legacy.store_prefix != provider.store_prefix
+    assert legacy.base_store_prefix != GMGSIProvider.base_store_prefix
 
 
 def test_process_merges_channels_as_uint8(processed):
@@ -213,6 +217,38 @@ def test_run_partition_writes_then_skips(provider, monkeypatch, v3_files):
 
     stored = read_store(provider)
     assert pd.Timestamp(stored["time"].values[0]) == TIME
+
+
+def test_a_narrower_grid_starts_a_new_dated_generation(provider, monkeypatch, tmp_path, v3_files):
+    """The 2026-07-22 break: one column fewer must not be silently dropped.
+
+    Before the providers were generational the writer's alignment guard refused the
+    narrower hour and returned False, which `run_partition` reports as "nothing to do", so
+    the store simply stopped at the last wide hour.
+    """
+    monkeypatch.setattr(provider, "fetch", lambda it, temp_dir=None, **kw: v3_files)
+    assert provider.run_partition(TIME) is True
+    wide_prefix = provider.store_prefix
+
+    # The same hour one column narrower, an hour later: a different grid, not a regrid.
+    narrow_time = TIME + pd.Timedelta("1h")
+    narrow_dir = tmp_path / "narrow"
+    narrow_dir.mkdir()
+    narrow_files = []
+    for channel in V3_CHANNELS:
+        path = _source_file(narrow_dir, channel, time=narrow_time)
+        with xr.open_dataset(path) as raw:
+            trimmed = raw.isel(xc=slice(0, 2)).load()
+        trimmed.to_netcdf(path.replace(".nc", ".trimmed.nc"))
+        narrow_files.append(path.replace(".nc", ".trimmed.nc"))
+
+    monkeypatch.setattr(provider, "fetch", lambda it, temp_dir=None, **kw: narrow_files)
+    assert provider.run_partition(narrow_time) is True
+
+    assert provider.store_prefix != wide_prefix
+    assert provider.store_prefix.endswith(f"_{narrow_time.strftime('%d%m%Y')}.icechunk")
+    # Each hour is in exactly one generation, and neither is now missing.
+    assert provider.missing_timesteps(pd.DatetimeIndex([TIME, narrow_time])) == []
 
 
 def test_timestamps_are_clipped_to_the_archive_start(provider):
