@@ -101,6 +101,14 @@ def _encoding(ds: xr.Dataset, fixed: set[str]) -> dict:
             # Otherwise xarray declares a default (NaN, or 0 for integers) that the source
             # never had, and a reader would mask real values equal to it.
             entry["_FillValue"] = None
+        if variable.dtype.kind == "M":
+            # Units fixed at creation that hold any later datetime exactly; xarray would
+            # otherwise pick the coarsest that fits the first partition (whole days, say).
+            entry.update(units=TIME_UNITS, calendar="proleptic_gregorian", dtype="int64")
+            entry["_FillValue"] = NAT  # NaT, declared so it decodes back to NaT
+        elif variable.dtype.kind == "m":
+            entry.update(units="nanoseconds", dtype="int64")
+            entry["_FillValue"] = NAT
         if variable.ndim and variable.dims[0] not in fixed:
             entry["chunks"] = (_chunk_rows(variable), *variable.shape[1:])
         # The source's fill value and dtype would otherwise override the chosen dtype.
@@ -202,6 +210,84 @@ def _create_array(group: zarr.Group, name: str, variable: xr.Variable, rows: int
     )
 
 
+#: Units every datetime array is created with: int64 nanoseconds hold any datetime64[ns].
+TIME_UNITS = "nanoseconds since 1970-01-01"
+_UNIT_NS = {
+    "nanoseconds": 1,
+    "microseconds": 10**3,
+    "milliseconds": 10**6,
+    "seconds": 10**9,
+    "minutes": 60 * 10**9,
+    "hours": 3600 * 10**9,
+    "days": 86400 * 10**9,
+}
+NAT = np.iinfo("int64").min
+
+
+def _time_fill(array: zarr.Array) -> int:
+    from xarray.backends.zarr import FillValueCoder
+
+    fill = array.attrs.get("_FillValue")
+    if isinstance(fill, str):
+        fill = FillValueCoder.decode(fill, array.dtype)
+    return int(fill) if fill is not None else NAT
+
+
+def _rescale_to_ns(array: zarr.Array) -> None:
+    """Rewrite a stored time array in exact int64 nanoseconds (since 1970 for datetimes)."""
+    import pandas as pd
+
+    unit, _, since = str(array.attrs["units"]).partition(" since ")
+    factor = _UNIT_NS[unit.strip()]
+    fill = _time_fill(array)
+    values = array[:].astype("int64")
+    valid = values != fill
+    offset = 0
+    if since:
+        ref = pd.Timestamp(since.strip())
+        ref = ref.tz_convert(None) if ref.tzinfo else ref
+        offset = int((ref - pd.Timestamp("1970-01-01")).value)
+    rescaled = np.where(valid, values * factor + offset, NAT)
+    if array.dtype != np.dtype("int64"):
+        raise ValueError(f"{array.name}: cannot rescale a {array.dtype} time array in place")
+    array[:] = rescaled
+    attrs = dict(array.attrs)
+    attrs["units"] = TIME_UNITS if since else "nanoseconds"
+    attrs["_FillValue"] = NAT
+    array.attrs.update(attrs)
+
+
+def encode_times(array: zarr.Array, values: np.ndarray) -> np.ndarray:
+    """``values`` (datetime64/timedelta64) as the stored ``array`` encodes them, exactly.
+
+    An array whose units cannot hold the new values exactly (days, when a time has
+    seconds) is first rewritten in nanoseconds; nothing is ever rounded.
+    """
+    import pandas as pd
+
+    if "units" not in array.attrs:
+        raise ValueError(f"{array.name}: stored time array has no units")
+    unit, _, since = str(array.attrs["units"]).partition(" since ")
+    unit = unit.strip()
+    if unit not in _UNIT_NS:
+        raise ValueError(f"{array.name}: unsupported time units {array.attrs['units']!r}")
+    kind = "M" if since else "m"
+    ns = np.asarray(values).astype(f"{kind}8[ns]").view("int64")
+    missing = ns == NAT
+    offset = 0
+    if since:
+        ref = pd.Timestamp(since.strip())
+        ref = ref.tz_convert(None) if ref.tzinfo else ref
+        offset = int((ref - pd.Timestamp("1970-01-01")).value)
+    factor = _UNIT_NS[unit]
+    shifted = ns - offset
+    if factor != 1 and np.any((shifted % factor != 0) & ~missing):
+        _rescale_to_ns(array)
+        return encode_times(array, values)
+    out = np.where(missing, _time_fill(array), shifted // factor)
+    return out.astype(array.dtype)
+
+
 def _append(
     session: icechunk.Session, ds: xr.Dataset, fixed: set[str], path: str | None = None
 ) -> None:
@@ -262,11 +348,8 @@ def _append(
                     name
                 ].values
             group[name][start:stop] = values
-        if times:
-            part = ds[times].drop_indexes([n for n in times if n in ds.indexes], errors="ignore")
-            for variable in part.variables.values():
-                variable.attrs = {}
-            to_icechunk(part, session, region={dim: slice(start, stop)}, group=path)
+        for name in times:
+            group[name][start:stop] = encode_times(group[name], ds[name].values)
 
 
 #: Suffix of an array's wider copy while :func:`widen` replaces it.
@@ -405,7 +488,16 @@ def _append_once(
                 for name in narrow:
                     widen(repo, name, np.dtype(ds[name].dtype), label, path)
                 return _append_once(repo, ds, partition, fixed, label, path)
-            ds = cast_exactly(ds, {k: v for k, v in dtypes.items() if v.kind in "fiu"})
+            # Times are encoded into their stored units by encode_times, not cast: a cast of
+            # datetime64 to the stored int64 is raw nanoseconds whatever the units say.
+            ds = cast_exactly(
+                ds,
+                {
+                    k: v
+                    for k, v in dtypes.items()
+                    if v.kind in "fiu" and ds[k].dtype.kind not in "Mm"
+                },
+            )
             _append(session, ds, fixed, path)
         else:
             # A new store, or variables new to it (another product sharing the store):
@@ -415,6 +507,16 @@ def _append_once(
                 variable.attrs = json_safe_attrs(variable.attrs)
             ds.attrs = json_safe_attrs(ds.attrs) if not exists else {}
             mode = "a" if exists else "w-"
+            # xarray encodes datetime64[s] (or [ms], [us]) under nanosecond units as NaT, so
+            # every time column goes to it at nanosecond resolution.
+            ds = ds.assign(
+                {
+                    name: ds[name].astype(f"{ds[name].dtype.kind}8[ns]")
+                    for name in ds.variables
+                    if ds[name].dtype.kind in "Mm"
+                    and ds[name].dtype != f"{ds[name].dtype.kind}8[ns]"
+                }
+            )
             to_icechunk(ds, session, mode=mode, encoding=_encoding(ds, fixed), group=path)
     group = _open(session.store, path, "a")
     # Adding variables with xarray replaces the group's attributes; put them back. Left
