@@ -22,8 +22,9 @@ once for the history and again every :data:`BULK_REFRESH_DAYS`. The web service 
 stores current: the last :data:`RECENT_DAYS` days of every web product every few hours,
 and the Level 2.0 products over the past :data:`REVISIT_DAYS` days weekly, since Level 2.0
 is only released once an instrument's post-deployment calibration is in, months later.
-Level 1.0 and the total optical depth products are only served by the web service, so
-their history is walked from 1993 a month at a time.
+The history lane fills everything else up to the recent window: Level 1.0 and the total
+optical depth products (web only) from 1993, and the days since a product's last tarball
+read, a month at a time (:func:`history_days`), so no day of a web product is left out.
 
 :mod:`planetary_datasets.providers.observations.aeronet` is a different thing: Level 1.5
 AOD averaged onto an hourly ``(time, station)`` grid for the Dagster assets. This module
@@ -944,8 +945,9 @@ def run_web(
 ) -> int:
     """Read ``days`` of every product from the web service. Returns the rows written.
 
-    With ``ledger_months``, a calendar month whose days are all read is recorded in the
-    store's ledger (``web:YYYY-MM``) and skipped on later runs; the history walk uses it.
+    With ``ledger_months``, a calendar month read through to its last day is recorded in
+    the store's ledger (``web:YYYY-MM``) and skipped on later runs; the history walk uses
+    it. A month still running is read again each pass and only ledgered once it is over.
     """
     config = config or get_config()
     session = requests.Session()
@@ -971,8 +973,54 @@ def run_web(
 
 
 def _whole_month(month: str, days: pd.Series) -> bool:
+    """Whether ``days`` reach the month's last day (the days before are someone's)."""
     start = pd.Timestamp(f"{month}-01")
-    return len(set(days)) == start.days_in_month
+    return start + pd.offsets.MonthEnd(0) in set(pd.DatetimeIndex(days))
+
+
+def recent_window(today: pd.Timestamp) -> pd.DatetimeIndex:
+    """Days the ``recent`` lane reads each pass."""
+    return pd.date_range(today - pd.Timedelta(RECENT_DAYS, "D"), today)
+
+
+def history_days(product: Product, ledger: set[str], today: pd.Timestamp) -> pd.DatetimeIndex:
+    """Days the ``history`` lane reads for ``product``, up to :func:`recent_window`.
+
+    A web-only product is walked from :data:`ARCHIVE_START`. A product with a tarball is
+    walked from :data:`RECENT_DAYS` before the newest tarball read into its store (the
+    tarball's last days may still have been filling in), so the gap between that tarball
+    and the recent window is never left to the next re-read; until a tarball is read the
+    bulk lane is still coming, and nothing is walked.
+    """
+    if not product.web:
+        return pd.DatetimeIndex([])
+    end = recent_window(today)[0] - pd.Timedelta(1, "D")
+    if product.bulk:
+        reads = sorted(e.removeprefix("bulk:") for e in ledger if e.startswith("bulk:"))
+        if not reads:
+            return pd.DatetimeIndex([])
+        start = pd.Timestamp(reads[-1]) - pd.Timedelta(RECENT_DAYS, "D")
+    else:
+        start = ARCHIVE_START
+    return pd.date_range(start, end)
+
+
+def run_history(
+    products: Iterable[Product],
+    today: pd.Timestamp,
+    config: Config | None = None,
+    sites: pd.DataFrame | None = None,
+) -> int:
+    """Walk every web product's :func:`history_days`, a month at a time. Returns rows."""
+    config = config or get_config()
+    sites = sites if sites is not None else site_list()
+    written = 0
+    for product in products:
+        ledger = AeronetStore(product, config, sites).ledger()
+        days = history_days(product, ledger, today)
+        if len(days):
+            written += run_web([product], list(days), config, sites, ledger_months=True)
+    return written
 
 
 # ---------------------------------------------------------------------------- lanes
@@ -1000,18 +1048,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.mode == "bulk":
                 written = run_bulk(products)
             elif args.mode == "recent":
-                days = pd.date_range(today - pd.Timedelta(RECENT_DAYS, "D"), today)
-                written = run_web(products, list(days))
+                written = run_web(products, list(recent_window(today)))
             elif args.mode == "revisit":
                 level2 = [p for p in products if p.level == "20"]
                 days = pd.date_range(today - pd.Timedelta(REVISIT_DAYS, "D"), today)
                 written = run_web(level2, list(days))
             else:
-                # Web-only products' history, a month at a time, up to the recent window.
-                web_only = [p for p in products if p.web and not p.bulk]
-                end = (today - pd.Timedelta(RECENT_DAYS, "D")).to_period("M").start_time
-                days = pd.date_range(ARCHIVE_START, end - pd.Timedelta(1, "D"))
-                written = run_web(web_only, list(days), ledger_months=True)
+                written = run_history(products, today)
         except requests.RequestException as exc:
             logger.warning(f"aeronet {args.mode}: {exc}; next pass")
             written = 0

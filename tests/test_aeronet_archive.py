@@ -321,3 +321,31 @@ def test_a_lane_rereads_a_store_another_lane_wrote(local_config, sites):
     ds = stored(first)
     assert ds["site_name"].values.tolist() == ["Cuiaba", "Tucson"]
     assert ds["site_index"].values.tolist() == [0, 1, 0]
+
+
+@pytest.mark.parametrize("today", ["2026-10-29", "2026-03-01", "2026-03-08", "2024-02-29"])
+def test_no_day_of_a_web_product_falls_between_history_and_recent(today):
+    today = pd.Timestamp(today)
+    recent = set(aeronet.recent_window(today))
+    tarball = "2026-01-15"
+    for product in PRODUCTS.values():
+        if not product.web:
+            continue
+        ledger = {f"bulk:{tarball}"} if product.bulk else set()
+        history = set(aeronet.history_days(product, ledger, today))
+        # Before the tarball's day the tarball holds a product; a web-only one, history.
+        start = pd.Timestamp(tarball) if product.bulk else aeronet.ARCHIVE_START
+        wanted = set(pd.date_range(min(start, today), today))
+        missing = sorted(wanted - history - recent)
+        assert not missing, (product.key, missing[:3])
+
+
+def test_a_product_with_a_tarball_waits_for_it_before_walking():
+    product = PRODUCTS["aod_level15_all_points"]
+    assert len(aeronet.history_days(product, set(), pd.Timestamp("2026-10-29"))) == 0
+
+
+def test_a_running_month_is_read_but_not_ledgered_until_it_ends():
+    running = pd.Series(pd.date_range("2026-10-01", "2026-10-21"))
+    assert not aeronet._whole_month("2026-10", running)
+    assert aeronet._whole_month("2026-09", pd.Series(pd.date_range("2026-09-12", "2026-09-30")))

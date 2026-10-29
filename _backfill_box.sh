@@ -170,7 +170,8 @@ declare -A LANES=(
   # NASA AERONET (bkr/obs/aeronet/*.icechunk, 76 stores). bulk reads the all-sites tarballs
   # (~130 GB, smallest first, again every 90 days); recent keeps every web product's last
   # week current; revisit re-reads a year of Level 2.0, which arrives months late; history
-  # walks the web-only products (Level 1.0, total optical depth) back to 1993. One server:
+  # fills every web product up to the recent window (web-only ones from 1993, the rest from
+  # their last tarball). One server:
   # each lane makes one request at a time, and the lanes take turns at each store.
   [aeronet_bulk]="-m planetary_datasets.providers.observations.aeronet_archive bulk --pause 86400"
   [aeronet_recent]="-m planetary_datasets.providers.observations.aeronet_archive recent --pause 21600"
