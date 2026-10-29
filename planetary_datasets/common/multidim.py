@@ -190,7 +190,7 @@ def _create_array(group: zarr.Group, name: str, variable: xr.Variable, rows: int
         shape=(rows, *variable.shape[1:]),
         chunks=(_chunk_rows(variable), *variable.shape[1:]),
         dtype=str if strings else variable.dtype,
-        compressors=()
+        compressors=(zarr.codecs.ZstdCodec(level=CLEVEL),)
         if strings
         else (zarr.codecs.BloscCodec(cname="zstd", clevel=CLEVEL, shuffle="bitshuffle"),),
         # Without a fill value of its own, a float's earlier rows read as NaN, not 0.
