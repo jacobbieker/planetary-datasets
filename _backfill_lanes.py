@@ -32,6 +32,9 @@ from typing import Any, Callable
 
 CONSECUTIVE_FAILURE_LIMIT = 20
 EXIT_FAILURE_STREAK = 2
+#: The source is not published yet (a provider's ``available()`` is False); the box
+#: script tries again a day later.
+EXIT_UNAVAILABLE = 3
 PASS_PAUSE_SECONDS = 1800
 
 
@@ -388,6 +391,16 @@ LANES: dict[str, Lane] = {
         0,
         recent_days=90,
     ),
+    # Copernicus Sentinel-4 L2 from the EUMETSAT Data Store, a group per product in
+    # bkr/geo/sentinel4_l2.icechunk. Collections are found by title once published; until
+    # then the lane exits 3 and the box retries daily.
+    "sentinel4_l2": Lane(
+        _provider("eumetsat.sentinel4", "Sentinel4Provider", download_workers=4),
+        "2025-10-08",
+        "1D",
+        0,
+        recent_days=14,
+    ),
     # Aeolus (2018-09 to 2023-07) from VirES, one lane per level into bkr/polar/aeolus.
     **{
         f"aeolus_{level}": Lane(
@@ -529,6 +542,9 @@ def main(argv) -> int:
 
     dask.config.set(scheduler="threads", num_workers=args.threads)
     provider = lane.provider()
+    if hasattr(provider, "available") and not provider.available():
+        print(f"{args.lane}: nothing published yet; trying again later", flush=True)
+        return EXIT_UNAVAILABLE
     stager = None
     if lane.opera:
         from one_offs.silam_harmonie_catchup import OperaCatchUp
