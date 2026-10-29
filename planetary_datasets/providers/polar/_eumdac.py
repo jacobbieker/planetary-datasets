@@ -25,6 +25,21 @@ from planetary_datasets.providers.polar._granule import GranuleProvider
 from planetary_datasets.providers.polar.epct_download import stage_dir
 
 
+#: A download that receives nothing for this long is abandoned and retried. eumdac streams
+#: with no read timeout, and a stalled connection otherwise blocks a lane for hours.
+DOWNLOAD_STALL_SECONDS = 300
+
+
+def _set_read_timeout(src, seconds: float) -> None:
+    """Make reads from eumdac's raw urllib3 response give up after ``seconds`` of silence."""
+    connection = getattr(src, "connection", None) or getattr(src, "_connection", None)
+    sock = getattr(connection, "sock", None)
+    if sock is None:
+        logger.debug("eumdac response exposes no socket; downloading without a read timeout")
+        return
+    sock.settimeout(seconds)
+
+
 class EumdacProvider(StagedFilesMixin, GranuleProvider):
     """Base class for providers backed by a EUMETSAT Data Store collection.
 
@@ -96,6 +111,7 @@ class EumdacProvider(StagedFilesMixin, GranuleProvider):
         for attempt in range(1, self.download_retries + 1):
             try:
                 with product.open() as src:
+                    _set_read_timeout(src, DOWNLOAD_STALL_SECONDS)
                     target = dest / src.name
                     if target.is_file() and target.stat().st_size > 0:
                         logger.debug(f"{self.name}: {src.name} already downloaded")

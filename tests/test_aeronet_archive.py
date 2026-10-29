@@ -6,6 +6,7 @@ No network: the files and web responses are small fakes in AERONET's formats.
 from __future__ import annotations
 
 import io
+import re
 import tarfile
 
 import numpy as np
@@ -93,17 +94,20 @@ def test_columns_get_readable_names_and_units(column, name, units):
     assert column_name(column) == (name, units)
 
 
-def test_every_store_lives_under_bkr_obs_aeronet():
-    assert len(PRODUCTS) == 76
-    assert all(p.store_prefix.startswith("bkr/obs/aeronet/") for p in PRODUCTS.values())
-    assert PRODUCTS["aod_level20_all_points"].bulk == "AOD/AOD_Level20_All_Points_V3.tar.gz"
-    assert PRODUCTS["aod_level10_all_points"].bulk is None
-    assert PRODUCTS["tot_level15_daily"].web == ("TOT15=1&AVG=20",)
-    pfn = PRODUCTS["inversion_hybrid_phase_functions_level20_all_points"]
+def test_only_all_points_products_each_a_group():
+    assert len(PRODUCTS) == 27
+    assert aeronet.STORE_PREFIX == "bkr/obs/aeronet.icechunk"
+    assert not [k for k in PRODUCTS if re.search("daily|monthly|all_points", k)]
+    assert all("All_Points" in p.bulk for p in PRODUCTS.values() if p.bulk)
+    assert all(q.count("AVG=10") for p in PRODUCTS.values() for q in p.web)
+    assert PRODUCTS["aod_level20"].bulk == "AOD/AOD_Level20_All_Points_V3.tar.gz"
+    assert PRODUCTS["aod_level10"].bulk is None
+    assert PRODUCTS["tot_level15"].web == ("TOT15=1&AVG=10",)
+    assert "inversion_hybrid_phase_functions_polarized_level15" in PRODUCTS
+    assert PRODUCTS["ocean_colour_level20"].bulk == "LWN/LWN_Level20_All_Points_V3.tar.gz"
+    pfn = PRODUCTS["inversion_hybrid_phase_functions_level20"]
     assert pfn.inversion and len(pfn.web) == 3
-    assert PRODUCTS["inversion_almucantar_level20_all_points"].bulk == (
-        "INV/INV_Level2_All_Points_V3.tar.gz"
-    )
+    assert PRODUCTS["inversion_almucantar_level20"].bulk == ("INV/INV_Level2_All_Points_V3.tar.gz")
 
 
 # --- parsing ------------------------------------------------------------------------------
@@ -137,11 +141,7 @@ def test_float32_only_when_it_reprints_the_published_text():
     assert table.rows["aerosol_optical_depth_500nm"].iloc[1] == 123.456789
 
 
-def test_monthly_daily_and_ocean_colour_dates():
-    monthly = "\n".join(
-        [*(h.format(site="Cuiaba") for h in HEAD), "Month,AOD_500nm,N[AOD_500nm]", "1993-JUN,0.1,3"]
-    )
-    assert parse_table(monthly).rows["time"].iloc[0] == pd.Timestamp("1993-06-01")
+def test_ocean_colour_dates_and_site_column():
     ocean = "\n".join(
         [
             *(h.format(site="Venise") for h in HEAD),
@@ -165,11 +165,13 @@ def test_a_value_outside_a_vocabulary_is_refused():
 
 
 def stored(store: AeronetStore) -> xr.Dataset:
-    return xr.open_zarr(store.repo.readonly_session("main").store, consolidated=False)
+    return xr.open_zarr(
+        store.repo.readonly_session("main").store, group=store.path, consolidated=False
+    )
 
 
 def test_rows_append_once_and_decode(local_config, sites):
-    product = PRODUCTS["aod_level20_all_points"]
+    product = PRODUCTS["aod_level20"]
     store = AeronetStore(product, local_config, sites)
     assert store.append([parse_table(aod_file("Cuiaba", ROWS))]) == 2
     # The same rows again, and one new row from a new site, through a fresh store object.
@@ -189,14 +191,17 @@ def test_rows_append_once_and_decode(local_config, sites):
     assert np.isnan(ds["angstrom_exponent_440_870nm"].values[1])
     assert ds["total_column_water_vapour"].values[0] == pytest.approx(19.89356, rel=1e-6)
     raw = xr.open_zarr(
-        store.repo.readonly_session("main").store, consolidated=False, mask_and_scale=False
+        store.repo.readonly_session("main").store,
+        group=store.path,
+        consolidated=False,
+        mask_and_scale=False,
     )
     assert raw["total_column_water_vapour"].values[0] == pytest.approx(1.989356)
     assert raw["aerosol_optical_depth_500nm"].values[0] == np.float32(0.065048)
 
 
 def test_a_web_response_shares_the_bulk_store(local_config, sites):
-    product = PRODUCTS["aod_level20_all_points"]
+    product = PRODUCTS["aod_level20"]
     AeronetStore(product, local_config, sites).append([parse_table(aod_file("Cuiaba", ROWS))])
     web = "\n".join(
         [
@@ -224,7 +229,7 @@ def test_phase_function_modes_are_distinct_rows(local_config, sites):
             "Cuiaba,20:06:1993,18:58:26,0.400000,Fine",
         ]
     )
-    product = PRODUCTS["inversion_almucantar_phase_functions_level20_all_points"]
+    product = PRODUCTS["inversion_almucantar_phase_functions_level20"]
     store = AeronetStore(product, local_config, sites)
     assert store.append([parse_table(text)]) == 2
     assert AeronetStore(product, local_config, sites).append([parse_table(text)]) == 0
@@ -258,7 +263,7 @@ def test_the_bulk_lane_reads_a_tarball_into_its_store(local_config, sites, monke
 
     monkeypatch.setattr(aeronet, "download_one", fake_download)
     monkeypatch.setattr(aeronet, "published", lambda url, session=None: ("2026-10-24", 1))
-    product = PRODUCTS["aod_level20_all_points"]
+    product = PRODUCTS["aod_level20"]
     assert aeronet.run_bulk([product], local_config, sites) == 3
     store = AeronetStore(product, local_config, sites)
     assert "bulk:2026-10-24" in store.ledger()
@@ -292,7 +297,7 @@ def test_the_history_walk_ledgers_only_whole_months(local_config, sites, monkeyp
     )
     session = FakeSession(text)
     monkeypatch.setattr(aeronet.requests, "Session", lambda: session)
-    product = PRODUCTS["aod_level10_all_points"]
+    product = PRODUCTS["aod_level10"]
     june = list(pd.date_range("1993-06-01", "1993-06-30"))
     assert aeronet.run_web([product], june, local_config, sites, ledger_months=True) == 1
     assert "web:1993-06" in AeronetStore(product, local_config, sites).ledger()
@@ -305,7 +310,7 @@ def test_the_history_walk_ledgers_only_whole_months(local_config, sites, monkeyp
 
 
 def test_a_lane_rereads_a_store_another_lane_wrote(local_config, sites):
-    product = PRODUCTS["aod_level20_all_points"]
+    product = PRODUCTS["aod_level20"]
     first = AeronetStore(product, local_config, sites)
     second = AeronetStore(product, local_config, sites)
     assert first.append([parse_table(aod_file("Cuiaba", ROWS[:1]))]) == 1
@@ -341,7 +346,7 @@ def test_no_day_of_a_web_product_falls_between_history_and_recent(today):
 
 
 def test_a_product_with_a_tarball_waits_for_it_before_walking():
-    product = PRODUCTS["aod_level15_all_points"]
+    product = PRODUCTS["aod_level15"]
     assert len(aeronet.history_days(product, set(), pd.Timestamp("2026-10-29"))) == 0
 
 
@@ -352,7 +357,7 @@ def test_a_running_month_is_read_but_not_ledgered_until_it_ends():
 
 
 def test_a_header_with_a_trailing_separator_and_shorter_rows_parses():
-    """SDA daily: the header ends in a comma (35 names, the last empty), rows have 34."""
+    """The header ends in a comma (a last name that is empty), rows have one field less."""
     from planetary_datasets.providers.observations.aeronet_archive import parse_table
 
     header = (
@@ -363,3 +368,96 @@ def test_a_header_with_a_trailing_separator_and_shorter_rows_parses():
     row = "Lulin,22:10:2026,00:00:00,295,0.123456,lev10,1564,Lulin,23.468611,120.873611,2868.000000"
     table = parse_table("\n".join(["Version 3: SDA", "Level 1.0", header, row, row]))
     assert len(table.rows) == 2
+
+
+def test_products_share_one_store_as_groups_that_open_as_a_datatree(local_config, sites):
+    aod = AeronetStore(PRODUCTS["aod_level20"], local_config, sites)
+    aod.append([parse_table(aod_file("Cuiaba", ROWS))])
+    inversion = AeronetStore(PRODUCTS["inversion_almucantar_level20"], local_config, sites)
+    columns = "Site,Date(dd:mm:yyyy),Time(hh:mm:ss),Single_Scattering_Albedo[440nm]"
+    text = "\n".join(
+        [*(h.format(site="Tucson") for h in HEAD), columns, "Tucson,20:06:1993,18:58:26,0.9"]
+    )
+    inversion.append([parse_table(text)])
+    aod.mark("bulk:2026-10-24")
+
+    assert aod.repo is not None and local_config.store_path(aeronet.STORE_PREFIX)
+    store = aod.repo.readonly_session("main").store
+    tree = xr.open_datatree(store, engine="zarr", consolidated=False)
+    assert set(tree.children) == {"aod_level20", "inversion_almucantar_level20"}
+    assert "layout" in tree.attrs and "open_datatree" in tree.attrs["layout"]
+    assert tree["aod_level20"].sizes == {"observation": 2, "site": 1}
+    assert tree["inversion_almucantar_level20"].sizes == {"observation": 1, "site": 1}
+    one = xr.open_zarr(store, group="inversion_almucantar_level20", consolidated=False)
+    assert one["single_scattering_albedo_440nm"].values.tolist() == [pytest.approx(0.9)]
+    assert one["site_name"].values.tolist() == ["Tucson"]
+    # Ledgers are per group.
+    assert aod.ledger() == {"bulk:2026-10-24"}
+    assert inversion.ledger() == set()
+
+
+def test_writers_of_different_groups_rebase_over_each_other(local_config, sites):
+    from planetary_datasets.common import multidim
+
+    aod = AeronetStore(PRODUCTS["aod_level20"], local_config, sites)
+    sda = AeronetStore(PRODUCTS["sda_level20"], local_config, sites)
+    aeronet.ensure_root(aod.repo)
+    first = aod._dataset(
+        parse_table(aod_file("Cuiaba", ROWS)).rows.assign(site_index=np.uint16(0)),
+        {},
+        aod._site_rows(["Cuiaba"], {}),
+    )
+    second = sda._dataset(
+        parse_table(aod_file("Tucson", ROWS[:1])).rows.assign(site_index=np.uint16(0)),
+        {},
+        sda._site_rows(["Tucson"], {}),
+    )
+    repo = aod.repo
+    # Both sessions open before either commits; each commit rebases over the other's.
+    a = repo.writable_session("main")
+    b = repo.writable_session("main")
+    from icechunk.xarray import to_icechunk
+
+    to_icechunk(first, a, group="aod_level20", mode="w-")
+    to_icechunk(second, b, group="sda_level20", mode="w-")
+    a.commit("aod", rebase_with=aeronet.icechunk.ConflictDetector())
+    b.commit("sda", rebase_with=aeronet.icechunk.ConflictDetector())
+    # And through the archiver: ledger entries for both groups, interleaved.
+    multidim.mark_written(repo, "bulk:1", group="aod_level20")
+    multidim.mark_written(repo, "bulk:2", group="sda_level20")
+    tree = xr.open_datatree(repo.readonly_session("main").store, engine="zarr", consolidated=False)
+    assert set(tree.children) == {"aod_level20", "sda_level20"}
+    assert tree["aod_level20"].sizes["observation"] == 2
+    assert tree["sda_level20"].sizes["observation"] == 1
+    assert aod.ledger() == {"bulk:1"} and sda.ledger() == {"bulk:2"}
+    assert tree.attrs["title"] == aeronet.ROOT_ATTRS["title"]
+
+
+def test_appends_to_different_groups_from_stale_sessions_both_land(local_config, sites):
+    """Two appends whose sessions were opened before either committed."""
+    from planetary_datasets.common import multidim
+
+    aod = AeronetStore(PRODUCTS["aod_level20"], local_config, sites)
+    sda = AeronetStore(PRODUCTS["sda_level20"], local_config, sites)
+    aeronet.ensure_root(aod.repo)
+    repo = aod.repo
+    real = repo.writable_session
+    opened = [real("main"), real("main")]
+    sessions = iter(opened)
+    repo.writable_session = lambda branch: next(sessions)
+    ds_a = aod._dataset(
+        parse_table(aod_file("Cuiaba", ROWS)).rows.assign(site_index=np.uint16(0)),
+        {},
+        aod._site_rows(["Cuiaba"], {}),
+    )
+    ds_b = sda._dataset(
+        parse_table(aod_file("Tucson", ROWS[:1])).rows.assign(site_index=np.uint16(0)),
+        {},
+        sda._site_rows(["Tucson"], {}),
+    )
+    multidim.append_partition(repo, ds_a, None, label="aod", group="aod_level20")
+    multidim.append_partition(repo, ds_b, None, label="sda", group="sda_level20")
+    repo.writable_session = real
+    tree = xr.open_datatree(repo.readonly_session("main").store, engine="zarr", consolidated=False)
+    assert tree["aod_level20"].sizes["observation"] == 2
+    assert tree["sda_level20"].sizes["observation"] == 1
