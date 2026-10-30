@@ -528,6 +528,35 @@ def window(lane: Lane):
     return pd.date_range(start, end, freq=lane.freq)
 
 
+#: Replaces the lane during its pause: sleeps (saying so hourly, for the box's stall
+#: guard), then starts the lane again.
+_SLEEPER = """
+import os, sys, time
+left = float(sys.argv[1])
+while left > 0:
+    step = min(left, 3600)
+    time.sleep(step)
+    left -= step
+    if left > 0:
+        print(f"paused, {left / 3600:.1f} h to the next pass", flush=True)
+os.execv(sys.argv[2], sys.argv[2:])
+"""
+
+
+def pause_lightly(seconds: float, argv: list[str] | None = None) -> None:
+    """Wait ``seconds`` before the next pass without holding this pass's memory.
+
+    A Python process keeps the memory a pass grew to while it sleeps, and a caught-up lane
+    sleeps most of the time: the HAFS lanes held 16-18 GB each doing nothing. The process
+    is replaced (same PID, so the box's pid files still apply) by a small sleeper that
+    starts the lane afresh when the pause is over. Does not return.
+    """
+    argv = [sys.executable, *(sys.argv if argv is None else argv)]
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execv(sys.executable, [sys.executable, "-c", _SLEEPER, str(seconds), *argv])
+
+
 def main(argv) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("lane", nargs="?")
@@ -648,7 +677,7 @@ def main(argv) -> int:
         )
         if args.once:
             return 1 if failed else 0
-        time.sleep(args.pause)
+        pause_lightly(args.pause)
 
 
 if __name__ == "__main__":
