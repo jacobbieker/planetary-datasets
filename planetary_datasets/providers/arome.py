@@ -254,11 +254,12 @@ class AromeOverseasProvider(AromeProvider):
             files = _files_for(input_files, paquet)
             if not files:
                 continue
-            part = _open_steps(files)
-            if paquet == "IP5":
-                # IP5 repeats u/v/z on potential-vorticity surfaces, which collide with
-                # the isobaric fields of the other pressure paquets.
-                part = part.drop_vars(["potentialVorticity", "u", "v", "z"], errors="ignore")
+            # IP5 repeats u/v/z on potential-vorticity surfaces, which collide with the
+            # isobaric fields of the other pressure paquets; the isobaric reader skips them.
+            # cfgrib names a parameter it has no table entry for "unknown" (IP4 carries one
+            # since October 2026); it has no meaning to store.
+            drop = ("unknown", *(NEW_OVERSEAS_IP5_FIELDS if paquet == "IP5" else ()))
+            part = _open_isobaric_steps(files, drop=drop)
             pressure_parts.append(part)
         pressure = xr.merge(pressure_parts, compat="no_conflicts").drop_vars(
             ["time", "step"], errors="ignore"
@@ -428,6 +429,36 @@ def _require(files: Sequence[str], paquets: Sequence[str], it: pd.Timestamp) -> 
 def _open_steps(files: Sequence[str]) -> xr.Dataset:
     """Open one file per forecast step and stack them along ``valid_time``."""
     return xr.open_mfdataset(list(files), concat_dim="valid_time", combine="nested")
+
+
+#: Fields Météo-France added to the overseas IP5 paquet in October 2026, each on its own
+#: subset of pressure levels. Left out until the stores are given the new variables, so
+#: the stored schema does not change.
+NEW_OVERSEAS_IP5_FIELDS = ("d", "papt")
+
+
+def _open_isobaric_steps(files: Sequence[str], drop: Sequence[str] = ()) -> xr.Dataset:
+    """Open a pressure paquet whose fields sit on different sets of pressure levels.
+
+    cfgrib refuses one dataset over such a file, so each level set is opened as its own
+    hypercube and they are merged on the union of their levels (absent levels read as
+    NaN, as the stores already hold them). Hypercubes on other level types (the
+    potential-vorticity surfaces) are skipped.
+    """
+    steps = []
+    for path in files:
+        cubes = []
+        for cube in open_grib_datasets(path):
+            if "isobaricInhPa" not in cube.coords:
+                continue
+            if "isobaricInhPa" not in cube.dims:
+                cube = cube.expand_dims("isobaricInhPa")
+            cube = cube.drop_vars([v for v in drop if v in cube.data_vars])
+            if cube.data_vars:
+                cubes.append(cube)
+        if cubes:
+            steps.append(xr.merge(cubes, join="outer", compat="no_conflicts"))
+    return xr.concat(steps, dim="valid_time", join="outer")
 
 
 def _open_surface(path: str, per_step_file: bool = False) -> xr.Dataset:
