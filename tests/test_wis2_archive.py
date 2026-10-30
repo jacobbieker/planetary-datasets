@@ -171,3 +171,17 @@ def _soon() -> dt.datetime:
 
 def test_archive_names_carry_the_window_end():
     assert wis2.archive_name(END) == "bkr/obs/wis2/wis2_20261029T1200Z.tar"
+
+
+def test_the_wait_between_windows_logs_every_hour(caplog):
+    from loguru import logger
+
+    slept = []
+    handler = logger.add(lambda m: slept.append(("log", m)), level="INFO")
+    try:
+        wis2.wait(END, 11.5 * 3600, sleep=lambda s: slept.append(("sleep", s)))
+    finally:
+        logger.remove(handler)
+    sleeps = [v for k, v in slept if k == "sleep"]
+    assert max(sleeps) <= 3600 and sum(sleeps) == 11.5 * 3600
+    assert sum(1 for k, _ in slept if k == "log") == len(sleeps) - 1

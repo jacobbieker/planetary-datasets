@@ -73,6 +73,8 @@ EVERY = dt.timedelta(hours=12)
 LOOKBACK = EVERY
 #: How long after a window ends before it is archived, so late listings settle.
 SETTLE = dt.timedelta(minutes=10)
+#: How often a sleeping follow() logs that it is alive.
+HEARTBEAT = dt.timedelta(hours=1)
 #: Window ends still worth archiving when a run was missed. The cache keeps objects for
 #: about two and a half days (a few stragglers longer), so older windows are mostly gone.
 CATCH_UP = dt.timedelta(days=2)
@@ -528,6 +530,20 @@ def archived_tars(config: Config | None = None) -> list[str]:
     return sorted(keys)
 
 
+def wait(upcoming: dt.datetime, pause: float, sleep: Callable[[float], None] = time.sleep) -> None:
+    """Sleep ``pause`` seconds, logging every :data:`HEARTBEAT`.
+
+    The box's guard restarts a lane whose log is silent for over three hours, and the wait
+    between windows is longer.
+    """
+    while pause > 0:
+        step = min(pause, HEARTBEAT.total_seconds())
+        sleep(step)
+        pause -= step
+        if pause > 0:
+            logger.info(f"wis2: waiting for the {upcoming:%H:%MZ} archive ({pause / 3600:.1f} h)")
+
+
 def follow(config: Config | None = None, targets: Sequence[str] | None = None) -> None:
     """Archive each settled 00Z/12Z window not yet archived, forever."""
     while True:
@@ -543,7 +559,7 @@ def follow(config: Config | None = None, targets: Sequence[str] | None = None) -
         logger.info(
             f"wis2: next archive at {upcoming:%Y-%m-%dT%H:%MZ}; sleeping {pause / 3600:.1f} h"
         )
-        time.sleep(pause)
+        wait(upcoming, pause)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
