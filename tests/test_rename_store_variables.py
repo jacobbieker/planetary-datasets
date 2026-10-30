@@ -232,3 +232,22 @@ def test_a_renamed_generation_still_matches_its_source_named_partitions(
         time=pd.to_datetime(["2026-01-02"])
     )
     assert resolve_generation(local_config, base, incoming, "time") == base
+
+
+def test_dataset_level_coordinates_are_renamed_too(tables, repo):
+    """A coordinate no variable references is listed on the group; it must follow."""
+    import zarr
+
+    ds = xr.Dataset(
+        {"tc": (("t",), np.array([20.0], "float32"))},
+        coords={"t": [0], "a": ("x", np.array([1.0, 2.0]))},
+    )
+    session = repo.writable_session("main")
+    to_icechunk(ds, session)
+    session.commit("source")
+    root = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    assert "a" in root.attrs.get("coordinates", "")
+    tool.rename_store(PREFIX)
+    renamed = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    # "a" is renamed to "b" by the test tables, and stays a coordinate.
+    assert "b" in renamed.coords and "b" not in renamed.data_vars
