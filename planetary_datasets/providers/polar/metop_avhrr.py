@@ -48,6 +48,43 @@ SWATH_SHAPE = {"y": 37800, "x": 2048}
 FULL_PRECISION = ("latitude", "longitude", "start_time", "end_time", "platform_name")
 
 
+def spill_swath(ds: xr.Dataset, path: pathlib.Path) -> xr.Dataset:
+    """``ds`` with its swath-sized arrays moved to a local zarr store and read back lazily.
+
+    A partition holds several orbits of 37800 x 2048 pixels per variable; kept in memory,
+    with the copies concatenation and sorting make, they peaked past 70 GB. Spilled, the
+    partition is written to icechunk a chunk at a time. Values, dtypes, attributes and
+    encodings are unchanged: the spill is uncompressed, declares no fill value and is read
+    back without masking or decoding, and each array gets its own attributes and encoding
+    back. The files live in the partition's temporary directory, which outlasts the write.
+    """
+    big = [v for v in ds.data_vars if {"y", "x"} <= set(ds[v].dims)]
+    if not big:
+        return ds
+    # Bare arrays: no coordinates, attributes or encodings to carry into the spill (and the
+    # source dataset's variables are left untouched).
+    part = xr.Dataset({v: xr.Variable(ds[v].dims, ds[v].data) for v in big})
+    part.to_zarr(
+        path,
+        mode="w",
+        consolidated=False,
+        zarr_format=3,
+        encoding={
+            v: {"_FillValue": None, "compressors": None, "chunks": part[v].shape} for v in big
+        },
+    )
+    back = xr.open_zarr(
+        path, consolidated=False, chunks={}, mask_and_scale=False, decode_times=False
+    )
+    out = ds.copy()
+    for v in big:
+        lazy = back[v].variable
+        lazy.attrs = dict(ds[v].attrs)
+        lazy.encoding = dict(ds[v].encoding)
+        out[v] = lazy
+    return out
+
+
 class MetopAvhrrProvider(EumdacProvider):
     """AVHRR level 1B imagery for the MetOp series."""
 
@@ -77,12 +114,14 @@ class MetopAvhrrProvider(EumdacProvider):
         ds["end_time"] = xr.DataArray([end], dims=["time"]).astype("datetime64[ns]")
         ds["platform_name"] = xr.DataArray([str(ds.attrs["platform_name"])], dims=["time"])
 
-        ds = ds.load()
-        for var in ds.data_vars:
+        # Cast inside the lazy graph and load once: loading at satpy's precision first held
+        # every channel at full width and then again cast.
+        for var in list(ds.data_vars):
             if var in ("latitude", "longitude"):
                 ds[var] = ds[var].astype(np.float32)
             elif var not in FULL_PRECISION:
                 ds[var] = ds[var].astype(np.float16)
+        ds = ds.load()
 
         ds = serialize_dataset_attrs(ds, drop=("start_time", "end_time", "platform_name"))
         return ds.drop_vars("crs", errors="ignore")
@@ -100,6 +139,7 @@ class MetopAvhrrProvider(EumdacProvider):
     ) -> xr.Dataset:
         """Unpack, read, pad and concatenate every AVHRR orbit in the partition."""
         datasets = []
+        swaths = self.workdir(temp_dir) / "swaths"
         for native in self.iter_natives(input_files, temp_dir=temp_dir):
             try:
                 aligned = self.align(self.process_granule(native))
@@ -107,7 +147,7 @@ class MetopAvhrrProvider(EumdacProvider):
                 logger.warning(f"{self.name}: {native} failed: {exc}")
                 continue
             if aligned is not None:
-                datasets.append(aligned)
+                datasets.append(spill_swath(aligned, swaths / f"{len(datasets)}.zarr"))
 
         ds = self.restrict_to_window(self.concat_granules(datasets), it)
         if ds.sizes.get(self.append_dim, 0) == 0:

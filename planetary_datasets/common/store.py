@@ -84,6 +84,23 @@ def has_committed_data(repo: icechunk.Repository, branch: str = "main") -> bool:
     return next(itertools.islice(repo.ancestry(branch=branch), 1, None), None) is not None
 
 
+def match_string_dtypes(ds: xr.Dataset, existing: xr.Dataset) -> xr.Dataset:
+    """Fixed-width string variables of ``ds`` as objects where the store holds vlen strings.
+
+    xarray 2026.9 reads a variable-length string array as ``StringDType`` and refuses to
+    append a fixed-width ``<U`` one to it ("Mismatched dtypes"), which earlier versions
+    accepted; an object array of the same strings appends, and is stored the same way.
+    """
+    cast = {
+        name: ds[name].astype(object)
+        for name in ds.variables
+        if name in existing.variables
+        and ds[name].dtype.kind in "US"
+        and existing[name].dtype.kind in "OT"
+    }
+    return ds.assign(cast) if cast else ds
+
+
 def build_encoding(
     ds: xr.Dataset,
     append_dim: str = "time",
@@ -699,6 +716,8 @@ def _write_once(
                 f"{present.max()}; appending them out of order. {append_dim} will need "
                 f"sorting (sort_append_axis). First: {incoming[stale][0]}"
             )
+
+    ds = match_string_dtypes(ds, existing)
 
     # "a-" appends only the variables that have append_dim. Everything else - static
     # 2-D latitude/longitude, say - was written with the store and was just checked
