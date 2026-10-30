@@ -390,7 +390,8 @@ def widen(
             shape=old.shape,
             chunks=old.chunks,
             dtype=dtype,
-            serializer=old.serializer,
+            # A one-byte array's serializer has no byte order, which a wider dtype needs.
+            serializer=old.serializer if old.dtype.itemsize == np.dtype(dtype).itemsize else "auto",
             compressors=old.compressors,
             filters=old.filters,
             fill_value=None if fill is None else np.asarray(fill).astype(dtype)[()],
@@ -476,17 +477,22 @@ def _append_once(
         present = set(group.array_keys()) & set(ds.variables) if exists else set()
         if present:
             dtypes = {name: group[name].dtype for name in present}
-            narrow = {
-                name: dtype
-                for name, dtype in dtypes.items()
-                if dtype.kind == "f"
-                and ds[name].dtype.kind == "f"
-                and not fits(ds[name].values, dtype)
-            }
+            narrow = {}
+            for name, dtype in dtypes.items():
+                incoming = ds[name].dtype
+                same_family = (dtype.kind == "f" and incoming.kind == "f") or (
+                    dtype.kind in "iu" and incoming.kind in "iu"
+                )
+                if same_family and not fits(ds[name].values, dtype):
+                    # A dtype that holds both what is stored and what arrives.
+                    wider = np.promote_types(dtype, incoming)
+                    if not fits(ds[name].values, wider):
+                        wider = incoming
+                    narrow[name] = wider
             if narrow:
-                # Narrowed from earlier partitions, but this one needs more precision.
-                for name in narrow:
-                    widen(repo, name, np.dtype(ds[name].dtype), label, path)
+                # Narrowed from earlier partitions, but this one needs a wider dtype.
+                for name, wider in narrow.items():
+                    widen(repo, name, np.dtype(wider), label, path)
                 return _append_once(repo, ds, partition, fixed, label, path)
             # Times are encoded into their stored units by encode_times, not cast: a cast of
             # datetime64 to the stored int64 is raw nanoseconds whatever the units say.
