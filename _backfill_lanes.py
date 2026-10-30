@@ -311,13 +311,19 @@ LANES: dict[str, Lane] = {
     },
     "silam_aerosol": Lane(_provider("silam", "SILAMAerosolProvider"), "2025-04-26", "1D", 48),
     # From 2024 only: from 2008 it ran at ~16 min per 4 h window, over a year of backfill.
-    "metop_avhrr": Lane(_provider("polar", "MetopAvhrrProvider"), "2024-01-01", "4h", 6),
+    "metop_avhrr": Lane(
+        _provider("polar", "MetopAvhrrProvider"), "2024-01-01", "4h", 6, recent_days=7
+    ),
     # From 2024, like AVHRR: from 2008 it was 163k hourly partitions, years of backfill.
-    "metop_gome": Lane(_provider("polar", "MetopGomeProvider"), "2024-01-01", "1h", 6),
+    "metop_gome": Lane(
+        _provider("polar", "MetopGomeProvider"), "2024-01-01", "1h", 6, recent_days=7
+    ),
     # Nordic composite reflectivity (bkr/precipradar/norway_radar): the gap since it
     # stopped on 2026-09-29, then kept current. thredds.met.no blocks parallel downloads,
     # so one partition at a time; the 2020 backfill this lane once ran stays off.
-    "nordic_radar": Lane(_provider("meps", "NordicReflectivityProvider"), "2026-09-28", "1D", 48),
+    "nordic_radar": Lane(
+        _provider("meps", "NordicReflectivityProvider"), "2026-09-28", "1D", 48, recent_days=7
+    ),
     # Met Office UK composite rain radar, from just before it stopped on 2026-10-15.
     "uk_radar": Lane(_provider("radar", "UKRadarProvider"), "2026-10-13", "1h", 2),
     # JPSS products NOAA deletes ~90 days after publication (VIIRS M-band SDR, ATMS snowfall
@@ -454,7 +460,7 @@ LANES: dict[str, Lane] = {
     # JPSS ATMS SDR, every satellite in one store (NOAA keeps the SDRs). The store is
     # complete from 2022-11 to 2025-09 and nearly empty since; this fills that and keeps
     # it current.
-    "jpss_atms": Lane(_provider("polar", "JpssAtmsProvider"), "2025-08-01", "1h", 3),
+    "jpss_atms": Lane(_provider("polar", "JpssAtmsProvider"), "2025-08-01", "1h", 3, recent_days=7),
     # GOES-East GLM 0.1 degree lightning density, staged by the earth2studio image like
     # the Dagster asset, which had only just started the store when it stopped on
     # 2026-10-02. Five-minute frames, an hour per partition.
@@ -493,11 +499,15 @@ LANES: dict[str, Lane] = {
     },
     "geos_v2": Lane(_catchup("geos_v2"), "2026-01-01", "15min", 30),
     "ifs_analysis": Lane(_catchup("ifs_analysis"), "2016-01-01", "1D", 48),
-    "opera_rainfall": Lane(_catchup("opera_rainfall"), "2018-01-01", "1h", 2, opera=True),
+    "opera_rainfall": Lane(
+        _catchup("opera_rainfall"), "2018-01-01", "1h", 2, opera=True, recent_days=7
+    ),
     "opera_dbz": Lane(_catchup("opera_dbz"), "2025-01-01", "1h", 2, opera=True),
     "metop_sg_mws": Lane(_catchup("metop_sg_mws"), "2026-06-11", "1D", 48),
-    "metop_sg_ro": Lane(_catchup("metop_sg_ro"), "2026-02-26", "1h", 6),
-    "metop_sg_metimage": Lane(_catchup("metop_sg_metimage"), "2026-08-27", "10min", 6),
+    "metop_sg_ro": Lane(_catchup("metop_sg_ro"), "2026-02-26", "1h", 6, recent_days=7),
+    "metop_sg_metimage": Lane(
+        _catchup("metop_sg_metimage"), "2026-08-27", "10min", 6, recent_days=7
+    ),
 }
 
 
