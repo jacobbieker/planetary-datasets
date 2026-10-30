@@ -258,7 +258,7 @@ class AromeOverseasProvider(AromeProvider):
             # isobaric fields of the other pressure paquets; the isobaric reader skips them.
             # cfgrib names a parameter it has no table entry for "unknown" (IP4 carries one
             # since October 2026); it has no meaning to store.
-            drop = ("unknown", *(NEW_OVERSEAS_IP5_FIELDS if paquet == "IP5" else ()))
+            drop = ("unknown",)
             part = _open_isobaric_steps(files, drop=drop)
             pressure_parts.append(part)
         pressure = xr.merge(pressure_parts, compat="no_conflicts").drop_vars(
@@ -432,8 +432,8 @@ def _open_steps(files: Sequence[str]) -> xr.Dataset:
 
 
 #: Fields Météo-France added to the overseas IP5 paquet in October 2026, each on its own
-#: subset of pressure levels. Left out until the stores are given the new variables, so
-#: the stored schema does not change.
+#: subset of pressure levels: divergence and pseudo-adiabatic potential temperature. The
+#: stores were given these variables on 2026-10-30 (earlier times read as missing).
 NEW_OVERSEAS_IP5_FIELDS = ("d", "papt")
 
 
