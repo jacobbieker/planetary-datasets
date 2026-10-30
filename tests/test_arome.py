@@ -78,7 +78,11 @@ def test_france_hd_filenames_and_urls_match_the_archive():
         (AromeFranceHDProvider, {}, "arome_france_hd", "bkr/dmi/arome_france.icechunk"),
         *[
             pytest.param(
-                AromeOverseasProvider, {"region": region}, f"arome_{slug}", f"bkr/dmi/arome_{slug}.icechunk", id=region
+                AromeOverseasProvider,
+                {"region": region},
+                f"arome_{slug}",
+                f"bkr/dmi/arome_{slug}.icechunk",
+                id=region,
             )
             for region, slug in {
                 "NCALED": "new_caledonia",
@@ -214,9 +218,7 @@ def _grib_stubs(tmp_path: pathlib.Path) -> list[pathlib.Path]:
     return paths
 
 
-def test_run_partition_writes_and_then_deletes_the_gribs(
-    local_config, tmp_path, sample_dataset
-):
+def test_run_partition_writes_and_then_deletes_the_gribs(local_config, tmp_path, sample_dataset):
     files = _grib_stubs(tmp_path)
     provider = _StubProvider(files, sample_dataset, config=local_config)
 
@@ -291,7 +293,10 @@ def test_overseas_fetch_tolerates_a_paquet_with_no_analysis_step(local_config, m
     [
         pytest.param(AromeFranceProvider, {}, lambda name: True, id="france-nothing-published"),
         pytest.param(
-            AromeOverseasProvider, {"region": "INDIEN"}, lambda name: "HP2__" in name, id="overseas-paquet-missing"
+            AromeOverseasProvider,
+            {"region": "INDIEN"},
+            lambda name: "HP2__" in name,
+            id="overseas-paquet-missing",
         ),
         # Regression: "any subset will do" accepted a half-published init time. `process`
         # merged it with join="outer", `_keep_hours` yielded two valid times instead of
@@ -300,11 +305,38 @@ def test_overseas_fetch_tolerates_a_paquet_with_no_analysis_step(local_config, m
         pytest.param(
             AromeOverseasProvider,
             {"region": "INDIEN"},
-            lambda name: "IP4__000H" in name or not any(f"__{s}__" in name for s in ("000H", "001H")),
+            lambda name: "IP4__000H" in name
+            or not any(f"__{s}__" in name for s in ("000H", "001H")),
             id="overseas-still-being-published",
         ),
     ],
 )
-def test_fetch_gives_up_on_an_incomplete_init_time(local_config, monkeypatch, provider_cls, kwargs, missing):
+def test_fetch_gives_up_on_an_incomplete_init_time(
+    local_config, monkeypatch, provider_cls, kwargs, missing
+):
     _serve(monkeypatch, missing=missing)
     assert provider_cls(config=local_config, **kwargs).fetch(INIT_TIME) == []
+
+
+def test_overseas_pressure_paquets_merge_fields_on_different_level_sets(monkeypatch):
+    """Since October 2026 IP5 holds fields on different pressure-level subsets."""
+    import numpy as np
+
+    from planetary_datasets.providers import arome
+
+    def cube(name, levels, extra_dims=()):
+        coords = {"isobaricInhPa": levels, "latitude": [10.0], "longitude": [20.0]}
+        data = np.ones((len(levels), 1, 1))
+        return xr.Dataset({name: (("isobaricInhPa", "latitude", "longitude"), data)}, coords=coords)
+
+    pv = xr.Dataset(
+        {"z": (("latitude",), [1.0])}, coords={"potentialVorticity": 2.0, "latitude": [10.0]}
+    )
+    files = {
+        "a": [cube("vo", [850.0, 700.0]), cube("d", [950.0, 300.0]), cube("papt", [1000.0]), pv],
+        "b": [cube("vo", [850.0, 700.0]), cube("d", [950.0, 300.0]), cube("papt", [1000.0]), pv],
+    }
+    monkeypatch.setattr(arome, "open_grib_datasets", lambda path: files[path])
+    ds = arome._open_isobaric_steps(["a", "b"], drop=arome.NEW_OVERSEAS_IP5_FIELDS)
+    assert set(ds.data_vars) == {"vo"}
+    assert ds.sizes["valid_time"] == 2 and sorted(ds["isobaricInhPa"].values) == [700.0, 850.0]
