@@ -29,6 +29,11 @@ class LossyCastError(ValueError):
 
 
 def _round_trips(values: np.ndarray, dtype: np.dtype) -> bool:
+    if values.dtype.kind in "iu" and dtype.kind in "iu" and values.size:
+        # Integer casts wrap: int8 -1 goes to uint8 255 and back to -1, so a round trip
+        # alone would pass it. The range has to hold.
+        info = np.iinfo(dtype)
+        return bool(values.min() >= info.min and values.max() <= info.max)
     with np.errstate(over="ignore", invalid="ignore"):
         narrowed = values.astype(dtype)
     back = narrowed.astype(values.dtype)
