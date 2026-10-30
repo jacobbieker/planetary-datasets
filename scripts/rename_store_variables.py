@@ -46,6 +46,32 @@ def _paths(group, prefix=""):
         yield from _paths(sub, prefix + name + "/")
 
 
+def _groups(group):
+    yield group
+    for _, sub in group.groups():
+        yield from _groups(sub)
+
+
+def rename_group_coordinates(group, tokens: dict) -> int:
+    """Rename the variables a group-level ``coordinates`` attribute lists.
+
+    xarray records coordinates that no variable references in the dataset's own
+    ``coordinates`` attribute; left with old names, those coordinates read back as data
+    variables and every later write is refused as a variable mismatch.
+    Returns how many groups changed.
+    """
+    changed = 0
+    for node in _groups(group):
+        listed = node.attrs.get("coordinates")
+        if not listed:
+            continue
+        renamed = _rename_tokens(listed, tokens)
+        if renamed != listed:
+            node.attrs["coordinates"] = renamed
+            changed += 1
+    return changed
+
+
 def plan_store(prefix: str) -> tuple[dict, dict, dict]:
     names = _table(str(STORE_NAMES)).get(prefix, {})
     dims = _table(str(STORE_DIMS)).get(prefix, {})
@@ -127,6 +153,7 @@ def rename_store(prefix: str, dry_run: bool = False, upgrade_v1: bool = False) -
         if changed:
             sync(store.set(key, cpu.Buffer.from_bytes(json.dumps(meta).encode())))
     group = zarr.open_group(store, mode="a")
+    rename_group_coordinates(group, tokens)
     group.attrs[APPLIED_ATTR] = "store_names.json"
     session.commit(
         f"naming: dimensions, attributes and units ({len(dims)} dim(s), {len(units)} conversion(s))"
