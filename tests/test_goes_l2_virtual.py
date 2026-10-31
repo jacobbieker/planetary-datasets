@@ -25,12 +25,17 @@ def granule(
     seed: int = 0,
     name: str = "TPW",
     channel: int | None = None,
+    x0: float = -0.1,
 ) -> pathlib.Path:
-    """One file laid out like NOAA's: a scalar t, a chunked zlib grid, small metadata."""
+    """One file laid out like NOAA's: a scalar t, a chunked zlib grid, small metadata.
+
+    A mesoscale ``product`` (``TPWM1``) goes under the shared ``ABI-L2-TPWM`` prefix.
+    """
     code = f"M6C{channel:02d}" if channel else "M6"
     stamp = when.strftime("%Y%j%H%M%S") + "0"
+    prefix = product[:-1] if product[-2:] in ("M1", "M2") else product
     folder = (
-        root / f"ABI-L2-{product}" / f"{when:%Y}" / f"{when.timetuple().tm_yday:03d}" / f"{when:%H}"
+        root / f"ABI-L2-{prefix}" / f"{when:%Y}" / f"{when.timetuple().tm_yday:03d}" / f"{when:%H}"
     )
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"OR_ABI-L2-{product}-{code}_G19_s{stamp}_e{stamp}_c{stamp}.nc"
@@ -43,7 +48,8 @@ def granule(
         coords={
             "t": np.datetime64(when, "ns"),
             "y": np.linspace(0.1, -0.1, rows).astype("float32"),
-            "x": np.linspace(-0.1, 0.1, 6).astype("float32"),
+            "x": np.linspace(x0, x0 + 0.2, 6).astype("float32"),
+            "x_image": np.float32(x0 + 0.1),
         },
     )
     ds[name].attrs.update(long_name="Total Precipitable Water", units="mm")
@@ -182,3 +188,43 @@ def test_a_file_missing_the_grid_variable_is_left_out(archive, local_config):
     product = g.Product(19, "TPW", "F")
     now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
     assert g.run_product(product, local_config, now=now) == 2
+
+
+def test_mesoscale_sectors_are_split_by_sector_and_year():
+    listing = ["ABI-L2-ACMF", "ABI-L2-ACMM", "ABI-L2-CMIPM", "ABI-L2-DMWM"]
+    products = g.products_from_listing(19, listing, sectors=g.MESO_SECTORS)
+    assert {p.sector for p in products} == {"M1", "M2"}
+    assert len(products) == 2 + 2 * 16, "ACM and CMIP by channel, both sectors; no winds"
+    acm = g.Product(19, "ACM", "M1", year=2026)
+    assert acm.store_prefix == "bkr/geo/virtualized/goes19_l2_meso/acm_m1_2026.icechunk"
+    assert acm.source_prefix == "ABI-L2-ACMM" and acm.files_per_day == 1440
+    assert acm.wants("ABI-L2-ACMM/2026/300/12/OR_ABI-L2-ACMM1-M6_G19_s20263001200278_e.nc")
+    assert not acm.wants("ABI-L2-ACMM/2026/300/12/OR_ABI-L2-ACMM2-M6_G19_s20263001200278_e.nc")
+    cmip = g.Product(19, "CMIP", "M2", 13, year=2026)
+    assert cmip.wants("ABI-L2-CMIPM/2026/300/12/OR_ABI-L2-CMIPM2-M6C13_G19_s2026300120_e.nc")
+    assert not cmip.wants("ABI-L2-CMIPM/2026/300/12/OR_ABI-L2-CMIPM1-M6C13_G19_s2026300120_e.nc")
+
+
+def test_a_moving_mesoscale_box_stays_in_one_store_with_its_own_positions(archive, local_config):
+    """The box moves between days; each time keeps the x/y it was scanned at."""
+    product = g.Product(19, "TPW", "M1", year=DAY.year)
+    first = dt.datetime.combine(DAY, dt.time())
+    second = dt.datetime.combine(DAY + dt.timedelta(days=1), dt.time())
+    paths = [
+        granule(archive, "TPWM1", first, seed=1, x0=-0.1),
+        granule(archive, "TPWM1", first + dt.timedelta(minutes=1), seed=2, x0=-0.1),
+        granule(archive, "TPWM1", second, seed=3, x0=0.05),
+    ]
+    granule(archive, "TPWM2", first, seed=4, x0=0.3)
+    now = dt.datetime.combine(DAY + dt.timedelta(days=5), dt.time())
+    assert g.run_product(product, local_config, now=now) == 3
+    assert g.generations(local_config, product.store_prefix) == [product.store_prefix]
+    stored = read(product, local_config)
+    assert stored.sizes["t"] == 3 and "x" not in stored.indexes
+    assert stored["x_scan_angle"].dims == ("t", "x")
+    ds = stored.sortby("t")  # written recent-first
+    for i, path in enumerate(paths):
+        with xr.open_dataset(path) as src:
+            np.testing.assert_array_equal(ds["x_scan_angle"].isel(t=i).values, src["x"].values)
+            np.testing.assert_array_equal(ds["TPW"].isel(t=i).values, src["TPW"].values)
+    np.testing.assert_allclose(ds["x_image"].values, [0.0, 0.0, 0.15], atol=1e-6)
