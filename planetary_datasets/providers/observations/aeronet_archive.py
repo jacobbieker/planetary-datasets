@@ -498,11 +498,19 @@ def parse_table(text: str) -> Table:
     if site_column is not None:
         sites = frame[site_column].str.strip().to_numpy(object)
         used.add(site_column)
-        # Some files carry a second site column; it must agree with the first.
+        # Some files carry a second site column. It normally repeats the first; where a site
+        # has been renamed the two disagree, and the first (the one every other file and
+        # row is keyed by) is kept rather than failing the whole response.
         for i, c in enumerate(lowered):
             if c in SITE_COLUMNS and i != site_column:
-                if not (frame[i].str.strip().to_numpy(object) == sites).all():
-                    raise ValueError(f"site columns {columns[site_column]} and {columns[i]} differ")
+                other = frame[i].str.strip().to_numpy(object)
+                differ = other != sites
+                if differ.any():
+                    pairs = sorted({(a, b) for a, b in zip(sites[differ], other[differ])})
+                    logger.warning(
+                        f"aeronet: {columns[site_column]} and {columns[i]} differ on "
+                        f"{int(differ.sum())} row(s), keeping {columns[site_column]}: {pairs[:5]}"
+                    )
                 used.add(i)
 
     for i, (column, (name, units)) in enumerate(zip(columns, names)):

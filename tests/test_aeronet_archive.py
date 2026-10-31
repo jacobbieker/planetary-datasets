@@ -475,3 +475,17 @@ def test_a_row_cut_off_without_a_date_is_dropped_not_fatal():
     cut = "Lulin, , ,295,0.1"
     table = parse_table("\n".join(["Version 3: AOD", "Level 1.5", header, good, cut, good]))
     assert len(table.rows) == 2
+
+
+def test_disagreeing_site_columns_keep_the_first_instead_of_failing():
+    from planetary_datasets.providers.observations.aeronet_archive import parse_table
+
+    header = (
+        "AERONET_Site,Date(dd:mm:yyyy),Time(hh:mm:ss),Day_of_Year,AOD_500nm,"
+        "AERONET_Instrument_Number,AERONET_Site_Name,Site_Latitude(Degrees),"
+        "Site_Longitude(Degrees),Site_Elevation(m)"
+    )
+    same = "Lulin,22:10:2026,00:00:00,295,0.1,1564,Lulin,23.468611,120.873611,2868.000000"
+    renamed = "Lulin,22:10:2026,00:10:00,295,0.2,1564,Lulin_NCU,23.468611,120.873611,2868.000000"
+    table = parse_table("\n".join(["Version 3: AOD", "Level 1.5", header, same, renamed]))
+    assert table.rows["site_name"].tolist() == ["Lulin", "Lulin"]
