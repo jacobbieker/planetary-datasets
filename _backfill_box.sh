@@ -49,7 +49,8 @@ declare -A SCRIPT_PAUSE=([kenda]=1800 [icon_v1_global]=43200 [icon_v1_global_art
 #: day). guard restarts one once its process holds more than GUARD_LEAKY_GB; a restart
 #: costs at most the run in progress, and frees the memory Himawari would otherwise lose.
 GUARD_LEAKY="hafs_a_parent hafs_a_storm hafs_b_parent hafs_b_storm nam_hawaii
-  hrrr_alaska_sfc hrrr_alaska_prs hrrr_alaska_nat osmc_ragged"
+  hrrr_alaska_sfc hrrr_alaska_prs hrrr_alaska_nat osmc_ragged
+  goes16_l2_points goes17_l2_points goes18_l2_points goes19_l2_points"
 GUARD_LEAKY_GB=${GUARD_LEAKY_GB:-25}
 #: guard also removes abandoned planetary-datasets-* scratch untouched for this long, and
 #: at once any whose .pid names a process that has exited.

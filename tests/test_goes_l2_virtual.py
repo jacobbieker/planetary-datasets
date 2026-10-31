@@ -228,3 +228,17 @@ def test_a_moving_mesoscale_box_stays_in_one_store_with_its_own_positions(archiv
             np.testing.assert_array_equal(ds["x_scan_angle"].isel(t=i).values, src["x"].values)
             np.testing.assert_array_equal(ds["TPW"].isel(t=i).values, src["TPW"].values)
     np.testing.assert_allclose(ds["x_image"].values, [0.0, 0.0, 0.15], atol=1e-6)
+
+
+def test_a_day_whose_chunking_changes_midway_writes_every_file(archive, local_config):
+    """GOES-18 changed chunk shapes mid-day while commissioning; no file may be lost."""
+    product = g.Product(19, "TPW", "F")
+    start = dt.datetime.combine(DAY, dt.time())
+    granule(archive, "TPWF", start)
+    granule(archive, "TPWF", start + dt.timedelta(minutes=10))
+    granule(archive, "TPWF", start + dt.timedelta(minutes=20), chunk_rows=4)
+    now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
+    assert g.run_product(product, local_config, now=now) == 3
+    stores = g.generations(local_config, product.store_prefix)
+    assert sorted(read(product, local_config, p).sizes["t"] for p in stores) == [1, 2]
+    assert g.run_product(product, local_config, now=now) == 0, "the day is recorded done"
