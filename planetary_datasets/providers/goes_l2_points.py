@@ -31,6 +31,10 @@ Each partition (a day of winds, six hours of lightning) is one commit, recorded 
 group's ledger; the last week goes first, newest first, then the backlog oldest first.
 
     python -m planetary_datasets.providers.goes_l2_points --satellite 19 --follow
+
+Files are parsed in worker processes (Python's default forkserver start), which import
+the calling program's main module: call :func:`run_prefix` from behind an
+``if __name__ == "__main__":`` guard, as ``main`` here is.
 """
 
 from __future__ import annotations
