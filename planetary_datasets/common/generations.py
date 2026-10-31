@@ -170,7 +170,9 @@ def existing_generations(config, base_prefix: str) -> list[str]:
         import fsspec
 
         root = config.store_path(parent) if parent else config.store_path("")
-        filesystem, path = fsspec.core.url_to_fs(root, **config.fsspec_storage_options())
+        # S3 options (credentials, region) are not arguments a local filesystem takes.
+        options = {} if config.use_local_store else config.fsspec_storage_options()
+        filesystem, path = fsspec.core.url_to_fs(root, **options)
         # fsspec caches directory listings, and this is called repeatedly inside a process
         # that *creates* the very entries it is looking for. Without dropping the cache a
         # backfill never sees the generation its own previous partition started, so it
@@ -360,11 +362,20 @@ def inspect_generation(
 def store_exists(config, prefix: str) -> bool:
     """Whether a store at ``prefix`` holds anything at all.
 
-    ``icechunk_repo`` creates an empty repository as a side effect of opening one, so
-    "the repository exists" is not the question — "it has a root group" is.
+    "The repository exists" is not the question — "it has a root group" is — and the check
+    never creates a repository, as ``icechunk_repo`` would.
     """
+    import icechunk
+
+    # Checked without creating anything: probing a numbered name must not leave an empty
+    # repository (or, locally, an empty directory) behind.
+    if config.use_local_store and not config.local_store_path(prefix).is_dir():
+        return False
     try:
-        repo = config.icechunk_repo(prefix)
+        storage = config.icechunk_storage(prefix)
+        if not icechunk.Repository.exists(storage):
+            return False
+        repo = icechunk.Repository.open(storage)
         xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
     except Exception:  # noqa: BLE001 - anything unreadable is "not a usable store"
         return False
