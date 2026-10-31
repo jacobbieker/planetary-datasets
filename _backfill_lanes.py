@@ -309,7 +309,9 @@ LANES: dict[str, Lane] = {
         )
         for region in ("ALASKA", "CARIB", "GUAM", "HAWAII")
     },
-    "silam_aerosol": Lane(_provider("silam", "SILAMAerosolProvider"), "2025-04-26", "1D", 48),
+    # FMI has a complete 00Z run up within the day, and a part-published run is failed and
+    # retried at the next pass, so a day's lag keeps the store a day behind rather than two.
+    "silam_aerosol": Lane(_provider("silam", "SILAMAerosolProvider"), "2025-04-26", "1D", 24),
     # From 2024 only: from 2008 it ran at ~16 min per 4 h window, over a year of backfill.
     "metop_avhrr": Lane(
         _provider("polar", "MetopAvhrrProvider"), "2024-01-01", "4h", 6, recent_days=7
