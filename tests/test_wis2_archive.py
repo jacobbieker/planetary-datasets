@@ -113,7 +113,7 @@ def test_a_failed_part_aborts_the_upload_and_leaves_nothing(monkeypatch):
     monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
     monkeypatch.setattr(wis2, "exists", lambda *a: False)
     with pytest.raises(ConnectionError):
-        wis2.archive(_soon(), config=_config())
+        wis2.archive(_soon(), config=_config(), targets=[])
     assert len(dest.aborted) == 1
     assert not dest.objects
 
@@ -123,10 +123,10 @@ def test_an_archive_is_written_once(monkeypatch):
     monkeypatch.setattr(wis2, "source_store", lambda: cache()[0])
     monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
     monkeypatch.setattr(wis2, "exists", lambda client, bucket, key: key in dest.objects)
-    first = wis2.archive(_soon(), config=_config())
+    first = wis2.archive(_soon(), config=_config(), targets=[])
     assert first.files == len(FILES) and first.key.startswith("bkr/obs/wis2/wis2_")
     assert f"{first.key}.index.csv.gz" in dest.objects
-    assert wis2.archive(_soon(), config=_config()).files == 0
+    assert wis2.archive(_soon(), config=_config(), targets=[]).files == 0
 
 
 def test_windows_end_at_00z_and_12z_once_settled():
