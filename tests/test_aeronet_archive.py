@@ -461,3 +461,17 @@ def test_appends_to_different_groups_from_stale_sessions_both_land(local_config,
     tree = xr.open_datatree(repo.readonly_session("main").store, engine="zarr", consolidated=False)
     assert tree["aod_level20"].sizes["observation"] == 2
     assert tree["sda_level20"].sizes["observation"] == 1
+
+
+def test_a_row_cut_off_without_a_date_is_dropped_not_fatal():
+    from planetary_datasets.providers.observations.aeronet_archive import parse_table
+
+    header = (
+        "AERONET_Site,Date(dd:mm:yyyy),Time(hh:mm:ss),Day_of_Year,AOD_500nm,"
+        "AERONET_Instrument_Number,AERONET_Site_Name,Site_Latitude(Degrees),"
+        "Site_Longitude(Degrees),Site_Elevation(m)"
+    )
+    good = "Lulin,22:10:2026,00:00:00,295,0.123456,1564,Lulin,23.468611,120.873611,2868.000000"
+    cut = "Lulin, , ,295,0.1"
+    table = parse_table("\n".join(["Version 3: AOD", "Level 1.5", header, good, cut, good]))
+    assert len(table.rows) == 2

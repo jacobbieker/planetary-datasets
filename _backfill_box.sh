@@ -390,6 +390,9 @@ guard)
   for dir in /tmp/planetary-datasets-* /tmp/planetary-datasets/*/ /tmp/mtg-irs-*; do
     dir=${dir%/}
     [[ -d $dir ]] || continue
+    # MARS stages its retrievals here and sits idle for hours waiting on ECMWF; it is
+    # never abandoned scratch, and losing it mid-ingest costs a retrieval.
+    [[ $(basename "$dir") == mars_staging ]] && continue
     grep -qx "$dir" <<< "$inuse" && continue
     if [[ -f $dir/.pid ]]; then
       # The owner recorded itself (EarthCARE, PACE): gone the moment it is.
