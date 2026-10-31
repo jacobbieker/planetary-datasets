@@ -288,6 +288,14 @@ def encode_times(array: zarr.Array, values: np.ndarray) -> np.ndarray:
     return out.astype(array.dtype)
 
 
+def fits_stored(stored: np.dtype, wider: np.dtype) -> bool:
+    """Whether every value ``stored`` can hold survives a cast to ``wider``."""
+    stored, wider = np.dtype(stored), np.dtype(wider)
+    if stored.kind in "iu" and wider.kind == "f":
+        return stored.itemsize * 8 <= np.finfo(wider).nmant + 1
+    return np.can_cast(stored, wider, "safe")
+
+
 def _append(
     session: icechunk.Session, ds: xr.Dataset, fixed: set[str], path: str | None = None
 ) -> None:
@@ -384,6 +392,10 @@ def widen(
         if "_FillValue" in attrs and old.dtype.kind == "f":
             value = FillValueCoder.decode(attrs["_FillValue"], old.dtype)
             attrs["_FillValue"] = FillValueCoder.encode(value, dtype)
+        elif "_FillValue" in attrs and np.dtype(dtype).kind == "f":
+            # An integer column widened to float: xarray reads a float's fill encoded.
+            value = np.asarray(attrs["_FillValue"]).astype(dtype)[()]
+            attrs["_FillValue"] = FillValueCoder.encode(value, np.dtype(dtype))
         fill = old.fill_value
         new = group.create_array(
             copy,
@@ -480,14 +492,14 @@ def _append_once(
             narrow = {}
             for name, dtype in dtypes.items():
                 incoming = ds[name].dtype
-                same_family = (dtype.kind == "f" and incoming.kind == "f") or (
-                    dtype.kind in "iu" and incoming.kind in "iu"
-                )
-                if same_family and not fits(ds[name].values, dtype):
-                    # A dtype that holds both what is stored and what arrives.
+                numeric = dtype.kind in "iuf" and incoming.kind in "iuf"
+                if numeric and not fits(ds[name].values, dtype):
+                    # A dtype that holds both what is stored and what arrives: an integer
+                    # column a later partition brings fractions to becomes float64, which
+                    # holds every int32 (and smaller) exactly.
                     wider = np.promote_types(dtype, incoming)
-                    if not fits(ds[name].values, wider):
-                        wider = incoming
+                    if not (fits(ds[name].values, wider) and fits_stored(dtype, wider)):
+                        wider = incoming if fits_stored(dtype, incoming) else np.dtype("float64")
                     narrow[name] = wider
             if narrow:
                 # Narrowed from earlier partitions, but this one needs a wider dtype.
