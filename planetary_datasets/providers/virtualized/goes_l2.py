@@ -323,11 +323,20 @@ def open_day(keys: Sequence[str], product: Product):
             return url, None, None
         try:
             names = list(ds.variables)
-            # The layout is the grid variables and their chunking: files whose chunk
-            # shapes differ (GOES-18 changed them mid-day while commissioning) cannot be
-            # concatenated, though their variables match.
+            # The layout is the grid variables with their chunking, codecs and dtype:
+            # files differing in any (GOES-18 changed chunk shapes mid-day while
+            # commissioning; GOES-16 files mix shuffle on and off) cannot be concatenated,
+            # though their variables match.
             layout = tuple(
-                sorted((n, tuple(ds[n].data.metadata.chunks)) for n in _virtual_names(ds))
+                sorted(
+                    (
+                        n,
+                        tuple(ds[n].data.metadata.chunks),
+                        str(ds[n].data.metadata.codecs),
+                        str(ds[n].data.metadata.data_type),
+                    )
+                    for n in _virtual_names(ds)
+                )
             )
             return url, layout, names
         finally:
@@ -354,7 +363,7 @@ def open_day(keys: Sequence[str], product: Product):
             break
     else:
         return [], 0
-    grid = {n for n, _ in layout}
+    grid = {n for n, *_ in layout}
     try:
         vds = combine(urls, [n for n in names if n not in grid])
         if set(_virtual_names(vds)) == grid:
@@ -369,7 +378,7 @@ def open_day(keys: Sequence[str], product: Product):
     # missing a field) is left out. The rest are split by chunking: each chunk layout the
     # day holds is combined on its own and goes to its own generation, losing no file.
     readable = [(url, layout, names) for url, layout, names in probed if layout is not None]
-    variables = [frozenset(n for n, _ in layout) for _, layout, _ in readable]
+    variables = [frozenset(n for n, *_ in layout) for _, layout, _ in readable]
     majority = max(set(variables), key=variables.count)
     groups: dict[tuple, list[str]] = {}
     names_of: dict[tuple, list[str]] = {}

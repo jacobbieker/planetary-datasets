@@ -22,6 +22,7 @@ def granule(
     *,
     rows: int = 8,
     chunk_rows: int = 2,
+    shuffle: bool = True,
     seed: int = 0,
     name: str = "TPW",
     channel: int | None = None,
@@ -54,7 +55,12 @@ def granule(
     )
     ds[name].attrs.update(long_name="Total Precipitable Water", units="mm")
     encoding = {
-        name: {"chunksizes": (chunk_rows, 6), "zlib": True, "shuffle": True, "_FillValue": 65535},
+        name: {
+            "chunksizes": (chunk_rows, 6),
+            "zlib": True,
+            "shuffle": shuffle,
+            "_FillValue": 65535,
+        },
         "t": {"units": "seconds since 2000-01-01 12:00:00"},
     }
     ds.to_netcdf(path, engine="netcdf4", encoding=encoding)
@@ -242,3 +248,15 @@ def test_a_day_whose_chunking_changes_midway_writes_every_file(archive, local_co
     stores = g.generations(local_config, product.store_prefix)
     assert sorted(read(product, local_config, p).sizes["t"] for p in stores) == [1, 2]
     assert g.run_product(product, local_config, now=now) == 0, "the day is recorded done"
+
+
+def test_a_day_mixing_compression_filters_writes_every_file(archive, local_config):
+    """GOES-16 files of one day mix shuffle on and off; references cannot concatenate them."""
+    product = g.Product(19, "TPW", "F")
+    start = dt.datetime.combine(DAY, dt.time())
+    granule(archive, "TPWF", start)
+    granule(archive, "TPWF", start + dt.timedelta(minutes=10), shuffle=False)
+    now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
+    assert g.run_product(product, local_config, now=now) == 2
+    stores = g.generations(local_config, product.store_prefix)
+    assert sorted(read(product, local_config, p).sizes["t"] for p in stores) == [1, 1]
