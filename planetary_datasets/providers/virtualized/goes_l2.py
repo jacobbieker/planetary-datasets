@@ -20,16 +20,27 @@ the new layout (``acm_f_15062024.icechunk``), found again by the layout's signat
 Variables keep NOAA's names (``CMI``, ``ACM``, ``DQF``) with their ``long_name`` and
 units: virtual stores are written without the renaming the materialised stores get.
 
-Not covered here (see ``DEFERRED``): the point products (derived motion winds and the
-GLM lightning events), which cannot be appended as references because each file's
-length differs, and the mesoscale sectors, ~870 million one-minute files whose position
-moves with each sector.
+The mesoscale sectors (``--sectors M1,M2``) are one-minute scans, 1440 files a day per
+sector, so each is split by year::
+
+    bkr/geo/virtualized/goes19_l2_meso/acm_m1_2026.icechunk
+    bkr/geo/virtualized/goes19_l2_meso/cmip_m2_c13_2026.icechunk
+
+A mesoscale sector's box moves (about every other day in a month of GOES-19 samples, never
+within a day), so its stores have no ``x``/``y`` index: each time carries its own
+``x_scan_angle``/``y_scan_angle`` along ``t``, with the scalar ``x_image``/``y_image``.
+
+Not covered here: the point products (derived motion winds and the GLM lightning
+events), which cannot be appended as references because each file's length differs;
+``planetary_datasets.providers.goes_l2_points`` materialises them.
 
 Each day is written in one commit and recorded in the store's ledger, so a run resumes
 where it stopped. The last few days go first, newest first, then the backlog oldest
 first; times are therefore not sorted in the store.
 
     python -m planetary_datasets.providers.virtualized.goes_l2 --satellite 19 --follow
+    python -m planetary_datasets.providers.virtualized.goes_l2 --satellite 19 --follow \
+        --sectors M1,M2
 """
 
 from __future__ import annotations
@@ -55,13 +66,20 @@ SOURCE_REGION = "us-east-1"
 STORE_ROOT = "bkr/geo/virtualized"
 #: Sectors archived by default: full disk and CONUS (or PACUS for the west satellites).
 SECTORS = ("F", "C")
+#: The two mesoscale sectors. Both are published under one prefix (``ABI-L2-ACMM``) and
+#: told apart by the file name (``OR_ABI-L2-ACMM1-M6_G19_...``).
+MESO_SECTORS = ("M1", "M2")
+#: Where the mesoscale stores live; they are split by year (see :class:`Product`).
+MESO_ROOT = f"{STORE_ROOT}/goes{{satellite}}_l2_meso"
+#: One-minute scans: 1440 files a day per mesoscale sector.
+MESO_FILES_PER_DAY = 1440
 #: Products whose files are not on a fixed grid: winds and lightning are lists of
 #: observations of a different length in every file.
 POINT_PRODUCTS = ("DMW", "DMWV")
+#: Covered elsewhere: ``planetary_datasets.providers.goes_l2_points`` materialises them.
 DEFERRED = (
     "ABI-L2-DMW*, ABI-L2-DMWV* (derived motion winds) and GLM-L2-LCFA (lightning): "
-    "per-file lengths differ, so they need materialising rather than references",
-    "mesoscale sectors (ABI-L2-*M): ~870M one-minute files, sector position moves",
+    "per-file lengths differ, so they are materialised by goes_l2_points",
 )
 #: Root attributes.
 LEDGER_ATTR = "days_written"
@@ -89,8 +107,15 @@ class Product:
 
     satellite: int
     code: str  # e.g. "ACM", "CMIP", "ACHA2KM"
-    sector: str  # "F" or "C" (or "M")
+    sector: str  # "F", "C", or a mesoscale sector "M1" / "M2"
     channel: int | None = None
+    #: Mesoscale stores only: the year this store holds. A sector writes 1440 files a
+    #: day, so one store per year keeps each store's manifests a manageable size.
+    year: int | None = None
+
+    @property
+    def meso(self) -> bool:
+        return self.sector in MESO_SECTORS
 
     @property
     def bucket(self) -> str:
@@ -98,25 +123,35 @@ class Product:
 
     @property
     def source_prefix(self) -> str:
-        return f"ABI-L2-{self.code}{self.sector}"
+        return f"ABI-L2-{self.code}{self.sector[0]}"
+
+    @property
+    def _stem(self) -> str:
+        tail = f"_c{self.channel:02d}" if self.channel else ""
+        year = f"_{self.year}" if self.year else ""
+        return f"{self.code.lower()}_{self.sector.lower()}{tail}{year}"
 
     @property
     def name(self) -> str:
-        tail = f"_c{self.channel:02d}" if self.channel else ""
-        return f"goes{self.satellite}_l2_{self.code.lower()}_{self.sector.lower()}{tail}"
+        return f"goes{self.satellite}_l2_{self._stem}"
 
     @property
     def store_prefix(self) -> str:
-        tail = f"_c{self.channel:02d}" if self.channel else ""
-        return (
-            f"{STORE_ROOT}/goes{self.satellite}_l2/"
-            f"{self.code.lower()}_{self.sector.lower()}{tail}.icechunk"
-        )
+        if self.meso:
+            return f"{MESO_ROOT.format(satellite=self.satellite)}/{self._stem}.icechunk"
+        return f"{STORE_ROOT}/goes{self.satellite}_l2/{self._stem}.icechunk"
+
+    @property
+    def files_per_day(self) -> int:
+        return MESO_FILES_PER_DAY if self.meso else 288 if self.sector == "C" else 144
 
     def wants(self, key: str) -> bool:
         """Whether a file in the product's prefix belongs to this store."""
         name = key.rsplit("/", 1)[-1]
         if not name.endswith(".nc"):
+            return False
+        # OR_ABI-L2-ACMM1-M6_G19_s...: both mesoscale sectors share one prefix.
+        if self.meso and f"L2-{self.code}{self.sector}-" not in name:
             return False
         if self.channel is None:
             return True
@@ -134,14 +169,22 @@ def products_from_listing(
         if not prefix.startswith("ABI-L2-"):
             continue
         body = prefix[len("ABI-L2-") :]
-        code, sector = body[:-1], body[-1]
-        if sector not in sectors or code in POINT_PRODUCTS:
+        code, letter = body[:-1], body[-1]
+        if code in POINT_PRODUCTS:
             continue
-        if code == "CMIP":
-            out += [Product(satellite, code, sector, ch) for ch in range(1, 17)]
-        else:
-            out.append(Product(satellite, code, sector))
+        wanted = [s for s in sectors if s[0] == letter]
+        for sector in wanted:
+            if code == "CMIP":
+                out += [Product(satellite, code, sector, ch) for ch in range(1, 17)]
+            else:
+                out.append(Product(satellite, code, sector))
     return out
+
+
+def by_year(store, product: Product) -> list[Product]:
+    """A mesoscale product as one store per year it has data for."""
+    years = [y for y in _children(store, f"{product.source_prefix}/") if y.isdigit()]
+    return [dataclasses.replace(product, year=int(y)) for y in years if int(y) >= 2017]
 
 
 def scan_start(key: str) -> dt.datetime:
@@ -174,7 +217,8 @@ def _children(store, prefix: str) -> list[str]:
 def available_days(store, product: Product) -> list[dt.date]:
     """Every day the product has a folder for, skipping mis-stamped year folders."""
     days = []
-    for year in _children(store, f"{product.source_prefix}/"):
+    years = [str(product.year)] if product.year else _children(store, f"{product.source_prefix}/")
+    for year in years:
         if not year.isdigit() or int(year) < 2017:
             continue  # a few products carry a stray 2000/ folder of mis-stamped files
         for doy in _children(store, f"{product.source_prefix}/{year}/"):
@@ -239,6 +283,21 @@ def _add_time(ds):
     return new
 
 
+def _add_time_meso(ds):
+    """A mesoscale granule along ``t``, keeping the granule's own position.
+
+    The sector box moves (about every other day; never within a day in the samples
+    taken), so ``x``/``y`` are not one grid for the store: they become the per-time
+    ``x_scan_angle``/``y_scan_angle`` (radians), as do the scalar coordinates that
+    describe the box (``x_image``, ``y_image``), and ``x``/``y`` are left as bare image
+    dimensions without an index.
+    """
+    renames = {n: f"{n}_scan_angle" for n in ("x", "y") if n in ds.variables}
+    ds = ds.drop_indexes([n for n in renames if n in ds.indexes]).rename_vars(renames)
+    per_file = [n for n in ds.coords if n != "t" and n not in ds.indexes]
+    return _add_time(ds.reset_coords(per_file))
+
+
 def open_day(keys: Sequence[str], product: Product):
     """The day's files as one virtual dataset along ``t``.
 
@@ -276,7 +335,7 @@ def open_day(keys: Sequence[str], product: Product):
                 registry=registry,
                 parser=parser,
                 loadable_variables=loadable,
-                preprocess=_add_time,
+                preprocess=_add_time_meso if product.meso else _add_time,
                 parallel=ThreadPoolExecutor,
                 **_COMBINE,
             )
@@ -342,11 +401,10 @@ def layout_signature(vds) -> str:
 def open_store(prefix: str, product: Product, config: Config, create: bool = True):
     from planetary_datasets.providers.virtualized.virtual_repo import open_virtual_repo
 
-    files_per_day = 288 if product.sector == "C" else 144
     return open_virtual_repo(
         prefix,
         virtual_buckets=[f"s3://{product.bucket}"],
-        split_size=files_per_day,
+        split_size=product.files_per_day,
         split_dim="t",
         source_region=SOURCE_REGION,
         config=config,
@@ -456,6 +514,7 @@ def write_day(product: Product, day: dt.date, keys: Sequence[str], config: Confi
             LEDGER_ATTR: sorted(days),
             "source": f"s3://{product.bucket}/{product.source_prefix}/ (mirror: gs://gcp-public-data-goes-{product.satellite}/)",
             "product": product.source_prefix
+            + (f" sector {product.sector}" if product.meso else "")
             + (f" channel {product.channel}" if product.channel else ""),
         }
     )
@@ -501,7 +560,11 @@ def list_products(
     found = products_from_listing(satellite, _children(store, ""), sectors)
     if codes:
         found = [p for p in found if p.code in codes]
-    return found
+    # Newest year first, so a long backlog never holds back the live edge.
+    out = []
+    for product in found:
+        out += sorted(by_year(store, product), key=lambda p: -p.year) if product.meso else [product]
+    return out
 
 
 def main(argv: Sequence[str] | None = None) -> int:
