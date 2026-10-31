@@ -128,16 +128,16 @@ declare -A LANES=(
   # spaced two seconds apart per process and a refusal backs off for minutes
   # (common.download.HOST_MIN_INTERVAL). Resumed 2026-10-21: AMPS d5, NCEP upper air and
   # IFS analysis; AMPS d3 2026-10-22 after a night with only two retried refusals; AMPS d6
-  # 2026-10-23 after a day with none.
+  # 2026-10-23 after a day with none; d1, d2, Drake and NZ 2026-10-31 (5 refusals in 36 h).
   # AMPS WRF24. The nests d3/d6 (2.67 km) and d5 (0.89 km) backfill from 2024 only; d5
   # resumed 2026-10-18 and d3/d6 2026-10-19 on the 192-vCPU box.
-  # GDEX-PAUSED [amps_d1]="_backfill_lanes.py amps_d1 --threads 4 --pause 21600"
-  # GDEX-PAUSED [amps_d2]="_backfill_lanes.py amps_d2 --threads 4 --pause 21600"
+  [amps_d1]="_backfill_lanes.py amps_d1 --threads 4 --pause 21600"
+  [amps_d2]="_backfill_lanes.py amps_d2 --threads 4 --pause 21600"
   [amps_d3]="_backfill_lanes.py amps_d3 --threads 8 --pause 21600"
   [amps_d5]="_backfill_lanes.py amps_d5 --threads 8 --pause 21600"
   [amps_d6]="_backfill_lanes.py amps_d6 --threads 4 --pause 21600"
-  # GDEX-PAUSED [amps_drake]="_backfill_lanes.py amps_drake --threads 4 --pause 21600"
-  # GDEX-PAUSED [amps_nz]="_backfill_lanes.py amps_nz --threads 4 --pause 21600"
+  [amps_drake]="_backfill_lanes.py amps_drake --threads 4 --pause 21600"
+  [amps_nz]="_backfill_lanes.py amps_nz --threads 4 --pause 21600"
   # JPSS products NOAA keeps ~90 days: VIIRS M-band SDR and the ATMS-derived L2 stores.
   [jpss_viirs_mband_n20]="_backfill_lanes.py jpss_viirs_mband_n20 --threads 8"
   [jpss_viirs_mband_n21]="_backfill_lanes.py jpss_viirs_mband_n21 --threads 8"
