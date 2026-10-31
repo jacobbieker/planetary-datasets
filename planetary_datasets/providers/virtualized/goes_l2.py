@@ -299,11 +299,11 @@ def _add_time_meso(ds):
 
 
 def open_day(keys: Sequence[str], product: Product):
-    """The day's files as one virtual dataset along ``t``.
+    """The day's files as virtual datasets along ``t``, one per layout (usually one).
 
     The grid variables stay references; everything small (times, bounds, projection,
     per-file statistics) is loaded and stored inline. Files whose grid variables differ
-    from the day's majority (an occasional file missing a field) are left out.
+    or chunking from the others are combined separately; unreadable files are left out.
     """
     import virtualizarr as vz
     from obspec_utils.registry import ObjectStoreRegistry
@@ -323,7 +323,13 @@ def open_day(keys: Sequence[str], product: Product):
             return url, None, None
         try:
             names = list(ds.variables)
-            return url, tuple(sorted(_virtual_names(ds))), names
+            # The layout is the grid variables and their chunking: files whose chunk
+            # shapes differ (GOES-18 changed them mid-day while commissioning) cannot be
+            # concatenated, though their variables match.
+            layout = tuple(
+                sorted((n, tuple(ds[n].data.metadata.chunks)) for n in _virtual_names(ds))
+            )
+            return url, layout, names
         finally:
             ds.close()
 
@@ -343,27 +349,40 @@ def open_day(keys: Sequence[str], product: Product):
     # Usually every file of a day has the same layout: learn it from the first readable
     # file and combine them all in one pass. Only if that fails is each file checked.
     for url in urls:
-        _, grid, names = probe(url)
-        if grid is not None:
+        _, layout, names = probe(url)
+        if layout is not None:
             break
     else:
-        return None, 0
+        return [], 0
+    grid = {n for n, _ in layout}
     try:
         vds = combine(urls, [n for n in names if n not in grid])
-        if set(_virtual_names(vds)) == set(grid):
-            return vds, 0
+        if set(_virtual_names(vds)) == grid:
+            return [vds], 0
     except Exception as exc:  # noqa: BLE001 - fall back to checking each file
         logger.info(
             f"{product.name}: day does not combine as is ({type(exc).__name__}); checking each file"
         )
     with ThreadPoolExecutor(OPEN_WORKERS) as pool:
         probed = list(pool.map(probe, urls))
-    layouts = [grid for _, grid, _ in probed if grid is not None]
-    majority = max(set(layouts), key=layouts.count)
-    keep = [url for url, grid, _ in probed if grid == majority]
-    names = next(names for _, grid, names in probed if grid == majority)
-    vds = combine(keep, [n for n in names if n not in majority])
-    return vds, len(urls) - len(keep)
+    # A file whose grid variables differ from the day's majority (an occasional file
+    # missing a field) is left out. The rest are split by chunking: each chunk layout the
+    # day holds is combined on its own and goes to its own generation, losing no file.
+    readable = [(url, layout, names) for url, layout, names in probed if layout is not None]
+    variables = [frozenset(n for n, _ in layout) for _, layout, _ in readable]
+    majority = max(set(variables), key=variables.count)
+    groups: dict[tuple, list[str]] = {}
+    names_of: dict[tuple, list[str]] = {}
+    for (url, layout, names), grid in zip(readable, variables):
+        if grid != majority:
+            continue
+        groups.setdefault(layout, []).append(url)
+        names_of.setdefault(layout, names)
+    datasets = [
+        combine(keep, [n for n in names_of[layout] if n not in majority])
+        for layout, keep in sorted(groups.items(), key=lambda item: -len(item[1]))
+    ]
+    return datasets, len(urls) - sum(len(keep) for keep in groups.values())
 
 
 def layout_signature(vds) -> str:
@@ -493,10 +512,20 @@ def write_day(product: Product, day: dt.date, keys: Sequence[str], config: Confi
     import icechunk
     import zarr
 
-    vds, dropped = open_day(keys, product)
-    if vds is None:
+    datasets, dropped = open_day(keys, product)
+    if not datasets:
         logger.warning(f"{product.name} {day}: no readable files")
         return 0
+    if len(datasets) > 1:
+        logger.info(f"{product.name} {day}: {len(datasets)} layouts in one day; one store each")
+    return sum(_write_layout(product, day, vds, dropped, config) for vds in datasets)
+
+
+def _write_layout(product: Product, day: dt.date, vds, dropped: int, config: Config) -> int:
+    """Reference one layout's files of a day in the generation matching it; one commit."""
+    import icechunk
+    import zarr
+
     signature = layout_signature(vds)
     prefix = store_for(product, signature, day, config)
     attrs = stored_attrs(prefix, product, config)
