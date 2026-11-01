@@ -71,7 +71,7 @@ def glm_file(root, when, events, groups, flashes, energy_scale=1.9024e-17):
     return path
 
 
-def dmw_file(root, when, n, band=14, sector="F", extra=False):
+def dmw_file(root, when, n, band=14, sector="F", extra=False, stripped=False):
     """A derived-motion-wind file: one list of winds plus per-file statistics."""
     measures = ("nMeasures",)
     variables = {
@@ -89,6 +89,8 @@ def dmw_file(root, when, n, band=14, sector="F", extra=False):
     }
     if extra:
         variables["pressure"] = (measures, np.full(n, 500.0, "float32"), {"units": "hPa"})
+    if stripped:
+        variables = {k: v[:2] for k, v in variables.items()}
     ds = xr.Dataset(variables)
     prefix = "ABI-L2-DMWF" if sector == "F" else f"ABI-L2-DMW{sector[0]}"
     name = f"OR_ABI-L2-DMW{sector}-M6C{band:02d}_G19_s{_stamp(when)}_e{_stamp(when)}_c1.nc"
@@ -259,3 +261,16 @@ def test_units_that_disagree_are_still_refused():
     files = [_wind_file("degrees_north"), _wind_file("radians")]
     with pytest.raises(gp.PackingChanged):
         gp.combine(files, first_file=0)
+
+
+def test_a_file_published_without_any_attributes_is_left_out(archive, local_config):
+    """One GOES-18 DMW file on 2024-09-04 carried no attributes at all, _Unsigned included."""
+    root, src = archive
+    first = dt.datetime(2026, 10, 27, 12)
+    dmw_file(root, first, n=3)
+    dmw_file(root, first + dt.timedelta(minutes=10), n=2, stripped=True)
+    dmw_file(root, first + dt.timedelta(minutes=20), n=4)
+    assert gp.run_prefix(19, "ABI-L2-DMWF", local_config, now=NOW, store=src) == 2
+    ds = xr.open_zarr(store(local_config), group="dmw_f_c14", consolidated=False)
+    assert ds.sizes["file"] == 2 and ds.sizes["wind"] == 7
+    assert gp.run_prefix(19, "ABI-L2-DMWF", local_config, now=NOW, store=src) == 0

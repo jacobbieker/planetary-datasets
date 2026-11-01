@@ -422,6 +422,12 @@ def _read_safely(item: tuple[str, bytes]) -> dict | str:
         return f"{type(exc).__name__}: {exc}"
 
 
+def _stripped(parsed: dict) -> bool:
+    """A file published with every variable attribute missing (one GOES-18 DMW file on
+    2024-09-04): what its values mean, packed or signed, is not recorded anywhere in it."""
+    return not any(attrs for _, _, attrs in parsed.values())
+
+
 def write_partition(
     repo: icechunk.Repository, group: str, partition: str, bodies: Sequence[tuple[str, bytes]]
 ) -> int:
@@ -430,6 +436,11 @@ def write_partition(
     for key, result in zip((k for k, _ in bodies), _parse(bodies)):
         if isinstance(result, str):
             logger.warning(f"{group}: {key}: {result}")
+        elif _stripped(result):
+            logger.warning(
+                f"{group}: {key}: no variable carries any attribute (units, _Unsigned, "
+                "packing, fill), so its raw values cannot be read with certainty; left out"
+            )
         else:
             parsed.append(result)
     if not parsed:
