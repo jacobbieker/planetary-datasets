@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import json
 import tarfile
 
 import pytest
@@ -149,6 +150,13 @@ class FakeDest:
     def get_object(self, Bucket, Key):
         return {"Body": io.BytesIO(self.objects[Key])}
 
+    def head_object(self, Bucket, Key):
+        from botocore.exceptions import ClientError
+
+        if Key not in self.objects:
+            raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
+        return {}
+
 
 def _cache():
     import obstore
@@ -196,6 +204,70 @@ def test_targets_run_over_an_archived_tar(monkeypatch):
     assert target.keys == ["data/x/one"] and summaries["recorder"]["rows"] == 1
     end = dt.datetime(2026, 10, 27, 12, tzinfo=UTC)
     assert target.finished == [(end - wis2.LOOKBACK, end, "wis2_20261027T1200Z")]
+
+
+def _archived_tar(dest, key="bkr/obs/wis2/wis2_20261027T1200Z.tar"):
+    tar_bytes = io.BytesIO()
+    with tarfile.open(fileobj=tar_bytes, mode="w") as tar:
+        for name in ("data/x/one", "data/y/two"):
+            info = tarfile.TarInfo(name)
+            info.size = len(name)
+            info.mtime = 1761552000
+            tar.addfile(info, io.BytesIO(name.encode()))
+    dest.objects[key] = tar_bytes.getvalue()
+    return key
+
+
+def _state(dest, key):
+    return json.loads(dest.objects[f"{key}.targets.json"])
+
+
+def test_an_archive_records_which_targets_finished(monkeypatch):
+    store, _ = _cache()
+    dest = FakeDest()
+    monkeypatch.setattr(wis2, "source_store", lambda: store)
+    monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
+    monkeypatch.setattr(wis2, "build_targets", lambda config, names: [Recorder(), Broken()])
+    summary = wis2.archive(dt.datetime.now(UTC) + dt.timedelta(minutes=1), config=_config())
+    assert _state(dest, summary.key) == {
+        "pending": [],
+        "done": ["recorder"],
+        "failed": ["broken"],
+    }
+
+
+def test_targets_an_interrupted_run_left_pending_are_finished_from_the_tar(monkeypatch):
+    dest = FakeDest()
+    key = _archived_tar(dest)
+    dest.objects[f"{key}.targets.json"] = json.dumps(
+        {"pending": ["recorder"], "done": ["broken"], "failed": []}
+    ).encode()
+    built_for = []
+
+    def build(config, names):
+        built_for.append(names)
+        return [Recorder()]
+
+    monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
+    monkeypatch.setattr(wis2, "build_targets", build)
+    end = dt.datetime(2026, 10, 27, 12, tzinfo=UTC)
+    summary = wis2.archive(end, config=_config())
+    assert built_for == [["recorder"]], "only the pending target, not the finished one"
+    assert summary.files == 0 and summary.targets["recorder"]["rows"] == 1
+    assert _state(dest, key) == {"pending": [], "done": ["broken", "recorder"], "failed": []}
+    built_for.clear()
+    wis2.archive(end, config=_config())
+    assert built_for == [], "nothing left to finish"
+
+
+def test_an_archived_tar_without_a_target_record_is_left_alone(monkeypatch):
+    dest = FakeDest()
+    _archived_tar(dest)
+    monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
+    monkeypatch.setattr(
+        wis2, "build_targets", lambda config, names: pytest.fail("no targets should run")
+    )
+    wis2.archive(dt.datetime(2026, 10, 27, 12, tzinfo=UTC), config=_config())
 
 
 def test_no_targets_when_asked_for_none(monkeypatch):
