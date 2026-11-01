@@ -11,10 +11,11 @@ observations are also decoded (BUFR, with ecCodes) and appended to
     One row per report (dimension ``observation``): moored and drifting buoys, ships,
     uncrewed surface vehicles and wave buoys. Position, time, platform identifiers, sea
     surface temperature and salinity, air pressure, temperature, humidity, wind, the bulk
-    wave parameters (ERA5's names) and surface currents, as reported.
+    wave parameters (ERA5's names) and surface currents, as reported, and the arrival
+    times (below).
 ``/profiles``
     CF contiguous ragged arrays: one row per profile (dimension ``profile``: platform,
-    time, position, cycle) and one per level (dimension ``level``: pressure or depth,
+    time, position, cycle, arrival times) and one per level (dimension ``level``: pressure or depth,
     water temperature, salinity, dissolved oxygen, current). ``level_count`` gives each
     profile's levels, in order (CF ``sample_dimension``). Argo floats, and the subsurface
     temperature and salinity some buoys report.
@@ -37,6 +38,11 @@ platform, time to the minute and position to 0.01 degree (a profile likewise); w
 window the copy with the most values is kept, and reports the store already holds (its
 recent rows are read back) are not written again. Values are as decoded, lossless:
 floats stay float64 unless every value survives float32 exactly.
+
+Each row of either group records when its report reached the cache, so the live stream
+can be replayed: ``arrival_time``, when the copy kept arrived, and ``first_arrival_time``,
+the earliest arrival of any copy the window collapsed into the row. Both are UTC, to the
+second; rows written before they were added read NaT.
 """
 
 from __future__ import annotations
@@ -219,6 +225,20 @@ UNITS = {
     "current_direction": "degree",
     "current_speed": "m s-1",
 }
+
+#: Descriptions of the arrival times, worded the same in every WIS2 observation store.
+ARRIVAL_ATTRS = {
+    "arrival_time": {
+        "long_name": "time the copy of this observation kept here arrived in the WIS2 Global Cache",
+    },
+    "first_arrival_time": {
+        "long_name": "earliest time any copy of this observation arrived in the WIS2 Global Cache",
+        "comment": "minimum over the copies (GTS relays, the originating centre's topic) "
+        "collapsed into this row within its window; rows written before this variable was "
+        "added have no value (NaT)",
+    },
+}
+ARRIVAL_KEYS = tuple(ARRIVAL_ATTRS)
 
 #: Everything the walker reads; other keys are skipped without being fetched.
 READ_KEYS = (
@@ -427,7 +447,8 @@ def _richness(row: dict) -> int:
         1
         for k, v in row.items()
         if not (
-            v is None
+            k in ARRIVAL_KEYS
+            or v is None
             or (isinstance(v, float) and math.isnan(v))
             or (k in CODE_VARIABLES and v == -1)
         )
@@ -454,11 +475,14 @@ class Collector:
         self.profiles: dict[tuple, tuple[dict, list[dict]]] = {}
         self.counts = Counts()
         self.duplicates = {SURFACE: 0, PROFILES: 0}
+        #: Per group and identity, the earliest arrival among the copies seen.
+        self.first_arrival: dict[str, dict[tuple, np.datetime64]] = {SURFACE: {}, PROFILES: {}}
 
-    def add(self, key: str, body: bytes) -> None:
+    def add(self, key: str, body: bytes, arrived: dt.datetime | None = None) -> None:
         kind = kind_of(key)
         if kind is None:
             return
+        stamp = _utc_seconds(arrived)
         self.counts.objects += 1
         for message in split_bufr(body):
             self.counts.messages += 1
@@ -474,10 +498,17 @@ class Collector:
                     self.counts.without_position += 1
                     continue
                 self.counts.reports += 1
+                report.surface["arrival_time"] = stamp
                 self._keep(report)
+
+    def _arrived(self, group: str, ident: tuple, arrived: np.datetime64 | None) -> None:
+        earliest = self.first_arrival[group].get(ident)
+        if arrived is not None and (earliest is None or arrived < earliest):
+            self.first_arrival[group][ident] = arrived
 
     def _keep(self, report: Report) -> None:
         ident = identity(report.surface)
+        arrived = report.surface.get("arrival_time")
         if report.levels:
             meta = {k: v for k, v in report.surface.items() if k in PROFILE_FIELDS}
             held = self.profiles.get(ident)
@@ -485,12 +516,38 @@ class Collector:
                 self.duplicates[PROFILES] += 1
             if held is None or len(report.levels) > len(held[1]):
                 self.profiles[ident] = (meta, report.levels)
+            self._arrived(PROFILES, ident, arrived)
         if any(not math.isnan(report.surface[name]) for name in SURFACE_VARIABLES):
             held = self.surface.get(ident)
             if held is not None:
                 self.duplicates[SURFACE] += 1
             if held is None or _richness(report.surface) > _richness(held):
                 self.surface[ident] = report.surface
+            self._arrived(SURFACE, ident, arrived)
+
+    def surface_rows(self, held: set[tuple] = frozenset()) -> list[dict]:
+        """The kept reports not in ``held``, each with its ``first_arrival_time``."""
+        return [
+            {**row, "first_arrival_time": self.first_arrival[SURFACE].get(ident)}
+            for ident, row in self.surface.items()
+            if ident not in held
+        ]
+
+    def profile_rows(self, held: set[tuple] = frozenset()) -> list[tuple[dict, list[dict]]]:
+        """The kept profiles not in ``held``, each with its ``first_arrival_time``."""
+        return [
+            ({**meta, "first_arrival_time": self.first_arrival[PROFILES].get(ident)}, levels)
+            for ident, (meta, levels) in self.profiles.items()
+            if ident not in held
+        ]
+
+
+def _utc_seconds(when: dt.datetime | None) -> np.datetime64 | None:
+    if when is None:
+        return None
+    if when.tzinfo is not None:
+        when = when.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    return np.datetime64(when, "s")
 
 
 PROFILE_FIELDS = (
@@ -508,6 +565,7 @@ PROFILE_FIELDS = (
     "float_cycle_number",
     "direction_of_profile",
     "profile_instrument_type",
+    "arrival_time",
 )
 SURFACE_STRINGS = (
     "platform_kind",
@@ -524,6 +582,12 @@ def _strings(values: Iterable) -> np.ndarray:
     return np.array(["" if v is None else str(v) for v in values], dtype=object)
 
 
+def _times(values: Iterable) -> np.ndarray:
+    return np.array(
+        [np.datetime64("NaT", "s") if v is None else v for v in values], dtype="datetime64[s]"
+    )
+
+
 def surface_dataset(rows: Sequence[dict]) -> xr.Dataset:
     """``/surface`` rows as a dataset along ``observation``, in time order."""
     rows = sorted(rows, key=lambda r: (r["time"], platform_id(r)))
@@ -538,6 +602,8 @@ def surface_dataset(rows: Sequence[dict]) -> xr.Dataset:
         data[name] = ("observation", np.array([r[name] for r in rows], dtype="float64"))
     for name in CODE_VARIABLES:
         data[name] = ("observation", np.array([r[name] for r in rows], dtype="int32"))
+    for name in ARRIVAL_KEYS:
+        data[name] = ("observation", _times(r.get(name) for r in rows))
     ds = xr.Dataset(data)
     return _attributes(ds)
 
@@ -556,6 +622,8 @@ def profiles_dataset(profiles: Sequence[tuple[dict, list[dict]]]) -> xr.Dataset:
         data[name] = ("profile", _strings(m.get(name) for m in metas))
     for name in CODE_VARIABLES:
         data[name] = ("profile", np.array([m.get(name, -1) for m in metas], dtype="int32"))
+    for name in ARRIVAL_KEYS:
+        data[name] = ("profile", _times(m.get(name) for m in metas))
     levels = [lv for _, lvs in profiles for lv in lvs]
     for name in LEVEL_VARIABLES.values():
         values = [lv.get(name) for lv in levels]
@@ -578,6 +646,8 @@ def _attributes(ds: xr.Dataset) -> xr.Dataset:
     for name in CODE_VARIABLES:
         if name in ds:
             ds[name].attrs["_FillValue"] = -1
+    for name, attrs in ARRIVAL_ATTRS.items():
+        ds[name].attrs.update(attrs)
     ds["platform_kind"].attrs["long_name"] = "platform kind, from the WIS2 topic or GTS bulletin"
     ds["source_key"].attrs["long_name"] = "WIS2 Global Cache key of the object the report came from"
     return ds
@@ -618,31 +688,31 @@ def stored_identities(repo, group: str) -> set[tuple]:
 
 def write(collector: Collector, partition: str, config: Config | None = None) -> dict:
     """Append a window's reports to the store, skipping any it already holds."""
-    from planetary_datasets.common.multidim import append_partition
+    from planetary_datasets.common.multidim import append_partition, describe_variables
 
     config = config or get_config()
     repo = config.icechunk_repo(STORE_PREFIX)
     summary = {"partition": partition, **dataclasses.asdict(collector.counts)}
     summary["duplicates_in_window"] = dict(collector.duplicates)
 
-    held = stored_identities(repo, SURFACE)
-    rows = [r for ident, r in collector.surface.items() if ident not in held]
+    rows = collector.surface_rows(stored_identities(repo, SURFACE))
     summary["surface_already_stored"] = len(collector.surface) - len(rows)
     summary["surface_written"] = 0
     if rows:
         append_partition(
             repo, surface_dataset(rows), partition, label="wis2 ocean surface", group=SURFACE
         )
+        describe_variables(repo, ARRIVAL_ATTRS, label="wis2 ocean surface", group=SURFACE)
         summary["surface_written"] = len(rows)
 
-    held = stored_identities(repo, PROFILES)
-    profiles = [p for ident, p in collector.profiles.items() if ident not in held]
+    profiles = collector.profile_rows(stored_identities(repo, PROFILES))
     summary["profiles_already_stored"] = len(collector.profiles) - len(profiles)
     summary["profiles_written"] = 0
     if profiles:
         append_partition(
             repo, profiles_dataset(profiles), partition, label="wis2 ocean profiles", group=PROFILES
         )
+        describe_variables(repo, ARRIVAL_ATTRS, label="wis2 ocean profiles", group=PROFILES)
         summary["profiles_written"] = len(profiles)
         summary["levels_written"] = sum(len(lv) for _, lv in profiles)
     _describe_root(repo)
@@ -688,7 +758,7 @@ class OceanTarget(QueuedTarget):
         return kind_of(key) is not None
 
     def decode(self, key: str, body: bytes, arrived: dt.datetime | None) -> None:
-        self.collector.add(key, body)
+        self.collector.add(key, body, arrived)
 
     def write(
         self, window_start: dt.datetime | None, window_end: dt.datetime | None, partition: str
@@ -697,11 +767,13 @@ class OceanTarget(QueuedTarget):
         return write(collector, partition, self.config)
 
 
-def collect(objects: Iterable[tuple[str, bytes]]) -> Collector:
-    """A collector fed every ocean object of ``objects``."""
+def collect(
+    objects: Iterable[tuple[str, bytes] | tuple[str, bytes, dt.datetime | None]],
+) -> Collector:
+    """A collector fed every ocean object of ``objects``: ``(key, body[, arrived])``."""
     collector = Collector()
-    for key, body in objects:
-        collector.add(key, body)
+    for key, body, *arrived in objects:
+        collector.add(key, body, *arrived)
     return collector
 
 

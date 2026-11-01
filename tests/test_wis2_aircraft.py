@@ -115,3 +115,68 @@ def test_the_target_decodes_as_the_archive_streams(local_config):
     summary = target.finish(None, None, "wis2_20261027T1200Z")
     assert summary["rows"] == 2 and summary["bulletins"] == 1 and summary["objects"] == 1
     assert _store(local_config).sizes["observation"] == 2
+
+
+def _stored_times(local_config, name: str) -> np.ndarray:
+    """A stored time column as datetime64[s], NaT for its fill, without xarray's decoding.
+
+    (xarray before 2026.9 cannot decode an integer time column holding NaT.)
+    """
+    import zarr
+
+    repo = local_config.icechunk_repo(aircraft.STORE_PREFIX)
+    array = zarr.open_group(repo.readonly_session("main").store, mode="r")[name]
+    assert array.attrs["units"] == aircraft.TIME_UNITS
+    assert array.attrs["_FillValue"] == aircraft.TIME_FILL
+    return array[:].astype("int64").view("datetime64[s]")
+
+
+def test_first_arrival_is_the_earliest_copy_and_arrival_the_kept_ones(local_config):
+    one, two = report("HK0013"), report("HK0014", minute=37)
+    batch = Batch()
+    # The bulletin read first is kept; a relay's copy of one report had arrived earlier.
+    batch.add(KEY, bulletin(encode_amdar([one, two])), ARRIVED)
+    batch.add(OTHER, bulletin(encode_amdar([one])), ARRIVED - dt.timedelta(minutes=4))
+    batch.add(OTHER, bulletin(encode_amdar([one])), ARRIVED + dt.timedelta(minutes=2))
+    assert aircraft.write(batch, "w", local_config) == 2
+
+    ds = _store(local_config)
+    order = np.argsort(ds["aircraft_identifier"].values)
+    assert ds["source_key"].values[order].tolist() == [KEY, KEY]
+    assert (
+        ds["arrival_time"].values[order].astype("datetime64[s]").tolist()
+        == [dt.datetime(2026, 10, 27, 6, 47, 54)] * 2
+    )
+    assert ds["first_arrival_time"].values[order].astype("datetime64[s]").tolist() == [
+        dt.datetime(2026, 10, 27, 6, 43, 54),
+        dt.datetime(2026, 10, 27, 6, 47, 54),
+    ]
+    assert ds["first_arrival_time"].attrs["long_name"] == (
+        "earliest time any copy of this observation arrived in the WIS2 Global Cache"
+    )
+
+
+def test_first_arrival_is_added_to_a_store_written_without_it(local_config):
+    from planetary_datasets.common.multidim import append_partition
+
+    old = Batch()
+    old.add(KEY, bulletin(encode_amdar([report("HK0013")])), ARRIVED)
+    for row in old.rows:
+        row["report_id"] = aircraft.report_id(row)
+    legacy = to_dataset(old.rows).drop_vars("first_arrival_time")
+    repo = local_config.icechunk_repo(aircraft.STORE_PREFIX)
+    append_partition(repo, legacy, "old", label="wis2 aircraft")
+
+    new = Batch()
+    new.add(KEY, bulletin(encode_amdar([report("HK0014", minute=37)])), ARRIVED)
+    new.add(
+        OTHER,
+        bulletin(encode_amdar([report("HK0014", minute=37)])),
+        ARRIVED - dt.timedelta(minutes=1),
+    )
+    assert aircraft.write(new, "new", local_config) == 1
+
+    arrival = _stored_times(local_config, "arrival_time")
+    first = _stored_times(local_config, "first_arrival_time")
+    assert arrival.tolist() == [dt.datetime(2026, 10, 27, 6, 47, 54)] * 2
+    assert np.isnat(first[0]) and first[1] == np.datetime64("2026-10-27T06:46:54")

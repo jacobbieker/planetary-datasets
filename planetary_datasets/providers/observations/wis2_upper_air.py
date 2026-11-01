@@ -30,7 +30,7 @@ Layout (``xr.open_zarr`` opens it directly)::
         radiosonde_serial_number, solar_and_infrared_radiation_correction,
         tracking_technique, measuring_equipment_type, data_sub_category, bufr_template,
         originating_centre, bulletin_heading, source_key, source_centre, arrival_time,
-        first_level, level_count
+        first_arrival_time, first_level, level_count
     level (one row per reported level): sounding_index, time_since_launch,
         vertical_sounding_significance, pressure, geopotential_height,
         latitude_displacement, longitude_displacement, temperature,
@@ -47,6 +47,12 @@ the issuing centre's own topic, and again in a later window. Its identity is the
 launch time, sub-category and a fingerprint of its levels, so relayed copies (identical
 content) collapse to one row while TEMP parts A-D, a TAC-converted part A beside the
 high-resolution BUFR, and corrected re-issues (different levels or values) are each kept.
+
+Each sounding records when it reached the cache, so the live stream can be replayed:
+``arrival_time``, when the object kept (the window's first copy) arrived, and
+``first_arrival_time``, the earliest arrival of any copy the window collapsed into the row.
+Both are UTC, to the second; rows written before ``first_arrival_time`` was added read NaT
+there.
 """
 
 from __future__ import annotations
@@ -183,7 +189,15 @@ SOUNDING_ATTRS = {
     "bulletin_heading": {"long_name": "GTS abbreviated heading TTAAiiCCCCYYGGgg[BBB]"},
     "source_key": {"long_name": "object key in s3://wis2globalcache"},
     "source_centre": {"long_name": "WIS2 centre the object came through"},
-    "arrival_time": {"long_name": "time the object arrived in the WIS2 Global Cache"},
+    "arrival_time": {
+        "long_name": "time the copy of this observation kept here arrived in the WIS2 Global Cache",
+    },
+    "first_arrival_time": {
+        "long_name": "earliest time any copy of this observation arrived in the WIS2 Global Cache",
+        "comment": "minimum over the copies (GTS relays, the originating centre's topic) "
+        "collapsed into this row within its window; rows written before this variable was "
+        "added have no value (NaT)",
+    },
     "first_level": {"long_name": "row of this sounding's first level along the level dimension"},
     "level_count": {"long_name": "number of levels"},
 }
@@ -470,6 +484,7 @@ SOUNDING_KINDS = {
     "source_key": "str",
     "source_centre": "str",
     "arrival_time": "time",
+    "first_arrival_time": "time",
 }
 
 
@@ -527,16 +542,31 @@ def to_dataset(soundings: Sequence[Sounding], first_sounding: int, first_level: 
 
 
 def deduplicate(soundings: Iterable[Sounding], stored: set[str], counts: Counter) -> list[Sounding]:
-    """One copy of each sounding not already ``stored``, in launch-time order."""
+    """One copy of each sounding not already ``stored``, in launch-time order.
+
+    The first copy is kept; its ``first_arrival_time`` is the earliest ``arrival_time`` of
+    all the copies.
+    """
     unique: dict[str, Sounding] = {}
+    first_arrival: dict[str, np.datetime64] = {}
     for sounding in soundings:
         identity = sounding.identity
         if identity in stored:
             counts["already_stored"] += 1
-        elif identity in unique:
+            continue
+        if identity in unique:
             counts["duplicate"] += 1
         else:
             unique[identity] = sounding
+        arrived, earliest = sounding.header.get("arrival_time"), first_arrival.get(identity)
+        if (
+            arrived is not None
+            and not np.isnat(arrived)
+            and (earliest is None or arrived < earliest)
+        ):
+            first_arrival[identity] = arrived
+    for identity, sounding in unique.items():
+        sounding.header["first_arrival_time"] = first_arrival.get(identity)
     keep = list(unique.values())
     keep.sort(key=lambda s: (s.header["launch_time"] or np.datetime64(0, "s"), s.identity))
     return keep
@@ -592,7 +622,12 @@ def _stored_ids(repo) -> tuple[set[str], int, int]:
 
 def write(soundings: Sequence[Sounding], config: Config, label: str | None, counts: Counter) -> int:
     """Append the soundings the store lacks; the number written."""
-    from planetary_datasets.common.multidim import append_partition, ledger, mark_written
+    from planetary_datasets.common.multidim import (
+        append_partition,
+        describe_variables,
+        ledger,
+        mark_written,
+    )
 
     counts["decoded"] += len(soundings)
     repo = config.icechunk_repo(STORE_PREFIX)
@@ -607,5 +642,10 @@ def write(soundings: Sequence[Sounding], config: Config, label: str | None, coun
         return 0
     ds = to_dataset(keep, first_sounding, first_level)
     append_partition(repo, ds, label, label="wis2_upper_air")
+    describe_variables(
+        repo,
+        {name: SOUNDING_ATTRS[name] for name in ("arrival_time", "first_arrival_time")},
+        label="wis2_upper_air",
+    )
     counts["levels_written"] += int(ds.sizes["level"])
     return len(keep)

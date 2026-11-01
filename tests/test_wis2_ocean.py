@@ -152,7 +152,7 @@ def _run_window(config, objects, end):
     (target,) = build_targets(config, ["ocean"])
     for key, body in objects:
         if target.wants(key, len(body)):
-            target.feed(key, body, None)
+            target.feed(key, body, end - dt.timedelta(hours=1))
     return target.finish(end - dt.timedelta(hours=12), end, f"wis2_{end:%Y%m%dT%H%M}Z")
 
 
@@ -189,3 +189,76 @@ def test_the_store_opens_as_a_tree_and_skips_reports_it_holds(local_config):
     assert later["profiles_written"] == 0
     again = xr.open_zarr(store, group="surface", consolidated=False)
     assert again.sizes["observation"] == 8
+
+
+def stored_times(store, name: str, group: str) -> np.ndarray:
+    """A stored time array as datetime64, NaT for its fill, read without xarray's decoding.
+
+    (xarray before 2026.9 cannot decode an integer time column holding NaT.)
+    """
+    import zarr
+
+    array = zarr.open_group(store, mode="r")[group][name]
+    unit = str(array.attrs["units"]).split()[0]
+    assert unit == "nanoseconds" and array.attrs["_FillValue"] == np.iinfo("int64").min
+    return array[:].astype("int64").view("datetime64[ns]").astype("datetime64[s]")
+
+
+T0 = dt.datetime(2026, 10, 28, 17, 4, 11, tzinfo=dt.timezone.utc)
+RELAYED = "data/jp-jma-gts-to-wis2/data/core/I/O/B/A/01/KWBC/A_IOBA01KWBC281700_C_RJTD_1"
+
+
+def test_first_arrival_is_the_earliest_copy_and_arrival_the_kept_ones():
+    body = sample("moored_buoy_315008.msg")
+    # The buoy's own topic arrives last but is read first: it is the copy kept (relays
+    # have no more values), while the earliest copy came through the JMA relay.
+    collector = ocean.collect(
+        [
+            (MOORED, body, T0 + dt.timedelta(minutes=9)),
+            (RELAYED, b"IOBA01 KWBC 281700\r\r\n" + body, T0),
+            (RELAYED.replace("_1", "_2"), b"IOBA01 KWBC 281700\r\r\n" + body, None),
+        ]
+    )
+    (row,) = collector.surface_rows()
+    assert row["source_key"] == MOORED
+    assert row["arrival_time"] == np.datetime64("2026-10-28T17:13:11", "s")
+    assert row["first_arrival_time"] == np.datetime64("2026-10-28T17:04:11", "s")
+    ((meta, _),) = collector.profile_rows()
+    assert meta["source_key"] == MOORED
+    assert meta["arrival_time"] == row["arrival_time"]
+    assert meta["first_arrival_time"] == row["first_arrival_time"]
+
+    surface = ocean.surface_dataset(collector.surface_rows())
+    assert surface["arrival_time"].dtype == "datetime64[s]"
+    assert surface["first_arrival_time"].values[0] == np.datetime64("2026-10-28T17:04:11")
+    assert surface["first_arrival_time"].attrs == ocean.ARRIVAL_ATTRS["first_arrival_time"]
+    profiles = ocean.profiles_dataset(collector.profile_rows())
+    assert profiles["first_arrival_time"].values[0] == np.datetime64("2026-10-28T17:04:11")
+
+
+def test_arrival_times_are_added_to_a_store_written_without_them(local_config):
+    from planetary_datasets.common.multidim import append_partition
+
+    repo = local_config.icechunk_repo(ocean.STORE_PREFIX)
+    # A window written before the arrival times existed: the ship reports, no profiles.
+    old = ocean.collect([(SHIP, sample("ship_308009_7_subsets.msg"), T0)])
+    legacy = ocean.surface_dataset(old.surface_rows()).drop_vars(list(ocean.ARRIVAL_KEYS))
+    append_partition(repo, legacy, "old", group=ocean.SURFACE)
+
+    new = ocean.collect(
+        [
+            (MOORED, sample("moored_buoy_315008.msg"), T0 + dt.timedelta(minutes=9)),
+            (RELAYED, b"IOBA01 KWBC 281700\r\r\n" + sample("moored_buoy_315008.msg"), T0),
+        ]
+    )
+    summary = ocean.write(new, "new", local_config)
+    assert summary["surface_written"] == 1 and summary["profiles_written"] == 1
+
+    store = repo.readonly_session("main").store
+    arrival = stored_times(store, "arrival_time", ocean.SURFACE)
+    first = stored_times(store, "first_arrival_time", ocean.SURFACE)
+    assert len(arrival) == len(first) == 8
+    assert np.isnat(arrival[:7]).all() and np.isnat(first[:7]).all()
+    assert arrival[7] == np.datetime64("2026-10-28T17:13:11")
+    assert first[7] == np.datetime64("2026-10-28T17:04:11")
+    assert stored_times(store, "first_arrival_time", ocean.PROFILES).tolist() == [first[7]]

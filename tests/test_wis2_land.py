@@ -289,3 +289,63 @@ def test_an_archived_tar_backfills_the_store_through_the_archiver(local_config, 
 def test_the_target_registers_with_the_archiver():
     targets = wis2_targets.load_targets()
     assert targets["land"] is land.LandTarget
+
+
+def stored_times(repo, name: str) -> np.ndarray:
+    """A stored time column as datetime64[s], NaT for its fill, without xarray's decoding.
+
+    (xarray before 2026.9 cannot decode an integer time column holding NaT.)
+    """
+    import zarr
+
+    array = zarr.open_group(repo.readonly_session("main").store, mode="r")[name]
+    assert str(array.attrs["units"]).startswith("nanoseconds since 1970-01-01")
+    return array[:].astype("int64").view("datetime64[ns]").astype("datetime64[s]")
+
+
+def test_first_arrival_is_the_earliest_copy_and_arrived_the_kept_ones():
+    early, late = ARRIVED - dt.timedelta(minutes=6), ARRIVED + dt.timedelta(minutes=3)
+    (sendai,) = land.decode(body("jma_single.bufr"), "jp-jma", ARRIVED).rows
+    (relayed,) = land.decode(body("jma_single.bufr"), "jp-jma-gts-to-wis2", early).rows
+    (sparse,) = land.decode(body("jma_single.bufr"), "de-dwd-gts-to-wis2", late).rows
+    del sparse["2m_temperature"]
+    (kept,) = land.deduplicate([sparse, sendai, relayed])
+    # The fullest copy read first is kept; the relay's identical copy arrived earliest.
+    assert kept["centre"] == "jp-jma"
+    assert kept["arrived"] == np.datetime64("2026-10-28T07:30:00")
+    assert kept["first_arrival_time"] == np.datetime64("2026-10-28T07:24:00")
+    assert "first_arrival_time" not in sendai, "the decoded rows are left as they were"
+    ds = land.to_dataset([kept])
+    assert ds["first_arrival_time"].dtype == "datetime64[s]"
+    assert ds["first_arrival_time"].attrs == land.COLUMNS["first_arrival_time"].attrs
+    assert ds["arrived"].attrs["long_name"] == (
+        "time the copy of this observation kept here arrived in the WIS2 Global Cache"
+    )
+
+
+def test_first_arrival_is_added_to_a_store_written_without_it(local_config):
+    import zarr
+
+    from planetary_datasets.common.multidim import append_partition
+
+    repo = local_config.icechunk_repo(land.STORE_PREFIX)
+    # A window written before the variable existed, its "arrived" described the old way.
+    (old,) = land.decode(body("ism_cloud.bufr"), "de-dwd-gts-to-wis2", ARRIVED).rows
+    legacy = land.to_dataset([old]).drop_vars("first_arrival_time")
+    legacy["arrived"].attrs = {"long_name": "time the copy kept reached the cache"}
+    append_partition(repo, legacy, "old", label="wis2_land")
+
+    target = land.LandTarget(local_config, workers=1)
+    for key, arrived in [
+        ("data/jp-jma/data/core/weather/surface-based-observations/synop/W", ARRIVED),
+        ("data/jp-jma-gts-to-wis2/data/core/I/S/M/N/01/RJTD/A", ARRIVED - dt.timedelta(minutes=2)),
+    ]:
+        target.feed(key, body("jma_single.bufr"), arrived)
+    assert target.finish(None, None, "new")["rows_written"] == 1
+
+    assert stored_times(repo, "arrived").tolist() == [ARRIVED.replace(tzinfo=None)] * 2
+    first = stored_times(repo, "first_arrival_time")
+    assert np.isnat(first[0]) and first[1] == np.datetime64("2026-10-28T07:28:00")
+    group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    assert group["arrived"].attrs["long_name"] == land.ARRIVAL_ATTRS["arrived"]["long_name"]
+    assert group["first_arrival_time"].attrs["comment"].endswith("have no value (NaT)")
