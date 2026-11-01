@@ -153,6 +153,15 @@ SHORT_CUTOFF_RETIRED = pd.Timestamp("2026-05-12 06:00")
 #: deadline and legitimately runs for hours.
 MARS_CLEANUP_TIMEOUT = 600
 
+#: Exit status of a `_mars_execute` child whose data sits on an ECMWF tape that is
+#: unavailable. Retrying in minutes cannot help; ECMWF has to bring the tape back.
+TAPE_UNAVAILABLE_EXIT = 3
+
+
+def tape_unavailable(messages: Iterable[str]) -> bool:
+    """Whether MARS refused a request because the tape holding its data is unavailable."""
+    return any("AccessError" in m and "tape" in m and "unavailable" in m for m in messages)
+
 #: Ocean wave analysis parameters (GRIB codes, table 140)
 WAVE_PARAMS = (
     "98.140/99.140/100.140/101.140/102.140/103.140/104.140/105.140/112.140/113.140/"
@@ -477,11 +486,22 @@ def _mars_execute(request: dict[str, str], target: str) -> None:
 
     api.Connection.cleanup = bounded_cleanup
     code = 0
+    service = mars_service()
+    # The server's own messages say why a request failed; the exception only says it
+    # got no fields. Kept to tell a tape outage from a transient failure.
+    messages: list[str] = []
+    log = service.log
+
+    def keep(message):
+        messages.append(str(message))
+        log(message)
+
+    service.log = keep
     try:
-        mars_service().execute(request, target)
+        service.execute(request, target)
     except BaseException:
         traceback.print_exc()
-        code = 1
+        code = TAPE_UNAVAILABLE_EXIT if tape_unavailable(messages) else 1
     finally:
         sys.stdout.flush()
         sys.stderr.flush()
@@ -540,6 +560,14 @@ def retrieve(
             tmp.rename(job.target)
             logger.info(f"MARS retrieval complete: {job.target.name} ({size / GB:.1f}GB)")
             return True
+        if not stalled and child.exitcode == TAPE_UNAVAILABLE_EXIT:
+            logger.error(
+                f"MARS request for {job.target.name}: the tape holding its data is unavailable "
+                "at ECMWF (AccessError); not retrying this run. It is tried again on the next "
+                "run; if it persists, raise a ticket at https://support.ecmwf.int with the "
+                "request id above."
+            )
+            break
         if not stalled:
             logger.error(f"MARS request for {job.target.name} failed (exit code {child.exitcode})")
         if attempt < attempts:
