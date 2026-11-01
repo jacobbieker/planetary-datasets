@@ -81,6 +81,9 @@ HEARTBEAT = dt.timedelta(hours=1)
 #: Window ends still worth archiving when a run was missed. The cache keeps objects for
 #: about two and a half days (a few stragglers longer), so older windows are mostly gone.
 CATCH_UP = dt.timedelta(days=2)
+#: A pending target is only started over an older archive with this long left before the
+#: next window, so backfilling never holds up the live schedule.
+PENDING_BUDGET = dt.timedelta(hours=3)
 
 #: Directories listed, and objects fetched, at once.
 LIST_WORKERS = 256
@@ -605,8 +608,74 @@ def wait(upcoming: dt.datetime, pause: float, sleep: Callable[[float], None] = t
             logger.info(f"wis2: waiting for the {upcoming:%H:%MZ} archive ({pause / 3600:.1f} h)")
 
 
+def mark_pending(
+    names: Sequence[str], config: Config | None = None, keys: Sequence[str] | None = None
+) -> int:
+    """Record ``names`` as pending in every archived window's target record.
+
+    For a backfill: :func:`follow` then runs them over each archive between the live
+    windows, from the one process that writes the stores. Returns the windows marked.
+    """
+    config = config or get_config()
+    client = dest_client(config)
+    marked = 0
+    for key in keys if keys is not None else archived_tars(config):
+        state = _load_target_state(client, config.bucket, key) or {
+            "pending": [],
+            "done": [],
+            "failed": [],
+        }
+        before = list(state["pending"])
+        for name in names:
+            for other in ("done", "failed"):
+                state[other] = [n for n in state.get(other, []) if n != name]
+            if name not in state["pending"]:
+                state["pending"].append(name)
+        if state["pending"] != before or not before:
+            _save_target_state(client, config.bucket, key, state)
+            marked += 1
+    logger.info(f"wis2: marked {', '.join(names)} pending over {marked} archived window(s)")
+    return marked
+
+
+def finish_pending(
+    deadline: dt.datetime,
+    config: Config | None = None,
+    targets: Sequence[str] | None = None,
+    now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.timezone.utc),
+) -> int:
+    """Run pending targets over older archives, oldest first, while time allows.
+
+    One is only started with :data:`PENDING_BUDGET` left before ``deadline`` (the next
+    live window). Returns the archives worked on.
+    """
+    config = config or get_config()
+    client = dest_client(config)
+    worked = 0
+    for key in archived_tars(config):
+        if now() + PENDING_BUDGET > deadline:
+            break
+        state = _load_target_state(client, config.bucket, key) or {}
+        pending = [n for n in state.get("pending", []) if targets is None or n in targets]
+        if not pending:
+            continue
+        logger.info(f"wis2: finishing {', '.join(pending)} over {key}")
+        try:
+            targets_from_tar(key, config, targets=pending)
+        except Exception as exc:  # noqa: BLE001 - the live schedule must carry on
+            # Not counted: the caller would otherwise retry it at once, in a loop.
+            logger.exception(f"wis2: pending targets over {key} failed: {exc}")
+            continue
+        worked += 1
+    return worked
+
+
 def follow(config: Config | None = None, targets: Sequence[str] | None = None) -> None:
-    """Archive each settled 00Z/12Z window not yet archived, forever."""
+    """Archive each settled 00Z/12Z window not yet archived, forever.
+
+    Between windows, targets left pending over older archives (a backfill marked with
+    :func:`mark_pending`) are finished, without starting one too close to the next window.
+    """
     while True:
         now = dt.datetime.now(dt.timezone.utc)
         for end in window_ends(now):
@@ -614,6 +683,13 @@ def follow(config: Config | None = None, targets: Sequence[str] | None = None) -
                 archive(end, config, targets=targets)
             except Exception as exc:  # noqa: BLE001 - the next window must still be tried
                 logger.exception(f"wis2: archive ending {end:%Y-%m-%dT%H:%MZ} failed: {exc}")
+        now = dt.datetime.now(dt.timezone.utc)
+        upcoming = last_boundary(now - SETTLE) + EVERY + SETTLE
+        try:
+            if finish_pending(upcoming, config, targets):
+                continue
+        except Exception as exc:  # noqa: BLE001 - listing the archives must not stop the loop
+            logger.exception(f"wis2: checking pending targets failed: {exc}")
         now = dt.datetime.now(dt.timezone.utc)
         upcoming = last_boundary(now - SETTLE) + EVERY + SETTLE
         pause = max(60.0, (upcoming - now).total_seconds())
@@ -632,6 +708,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     group.add_argument(
         "--all-archived", action="store_true", help="run the targets over every archived window"
     )
+    group.add_argument(
+        "--mark-pending",
+        help="comma-separated targets to backfill: marked pending over every archived window, "
+        "for --follow to finish between live windows",
+    )
     parser.add_argument("--force", action="store_true", help="rewrite an existing archive")
     parser.add_argument(
         "--targets",
@@ -641,7 +722,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     targets = None
     if args.targets is not None:
         targets = [] if args.targets == "none" else [t for t in args.targets.split(",") if t]
-    if args.follow:
+    if args.mark_pending:
+        mark_pending([t for t in args.mark_pending.split(",") if t])
+    elif args.follow:
         follow(targets=targets)
     elif args.from_tar or args.all_archived:
         for key in [args.from_tar] if args.from_tar else archived_tars():
