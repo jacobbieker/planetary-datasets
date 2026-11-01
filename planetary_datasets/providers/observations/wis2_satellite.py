@@ -1,4 +1,14 @@
-"""Satellite sounder radiances from the WIS2 Global Cache, as one grouped Icechunk store.
+"""Satellite observations from the WIS2 Global Cache, as one grouped Icechunk store.
+
+Sounder radiances, one group per instrument, as below; every other satellite product
+(GNSS radio occultation, AMVs, altimetry, scatterometer and SAR winds, AMI clear-sky
+radiances, OLCI water vapour) one group per product, see
+:mod:`~planetary_datasets.providers.observations.wis2_satellite_products`. Every row of
+every group carries ``arrival_time`` (when the copy kept reached the cache) and
+``first_arrival_time`` (the earliest arrival of the copies collapsed into it), so the live
+stream can be replayed; rows written before ``first_arrival_time`` was added read NaT.
+
+Radiances:
 
 An archive target of :mod:`planetary_datasets.providers.observations.wis2_archive`: as each
 12-hour window of the cache streams into its tar, the space-based observation objects of
@@ -16,6 +26,7 @@ amsua       AMSU-A (``amsu-a``)                         brightness_temperature (
 mhs         MHS (``mhs``)                               brightness_temperature (K)
 mwhs2       FY-3 MWHS-2 (``mwhs-2``)                    brightness_temperature (K)
 mwts2       FY-3 MWTS-2 (``mwts-2``)                    brightness_temperature (K)
+mws         Metop-SG MWS (``mws``)                      brightness_temperature (K)
 cris        CrIS (``cris``)                             radiance (W m-2 sr-1 m)
 iasi        IASI L1C (``iasi``)                         scaled_radiance, radiance_scale_factor
 ==========  ==========================================  ==========================
@@ -44,10 +55,8 @@ view number; within a window the copy with the most channels is kept (a CIMSS fu
 spectrum beats a Météo-France subset), and one already stored is dropped.
 
 Not parsed (counted, and skipped cheaply by key): IASI and AVHRR L2 products (trace gases,
-clouds, AMVs: ``*_l2*``), GNSS radio occultation (GRAS, GNOS-2, Spire), atmospheric motion
-vectors (SEVIRI, VIIRS, AVHRR), scatterometer and SAR winds, altimetry (SRAL, Poseidon,
-AltiKa), OLCI, FCI and imager products, and the GTS satellite bulletins (``IUE``/``IUF``/
-``IUT``/``IUV``/``IE*``).
+clouds: ``*_l2*``) and the GTS radiance bulletins (``IE*``, ``IN*`` other than the AMV
+headings), which repeat what the topics above carry.
 
 The tar stream never waits on decoding: :meth:`SatelliteTarget.feed` writes each object to
 a spool directory and hands its path to a process pool; workers decode to per-object
@@ -75,6 +84,7 @@ import xarray as xr
 from loguru import logger
 
 from planetary_datasets.config import Config, get_config
+from planetary_datasets.providers.observations import wis2_satellite_products as products
 from planetary_datasets.providers.observations.wis2_targets import (
     ArchiveTarget,
     register,
@@ -176,6 +186,19 @@ INSTRUMENTS = {
             (("surfaceFlag", "surface_flag"), ("rainFlag", "rain_flag")),
         ),
         Instrument(
+            "mws",
+            ("mws",),
+            "channelNumber",
+            (("brightnessTemperature", "brightness_temperature", "K"),),
+            (("satelliteChannelCentreFrequency", "channel_centre_frequency", "Hz", 1.0),),
+            (
+                ("mwsOverallQualityFlags", "overall_quality_flags"),
+                ("mwsScanLineProcessingFlags", "scan_line_processing_flags"),
+                ("mwsNavigationStatusFlags", "navigation_status_flags"),
+                ("landFraction", "land_fraction"),
+            ),
+        ),
+        Instrument(
             "cris",
             ("cris",),
             "channelNumber",
@@ -219,6 +242,18 @@ COMMON = (
     ("solarAzimuth", "solar_azimuth_angle"),
 )
 TIME_KEYS = ("year", "month", "day", "hour", "minute", "second")
+#: Descriptions of the arrival times, worded the same in every WIS2 observation store.
+ARRIVAL_ATTRS = {
+    "arrival_time": {
+        "long_name": "time the copy of this observation kept here arrived in the WIS2 Global Cache",
+    },
+    "first_arrival_time": {
+        "long_name": "earliest time any copy of this observation arrived in the WIS2 Global Cache",
+        "comment": "minimum over the copies (GTS relays, the originating centre's topic) "
+        "collapsed into this row within its window; rows written before this variable was "
+        "added have no value (NaT)",
+    },
+}
 UNITS = {
     "latitude": "degrees_north",
     "longitude": "degrees_east",
@@ -474,8 +509,15 @@ def decode_object(
     counts: Counter = Counter()
     instrument = instrument_for(key)
     if instrument is None:
-        counts["skipped_objects"] += 1
-        return None, None, counts
+        product = products.product_for(key)
+        if product is None:
+            counts["skipped_objects"] += 1
+            return None, None, counts
+        arrays, counts = products.decode_object(key, body, product)
+        if arrays is None:
+            return product.group, None, counts
+        _provenance(arrays, key, arrived)
+        return product.group, arrays, counts
     parts = []
     for message in split_bufr(body):
         counts["messages"] += 1
@@ -503,13 +545,7 @@ def decode_object(
     rows = arrays["time"].size
     if rows == 0:
         return instrument.group, None, counts
-    arrays["source_key"] = np.full(rows, key, dtype=object)
-    arrays["source_centre"] = np.full(rows, key.split("/")[1], dtype=object)
-    when = pd.Timestamp(arrived) if arrived is not None else None
-    if when is not None and when.tzinfo is not None:
-        when = when.tz_convert(None)
-    stamp = np.datetime64(when, "s") if when is not None else np.datetime64("NaT", "s")
-    arrays["arrival_time"] = np.full(rows, stamp, dtype="datetime64[s]")
+    _provenance(arrays, key, arrived)
     value = instrument.values[0][1]
     arrays["valid_channels"] = np.sum(
         ~np.isnan(arrays[value])
@@ -526,6 +562,18 @@ def decode_object(
     )
     counts["observations"] += rows
     return instrument.group, arrays, counts
+
+
+def _provenance(arrays: dict[str, np.ndarray], key: str, arrived: dt.datetime | None) -> None:
+    """The object's key, centre and arrival time on every row."""
+    rows = arrays["time"].size
+    arrays["source_key"] = np.full(rows, key, dtype=object)
+    arrays["source_centre"] = np.full(rows, key.split("/")[1], dtype=object)
+    when = pd.Timestamp(arrived) if arrived is not None else None
+    if when is not None and when.tzinfo is not None:
+        when = when.tz_convert(None)
+    stamp = np.datetime64(when, "s") if when is not None else np.datetime64("NaT", "s")
+    arrays["arrival_time"] = np.full(rows, stamp, dtype="datetime64[s]")
 
 
 def _compact(arrays: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -627,22 +675,14 @@ def to_dataset(batch: list[dict], width: int, instrument: Instrument) -> xr.Data
         elif values.dtype.kind == "M":
             # Stored as integer counts with CF units, written like any other integer:
             # multidim's datetime path re-encodes appended rows wrongly.
-            unit = "ms" if name == "time" else "s"
-            counts = values.astype(f"datetime64[{unit}]").astype("int64")
-            fill_value = int(np.iinfo("int64").min)  # NaT
-            values = counts
-            attrs.update(
-                {
-                    "units": f"{'milliseconds' if unit == 'ms' else 'seconds'} since 1970-01-01",
-                    "calendar": "proleptic_gregorian",
-                    "_FillValue": fill_value,
-                }
-            )
+            values, time_attrs = _time_counts(values, "ms" if name == "time" else "s", TIME_FILL)
+            attrs.update(time_attrs)
         else:
             values = values.astype(object)
         units = {n: u for _, n, u in instrument.values}.get(name) or UNITS.get(name)
         if units:
             attrs["units"] = units
+        attrs.update(ARRIVAL_ATTRS.get(name, {}))
         data[name] = xr.Variable(dims, values, attrs)
     return xr.Dataset(data)
 
@@ -707,19 +747,33 @@ def write_group(
     import icechunk
     import zarr
 
-    from planetary_datasets.common.multidim import append_partition, ledger, mark_written
+    from planetary_datasets.common.multidim import (
+        append_partition,
+        describe_variables,
+        ledger,
+        mark_written,
+    )
 
     group = instrument.group
     if partition is not None and partition in ledger(repo, group=group):
         counts[f"{group}_already_written"] += 1
         return 0
-    # Identities and channel counts only, to choose the copy to keep.
+    # Identities, channel counts and arrivals only, to choose the copy to keep.
     keys = []
     for index, path in enumerate(paths):
         with np.load(path, allow_pickle=True) as data:
             ids, valid = data["observation_identity"], data["valid_channels"]
+            arrived = data["arrival_time"]
         keys.append(
-            pd.DataFrame({"id": ids, "valid": valid, "file": index, "row": np.arange(ids.size)})
+            pd.DataFrame(
+                {
+                    "id": ids,
+                    "valid": valid,
+                    "arrival": arrived,
+                    "file": index,
+                    "row": np.arange(ids.size),
+                }
+            )
         )
     if not keys:
         return 0
@@ -727,6 +781,7 @@ def write_group(
     counts[f"{group}_decoded"] += len(table)
     stored = _stored_identities(repo, group)
     table = table[~table["id"].isin(stored)]
+    first_arrival = table.groupby("id")["arrival"].min()
     table = table.sort_values(["id", "valid"], ascending=[True, False]).drop_duplicates("id")
     counts[f"{group}_duplicates"] += counts[f"{group}_decoded"] - len(table)
     keep = {file: np.sort(rows["row"].to_numpy()) for file, rows in table.groupby("file")}
@@ -769,6 +824,7 @@ def write_group(
             else values[rows]
             for name, values in arrays.items()
         }
+        subset["first_arrival_time"] = _first_arrivals(first_arrival, subset)
         width = max(width, int(arrays["channel_number"].size))
         batch.append(subset)
         values_in_batch += rows.size * width
@@ -780,29 +836,180 @@ def write_group(
             mark_written(repo, partition, label=f"wis2_satellite {group}", group=group)
         except Exception as exc:  # noqa: BLE001 - group not created when nothing was new
             logger.debug(f"wis2_satellite {group}: ledger not updated ({exc})")
+    if written:
+        describe_variables(repo, ARRIVAL_ATTRS, label=f"wis2_satellite {group}", group=group)
+    return written
+
+
+#: Fill of every time column (read back as NaT).
+TIME_FILL = int(np.iinfo("int64").min)
+
+
+def _time_counts(values: np.ndarray, unit: str, fill: int) -> tuple[np.ndarray, dict]:
+    """Datetimes as integer counts of ``unit`` since 1970 with CF attributes."""
+    stamps = values.astype(f"datetime64[{unit}]")
+    counts = np.where(np.isnat(stamps), fill, stamps.astype("int64"))
+    spelled = "milliseconds" if unit == "ms" else "seconds"
+    attrs = {
+        "units": f"{spelled} since 1970-01-01",
+        "calendar": "proleptic_gregorian",
+        "_FillValue": fill,
+    }
+    return counts.astype("int64"), attrs
+
+
+def _first_arrivals(first: pd.Series, subset: dict[str, np.ndarray]) -> np.ndarray:
+    """Each row's earliest arrival among the copies of its observation."""
+    values = first.reindex(subset["observation_identity"]).to_numpy()
+    return np.asarray(values, dtype="datetime64[s]")
+
+
+def _stored_dims(repo, group: str) -> dict[str, int]:
+    """The number of dimensions of each array a product group already holds."""
+    import zarr
+
+    try:
+        node = zarr.open_group(repo.readonly_session("main").store, path=group, mode="r")
+    except Exception:  # noqa: BLE001 - a group not written yet holds nothing
+        return {}
+    return {name: len(node[name].shape) for name in node.array_keys()}
+
+
+def product_dataset(batch: list[dict], stored_dims: dict[str, int]) -> xr.Dataset:
+    """Decoded product rows as one dataset on ``observation`` and each ``<name>_n``.
+
+    An element repeated in the batch but stored as a single column keeps its first
+    occurrence there and the rest under ``<name>_all`` (all occurrences); one single here
+    but stored repeated becomes a width-one row of it.
+    """
+    joined = products.concat(batch)
+    data: dict[str, Any] = {}
+    for name, values in joined.items():
+        if name.endswith(".decimals"):
+            continue
+        stored = stored_dims.get(name)
+        pairs = [(name, values)]
+        if stored == 2 and values.ndim == 1:
+            pairs = [(name, values[:, None])]
+        elif stored == 1 and values.ndim == 2:
+            pairs = [(name, values[:, 0]), (f"{name}_all", values)]
+        for out_name, out in pairs:
+            dims = ("observation",) if out.ndim == 1 else ("observation", f"{out_name}_n")
+            attrs: dict[str, Any] = {}
+            if out.dtype.kind == "f":
+                decimals = int(joined.get(f"{name}.decimals", 6))
+                out = _float(out.astype("float64"), decimals)
+                attrs["decimal_places"] = decimals
+            elif out.dtype.kind in "iu":
+                # One fill for every window: ecCodes' own missing value, in int32 whenever
+                # the values allow, so later appends never meet a different fill.
+                big = out.max(initial=0) > MISSING_LONG or out.min(initial=0) < -MISSING_LONG
+                out = out.astype("int64" if big else "int32")
+                attrs["_FillValue"] = MISSING_LONG
+            elif out.dtype.kind == "M":
+                out, time_attrs = _time_counts(out, "ms" if name == "time" else "s", TIME_FILL)
+                attrs.update(time_attrs)
+            else:
+                out = out.astype(object)
+            attrs.update(ARRIVAL_ATTRS.get(out_name, {}))
+            data[out_name] = xr.Variable(dims, out, attrs)
+    return xr.Dataset(data)
+
+
+def write_product_group(
+    repo, product: products.Product, paths: Sequence[str], partition: str | None, counts: Counter
+) -> int:
+    """Deduplicate and append one product group's decoded objects. Returns rows written."""
+    from planetary_datasets.common.multidim import (
+        append_partition,
+        describe_variables,
+        ledger,
+        mark_written,
+    )
+
+    group = product.group
+    label = f"wis2_satellite {group}"
+    if partition is not None and partition in ledger(repo, group=group):
+        counts[f"{group}_already_written"] += 1
+        return 0
+    keys = []
+    for index, path in enumerate(paths):
+        with np.load(path, allow_pickle=True) as data:
+            ids, arrived = data["observation_identity"], data["arrival_time"]
+        keys.append(
+            pd.DataFrame({"id": ids, "arrival": arrived, "file": index, "row": np.arange(ids.size)})
+        )
+    if not keys:
+        return 0
+    table = pd.concat(keys, ignore_index=True)
+    counts[f"{group}_decoded"] += len(table)
+    table = table[~table["id"].isin(_stored_identities(repo, group))]
+    first_arrival = table.groupby("id")["arrival"].min()
+    # Identical copies: the earliest to arrive is kept.
+    table = table.sort_values(["id", "arrival", "file", "row"]).drop_duplicates("id")
+    counts[f"{group}_duplicates"] += counts[f"{group}_decoded"] - len(table)
+    keep = {file: np.sort(rows["row"].to_numpy()) for file, rows in table.groupby("file")}
+    stored_dims = _stored_dims(repo, group)
+
+    written = 0
+    batch: list[dict] = []
+    values_in_batch = 0
+
+    def flush() -> None:
+        nonlocal batch, values_in_batch, written
+        if not batch:
+            return
+        ds = product_dataset(batch, stored_dims)
+        fixed = [d for d in ds.dims if d != "observation"]
+        append_partition(repo, ds, None, fixed_dims=fixed, label=label, group=group)
+        stored_dims.update({name: ds[name].ndim for name in ds.data_vars})
+        written += ds.sizes["observation"]
+        batch, values_in_batch = [], 0
+
+    for file, rows in sorted(keep.items()):
+        arrays = _load(paths[file])
+        subset = {
+            name: values if name.endswith(".decimals") else values[rows]
+            for name, values in arrays.items()
+        }
+        subset["first_arrival_time"] = _first_arrivals(first_arrival, subset)
+        batch.append(subset)
+        values_in_batch += sum(
+            int(np.prod(v.shape)) for k, v in subset.items() if not k.endswith(".decimals")
+        )
+        if values_in_batch >= BATCH_VALUES:
+            flush()
+    flush()
+    if partition is not None:
+        try:
+            mark_written(repo, partition, label=label, group=group)
+        except Exception as exc:  # noqa: BLE001 - group not created when nothing was new
+            logger.debug(f"{label}: ledger not updated ({exc})")
+    if written:
+        describe_variables(repo, ARRIVAL_ATTRS, label=label, group=group)
     return written
 
 
 def ensure_root(repo) -> None:
-    """The store's root attributes, written once before any group."""
+    """The store's root attributes, written before any group and whenever they change."""
     import icechunk
     import zarr
 
+    attrs = {
+        "title": "WIS2 Global Cache satellite observations",
+        "source": "WMO WIS2 Global Cache (s3://wis2globalcache)",
+        "layout": (
+            "one group per sounder's radiances (" + ", ".join(INSTRUMENTS) + ") and per "
+            "product (" + ", ".join(products.PRODUCTS) + "); open all with "
+            "xr.open_datatree(store, engine='zarr', consolidated=False), one with "
+            "xr.open_zarr(store, group='atms', consolidated=False)"
+        ),
+    }
     session = repo.writable_session("main")
     root = zarr.open_group(session.store, mode="a")
-    if root.attrs.get("title"):
+    if all(root.attrs.get(k) == v for k, v in attrs.items()):
         return
-    root.attrs.update(
-        {
-            "title": "WIS2 Global Cache satellite sounder radiances",
-            "source": "WMO WIS2 Global Cache (s3://wis2globalcache)",
-            "layout": (
-                "one group per instrument (" + ", ".join(INSTRUMENTS) + "); open all with "
-                "xr.open_datatree(store, engine='zarr', consolidated=False), one with "
-                "xr.open_zarr(store, group='atms', consolidated=False)"
-            ),
-        }
-    )
+    root.attrs.update(attrs)
     session.commit("wis2_satellite: root", rebase_with=icechunk.ConflictDetector())
 
 
@@ -840,7 +1047,7 @@ class SatelliteTarget(ArchiveTarget):
         self.feed_seconds = 0.0
 
     def wants(self, key: str, size: int) -> bool:
-        return instrument_for(key) is not None
+        return instrument_for(key) is not None or products.product_for(key) is not None
 
     def _start(self) -> None:
         root = pathlib.Path(self.config.data_dir) / "wis2_satellite_spool"
@@ -944,9 +1151,9 @@ class SatelliteTarget(ArchiveTarget):
             with concurrent.futures.ThreadPoolExecutor(threads) as writers:
                 futures = {
                     group: writers.submit(
-                        write_group,
+                        write_group if group in INSTRUMENTS else write_product_group,
                         repo,
-                        INSTRUMENTS[group],
+                        INSTRUMENTS[group] if group in INSTRUMENTS else products.PRODUCTS[group],
                         sorted(files),
                         partition,
                         counts[group],
