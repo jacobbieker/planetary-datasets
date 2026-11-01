@@ -345,7 +345,7 @@ def open_day(keys: Sequence[str], product: Product):
             # combine by aligning, which a virtual array cannot do.
             # Not mesoscale: its box moves on purpose, and each file keeps its position.
             grid = tuple(
-                (axis, hashlib.sha1(np.asarray(ds[axis].values).tobytes()).hexdigest())
+                (axis, hashlib.sha256(np.asarray(ds[axis].values).tobytes()).hexdigest())
                 for axis in GRID_AXES
                 if axis in ds.variables and not product.meso
             )

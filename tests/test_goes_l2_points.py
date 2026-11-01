@@ -256,5 +256,6 @@ def test_a_file_omitting_units_still_combines_and_keeps_them():
 
 
 def test_units_that_disagree_are_still_refused():
+    files = [_wind_file("degrees_north"), _wind_file("radians")]
     with pytest.raises(gp.PackingChanged):
-        gp.combine([_wind_file("degrees_north"), _wind_file("radians")], first_file=0)
+        gp.combine(files, first_file=0)
