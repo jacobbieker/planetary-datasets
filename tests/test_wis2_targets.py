@@ -320,3 +320,48 @@ def test_targets_get_plain_bytes_from_the_archives_obstore_buffers():
 
     Router([Target(), Target()])("k", 6, body, None)
     assert seen == [(bytes, 2), (bytes, 2)]
+
+
+def test_marked_targets_are_finished_between_windows_while_time_allows(monkeypatch):
+    dest = FakeDest()
+    old, new = "bkr/obs/wis2/wis2_20261027T1200Z.tar", "bkr/obs/wis2/wis2_20261028T0000Z.tar"
+    for key in (old, new):
+        _archived_tar(dest, key)
+    dest.objects[f"{new}.targets.json"] = json.dumps(
+        {"pending": [], "done": ["recorder", "broken"], "failed": []}
+    ).encode()
+    built: list[Recorder] = []
+    monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
+    monkeypatch.setattr(wis2, "archived_tars", lambda config=None: [old, new])
+    monkeypatch.setattr(
+        wis2, "build_targets", lambda config, names: built.append(Recorder()) or [built[-1]]
+    )
+    assert wis2.mark_pending(["recorder"], config=_config()) == 2
+    assert _state(dest, new) == {"pending": ["recorder"], "done": ["broken"], "failed": []}
+
+    now = dt.datetime(2026, 11, 1, 15, tzinfo=UTC)
+    soon = now + wis2.PENDING_BUDGET - dt.timedelta(minutes=1)
+    assert wis2.finish_pending(soon, _config(), now=lambda: now) == 0, "too close to a window"
+    assert built == []
+    later = now + dt.timedelta(hours=9)
+    assert wis2.finish_pending(later, _config(), now=lambda: now) == 2
+    assert [t.finished[0][2] for t in built] == ["wis2_20261027T1200Z", "wis2_20261028T0000Z"]
+    assert _state(dest, old)["done"] == ["recorder"] and _state(dest, new)["pending"] == []
+    assert wis2.finish_pending(later, _config(), now=lambda: now) == 0, "nothing left"
+
+
+def test_a_pending_target_that_raises_is_not_retried_in_a_loop(monkeypatch):
+    dest = FakeDest()
+    key = _archived_tar(dest)
+    dest.objects[f"{key}.targets.json"] = json.dumps(
+        {"pending": ["recorder"], "done": [], "failed": []}
+    ).encode()
+    monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
+    monkeypatch.setattr(wis2, "archived_tars", lambda config=None: [key])
+
+    def boom(*args, **kwargs):
+        raise ConnectionError("source unreachable")
+
+    monkeypatch.setattr(wis2, "targets_from_tar", boom)
+    now = dt.datetime(2026, 11, 1, 15, tzinfo=UTC)
+    assert wis2.finish_pending(now + dt.timedelta(hours=9), _config(), now=lambda: now) == 0
