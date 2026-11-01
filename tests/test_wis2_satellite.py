@@ -52,29 +52,37 @@ def decoded(name: str) -> dict:
             "data/int-eumetsat/data/core/weather/experimental/space-based-observations/noaa-20/cris/x",
             True,
         ),
-        # IASI and AVHRR level-2 products, AMVs, radio occultation, imagers: not radiances.
+        # IASI level-2 products: neither radiances nor a product group.
         (
             "data/int-eumetsat/data/core/weather/space-based-observations/metop-b/iasi/"
             "W_XX-EUMETSAT-Darmstadt,SOUNDING+SATELLITE,METOPB+IASI_C_EUMP_1_73198_eps_o_trg_l2.bin",
             False,
         ),
+        # Product groups: AMVs, radio occultation, AMI, and their GTS relays.
         (
             "data/int-eumetsat/data/core/weather/space-based-observations/metop-c/avhrr-3/a_amv_l2t.bin",
-            False,
+            True,
         ),
-        ("data/int-eumetsat/data/core/weather/space-based-observations/metop-c/gras/x.bufr", False),
+        ("data/int-eumetsat/data/core/weather/space-based-observations/metop-c/gras/x.bufr", True),
         (
             "data/kr-meteofrance/data/core/weather/space-based-observations/geo-kompsat-2a/ami/x",
-            False,
+            True,
         ),
         (
             "data/jp-jma-gts-to-wis2/data/core/I/U/T/A/14/BAWX/A_IUTA14BAWX270834_C_RJTD_1.bufr",
-            False,
+            True,
         ),
+        (
+            "data/de-dwd-gts-to-wis2/data/core/I/S/X/X/01/EHDB/A_ISXX01EHDB010048_C_EDZW_1.bin",
+            True,
+        ),
+        # GTS radiance bulletins repeat the topics; upper-air bulletins are another target's.
+        ("data/de-dwd-gts-to-wis2/data/core/I/E/I/X/01/EUMP/A_IEIX01EUMP010001_C_EDZW_1", False),
+        ("data/de-dwd-gts-to-wis2/data/core/I/U/K/X/01/EGRR/A_IUKX01EGRR010000_C_EDZW_1", False),
         ("data/de-dwd/data/core/weather/surface-based-observations/synop/x.bufr", False),
     ],
 )
-def test_wants_only_sounder_radiances(path, wanted):
+def test_wants_radiances_and_satellite_products(path, wanted):
     assert sat.SatelliteTarget.wants(None, path, 1) is wanted
 
 
@@ -153,7 +161,8 @@ def test_the_target_writes_one_group_per_instrument_and_drops_relayed_copies(loc
         target.feed(key(name), body(name), ARRIVED)
     # The same IASI field of view relayed by another centre, and ATMS again.
     target.feed(key("iasi").replace("fr-meteofrance", "hk-hko"), body("iasi"), ARRIVED)
-    target.feed(key("atms").replace("int-eumetsat", "us-noaa-nws"), body("atms"), ARRIVED)
+    earlier = ARRIVED - dt.timedelta(minutes=5)
+    target.feed(key("atms").replace("int-eumetsat", "us-noaa-nws"), body("atms"), earlier)
     summary = target.finish(None, None, "wis2_20261029T1200Z")
     assert summary["iasi_duplicates"] == 120 and summary["atms_duplicates"] == 207
     assert set(summary["rows"]) == set(NAMES)
@@ -169,6 +178,10 @@ def test_the_target_writes_one_group_per_instrument_and_drops_relayed_copies(loc
         np.round(atms["brightness_temperature"].values.astype("float64"), 2), expected
     )
     assert atms["channel_centre_frequency"].values[0] == 23.8e9
+    # Every field of view first reached the cache with the relayed copy.
+    first = np.datetime64(earlier.replace(tzinfo=None))
+    assert (atms["first_arrival_time"].values == first).all()
+    assert atms["first_arrival_time"].attrs["long_name"].startswith("earliest time any copy")
     amsua = xr.open_zarr(store, group="amsua", consolidated=False)
     assert amsua["channel_atovs_number"].values.tolist() == list(range(28, 43))
     iasi = xr.open_zarr(store, group="iasi", consolidated=False, mask_and_scale=False)
@@ -261,3 +274,32 @@ def test_workers_hand_back_compact_types():
     arrays = sat._compact(decoded("iasi"))
     assert arrays["scaled_radiance"].dtype == np.int32
     assert sat._compact(decoded("atms"))["brightness_temperature"].dtype == np.float32
+
+
+def test_first_arrival_joins_a_group_written_before_it_existed(local_config):
+    from planetary_datasets.common.multidim import append_partition
+
+    repo = local_config.icechunk_repo(sat.STORE_PREFIX)
+    sat.ensure_root(repo)
+    full = decoded("mhs")
+    half = full["time"].size // 2
+    old = {
+        k: v if k.startswith("channel_") or k.endswith(".decimals") else v[:half]
+        for k, v in full.items()
+        if not k.startswith("channel_")
+    }
+    ds = sat.to_dataset(
+        [sat._compact(old)], old["brightness_temperature"].shape[1], sat.INSTRUMENTS["mhs"]
+    )
+    assert "first_arrival_time" not in ds
+    append_partition(repo, ds, "before", fixed_dims=["channel"], label="old", group="mhs")
+
+    target = sat.SatelliteTarget(local_config, workers=1)
+    later = ARRIVED + dt.timedelta(hours=12)
+    target.feed(key("mhs"), body("mhs"), later)
+    target.finish(None, None, "after")
+    mhs = xr.open_zarr(repo.readonly_session("main").store, group="mhs", consolidated=False)
+    assert mhs.sizes["observation"] == full["time"].size
+    first = mhs["first_arrival_time"].values
+    assert np.isnat(first[:half]).all(), "rows written before the variable existed"
+    assert (first[half:] == np.datetime64(later.replace(tzinfo=None))).all()
