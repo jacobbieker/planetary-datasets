@@ -240,3 +240,22 @@ def test_a_pool_that_breaks_twice_fails_the_partition(monkeypatch):
     monkeypatch.setattr(gp, "_parser", Dead)
     with pytest.raises(gp.BrokenProcessPool):
         gp._parse([(f"k{i}", b"") for i in range(12)])
+
+
+def _wind_file(units):
+    attrs = {} if units is None else {"units": units}
+    return {"latitude": (("wind",), np.array([1.0, 2.0]), attrs)}
+
+
+def test_a_file_omitting_units_still_combines_and_keeps_them():
+    """One GOES-18 DMW file on 2024-09-04 had latitude without units; values are unpacked."""
+    ds = gp.combine([_wind_file(None), _wind_file("degrees_north")], first_file=0)
+    assert ds["latitude"].attrs["units"] == "degrees_north"
+    assert ds.sizes["wind"] == 4
+    gp.check_packing(ds, {"latitude": {"units": "degrees_north"}}, "dmw_c_c10")
+
+
+def test_units_that_disagree_are_still_refused():
+    files = [_wind_file("degrees_north"), _wind_file("radians")]
+    with pytest.raises(gp.PackingChanged):
+        gp.combine(files, first_file=0)

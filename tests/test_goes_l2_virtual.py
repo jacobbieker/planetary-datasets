@@ -260,3 +260,18 @@ def test_a_day_mixing_compression_filters_writes_every_file(archive, local_confi
     assert g.run_product(product, local_config, now=now) == 2
     stores = g.generations(local_config, product.store_prefix)
     assert sorted(read(product, local_config, p).sizes["t"] for p in stores) == [1, 1]
+
+
+def test_a_day_whose_grid_shifts_midway_writes_every_file(archive, local_config):
+    """GOES-16 CONUS moved in x part way through 2023-06-01; the two grids cannot align."""
+    product = g.Product(19, "TPW", "F")
+    start = dt.datetime.combine(DAY, dt.time())
+    granule(archive, "TPWF", start)
+    granule(archive, "TPWF", start + dt.timedelta(minutes=10))
+    granule(archive, "TPWF", start + dt.timedelta(minutes=20), x0=-0.05)
+    now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
+    assert g.run_product(product, local_config, now=now) == 3
+    stores = g.generations(local_config, product.store_prefix)
+    assert sorted(read(product, local_config, p).sizes["t"] for p in stores) == [1, 2]
+    xs = sorted(float(read(product, local_config, p)["x"][0]) for p in stores)
+    assert xs == pytest.approx([-0.1, -0.05])
