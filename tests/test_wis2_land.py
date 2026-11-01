@@ -265,6 +265,13 @@ def test_an_archived_tar_backfills_the_store_through_the_archiver(local_config, 
         def get_object(self, Bucket, Key):
             return {"Body": io.BytesIO(buffer.getvalue())}
 
+        def head_object(self, Bucket, Key):
+            from botocore.exceptions import ClientError
+
+            if not Key.endswith(".tar"):
+                raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
+            return {}
+
     monkeypatch.setattr(wis2_archive, "dest_client", lambda config: Dest())
     key = "bkr/obs/wis2/wis2_20261028T1200Z.tar"
     summary = wis2_archive.targets_from_tar(key, config=local_config, targets=["land"])

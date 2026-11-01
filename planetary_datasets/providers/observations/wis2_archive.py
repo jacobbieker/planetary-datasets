@@ -25,7 +25,9 @@ Archive targets (:mod:`~planetary_datasets.providers.observations.wis2_targets`)
 stores from the same stream: each registered target is handed the objects it wants as
 they go into the tar and appends what it decoded once the tar is complete (aircraft
 reports, ``bkr/obs/wis2_aircraft.icechunk``, for one). A target's failure never fails the
-tar.
+tar. Which targets have finished a window is kept beside its tar
+(``<tar>.targets.json``: pending, done, failed), so a run killed part way through the
+targets finishes the pending ones from the archived tar when it next comes to that window.
 
 Run once for a given window end, or keep the 00Z/12Z schedule; run the targets over
 windows already archived::
@@ -45,6 +47,7 @@ import csv
 import datetime as dt
 import gzip
 import io
+import json
 import queue
 import re
 import sys
@@ -432,8 +435,10 @@ def archive(
 
     The archive targets named in ``targets`` (all registered when None, none when empty)
     are fed every file as it streams and finished once the tar is complete; a target's
-    failure is logged and never fails the tar. When the tar exists already nothing runs:
-    use :func:`targets_from_tar` for that window.
+    failure is logged and never fails the tar. When the tar exists already, only the
+    targets its ``.targets.json`` still lists as pending run, over the archived tar: what
+    a run killed part way through the targets left undone. A tar without that record
+    (archived before it was kept) is taken as finished; use :func:`targets_from_tar`.
     """
     config = config or get_config()
     end = end.astimezone(dt.timezone.utc) if end.tzinfo else end.replace(tzinfo=dt.timezone.utc)
@@ -442,7 +447,16 @@ def archive(
     key = config.prefix.strip("/") + "/" + archive_name(end) if config.prefix else archive_name(end)
     summary = Summary(key=key)
     if not force and exists(dest, config.bucket, key):
-        logger.info(f"wis2: {key} already archived")
+        state = _load_target_state(dest, config.bucket, key) or {}
+        pending = [n for n in state.get("pending", []) if targets is None or n in targets]
+        if pending:
+            logger.info(
+                f"wis2: {key} already archived, but target(s) {', '.join(pending)} did not "
+                "finish; running them over the archived tar"
+            )
+            summary.targets = targets_from_tar(key, config, targets=pending)
+        else:
+            logger.info(f"wis2: {key} already archived")
         return summary
     began = time.time()
     source = source_store()
@@ -463,6 +477,10 @@ def archive(
         out.abort()
         raise
     dest.put_object(Bucket=config.bucket, Key=f"{key}.index.csv.gz", Body=index)
+    state = None
+    if built:
+        state = {"pending": [t.name for t in built], "done": [], "failed": []}
+        _save_target_state(dest, config.bucket, key, state)
     summary.files, summary.gone, summary.bytes = files, gone, payload
     summary.seconds = time.time() - began
     logger.info(
@@ -471,8 +489,48 @@ def archive(
         f"in {summary.seconds / 60:.1f} min"
     )
     if built:
-        summary.targets = run_targets(built, start, end, partition_name(key))
+        summary.targets = _finish_targets(dest, config.bucket, key, built, start, end, state)
     return summary
+
+
+def _target_state_key(tar_key: str) -> str:
+    return f"{tar_key}.targets.json"
+
+
+def _load_target_state(client, bucket: str, tar_key: str) -> dict | None:
+    """The window's record of pending, done and failed targets; None if it has none."""
+    state_key = _target_state_key(tar_key)
+    if not exists(client, bucket, state_key):
+        return None
+    return json.loads(client.get_object(Bucket=bucket, Key=state_key)["Body"].read())
+
+
+def _save_target_state(client, bucket: str, tar_key: str, state: dict) -> None:
+    body = json.dumps(state, sort_keys=True).encode()
+    client.put_object(Bucket=bucket, Key=_target_state_key(tar_key), Body=body)
+
+
+def _finish_targets(
+    client,
+    bucket: str,
+    tar_key: str,
+    built: list,
+    start: dt.datetime | None,
+    end: dt.datetime | None,
+    state: dict | None,
+) -> dict[str, dict]:
+    """Finish each target in turn, recording it in ``state`` (when kept) as it does."""
+    summaries = {}
+    for target in built:
+        summaries.update(run_targets([target], start, end, partition_name(tar_key)))
+        if state is None:
+            continue
+        outcome = "failed" if "error" in summaries.get(target.name, {}) else "done"
+        for name in ("pending", "done", "failed"):
+            state[name] = [n for n in state.get(name, []) if n != target.name]
+        state[outcome].append(target.name)
+        _save_target_state(client, bucket, tar_key, state)
+    return summaries
 
 
 def _build_targets(config: Config, names: Sequence[str] | None) -> list:
@@ -492,14 +550,16 @@ def targets_from_tar(
     """Run the archive targets over a window already archived at ``tar_key``.
 
     The tar is streamed from Source Cooperative; only the files a target wants are read
-    into memory.
+    into memory. A window's ``.targets.json``, where it has one, is updated as each target
+    finishes.
     """
     config = config or get_config()
     built = _build_targets(config, targets)
     if not built:
         return {}
     route = Router(built)
-    body = dest_client(config).get_object(Bucket=config.bucket, Key=tar_key)["Body"]
+    client = dest_client(config)
+    body = client.get_object(Bucket=config.bucket, Key=tar_key)["Body"]
     with tarfile.open(fileobj=body, mode="r|") as tar:
         for member in tar:
             if not member.isfile() or not any(t.wants(member.name, member.size) for t in built):
@@ -508,7 +568,8 @@ def targets_from_tar(
             route(member.name, member.size, tar.extractfile(member).read(), arrived)
     end = _window_end(tar_key)
     start = end - LOOKBACK if end else None
-    return run_targets(built, start, end, partition_name(tar_key))
+    state = _load_target_state(client, config.bucket, tar_key)
+    return _finish_targets(client, config.bucket, tar_key, built, start, end, state)
 
 
 def _window_end(tar_key: str) -> dt.datetime | None:
