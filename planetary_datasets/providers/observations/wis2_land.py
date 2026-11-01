@@ -50,6 +50,13 @@ Duplicates
     so readers wanting the final version take the highest ``update_sequence_number`` per
     station and time. Reports already in the store's last :data:`DEDUP_ROWS` rows (a few
     days) are not written again.
+
+Arrival times
+    Each row records when its report reached the cache, so the live stream can be
+    replayed: ``arrived``, when the copy kept arrived (``arrival_time`` in the other WIS2
+    stores; the name predates them), and ``first_arrival_time``, the earliest arrival of
+    any copy the window collapsed into the row. Both are UTC, to the second; rows written
+    before ``first_arrival_time`` was added read NaT there.
 """
 
 from __future__ import annotations
@@ -193,8 +200,27 @@ COLUMNS: dict[str, Column] = {
         "int16", {"long_name": "BUFR international data sub-category", "_FillValue": -1}
     ),
     "centre": Column("str", {"long_name": "WIS2 centre the copy kept was received from"}),
-    "arrived": Column("datetime64[s]", {"long_name": "time the copy kept reached the cache"}),
+    # Named ``arrival_time`` in the other WIS2 stores; renaming it here would rewrite the store.
+    "arrived": Column(
+        "datetime64[s]",
+        {
+            "long_name": "time the copy of this observation kept here arrived in the WIS2 "
+            "Global Cache",
+        },
+    ),
+    "first_arrival_time": Column(
+        "datetime64[s]",
+        {
+            "long_name": "earliest time any copy of this observation arrived in the WIS2 "
+            "Global Cache",
+            "comment": "minimum over the copies (GTS relays, the originating centre's topic) "
+            "collapsed into this row within its window; rows written before this variable "
+            "was added have no value (NaT)",
+        },
+    ),
 }
+#: The arrival times' descriptions, set on an existing store's arrays too.
+ARRIVAL_ATTRS = {name: COLUMNS[name].attrs for name in ("arrived", "first_arrival_time")}
 
 #: Element names read from each subset; everything else is skipped without a lookup.
 _READ = {
@@ -703,8 +729,13 @@ def identity(station: str, time: np.datetime64, usn: int) -> tuple:
 
 
 def deduplicate(rows: Iterable[dict], seen: set[tuple] = frozenset()) -> list[dict]:
-    """One row per report identity, the most complete copy, none already in ``seen``."""
+    """One row per report identity, the most complete copy, none already in ``seen``.
+
+    Each row returned also has ``first_arrival_time``, the earliest ``arrived`` among the
+    copies collapsed into it.
+    """
     best: dict[tuple, dict] = {}
+    first_arrival: dict[tuple, np.datetime64] = {}
     for row in rows:
         ident = identity(row["station_id"], row["time"], row["update_sequence_number"])
         if ident in seen:
@@ -712,7 +743,15 @@ def deduplicate(rows: Iterable[dict], seen: set[tuple] = frozenset()) -> list[di
         held = best.get(ident)
         if held is None or _completeness(row) > _completeness(held):
             best[ident] = row
-    return sorted(best.values(), key=lambda r: (r["time"], r["station_id"]))
+        arrived, earliest = row.get("arrived"), first_arrival.get(ident)
+        if (
+            arrived is not None
+            and not np.isnat(arrived)
+            and (earliest is None or arrived < earliest)
+        ):
+            first_arrival[ident] = arrived
+    kept = [{**row, "first_arrival_time": first_arrival.get(ident)} for ident, row in best.items()]
+    return sorted(kept, key=lambda r: (r["time"], r["station_id"]))
 
 
 def to_dataset(rows: Sequence[dict]) -> xr.Dataset:
@@ -731,7 +770,9 @@ def to_dataset(rows: Sequence[dict]) -> xr.Dataset:
             array = np.array([missing if v is None else v for v in values], dtype=column.dtype)
         attrs = dict(column.attrs)
         if column.dtype.startswith("datetime64"):
-            attrs = {"long_name": attrs.get("long_name", name)}
+            attrs = {"long_name": attrs.get("long_name", name)} | (
+                {"comment": attrs["comment"]} if "comment" in attrs else {}
+            )
         data[name] = xr.Variable(("observation",), array, attrs)
     ds = xr.Dataset(data)
     ds.attrs = {
@@ -832,7 +873,7 @@ class LandTarget(ArchiveTarget):
         partition: str,
     ) -> dict:
         """Decode, deduplicate and append the window's reports. Returns a summary."""
-        from planetary_datasets.common.multidim import append_partition
+        from planetary_datasets.common.multidim import append_partition, describe_variables
 
         objects = len(self.pending)
         decoded = self.decode_pending()
@@ -842,6 +883,7 @@ class LandTarget(ArchiveTarget):
         written = False
         if rows:
             written = append_partition(repo, to_dataset(rows), partition, label="wis2_land")
+            describe_variables(repo, ARRIVAL_ATTRS, label="wis2_land")
         return {
             "objects": objects,
             "messages": decoded.messages,

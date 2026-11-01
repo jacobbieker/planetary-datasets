@@ -191,13 +191,20 @@ def _create_array(group: zarr.Group, name: str, variable: xr.Variable, rows: int
             if variable.dtype.kind == "f"
             else fill.item()
         )
-    if variable.dtype.kind in "Mm":
-        raise NotImplementedError(f"{name}: cannot add a datetime variable to an existing store")
+    dtype = variable.dtype
+    if dtype.kind in "Mm":
+        # Stored as xarray stores the times a new store is created with (int64 nanoseconds,
+        # NaT as fill), so the earlier rows read back as NaT and encode_times fills the rest.
+        dtype, fill = np.dtype("int64"), NAT
+        attrs.update(units=TIME_UNITS if variable.dtype.kind == "M" else "nanoseconds")
+        if variable.dtype.kind == "M":
+            attrs["calendar"] = "proleptic_gregorian"
+        attrs["_FillValue"] = NAT
     group.create_array(
         name,
         shape=(rows, *variable.shape[1:]),
         chunks=(_chunk_rows(variable), *variable.shape[1:]),
-        dtype=str if strings else variable.dtype,
+        dtype=str if strings else dtype,
         compressors=(zarr.codecs.ZstdCodec(level=CLEVEL),)
         if strings
         else (zarr.codecs.BloscCodec(cname="zstd", clevel=CLEVEL, shuffle="bitshuffle"),),
@@ -571,6 +578,50 @@ def mark_written(
             if attempt == COMMIT_ATTEMPTS:
                 raise
             time.sleep(attempt)
+
+
+def describe_variables(
+    repo: icechunk.Repository,
+    attrs: Mapping[str, Mapping],
+    label: str = "store",
+    group: str | None = None,
+) -> bool:
+    """Set ``attrs`` (``{variable: {attribute: value}}``) on the stored arrays.
+
+    Appends never touch an existing array's attributes, so a description changed in code
+    reaches an existing store only this way. Arrays the store lacks are skipped, and
+    nothing is committed when every attribute already matches. Returns whether it
+    committed.
+    """
+    for attempt in range(1, COMMIT_ATTEMPTS + 1):
+        session = repo.writable_session("main")
+        try:
+            node = _open(session.store, group, "r")
+        except (*STORE_READ_ERRORS, zarr.errors.GroupNotFoundError):
+            return False
+        names = set(node.array_keys())
+        changes = {
+            name: dict(wanted)
+            for name, wanted in attrs.items()
+            if name in names
+            and any(node[name].attrs.get(k) != v for k, v in json_safe_attrs(wanted).items())
+        }
+        if not changes:
+            return False
+        node = _open(session.store, group, "a")
+        for name, wanted in changes.items():
+            node[name].attrs.update(json_safe_attrs(wanted))
+        try:
+            session.commit(
+                f"{label}: describe {', '.join(sorted(changes))}",
+                rebase_with=icechunk.ConflictDetector(),
+            )
+            return True
+        except (icechunk.ConflictError, icechunk.RebaseFailedError):
+            if attempt == COMMIT_ATTEMPTS:
+                raise
+            time.sleep(attempt)
+    raise AssertionError("unreachable")
 
 
 def concat_frames(

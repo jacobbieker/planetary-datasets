@@ -23,6 +23,12 @@ windows) is stored once: ``report_id`` hashes the aircraft, time, position and f
 level, and a report whose id is in the batch already or among the store's most recent
 rows is dropped.
 
+Each row records when its report reached the cache, so the live stream can be replayed:
+``arrival_time``, when the bulletin kept (the window's first copy) arrived, and
+``first_arrival_time``, the earliest arrival of any copy of the report the window collapsed
+into the row (other bulletins and relays). Both are UTC, to the second; rows written
+before ``first_arrival_time`` was added read NaT there.
+
 Values are as reported, in SI/CF units (K, m s-1, Pa where pressure appears, m): floats
 are stored as float32 only when that reproduces every value at its BUFR precision, so the
 store is lossless. Code-table values are int16 with -1 for missing.
@@ -67,6 +73,19 @@ AIRCRAFT_KEY = re.compile(
 DEDUP_TAIL = 1_000_000
 CODE_FILL = -1
 INT_FILL = -2147483648
+
+#: Descriptions of the arrival times, worded the same in every WIS2 observation store.
+ARRIVAL_ATTRS = {
+    "arrival_time": {
+        "long_name": "time the copy of this observation kept here arrived in the WIS2 Global Cache",
+    },
+    "first_arrival_time": {
+        "long_name": "earliest time any copy of this observation arrived in the WIS2 Global Cache",
+        "comment": "minimum over the copies (GTS relays, the originating centre's topic) "
+        "collapsed into this row within its window; rows written before this variable was "
+        "added have no value (NaT)",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -385,6 +404,10 @@ TIME_UNITS = "seconds since 1970-01-01 00:00:00"
 TIME_FILL = int(np.iinfo("int64").min)
 
 
+def _utc(when: dt.datetime | None) -> dt.datetime | None:
+    return None if when is None else when.astimezone(dt.timezone.utc).replace(tzinfo=None)
+
+
 def _seconds(values: list, attrs: dict) -> xr.Variable:
     stamps = np.array(
         [np.datetime64("NaT", "s") if v is None else np.datetime64(v, "s") for v in values],
@@ -412,13 +435,10 @@ def to_dataset(rows: Sequence[dict]) -> xr.Dataset:
             [r["time"] for r in rows], {"standard_name": "time", "long_name": "observation time"}
         ),
         "arrival_time": _seconds(
-            [
-                None
-                if r.get("arrival_time") is None
-                else r["arrival_time"].astimezone(dt.timezone.utc).replace(tzinfo=None)
-                for r in rows
-            ],
-            {"long_name": "time the bulletin arrived in the WIS2 Global Cache"},
+            [_utc(r.get("arrival_time")) for r in rows], ARRIVAL_ATTRS["arrival_time"]
+        ),
+        "first_arrival_time": _seconds(
+            [_utc(r.get("first_arrival_time")) for r in rows], ARRIVAL_ATTRS["first_arrival_time"]
         ),
     }
     for name in ("source_key", "bulletin", "relay", "originating_centre"):
@@ -464,7 +484,12 @@ def stored_ids(repo, tail: int = DEDUP_TAIL) -> set[int]:
 
 def write(batch: Batch, partition: str, config: Config | None = None) -> int:
     """Append ``batch``'s new reports as ledger entry ``partition``. Returns rows written."""
-    from planetary_datasets.common.multidim import append_partition, ledger, mark_written
+    from planetary_datasets.common.multidim import (
+        append_partition,
+        describe_variables,
+        ledger,
+        mark_written,
+    )
 
     config = config or get_config()
     repo = config.icechunk_repo(STORE_PREFIX)
@@ -472,9 +497,16 @@ def write(batch: Batch, partition: str, config: Config | None = None) -> int:
         logger.info(f"wis2 aircraft: {partition} already written")
         return 0
     seen = stored_ids(repo)
-    rows = []
+    # The earliest arrival among each report's copies; the first copy is the one kept.
+    first_arrival: dict[int, dt.datetime] = {}
     for row in batch.rows:
         row["report_id"] = report_id(row)
+        arrived, earliest = row.get("arrival_time"), first_arrival.get(row["report_id"])
+        if arrived is not None and (earliest is None or arrived < earliest):
+            first_arrival[row["report_id"]] = arrived
+    rows = []
+    for row in batch.rows:
+        row["first_arrival_time"] = first_arrival.get(row["report_id"])
         if row["report_id"] in seen:
             continue
         seen.add(row["report_id"])
@@ -491,6 +523,7 @@ def write(batch: Batch, partition: str, config: Config | None = None) -> int:
         return 0
     rows.sort(key=lambda r: (r["time"], r["report_id"]))
     append_partition(repo, to_dataset(rows), partition, label="wis2 aircraft")
+    describe_variables(repo, ARRIVAL_ATTRS, label="wis2 aircraft")
     return len(rows)
 
 

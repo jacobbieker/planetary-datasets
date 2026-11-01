@@ -109,3 +109,40 @@ def test_second_resolution_datetimes_are_not_lost_on_creation_or_append(tmp_path
     multidim.append_partition(repo, xr.Dataset({"arrived": ("obs", later)}), "b")
     got = _read(repo)["arrived"].values
     assert got.tolist() == np.concatenate([first, later]).astype("datetime64[ns]").tolist()
+
+
+def test_a_datetime_variable_new_to_a_store_reads_nat_for_earlier_rows(tmp_path):
+    repo = _repo(tmp_path)
+    when = np.array(["2026-10-28T07:30:00", "2026-10-28T07:31:00"], dtype="datetime64[s]")
+    multidim.append_partition(repo, xr.Dataset({"time": ("obs", when)}), "a")
+    first = np.array(["2026-10-28T07:29:59", "NaT"], dtype="datetime64[s]")
+    added = xr.Dataset({"time": ("obs", when), "first": ("obs", first)})
+    added["first"].attrs["long_name"] = "earliest arrival"
+    multidim.append_partition(repo, added, "b")
+    multidim.append_partition(repo, added, "c")
+
+    array = zarr.open_group(repo.readonly_session("main").store, mode="r")["first"]
+    assert array.dtype == np.dtype("int64") and array.shape == (6,)
+    assert array.attrs["units"] == multidim.TIME_UNITS
+    assert array.attrs["_FillValue"] == multidim.NAT
+    assert array.attrs["long_name"] == "earliest arrival"
+    got = array[:].view("datetime64[ns]").astype("datetime64[s]")
+    assert np.isnat(got[[0, 1, 3, 5]]).all()
+    assert got[2] == got[4] == np.datetime64("2026-10-28T07:29:59")
+    if tuple(int(p) for p in xr.__version__.split(".")[:2]) >= (2026, 9):
+        # Older xarray cannot decode an integer time column holding NaT at all.
+        assert np.array_equal(
+            _read(repo)["first"].values.astype("datetime64[s]"), got, equal_nan=True
+        )
+
+
+def test_describe_variables_sets_attributes_once_and_skips_absent_arrays(tmp_path):
+    repo = _repo(tmp_path)
+    multidim.append_partition(repo, xr.Dataset({"x": ("obs", [1.0])}), "a")
+    wanted = {"x": {"long_name": "new words"}, "absent": {"long_name": "never written"}}
+    assert multidim.describe_variables(repo, wanted)
+    assert not multidim.describe_variables(repo, wanted), "nothing left to change"
+    group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    assert group["x"].attrs["long_name"] == "new words" and "absent" not in group
+    assert multidim.ledger(repo) == {"a"}
+    assert not multidim.describe_variables(_repo(tmp_path / "empty"), wanted)

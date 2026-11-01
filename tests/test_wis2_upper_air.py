@@ -191,3 +191,60 @@ def test_the_target_registers_with_the_archive():
     from planetary_datasets.providers.observations.wis2_targets import load_targets
 
     assert load_targets()["upper_air"] is ua.UpperAirTarget
+
+
+def stored_times(repo, name: str) -> np.ndarray:
+    """A stored time column as datetime64[s], NaT for its fill, without xarray's decoding.
+
+    (xarray before 2026.9 cannot decode an integer time column holding NaT.)
+    """
+    import zarr
+
+    array = zarr.open_group(repo.readonly_session("main").store, mode="r")[name]
+    assert str(array.attrs["units"]).startswith("nanoseconds since 1970-01-01")
+    return array[:].astype("int64").view("datetime64[ns]").astype("datetime64[s]")
+
+
+def test_first_arrival_is_the_earliest_copy_and_arrival_the_kept_ones():
+    later = ARRIVED + dt.timedelta(seconds=33)
+    (dwd,) = decode(VHHH_DWD)
+    (jma,) = ua.decode_object(VHHH_JMA, body(VHHH_JMA), later, Counter())
+    (again,) = ua.decode_object(VHHH_JMA, body(VHHH_JMA), None, Counter())
+    # The copy read first is kept, whichever arrived first.
+    (kept,) = ua.deduplicate([jma, dwd, again], set(), Counter())
+    assert kept.header["source_key"] == VHHH_JMA
+    assert kept.header["arrival_time"] == np.datetime64("2026-10-28T20:00:33")
+    assert kept.header["first_arrival_time"] == np.datetime64("2026-10-28T20:00:00")
+    ds = ua.to_dataset([kept], 0, 0)
+    assert ds["first_arrival_time"].values[0] == np.datetime64("2026-10-28T20:00:00")
+    assert ds["first_arrival_time"].attrs == ua.SOUNDING_ATTRS["first_arrival_time"]
+
+
+def test_first_arrival_is_added_to_a_store_written_without_it(local_config):
+    from planetary_datasets.common.multidim import append_partition
+
+    repo = local_config.icechunk_repo(ua.STORE_PREFIX)
+    legacy = ua.to_dataset(decode(TEMP), 0, 0).drop_vars("first_arrival_time")
+    append_partition(repo, legacy, "old", label="wis2_upper_air")
+
+    copies = decode(VHHH_DWD) + ua.decode_object(
+        VHHH_JMA, body(VHHH_JMA), ARRIVED - dt.timedelta(minutes=1), Counter()
+    )
+    assert ua.write(copies, local_config, "new", Counter()) == 1
+
+    assert stored_times(repo, "arrival_time").tolist() == [ARRIVED.replace(tzinfo=None)] * 2
+    first = stored_times(repo, "first_arrival_time")
+    assert np.isnat(first[0]) and first[1] == np.datetime64("2026-10-28T19:59:00")
+
+
+def test_arrival_times_are_described_alike_in_every_store():
+    from planetary_datasets.providers.observations import wis2_aircraft, wis2_land, wis2_ocean
+
+    names = ("arrival_time", "first_arrival_time")
+    upper_air = {name: ua.SOUNDING_ATTRS[name] for name in names}
+    assert wis2_aircraft.ARRIVAL_ATTRS == wis2_ocean.ARRIVAL_ATTRS == upper_air
+    # The land store's arrival time keeps its original name, "arrived".
+    land = wis2_land.ARRIVAL_ATTRS
+    assert {"arrival_time": land["arrived"], "first_arrival_time": land["first_arrival_time"]} == (
+        upper_air
+    )
