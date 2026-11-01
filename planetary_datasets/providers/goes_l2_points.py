@@ -111,6 +111,14 @@ class PackingChanged(ValueError):
     """A file's packing (scale, offset, units) differs from what its group stores."""
 
 
+def _agrees(key: str, a, b) -> bool:
+    """One packing attribute agrees. ``units`` only conflicts when both files state one:
+    an occasional file omits it (GOES-18 DMW on 2024-09-04), which changes no value."""
+    if key == "units" and (a is None or b is None):
+        return True
+    return _same(a, b)
+
+
 def _same(a, b) -> bool:
     """Packing attributes agree; numbers compared as the float32 they are published as."""
     if a is None or b is None:
@@ -265,8 +273,11 @@ def combine(files: Sequence[dict], first_file: int) -> xr.Dataset:
     for parsed in files:
         for name, (_, _, attrs) in parsed.items():
             first = names[name][1]
-            if not all(_same(attrs.get(k), first.get(k)) for k in PACKING):
+            if not all(_agrees(k, attrs.get(k), first.get(k)) for k in PACKING):
                 raise PackingChanged(f"{name}: packing differs between files of one partition")
+            if first.get("units") is None and attrs.get("units") is not None:
+                dims, _, dtype = names[name]
+                names[name] = (dims, {**first, "units": attrs["units"]}, dtype)
     ragged = sorted({d[0] for d, _, _ in names.values() if d and d[0] in RAGGED.values()})
     variables = {}
     for name, (dims, attrs, dtype) in names.items():
@@ -351,7 +362,7 @@ def check_packing(ds: xr.Dataset, stored: dict[str, dict], group: str) -> None:
             continue
         for key in PACKING:
             new, old = var.attrs.get(key), stored[name].get(key)
-            if not _same(new, old):
+            if not _agrees(key, new, old):
                 raise PackingChanged(f"{group}/{name}: {key} {old!r} stored, {new!r} incoming")
 
 

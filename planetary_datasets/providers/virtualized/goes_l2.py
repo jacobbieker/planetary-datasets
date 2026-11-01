@@ -84,6 +84,8 @@ DEFERRED = (
 #: Root attributes.
 LEDGER_ATTR = "days_written"
 SIGNATURE_ATTR = "layout_signature"
+#: Grid coordinates loaded when probing a file, so files on different grids are told apart.
+GRID_AXES = ("x", "y")
 #: Days written newest first before the backlog.
 RECENT_DAYS = 7
 #: A day is written once it has ended this long ago, so it is complete upstream.
@@ -316,11 +318,11 @@ def open_day(keys: Sequence[str], product: Product):
     def probe(url):
         try:
             ds = vz.open_virtual_dataset(
-                url, registry=registry, parser=parser, loadable_variables=[]
+                url, registry=registry, parser=parser, loadable_variables=list(GRID_AXES)
             )
         except Exception as exc:  # noqa: BLE001 - an unreadable file is left out
             logger.warning(f"{product.name}: {url}: {type(exc).__name__}: {exc}")
-            return url, None, None
+            return url, None, None, None
         try:
             names = list(ds.variables)
             # The layout is the grid variables with their chunking, codecs and dtype:
@@ -338,7 +340,16 @@ def open_day(keys: Sequence[str], product: Product):
                     for n in _virtual_names(ds)
                 )
             )
-            return url, layout, names
+            # The grid itself: a sector can move part way through a day (GOES-16 CONUS
+            # on 2023-06-01 shifted x at 15:26), and files on different grids only
+            # combine by aligning, which a virtual array cannot do.
+            # Not mesoscale: its box moves on purpose, and each file keeps its position.
+            grid = tuple(
+                (axis, hashlib.sha1(np.asarray(ds[axis].values).tobytes()).hexdigest())
+                for axis in GRID_AXES
+                if axis in ds.variables and not product.meso
+            )
+            return url, layout, names, grid
         finally:
             ds.close()
 
@@ -358,7 +369,7 @@ def open_day(keys: Sequence[str], product: Product):
     # Usually every file of a day has the same layout: learn it from the first readable
     # file and combine them all in one pass. Only if that fails is each file checked.
     for url in urls:
-        _, layout, names = probe(url)
+        _, layout, names, _ = probe(url)
         if layout is not None:
             break
     else:
@@ -375,21 +386,21 @@ def open_day(keys: Sequence[str], product: Product):
     with ThreadPoolExecutor(OPEN_WORKERS) as pool:
         probed = list(pool.map(probe, urls))
     # A file whose grid variables differ from the day's majority (an occasional file
-    # missing a field) is left out. The rest are split by chunking: each chunk layout the
-    # day holds is combined on its own and goes to its own generation, losing no file.
-    readable = [(url, layout, names) for url, layout, names in probed if layout is not None]
-    variables = [frozenset(n for n, *_ in layout) for _, layout, _ in readable]
+    # missing a field) is left out. The rest are split by layout and grid: each the day
+    # holds is combined on its own and goes to its own generation, losing no file.
+    readable = [entry for entry in probed if entry[1] is not None]
+    variables = [frozenset(n for n, *_ in layout) for _, layout, _, _ in readable]
     majority = max(set(variables), key=variables.count)
     groups: dict[tuple, list[str]] = {}
     names_of: dict[tuple, list[str]] = {}
-    for (url, layout, names), grid in zip(readable, variables):
-        if grid != majority:
+    for (url, layout, names, grid), found in zip(readable, variables):
+        if found != majority:
             continue
-        groups.setdefault(layout, []).append(url)
-        names_of.setdefault(layout, names)
+        groups.setdefault((layout, grid), []).append(url)
+        names_of.setdefault((layout, grid), names)
     datasets = [
-        combine(keep, [n for n in names_of[layout] if n not in majority])
-        for layout, keep in sorted(groups.items(), key=lambda item: -len(item[1]))
+        combine(keep, [n for n in names_of[key] if n not in majority])
+        for key, keep in sorted(groups.items(), key=lambda item: -len(item[1]))
     ]
     return datasets, len(urls) - sum(len(keep) for keep in groups.values())
 
