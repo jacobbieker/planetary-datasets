@@ -44,8 +44,10 @@ import datetime as dt
 import io
 import re
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from typing import Sequence
 
 import icechunk
@@ -357,15 +359,47 @@ def check_packing(ds: xr.Dataset, stored: dict[str, dict], group: str) -> None:
 #: ms a lightning file on 8 threads, 20 ms on 8 processes).
 PARSE_WORKERS = 8
 _PARSER = None
+_PARSER_LOCK = threading.Lock()
 
 
 def _parser():
     global _PARSER
-    if _PARSER is None:
-        from concurrent.futures import ProcessPoolExecutor
+    with _PARSER_LOCK:
+        if _PARSER is None:
+            from concurrent.futures import ProcessPoolExecutor
 
-        _PARSER = ProcessPoolExecutor(PARSE_WORKERS)
-    return _PARSER
+            _PARSER = ProcessPoolExecutor(PARSE_WORKERS)
+        return _PARSER
+
+
+def _discard_parser(pool) -> None:
+    """Drop ``pool`` once one of its workers has died (the OOM killer): a broken pool
+    fails every later call, so without this a lane wrote nothing until restarted. Only
+    the pool that broke is dropped, so threads sharing it make one replacement."""
+    global _PARSER
+    with _PARSER_LOCK:
+        if _PARSER is pool:
+            _PARSER = None
+    pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _parse(bodies: Sequence[tuple[str, bytes]]) -> list:
+    """:func:`_read_safely` over ``bodies``, in worker processes for more than a few.
+
+    A pool that breaks part way is replaced and the partition parsed again, once.
+    """
+    if len(bodies) <= 8:
+        return [_read_safely(item) for item in bodies]
+    for attempt in (1, 2):
+        pool = _parser()
+        try:
+            return list(pool.map(_read_safely, bodies, chunksize=8))
+        except BrokenProcessPool:
+            _discard_parser(pool)
+            if attempt == 2:
+                raise
+            logger.warning("goes points: a parser process died; parsing again on a new pool")
+    raise AssertionError("unreachable")
 
 
 def _read_safely(item: tuple[str, bytes]) -> dict | str:
@@ -382,12 +416,7 @@ def write_partition(
 ) -> int:
     """Copy one partition's files into ``group``; one commit. Returns files written."""
     parsed = []
-    results = (
-        _parser().map(_read_safely, bodies, chunksize=8)
-        if len(bodies) > 8
-        else map(_read_safely, bodies)
-    )
-    for key, result in zip((k for k, _ in bodies), results):
+    for key, result in zip((k for k, _ in bodies), _parse(bodies)):
         if isinstance(result, str):
             logger.warning(f"{group}: {key}: {result}")
         else:
