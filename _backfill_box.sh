@@ -311,6 +311,20 @@ running() {
   [[ -f $pidfile ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null
 }
 
+# PIDs of the Python processes in a running lane's process group, one per line.
+lane_pythons() {
+  pgrep -g "$(cat "$LOGS/$1.pid")" -f '^[^ ]*/bin/python[0-9.]* '
+}
+
+# True while any store of the noon catch-up still holds its lock.
+noon_running() {
+  local store
+  for store in $NOON_STORES; do
+    flock -n "$LOGS/noon_$store.lock" true || return 0
+  done
+  return 1
+}
+
 case "${1:-status}" in
 start)
   for name in "${!LANES[@]}"; do
@@ -362,16 +376,20 @@ guard)
   state=$LOGS/.guard
   mkdir -p "$state"
   # Lanes known to creep up in memory, restarted before they crowd anything else out.
+  # Measured over the lane's process group, so lanes run as `python -m ...` (SCRIPTS) are
+  # covered as well as `_backfill_lanes.py` ones. Only the Python processes are killed: the
+  # lane loop stays and starts the next one straight away.
   for name in $GUARD_LEAKY; do
     running "$name" || continue
-    rss=$(pgrep -f "[p]ython _backfill_lanes.py $name " | xargs -r ps -o rss= -p \
-      | awk '{s += $1} END {print int(s / 1048576)}')
+    pids=$(lane_pythons "$name")
+    [[ -n $pids ]] || continue
+    rss=$(ps -o rss= -p "${pids//$'\n'/,}" | awk '{s += $1} END {print int(s / 1048576)}')
     (( ${rss:-0} > GUARD_LEAKY_GB )) || continue
     if [[ -n ${GUARD_DRY_RUN:-} ]]; then
       echo "would restart $name (${rss} GB)"
       continue
     fi
-    pkill -f "[p]ython _backfill_lanes.py $name " \
+    kill $pids 2>/dev/null \
       && echo "$(date -u '+%F %T') restarted $name to release memory (${rss} GB)"
   done
   # Hung lanes: alive but silent for longer than they ever wait between passes.
@@ -424,13 +442,28 @@ guard)
     [[ -n ${GUARD_DRY_RUN:-} ]] && { echo "would remove stale scratch $dir"; continue; }
     rm -rf "$dir" && echo "$(date -u '+%F %T') removed stale scratch $dir"
   done
+  # WIS2 satellite spools (data/wis2_satellite_spool/<pid>-*) are removed by the archiver
+  # when a window finishes; one whose process was killed is a few hundred GB left behind.
+  for dir in data/wis2_satellite_spool/*/; do
+    dir=${dir%/}
+    [[ -d $dir ]] || continue
+    owner=$(basename "$dir"); owner=${owner%%-*}
+    [[ $owner =~ ^[0-9]+$ ]] || continue
+    kill -0 "$owner" 2> /dev/null && continue
+    [[ -n $(find "$dir" -mmin -"$GUARD_TMP_STALE_MINUTES" -print -quit) ]] && continue
+    [[ -n ${GUARD_DRY_RUN:-} ]] && { echo "would remove orphaned spool $dir"; continue; }
+    rm -rf "$dir" && echo "$(date -u '+%F %T') removed orphaned spool $dir"
+  done
   available=$(awk '/MemAvailable/ {print int($2 / 1048576)}' /proc/meminfo)
   reasons=()
   killed=()
   (( available < GUARD_MIN_AVAILABLE_GB )) && reasons+=("only ${available} GB available")
   oom=$(sudo -n journalctl -k --since "-10 min" -o cat 2>/dev/null \
     | grep -oE 'Killed process [0-9]+ \([^)]+\)' | grep -v 'sat-consumer' | head -3 | tr '\n' ' ')
-  [[ -n $oom ]] && { reasons+=("OOM killer: $oom"); killed+=(noon); }
+  # The OOM killer's victim is only named by PID, so the noon catch-up is relaunched when
+  # it is still running (a sibling store may have been the victim), never at night when a
+  # relaunch would add a ~200 GB catch-up to a box already out of memory.
+  [[ -n $oom ]] && reasons+=("OOM killer: $oom") && noon_running && killed+=(noon)
   for log in "$LOGS"/*.log; do
     name=$(basename "$log" .log)
     [[ $name == himawari_* || $name == guard ]] && continue
