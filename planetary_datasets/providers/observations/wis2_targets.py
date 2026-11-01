@@ -113,6 +113,13 @@ class ArchiveTarget(abc.ABC):
     def __init__(self, config: Config):
         self.config = config
 
+    def prepare(self, partition: str) -> None:
+        """Called with the window's ledger entry before its objects stream past.
+
+        A target whose store already holds some of the window (re-running it over an
+        archived tar) can then decline those objects in :meth:`wants`. Nothing by default.
+        """
+
     @abc.abstractmethod
     def wants(self, key: str, size: int) -> bool:
         """Whether this target needs the object at ``key``. Called for every object."""

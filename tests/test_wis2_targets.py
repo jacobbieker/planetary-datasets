@@ -365,3 +365,23 @@ def test_a_pending_target_that_raises_is_not_retried_in_a_loop(monkeypatch):
     monkeypatch.setattr(wis2, "targets_from_tar", boom)
     now = dt.datetime(2026, 11, 1, 15, tzinfo=UTC)
     assert wis2.finish_pending(now + dt.timedelta(hours=9), _config(), now=lambda: now) == 0
+
+
+def test_targets_are_told_the_window_before_it_streams(monkeypatch):
+    dest = FakeDest()
+    key = _archived_tar(dest)
+    seen = []
+
+    class Declining(Recorder):
+        def prepare(self, partition):
+            seen.append(partition)
+            self.declined = True
+
+        def wants(self, key, size):
+            return not getattr(self, "declined", False) and super().wants(key, size)
+
+    target = Declining()
+    monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
+    monkeypatch.setattr(wis2, "build_targets", lambda config, names: [target])
+    wis2.targets_from_tar(key, config=_config())
+    assert seen == ["wis2_20261027T1200Z"] and target.keys == []

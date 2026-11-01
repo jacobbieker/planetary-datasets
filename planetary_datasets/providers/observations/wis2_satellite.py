@@ -1045,9 +1045,37 @@ class SatelliteTarget(ArchiveTarget):
         self._spool: pathlib.Path | None = None
         self.counts: Counter = Counter()
         self.feed_seconds = 0.0
+        #: Groups whose ledger already lists the coming window; see :meth:`prepare`.
+        self._written: set[str] = set()
+
+    def prepare(self, partition: str) -> None:
+        """Note the groups that already hold ``partition``, so their objects are declined.
+
+        Re-running the target over an archived window (a backfill of new groups) then
+        neither spools nor decodes the radiances written the first time.
+        """
+        from planetary_datasets.common.multidim import ledger
+
+        repo = self.config.icechunk_repo(self.store_prefix)
+        written = set()
+        for group in [*INSTRUMENTS, *products.PRODUCTS]:
+            try:
+                if partition in ledger(repo, group=group):
+                    written.add(group)
+            except Exception:  # noqa: BLE001 - a group not created yet holds nothing
+                continue
+        self._written = written
+        if written:
+            logger.info(
+                f"wis2 satellite: {partition} already in {', '.join(sorted(written))}; "
+                "their objects are skipped"
+            )
 
     def wants(self, key: str, size: int) -> bool:
-        return instrument_for(key) is not None or products.product_for(key) is not None
+        instrument = instrument_for(key)
+        product = None if instrument is not None else products.product_for(key)
+        group = instrument.group if instrument else (product.group if product else None)
+        return group is not None and group not in getattr(self, "_written", ())
 
     def _start(self) -> None:
         root = pathlib.Path(self.config.data_dir) / "wis2_satellite_spool"

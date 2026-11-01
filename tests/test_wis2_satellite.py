@@ -303,3 +303,19 @@ def test_first_arrival_joins_a_group_written_before_it_existed(local_config):
     first = mhs["first_arrival_time"].values
     assert np.isnat(first[:half]).all(), "rows written before the variable existed"
     assert (first[half:] == np.datetime64(later.replace(tzinfo=None))).all()
+
+
+def test_groups_already_holding_the_window_are_not_fed_again(local_config):
+    first = sat.SatelliteTarget(local_config, workers=1)
+    first.feed(key("atms"), body("atms"), ARRIVED)
+    first.finish(None, None, "wis2_20261029T1200Z")
+
+    again = sat.SatelliteTarget(local_config, workers=1)
+    again.prepare("wis2_20261029T1200Z")
+    assert not again.wants(key("atms"), 1), "atms holds the window already"
+    assert again.wants(key("mhs"), 1)
+    gras = "data/int-eumetsat/data/core/weather/space-based-observations/metop-c/gras/x.bufr"
+    assert again.wants(gras, 1), "a product group not written yet"
+    fresh = sat.SatelliteTarget(local_config, workers=1)
+    fresh.prepare("wis2_20261030T0000Z")
+    assert fresh.wants(key("atms"), 1)
