@@ -207,3 +207,36 @@ def test_a_large_partition_is_parsed_in_worker_processes(archive, local_config):
     ds = xr.open_zarr(store(local_config), group="glm_lcfa", consolidated=False)
     assert ds.sizes["file"] == 12 and ds.sizes["event"] == 36
     assert ds["event_file_index"].values.tolist() == [i for i in range(12) for _ in range(3)]
+
+
+def test_a_broken_parser_pool_is_replaced(monkeypatch):
+    class Dead:
+        def map(self, *args, **kwargs):
+            raise gp.BrokenProcessPool("a worker was killed")
+
+        def shutdown(self, **kwargs):
+            pass
+
+    class Alive:
+        def map(self, fn, items, chunksize=1):
+            return map(fn, items)
+
+    pools = iter([Dead(), Alive()])
+    monkeypatch.setattr(gp, "_PARSER", None)
+    monkeypatch.setattr(gp, "_parser", lambda: next(pools))
+    monkeypatch.setattr(gp, "_read_safely", lambda item: item[0])
+    bodies = [(f"k{i}", b"") for i in range(12)]
+    assert gp._parse(bodies) == [k for k, _ in bodies]
+
+
+def test_a_pool_that_breaks_twice_fails_the_partition(monkeypatch):
+    class Dead:
+        def map(self, *args, **kwargs):
+            raise gp.BrokenProcessPool("a worker was killed")
+
+        def shutdown(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(gp, "_parser", Dead)
+    with pytest.raises(gp.BrokenProcessPool):
+        gp._parse([(f"k{i}", b"") for i in range(12)])
