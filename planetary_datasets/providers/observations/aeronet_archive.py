@@ -472,12 +472,20 @@ def parse_table(text: str) -> Table:
     if date is None:
         raise ValueError("no date column")
     # A response cut off mid-row (it happens on the web service) leaves a row with no
-    # date; it carries nothing usable, and one such row must not lose the whole response.
+    # date, or a date but nothing after it; it carries nothing usable, and one such row
+    # must not lose the whole response. A row without its quality level or another
+    # categorical column cannot be classified either.
     dated = frame[date].astype(str).str.strip().ne("")
     if clock is not None:
         dated &= frame[clock].astype(str).str.strip().ne("")
+    for i, c in enumerate(lowered):
+        if c in CATEGORY_COLUMNS:
+            dated &= frame[i].astype(str).str.strip().ne("")
     if not dated.all():
-        logger.warning(f"aeronet: dropped {int((~dated).sum())} row(s) with no date or time")
+        logger.warning(
+            f"aeronet: dropped {int((~dated).sum())} row(s) with no date, time or "
+            "category (quality level, mode, scan or measurement type)"
+        )
         frame = frame[dated].reset_index(drop=True)
     out["time"] = _times(frame[date], frame[clock] if clock is not None else None)
     used |= {date} | ({clock} if clock is not None else set())

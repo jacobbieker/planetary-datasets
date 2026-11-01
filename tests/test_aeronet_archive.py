@@ -477,6 +477,17 @@ def test_a_row_cut_off_without_a_date_is_dropped_not_fatal():
     assert len(table.rows) == 2
 
 
+def test_a_row_cut_off_after_its_date_is_dropped_not_fatal():
+    """2026-11-01: a recent response had a row with a date but a blank quality level."""
+    from planetary_datasets.providers.observations.aeronet_archive import parse_table
+
+    header = "AERONET_Site,Date(dd:mm:yyyy),Time(hh:mm:ss),Day_of_Year,AOD_500nm,Data_Quality_Level"
+    good = "Lulin,22:10:2026,00:00:00,295,0.123456,lev15"
+    cut = "Lulin,22:10:2026,00:15:00,295,,"
+    table = parse_table("\n".join(["Version 3: AOD", "Level 1.5", header, good, cut, good]))
+    assert len(table.rows) == 2
+
+
 def test_disagreeing_site_columns_keep_the_first_instead_of_failing():
     from planetary_datasets.providers.observations.aeronet_archive import parse_table
 
