@@ -196,21 +196,21 @@ declare -A LANES=(
   [wis2_archive]="-m planetary_datasets.providers.observations.wis2_archive --follow"
   # GOES ABI L2 as virtual references (bkr/geo/virtualized/goes{NN}_l2/), full disk and
   # CONUS, every gridded product; last week first, then the backlog. See goes_l2.py.
-  [goes16_l2]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 16 --follow --workers 4"
-  [goes17_l2]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 17 --follow --workers 4"
-  [goes18_l2]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 18 --follow --workers 4"
-  [goes19_l2]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 19 --follow --workers 4"
+  [goes16_l2]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 16 --follow --workers 2"
+  [goes17_l2]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 17 --follow --workers 2"
+  [goes18_l2]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 18 --follow --workers 2"
+  [goes19_l2]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 19 --follow --workers 2"
   # Mesoscale sectors M1/M2, one store per product, sector and year
   # (bkr/geo/virtualized/goes{NN}_l2_meso/), each time with its own box position.
-  [goes16_l2_meso]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 16 --sectors M1,M2 --follow --workers 4"
-  [goes17_l2_meso]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 17 --sectors M1,M2 --follow --workers 4"
-  [goes18_l2_meso]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 18 --sectors M1,M2 --follow --workers 4"
-  [goes19_l2_meso]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 19 --sectors M1,M2 --follow --workers 4"
+  [goes16_l2_meso]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 16 --sectors M1,M2 --follow --workers 2"
+  [goes17_l2_meso]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 17 --sectors M1,M2 --follow --workers 2"
+  [goes18_l2_meso]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 18 --sectors M1,M2 --follow --workers 2"
+  [goes19_l2_meso]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 19 --sectors M1,M2 --follow --workers 2"
   # Derived motion winds and GLM lightning, materialised (bkr/geo/goes{NN}_l2_points.icechunk).
-  [goes16_l2_points]="-m planetary_datasets.providers.goes_l2_points --satellite 16 --follow --workers 3"
-  [goes17_l2_points]="-m planetary_datasets.providers.goes_l2_points --satellite 17 --follow --workers 3"
-  [goes18_l2_points]="-m planetary_datasets.providers.goes_l2_points --satellite 18 --follow --workers 3"
-  [goes19_l2_points]="-m planetary_datasets.providers.goes_l2_points --satellite 19 --follow --workers 3"
+  [goes16_l2_points]="-m planetary_datasets.providers.goes_l2_points --satellite 16 --follow --workers 2"
+  [goes17_l2_points]="-m planetary_datasets.providers.goes_l2_points --satellite 17 --follow --workers 2"
+  [goes18_l2_points]="-m planetary_datasets.providers.goes_l2_points --satellite 18 --follow --workers 2"
+  [goes19_l2_points]="-m planetary_datasets.providers.goes_l2_points --satellite 19 --follow --workers 2"
   [icon_d2_ruc_60min]="_backfill_lanes.py icon_d2_ruc_60min --threads 4 --pause 7200"
   [icon_d2_ruc_15min]="_backfill_lanes.py icon_d2_ruc_15min --threads 4 --pause 7200"
   [icon_d2_ruc_5min]="_backfill_lanes.py icon_d2_ruc_5min --threads 2 --pause 7200"
