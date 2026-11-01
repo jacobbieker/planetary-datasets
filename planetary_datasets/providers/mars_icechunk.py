@@ -229,6 +229,11 @@ EXCLUDED_SHORT_NAMES = frozenset({"o3"}) | REDUNDANT_WITH_UV
 #: without a ``level`` dimension.
 ML_SURFACE_SHORT_NAMES = frozenset({"z", "lnsp"})
 
+#: Archived only with the analyses: MARS keeps model-level geopotential (the
+#: orography, a static field) at step 0 and never at forecast steps, so a forecast
+#: timestep without it is complete rather than truncated.
+ML_ANALYSIS_ONLY_SHORT_NAMES = frozenset({"z"})
+
 #: float32 carries 23 explicit mantissa bits, so keeping 23 or more is a no-op.
 #: Variables set to this get no BitRound filter at all and are stored exactly.
 LOSSLESS_KEEPBITS = 23
@@ -1212,7 +1217,7 @@ class MARSIcechunkProvider(BaseProvider):
         if rows.empty:
             return False
         counts = rows.groupby("short_name")["level"].nunique()
-        expected_names = self.expected_names(GROUP_ML)
+        expected_names = self.required_names(GROUP_ML, it)
         absent = expected_names - set(counts.index)
         if absent:
             logger.warning(f"{it}: model-level variable(s) missing entirely: {sorted(absent)[:5]}")
@@ -1239,6 +1244,21 @@ class MARSIcechunkProvider(BaseProvider):
                 GROUP_SPECTRA: set(names["spectra"]),
             }
         return self._expected_names[group]
+
+    def required_names(self, group: str, it: pd.Timestamp) -> set[str]:
+        """The variable names `it` must carry for ``group`` to count as complete.
+
+        :meth:`expected_names`, less :data:`ML_ANALYSIS_ONLY_SHORT_NAMES` at a
+        timestep the index offers no model-level analysis for. Requiring them there
+        left every forecast-hour timestep unflagged, so its GRIB was never deleted.
+        """
+        names = self.expected_names(group)
+        if group != GROUP_ML:
+            return names
+        rows = self.select(GROUP_ML, it)
+        if rows.empty or not (rows["data_type"] == "an").any():
+            return names - ML_ANALYSIS_ONLY_SHORT_NAMES
+        return names
 
     def variables(self) -> dict[str, List[str]]:
         """Variable names per family, discovered from the index.
@@ -1704,7 +1724,7 @@ class MARSIcechunkProvider(BaseProvider):
         for group, names in written_names.items():
             if not names:
                 continue
-            absent = self.expected_names(group) - names
+            absent = self.required_names(group, it) - names
             if absent:
                 logger.warning(
                     f"{it}: {group} is short of {len(absent)} variable(s) "
