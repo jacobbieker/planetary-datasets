@@ -470,6 +470,7 @@ def archive(
         f"{start:%Y-%m-%dT%H:%MZ}..{end:%Y-%m-%dT%H:%MZ} (listed in {time.time() - began:.0f}s)"
     )
     built = _build_targets(config, targets)
+    _prepare(built, partition_name(key))
     out = MultipartWriter(dest, config.bucket, key)
     try:
         files, gone, payload, index = write_archive(
@@ -536,6 +537,15 @@ def _finish_targets(
     return summaries
 
 
+def _prepare(built: list, partition: str) -> None:
+    """Tell each target which window is coming; a failure there never stops the window."""
+    for target in built:
+        try:
+            target.prepare(partition)
+        except Exception as exc:  # noqa: BLE001 - targets never stop the archive
+            logger.warning(f"wis2 {target.name}: preparing for {partition} failed: {exc}")
+
+
 def _build_targets(config: Config, names: Sequence[str] | None) -> list:
     """The archive targets to run; none (logged) if they cannot be built."""
     if names is not None and not names:
@@ -560,6 +570,7 @@ def targets_from_tar(
     built = _build_targets(config, targets)
     if not built:
         return {}
+    _prepare(built, partition_name(tar_key))
     route = Router(built)
     client = dest_client(config)
     body = client.get_object(Bucket=config.bucket, Key=tar_key)["Body"]
