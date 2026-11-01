@@ -916,6 +916,47 @@ def product_dataset(batch: list[dict], stored_dims: dict[str, int]) -> xr.Datase
     return xr.Dataset(data)
 
 
+def _earliest_copies(
+    paths: Sequence[str], stored: set[int], group: str, counts: Counter
+) -> dict[int, np.ndarray] | None:
+    """For each decoded file, the rows to write: one per identity, its earliest copy.
+
+    Identities the store already holds are dropped. Plain arrays and one lexsort rather
+    than a table: OLCI water vapour alone is ~250 million rows a window, and a pandas sort
+    and group-by over that drove the archiver out of memory. None when nothing decoded.
+    """
+    ids, arrivals, files, rows = [], [], [], []
+    for index, path in enumerate(paths):
+        with np.load(path, allow_pickle=True) as data:
+            identity = data["observation_identity"].astype("int64")
+            arrived = data["arrival_time"].astype("datetime64[s]").astype("int64")
+        ids.append(identity)
+        arrivals.append(arrived)
+        files.append(np.full(identity.size, index, dtype="int32"))
+        rows.append(np.arange(identity.size, dtype="int32"))
+    if not ids:
+        return None
+    identity, arrived = np.concatenate(ids), np.concatenate(arrivals)
+    file, row = np.concatenate(files), np.concatenate(rows)
+    del ids, arrivals, files, rows
+    counts[f"{group}_decoded"] += int(identity.size)
+    if stored:
+        new = ~np.isin(identity, np.fromiter(stored, dtype="int64", count=len(stored)))
+        identity, arrived, file, row = identity[new], arrived[new], file[new], row[new]
+    # NaT (int64's minimum) would sort first; a known arrival is preferred to none.
+    arrived = np.where(arrived == np.iinfo("int64").min, np.iinfo("int64").max, arrived)
+    order = np.lexsort((row, file, arrived, identity))
+    first = np.ones(order.size, dtype=bool)
+    first[1:] = identity[order][1:] != identity[order][:-1]
+    chosen = order[first]
+    counts[f"{group}_duplicates"] += counts[f"{group}_decoded"] - int(chosen.size)
+    keep: dict[int, np.ndarray] = {}
+    by_file = file[chosen]
+    for index in np.unique(by_file):
+        keep[int(index)] = np.sort(row[chosen[by_file == index]])
+    return keep
+
+
 def write_product_group(
     repo, product: products.Product, paths: Sequence[str], partition: str | None, counts: Counter
 ) -> int:
@@ -932,23 +973,9 @@ def write_product_group(
     if partition is not None and partition in ledger(repo, group=group):
         counts[f"{group}_already_written"] += 1
         return 0
-    keys = []
-    for index, path in enumerate(paths):
-        with np.load(path, allow_pickle=True) as data:
-            ids, arrived = data["observation_identity"], data["arrival_time"]
-        keys.append(
-            pd.DataFrame({"id": ids, "arrival": arrived, "file": index, "row": np.arange(ids.size)})
-        )
-    if not keys:
+    keep = _earliest_copies(paths, _stored_identities(repo, group), group, counts)
+    if keep is None:
         return 0
-    table = pd.concat(keys, ignore_index=True)
-    counts[f"{group}_decoded"] += len(table)
-    table = table[~table["id"].isin(_stored_identities(repo, group))]
-    first_arrival = table.groupby("id")["arrival"].min()
-    # Identical copies: the earliest to arrive is kept.
-    table = table.sort_values(["id", "arrival", "file", "row"]).drop_duplicates("id")
-    counts[f"{group}_duplicates"] += counts[f"{group}_decoded"] - len(table)
-    keep = {file: np.sort(rows["row"].to_numpy()) for file, rows in table.groupby("file")}
     stored_dims = _stored_dims(repo, group)
 
     written = 0
@@ -972,7 +999,8 @@ def write_product_group(
             name: values if name.endswith(".decimals") else values[rows]
             for name, values in arrays.items()
         }
-        subset["first_arrival_time"] = _first_arrivals(first_arrival, subset)
+        # The copy kept is the earliest to arrive, so its arrival is the first arrival.
+        subset["first_arrival_time"] = subset["arrival_time"].astype("datetime64[s]")
         batch.append(subset)
         values_in_batch += sum(
             int(np.prod(v.shape)) for k, v in subset.items() if not k.endswith(".decimals")
