@@ -147,3 +147,27 @@ def test_element_names_are_snake_case():
         "distance_from_earth_centre_in_direction_of_north_pole"
     )
     assert sp.snake("windSpeedAt10M") == "wind_speed_at10_m"
+
+
+def test_the_earliest_copy_of_each_identity_is_kept(tmp_path):
+    from collections import Counter
+
+    def spool(name, ids, arrivals):
+        path = tmp_path / f"{name}.npz"
+        np.savez(
+            path,
+            observation_identity=np.array(ids, dtype="int64"),
+            arrival_time=np.array(arrivals, dtype="datetime64[s]"),
+        )
+        return str(path)
+
+    a = spool("a", [1, 2, 3], ["2026-11-01T06:05", "2026-11-01T06:05", "NaT"])
+    b = spool(
+        "b", [2, 3, 4, 9], ["2026-11-01T06:01", "2026-11-01T06:09", "2026-11-01T06:02", "NaT"]
+    )
+    counts = Counter()
+    keep = sat._earliest_copies([a, b], stored={4}, group="amv", counts=counts)
+    # 1 from a; 2 from b (earlier); 3 from b (a's arrival is unknown); 4 already stored;
+    # 9 only from b.
+    assert {k: v.tolist() for k, v in keep.items()} == {0: [0], 1: [0, 1, 3]}
+    assert counts["amv_decoded"] == 7 and counts["amv_duplicates"] == 3
