@@ -312,20 +312,24 @@ lane_loop() {
 # Start time of a process in clock ticks since boot (/proc/<pid>/stat field 22). Unlike
 # wall-clock times it does not move when the system clock is stepped.
 start_ticks() {
-  local stat
-  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  local pid=$1 stat
+  stat=$(cat "/proc/$pid/stat" 2>/dev/null) || return 1
   stat=${stat##*) }  # the command name, in parentheses, may itself contain spaces
   awk '{print $20}' <<< "$stat"
 }
 
-# Record a lane just started with PID $2: its pidfile and its start ticks.
+# Record a lane just started as PID $2. The start ticks are written (atomically) before
+# the pidfile, so a reader never pairs the new PID with an old start. A process that has
+# already gone gets "none", which never matches, rather than falling back to the age check.
 record_lane() {
-  echo "$2" > "$LOGS/$1.pid"
-  start_ticks "$2" > "$LOGS/$1.start" 2>/dev/null || rm -f "$LOGS/$1.start"
+  local name=$1 pid=$2 ticks
+  ticks=$(start_ticks "$pid") || ticks=none
+  echo "$ticks" > "$LOGS/$name.start.tmp" && mv "$LOGS/$name.start.tmp" "$LOGS/$name.start"
+  echo "$pid" > "$LOGS/$name.pid"
 }
 
 running() {
-  local pidfile=$LOGS/$1.pid pid ticks age
+  local name=$1 pidfile=$LOGS/$1.pid pid ticks age
   [[ -f $pidfile ]] || return 1
   pid=$(cat "$pidfile")
   kill -0 "$pid" 2>/dev/null || return 1
@@ -333,9 +337,9 @@ running() {
   # 2026-11-02 guard took a reused PID for the paused himawari_1000m_0 and killed that
   # process group as a "stalled" lane. The PID counts only while it is the process that
   # was started: same start ticks as recorded at launch.
-  if [[ -f $LOGS/$1.start ]]; then
+  if [[ -f $LOGS/$name.start ]]; then
     ticks=$(start_ticks "$pid") || return 1
-    [[ $ticks == "$(cat "$LOGS/$1.start")" ]]
+    [[ $ticks == "$(cat "$LOGS/$name.start")" ]]
     return
   fi
   # Lanes launched before .start files existed: a process that started more than a minute
@@ -360,6 +364,10 @@ noon_running() {
 
 case "${1:-status}" in
 start)
+  # cron and guard both run start: one at a time, so a lane is never checked and launched
+  # twice at once. Lanes are started with fd 9 closed, so they do not hold the lock.
+  exec 9> "$LOGS/.start.lock"
+  flock 9
   for name in "${!LANES[@]}"; do
     if running "$name"; then
       echo "$name already running"
@@ -368,7 +376,7 @@ start)
     [[ -f $LOGS/$name.paused ]] && continue
     # setsid: the loop leads its own process group, so stop can take down the python too.
     setsid bash -c "$(declare -f lane_loop); PIXI=$PIXI RETRY_PAUSE=$RETRY_PAUSE UNAVAILABLE_PAUSE=$UNAVAILABLE_PAUSE lane_loop $name '${LANES[$name]}'" \
-      >> "$LOGS/$name.log" 2>&1 < /dev/null &
+      >> "$LOGS/$name.log" 2>&1 < /dev/null 9>&- &
     record_lane "$name" $!
     echo "started $name"
   done
@@ -380,7 +388,7 @@ start)
     # Paused by guard, which resumes it when memory allows; a .paused file starting with
     # "manual" is left alone by guard (rm it to let the lane start again).
     [[ -f $LOGS/$name.paused ]] && continue
-    PIXI=$PIXI setsid ./"${SCRIPTS[$name]}" >> "$LOGS/$name.log" 2>&1 < /dev/null &
+    PIXI=$PIXI setsid ./"${SCRIPTS[$name]}" >> "$LOGS/$name.log" 2>&1 < /dev/null 9>&- &
     record_lane "$name" $!
     echo "started $name"
   done
