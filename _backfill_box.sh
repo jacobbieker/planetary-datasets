@@ -309,15 +309,37 @@ lane_loop() {
   done
 }
 
+# Start time of a process in clock ticks since boot (/proc/<pid>/stat field 22). Unlike
+# wall-clock times it does not move when the system clock is stepped.
+start_ticks() {
+  local stat
+  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  stat=${stat##*) }  # the command name, in parentheses, may itself contain spaces
+  awk '{print $20}' <<< "$stat"
+}
+
+# Record a lane just started with PID $2: its pidfile and its start ticks.
+record_lane() {
+  echo "$2" > "$LOGS/$1.pid"
+  start_ticks "$2" > "$LOGS/$1.start" 2>/dev/null || rm -f "$LOGS/$1.start"
+}
+
 running() {
-  local pidfile=$LOGS/$1.pid pid age
+  local pidfile=$LOGS/$1.pid pid ticks age
   [[ -f $pidfile ]] || return 1
   pid=$(cat "$pidfile")
   kill -0 "$pid" 2>/dev/null || return 1
   # A pidfile outlives its lane (a paused lane keeps it) and the kernel reuses PIDs: on
   # 2026-11-02 guard took a reused PID for the paused himawari_1000m_0 and killed that
-  # process group as a "stalled" lane. A lane's process starts just before its pidfile is
-  # written; a process that started later is not the lane.
+  # process group as a "stalled" lane. The PID counts only while it is the process that
+  # was started: same start ticks as recorded at launch.
+  if [[ -f $LOGS/$1.start ]]; then
+    ticks=$(start_ticks "$pid") || return 1
+    [[ $ticks == "$(cat "$LOGS/$1.start")" ]]
+    return
+  fi
+  # Lanes launched before .start files existed: a process that started more than a minute
+  # after its pidfile was written is not the lane.
   age=$(ps -o etimes= -p "$pid" 2>/dev/null) || return 1
   (( $(date +%s) - age <= $(stat -c %Y "$pidfile") + 60 ))
 }
@@ -347,7 +369,7 @@ start)
     # setsid: the loop leads its own process group, so stop can take down the python too.
     setsid bash -c "$(declare -f lane_loop); PIXI=$PIXI RETRY_PAUSE=$RETRY_PAUSE UNAVAILABLE_PAUSE=$UNAVAILABLE_PAUSE lane_loop $name '${LANES[$name]}'" \
       >> "$LOGS/$name.log" 2>&1 < /dev/null &
-    echo $! > "$LOGS/$name.pid"
+    record_lane "$name" $!
     echo "started $name"
   done
   for name in "${!SCRIPTS[@]}"; do
@@ -359,7 +381,7 @@ start)
     # "manual" is left alone by guard (rm it to let the lane start again).
     [[ -f $LOGS/$name.paused ]] && continue
     PIXI=$PIXI setsid ./"${SCRIPTS[$name]}" >> "$LOGS/$name.log" 2>&1 < /dev/null &
-    echo $! > "$LOGS/$name.pid"
+    record_lane "$name" $!
     echo "started $name"
   done
   ;;
@@ -368,7 +390,7 @@ stop)
     if running "$name"; then
       kill -- -"$(cat "$LOGS/$name.pid")" 2>/dev/null && echo "stopped $name"
     fi
-    rm -f "$LOGS/$name.pid"
+    rm -f "$LOGS/$name.pid" "$LOGS/$name.start"
   done
   ;;
 status)
@@ -422,7 +444,7 @@ guard)
       continue
     fi
     kill -- -"$(cat "$LOGS/$name.pid")" 2>/dev/null
-    rm -f "$LOGS/$name.pid"
+    rm -f "$LOGS/$name.pid" "$LOGS/$name.start"
     echo "$(date -u '+%F %T') restarted stalled $name (log silent $((age / 60)) min)"
     restart_stalled=1
   done
@@ -509,7 +531,7 @@ guard)
         echo "$(date -u '+%F %T') relaunched the noon catch-up"
       elif [[ -n ${LANES[$name]:-}${SCRIPTS[$name]:-} ]]; then
         running "$name" && kill -- -"$(cat "$LOGS/$name.pid")" 2>/dev/null
-        rm -f "$LOGS/$name.pid"
+        rm -f "$LOGS/$name.pid" "$LOGS/$name.start"
         echo "$(date -u '+%F %T') restarting $name"
       fi
     done
