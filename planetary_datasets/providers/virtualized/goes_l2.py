@@ -400,6 +400,8 @@ def open_day(keys: Sequence[str], product: Product):
     urls = [url for url in listed if url not in skip]
     skipped = len(listed) - len(urls)
     errors: dict[str, str] = {}
+    damaged: set[str] = set()
+    unchecked: dict[str, str] = {}
 
     def probe(url):
         try:
@@ -409,6 +411,16 @@ def open_day(keys: Sequence[str], product: Product):
         except Exception as exc:  # noqa: BLE001 - an unreadable file is left out
             errors[url] = f"{type(exc).__name__}: {exc}"
             logger.warning(f"{product.name}: {url}: {errors[url]}")
+            # Checked and recorded at once: the process can crash minutes after HDF5 has
+            # read a damaged file, long before the rest of a 1440-file day is probed.
+            try:
+                damage = _damage(url)
+            except Exception as check:  # noqa: BLE001 - not known to be damaged
+                unchecked[url] = f"{type(check).__name__}: {check}"
+            else:
+                if damage is not None:
+                    _record_unreadable(product, url, damage)
+                    damaged.add(url)
             return url, None, None, None
         try:
             names = list(ds.variables)
@@ -475,18 +487,15 @@ def open_day(keys: Sequence[str], product: Product):
     # A file whose grid variables differ from the day's majority (an occasional file
     # missing a field) is left out. The rest are split by layout and grid: each the day
     # holds is combined on its own and goes to its own generation, losing no file.
-    # A file that would not open is downloaded and checked with h5py before the day is
-    # combined. Damaged bytes go to the ledger and are never opened again. A file that
-    # reads cleanly failed for some other reason, so it is opened once more and kept if
-    # it opens; a failed download raises, and the day is retried by a later pass.
+    # probe has checked every file that would not open: damaged ones are in the ledger.
+    # One that could not be fetched to check fails the day, for a later pass to retry; one
+    # whose bytes read cleanly failed for some other reason, so it is opened once more.
     for i, (url, layout, *_) in enumerate(probed):
-        if layout is not None:
+        if layout is not None or url in damaged:
             continue
-        damage = _damage(url)
-        if damage is not None:
-            _record_unreadable(product, url, damage)
-        else:
-            probed[i] = probe(url)
+        if url in unchecked:
+            raise RuntimeError(f"{product.name}: could not check {url}: {unchecked.pop(url)}")
+        probed[i] = probe(url)
     readable = [entry for entry in probed if entry[1] is not None]
     variables = [frozenset(n for n, *_ in layout) for _, layout, _, _ in readable]
     majority = max(set(variables), key=variables.count)
