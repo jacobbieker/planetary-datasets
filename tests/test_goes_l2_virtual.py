@@ -342,12 +342,16 @@ def test_checking_each_file_screens_its_bytes_before_the_parser_opens_it(
     }
 
 
-def test_a_file_without_a_time_is_left_out_not_the_whole_day(archive, local_config):
+@pytest.mark.parametrize("problem", ["missing", "dimensioned"])
+def test_a_file_without_a_scalar_time_is_left_out_not_the_whole_day(archive, local_config, problem):
     start = dt.datetime.combine(DAY, dt.time())
     granule(archive, "TPWF", start)
     odd = granule(archive, "TPWF", start + dt.timedelta(minutes=10), seed=1)
     with xr.open_dataset(odd) as ds:
         stripped = ds.drop_vars("t").load()
+    if problem == "dimensioned":
+        when = np.datetime64(start + dt.timedelta(minutes=10), "ns")
+        stripped = stripped.assign_coords(t=("n", [when, when]))
     stripped.to_netcdf(odd, engine="netcdf4")
     granule(archive, "TPWF", start + dt.timedelta(minutes=20), seed=2)
     product = g.Product(19, "TPW", "F")
