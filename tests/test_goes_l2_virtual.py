@@ -342,6 +342,20 @@ def test_checking_each_file_screens_its_bytes_before_the_parser_opens_it(
     }
 
 
+def test_a_file_without_a_time_is_left_out_not_the_whole_day(archive, local_config):
+    start = dt.datetime.combine(DAY, dt.time())
+    granule(archive, "TPWF", start)
+    odd = granule(archive, "TPWF", start + dt.timedelta(minutes=10), seed=1)
+    with xr.open_dataset(odd) as ds:
+        stripped = ds.drop_vars("t").load()
+    stripped.to_netcdf(odd, engine="netcdf4")
+    granule(archive, "TPWF", start + dt.timedelta(minutes=20), seed=2)
+    product = g.Product(19, "TPW", "F")
+    now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
+    assert g.run_product(product, local_config, now=now) == 2
+    assert g.known_unreadable(product) == set(), "an intact file is not ledgered"
+
+
 def test_mesoscale_sectors_are_split_by_sector_and_year():
     listing = ["ABI-L2-ACMF", "ABI-L2-ACMM", "ABI-L2-CMIPM", "ABI-L2-DMWM"]
     products = g.products_from_listing(19, listing, sectors=g.MESO_SECTORS)
