@@ -310,8 +310,16 @@ lane_loop() {
 }
 
 running() {
-  local pidfile=$LOGS/$1.pid
-  [[ -f $pidfile ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null
+  local pidfile=$LOGS/$1.pid pid age
+  [[ -f $pidfile ]] || return 1
+  pid=$(cat "$pidfile")
+  kill -0 "$pid" 2>/dev/null || return 1
+  # A pidfile outlives its lane (a paused lane keeps it) and the kernel reuses PIDs: on
+  # 2026-11-02 guard took a reused PID for the paused himawari_1000m_0 and killed that
+  # process group as a "stalled" lane. A lane's process starts just before its pidfile is
+  # written; a process that started later is not the lane.
+  age=$(ps -o etimes= -p "$pid" 2>/dev/null) || return 1
+  (( $(date +%s) - age <= $(stat -c %Y "$pidfile") + 60 ))
 }
 
 # PIDs of the Python processes in a running lane's process group, one per line.
