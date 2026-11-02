@@ -329,7 +329,7 @@ def known_unreadable(product: Product) -> set[str]:
 
 
 def _damage(url: str) -> str | None:
-    """Download one file and walk every object's attributes with h5py.
+    """Download one file and walk every object's attributes and chunk index with h5py.
 
     Args:
         url: The file's full URL (``s3://`` on the box, ``file://`` in tests).
@@ -355,6 +355,10 @@ def _damage(url: str) -> str | None:
 
         def check(_name, obj):
             list(obj.attrs.items())
+            # HDFParser also reads every chunk's offset from the chunk index.
+            if isinstance(obj, h5py.Dataset) and obj.chunks is not None:
+                for index in range(obj.id.get_num_chunks()):
+                    obj.id.get_chunk_info(index)
             return None  # visititems stops at the first callback that returns non-None
 
         try:
