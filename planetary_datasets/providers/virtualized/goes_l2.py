@@ -328,28 +328,41 @@ def known_unreadable(product: Product) -> set[str]:
     return {line.split("\t", 1)[0] for line in path.read_text().splitlines() if line.strip()}
 
 
-def _damage(store, key: str) -> str | None:
+def _damage(url: str) -> str | None:
     """Download one file and walk every object's attributes with h5py.
+
+    Args:
+        url: The file's full URL (``s3://`` on the box, ``file://`` in tests).
 
     Returns:
         The error if the file's own bytes are damaged; None if it reads cleanly.
 
     Raises:
-        Exception: Whatever the download raises. A file that cannot be fetched is not
-            known to be damaged, so its day fails and is retried by a later pass.
+        RuntimeError: The file could not be downloaded. It is not known to be damaged, so
+            its day fails and is retried by a later pass.
     """
-    import io
+    import tempfile
 
     import h5py
-    import obstore
 
-    data = bytes(obstore.get(store, key).bytes())
-    try:
-        with h5py.File(io.BytesIO(data), "r") as f:
-            list(f.attrs.items())
-            f.visititems(lambda _name, obj: list(obj.attrs.items()))
-    except Exception as exc:  # noqa: BLE001 - any HDF5 error means the bytes are bad
-        return f"{type(exc).__name__}: {exc}"
+    from planetary_datasets.common.download import download_one
+
+    options = {"anon": True} if url.startswith("s3://") else None
+    with tempfile.TemporaryDirectory(prefix="goes-l2-check-") as tmp:
+        path = download_one(url, pathlib.Path(tmp) / "granule.nc", storage_options=options)
+        if path is None:
+            raise RuntimeError(f"could not download {url} to check it; retrying the day later")
+
+        def check(_name, obj):
+            list(obj.attrs.items())
+            return None  # visititems stops at the first callback that returns non-None
+
+        try:
+            with h5py.File(path, "r") as f:
+                list(f.attrs.items())
+                f.visititems(check)
+        except Exception as exc:  # noqa: BLE001 - any HDF5 error means the bytes are bad
+            return f"{type(exc).__name__}: {exc}"
     return None
 
 
@@ -465,7 +478,7 @@ def open_day(keys: Sequence[str], product: Product):
     for i, (url, layout, *_) in enumerate(probed):
         if layout is not None:
             continue
-        damage = _damage(store, url[len(url_base) + 1 :])
+        damage = _damage(url)
         if damage is not None:
             _record_unreadable(product, url, damage)
         else:
