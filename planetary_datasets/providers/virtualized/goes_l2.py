@@ -50,7 +50,10 @@ import dataclasses
 import datetime as dt
 import hashlib
 import json
+import os
+import pathlib
 import sys
+import threading
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -64,6 +67,17 @@ from planetary_datasets.config import Config, get_config
 SATELLITES = {16: "noaa-goes16", 17: "noaa-goes17", 18: "noaa-goes18", 19: "noaa-goes19"}
 SOURCE_REGION = "us-east-1"
 STORE_ROOT = "bkr/geo/virtualized"
+#: Files that would not open while others of the same day did, one ledger per product
+#: (``<url>\t<error>`` lines). A damaged granule (GOES-18 ACHA2KMM1 2025-100 16:09 has a
+#: bad HDF5 metadata checksum) left the HDF5 library unstable: the lane segfaulted minutes
+#: after every attempt at that day, so later passes do not open these files again.
+#: ``GOES_L2_UNREADABLE_DIR`` overrides the default, ``<data_dir>/goes_l2_unreadable``.
+UNREADABLE_DIR: pathlib.Path | None = (
+    pathlib.Path(os.environ["GOES_L2_UNREADABLE_DIR"])
+    if os.environ.get("GOES_L2_UNREADABLE_DIR")
+    else None
+)
+_UNREADABLE_LOCK = threading.Lock()
 #: Sectors archived by default: full disk and CONUS (or PACUS for the west satellites).
 SECTORS = ("F", "C")
 #: The two mesoscale sectors. Both are published under one prefix (``ABI-L2-ACMM``) and
@@ -300,6 +314,74 @@ def _add_time_meso(ds):
     return _add_time(ds.reset_coords(per_file))
 
 
+def _unreadable_ledger(product: Product) -> pathlib.Path:
+    """The ledger file of ``product``, under the configured data directory by default."""
+    root = UNREADABLE_DIR or pathlib.Path(get_config().data_dir) / "goes_l2_unreadable"
+    return root / f"{product.name}.txt"
+
+
+def known_unreadable(product: Product) -> set[str]:
+    """URLs of ``product`` recorded as unreadable by an earlier pass."""
+    path = _unreadable_ledger(product)
+    if not path.is_file():
+        return set()
+    return {line.split("\t", 1)[0] for line in path.read_text().splitlines() if line.strip()}
+
+
+def _damage(url: str) -> str | None:
+    """Download one file and walk every object's attributes and chunk index with h5py.
+
+    Args:
+        url: The file's full URL (``s3://`` on the box, ``file://`` in tests).
+
+    Returns:
+        The error if the file's own bytes are damaged; None if it reads cleanly.
+
+    Raises:
+        RuntimeError: The file could not be downloaded. It is not known to be damaged, so
+            its day fails and is retried by a later pass.
+    """
+    import tempfile
+
+    import h5py
+
+    from planetary_datasets.common.download import download_one
+
+    options = {"anon": True} if url.startswith("s3://") else None
+    with tempfile.TemporaryDirectory(prefix="goes-l2-check-") as tmp:
+        path = download_one(url, pathlib.Path(tmp) / "granule.nc", storage_options=options)
+        if path is None:
+            raise RuntimeError(f"could not download {url} to check it; retrying the day later")
+
+        def check(_name, obj):
+            list(obj.attrs.items())
+            # HDFParser also reads every chunk's offset from the chunk index.
+            if isinstance(obj, h5py.Dataset) and obj.chunks is not None:
+                for index in range(obj.id.get_num_chunks()):
+                    obj.id.get_chunk_info(index)
+            return None  # visititems stops at the first callback that returns non-None
+
+        try:
+            with h5py.File(path, "r") as f:
+                list(f.attrs.items())
+                f.visititems(check)
+        except Exception as exc:  # noqa: BLE001 - any HDF5 error means the bytes are bad
+            return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+def _record_unreadable(product: Product, url: str, error: str) -> None:
+    """Append ``url`` to the product's ledger, so later passes never open it."""
+    path = _unreadable_ledger(product)
+    with _UNREADABLE_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as ledger:
+            ledger.write(f"{url}\t{error}\n")
+            ledger.flush()
+            os.fsync(ledger.fileno())
+    logger.warning(f"{product.name}: {url} recorded as unreadable; later passes skip it")
+
+
 def open_day(keys: Sequence[str], product: Product):
     """The day's files as virtual datasets along ``t``, one per layout (usually one).
 
@@ -313,7 +395,11 @@ def open_day(keys: Sequence[str], product: Product):
     url_base, store = source(product)
     registry = ObjectStoreRegistry({url_base: store})
     parser = vz.parsers.HDFParser()
-    urls = [f"{url_base}/{key}" for key in keys]
+    listed = [f"{url_base}/{key}" for key in keys]
+    skip = known_unreadable(product)
+    urls = [url for url in listed if url not in skip]
+    skipped = len(listed) - len(urls)
+    errors: dict[str, str] = {}
 
     def probe(url):
         try:
@@ -321,7 +407,8 @@ def open_day(keys: Sequence[str], product: Product):
                 url, registry=registry, parser=parser, loadable_variables=list(GRID_AXES)
             )
         except Exception as exc:  # noqa: BLE001 - an unreadable file is left out
-            logger.warning(f"{product.name}: {url}: {type(exc).__name__}: {exc}")
+            errors[url] = f"{type(exc).__name__}: {exc}"
+            logger.warning(f"{product.name}: {url}: {errors[url]}")
             return url, None, None, None
         try:
             names = list(ds.variables)
@@ -373,12 +460,12 @@ def open_day(keys: Sequence[str], product: Product):
         if layout is not None:
             break
     else:
-        return [], 0
+        return [], skipped
     grid = {n for n, *_ in layout}
     try:
         vds = combine(urls, [n for n in names if n not in grid])
         if set(_virtual_names(vds)) == grid:
-            return [vds], 0
+            return [vds], skipped
     except Exception as exc:  # noqa: BLE001 - fall back to checking each file
         logger.info(
             f"{product.name}: day does not combine as is ({type(exc).__name__}); checking each file"
@@ -388,6 +475,18 @@ def open_day(keys: Sequence[str], product: Product):
     # A file whose grid variables differ from the day's majority (an occasional file
     # missing a field) is left out. The rest are split by layout and grid: each the day
     # holds is combined on its own and goes to its own generation, losing no file.
+    # A file that would not open is downloaded and checked with h5py before the day is
+    # combined. Damaged bytes go to the ledger and are never opened again. A file that
+    # reads cleanly failed for some other reason, so it is opened once more and kept if
+    # it opens; a failed download raises, and the day is retried by a later pass.
+    for i, (url, layout, *_) in enumerate(probed):
+        if layout is not None:
+            continue
+        damage = _damage(url)
+        if damage is not None:
+            _record_unreadable(product, url, damage)
+        else:
+            probed[i] = probe(url)
     readable = [entry for entry in probed if entry[1] is not None]
     variables = [frozenset(n for n, *_ in layout) for _, layout, _, _ in readable]
     majority = max(set(variables), key=variables.count)
@@ -402,7 +501,7 @@ def open_day(keys: Sequence[str], product: Product):
         combine(keep, [n for n in names_of[key] if n not in majority])
         for key, keep in sorted(groups.items(), key=lambda item: -len(item[1]))
     ]
-    return datasets, len(urls) - sum(len(keep) for keep in groups.values())
+    return datasets, len(listed) - sum(len(keep) for keep in groups.values())
 
 
 def layout_signature(vds) -> str:
