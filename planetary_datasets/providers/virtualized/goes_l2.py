@@ -493,9 +493,11 @@ def open_day(keys: Sequence[str], product: Product):
     for i, (url, layout, *_) in enumerate(probed):
         if layout is not None or url in damaged:
             continue
-        if url in unchecked:
-            raise RuntimeError(f"{product.name}: could not check {url}: {unchecked.pop(url)}")
-        probed[i] = probe(url)
+        for attempt in ("first", "retry"):
+            if url in unchecked:
+                raise RuntimeError(f"{product.name}: could not check {url}: {unchecked.pop(url)}")
+            if attempt == "first":
+                probed[i] = probe(url)
     readable = [entry for entry in probed if entry[1] is not None]
     variables = [frozenset(n for n, *_ in layout) for _, layout, _, _ in readable]
     majority = max(set(variables), key=variables.count)
