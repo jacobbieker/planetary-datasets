@@ -182,17 +182,28 @@ def test_winds_by_band_with_a_field_missing_from_some_files(archive, local_confi
     np.testing.assert_array_equal(ds["latitude"].values[:3], np.linspace(-60, 60, 3))
 
 
-def test_a_changed_packing_is_refused_not_mixed(archive, local_config):
+def test_a_changed_packing_starts_a_generation_instead_of_mixing(archive, local_config):
     root, src = archive
     glm_file(root, dt.datetime(2026, 10, 27, 0), events=2, groups=1, flashes=1)
     gp.run_prefix(19, "GLM-L2-LCFA", local_config, now=NOW, store=src)
-    later = dt.datetime(2026, 10, 27, 7)
-    path = glm_file(root, later, events=2, groups=1, flashes=1, energy_scale=3e-17)
     repo = local_config.icechunk_repo(gp.store_prefix(19))
-    with pytest.raises(gp.PackingChanged):
-        gp.write_partition(repo, "glm_lcfa", f"{DAY}T06", [(path.name, path.read_bytes())])
-    ds = xr.open_zarr(store(local_config), group="glm_lcfa", consolidated=False)
-    assert ds.sizes["file"] == 1
+
+    def write(when, partition, **packing):
+        path = glm_file(root, when, events=2, groups=1, flashes=1, **packing)
+        return gp.write_partition(repo, "glm_lcfa", partition, [(path.name, path.read_bytes())])
+
+    # Repacked: a new generation named for its first partition, nothing mixed.
+    assert write(dt.datetime(2026, 10, 27, 7), f"{DAY}T06", energy_scale=3e-17) == 1
+    generation = f"glm_lcfa_{DAY:%d%m%Y}"
+    assert gp.generations_of(repo, "glm_lcfa") == ["glm_lcfa", generation]
+    # Each later partition joins the generation it is packed like.
+    write(dt.datetime(2026, 10, 27, 13), f"{DAY}T12")
+    write(dt.datetime(2026, 10, 27, 19), f"{DAY}T18", energy_scale=3e-17)
+    base = xr.open_zarr(store(local_config), group="glm_lcfa", consolidated=False)
+    repacked = xr.open_zarr(store(local_config), group=generation, consolidated=False)
+    assert base.sizes["file"] == 2 and repacked.sizes["file"] == 2
+    assert repacked["event_file_index"].values.tolist() == [0, 0, 1, 1]
+    assert gp.written_partitions(repo, "glm_lcfa") >= {f"{DAY}T06", f"{DAY}T12", f"{DAY}T18"}
 
 
 def test_mesoscale_and_glm_are_not_confused_with_gridded_products():
