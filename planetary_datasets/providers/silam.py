@@ -32,6 +32,7 @@ from loguru import logger
 
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common.download import download_many
+from planetary_datasets.common.lazy_fields import bounded_compute
 from planetary_datasets.common.store import ALIGNMENT_COORDS, has_timestep
 from planetary_datasets.common.store import write_to_icechunk as _write_to_icechunk
 from planetary_datasets.config import Config
@@ -83,6 +84,10 @@ class _SILAMForecastProvider(BaseProvider):
     """Shared behaviour for the SILAM forecast products."""
 
     append_dim = "init_time"
+    #: Dask tasks in flight while writing. A dust forecast is ~71 GB in memory (120 steps
+    #: of ~0.6 GB); on the 192-core box dask's default pool read nearly all of it at once
+    #: and the write peaked above 100 GB until the OOM killer took it, every attempt.
+    write_threads = 8
 
     @contextlib.contextmanager
     def local_tempdir(self) -> Iterator[pathlib.Path]:
@@ -98,13 +103,14 @@ class _SILAMForecastProvider(BaseProvider):
             yield pathlib.Path(td)
 
     def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
-        written = _write_to_icechunk(
-            repo,
-            processed,
-            append_dim=self.append_dim,
-            message=f"{self.name}: {processed[self.append_dim].values[0]}",
-            alignment_coords=FORECAST_ALIGNMENT_COORDS,
-        )
+        with bounded_compute(self.write_threads):
+            written = _write_to_icechunk(
+                repo,
+                processed,
+                append_dim=self.append_dim,
+                message=f"{self.name}: {processed[self.append_dim].values[0]}",
+                alignment_coords=FORECAST_ALIGNMENT_COORDS,
+            )
         if not written and not has_timestep(
             repo, processed[self.append_dim].values[0], append_dim=self.append_dim
         ):
