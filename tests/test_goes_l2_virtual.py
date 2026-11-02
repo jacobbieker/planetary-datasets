@@ -307,6 +307,41 @@ def test_a_damaged_file_is_recorded_as_soon_as_its_probe_fails(archive, local_co
     assert recorded_before and all(recorded_before)
 
 
+def test_checking_each_file_screens_its_bytes_before_the_parser_opens_it(
+    archive, local_config, monkeypatch
+):
+    """A damaged file can crash the parser outright, so it is screened first."""
+    import virtualizarr
+
+    start = dt.datetime.combine(DAY, dt.time())
+    granule(archive, "TPWF", start)
+    bad = granule(archive, "TPWF", start + dt.timedelta(minutes=10))
+    bad.write_bytes(b"not an HDF5 file" * 64)
+    granule(archive, "TPWF", start + dt.timedelta(minutes=20), seed=2)
+    real_open = virtualizarr.open_virtual_dataset
+    real_mf = virtualizarr.open_virtual_mfdataset
+    calls = []
+
+    def mf_first_call_fails(urls, **kw):
+        calls.append(urls)
+        if len(calls) == 1:
+            raise ValueError("force the per-file path")
+        return real_mf(urls, **kw)
+
+    def open_refusing_the_damaged_file(url, **kw):
+        assert not url.endswith(bad.name), "the parser opened a damaged file"
+        return real_open(url, **kw)
+
+    monkeypatch.setattr(virtualizarr, "open_virtual_mfdataset", mf_first_call_fails)
+    monkeypatch.setattr(virtualizarr, "open_virtual_dataset", open_refusing_the_damaged_file)
+    keys = [str(p.relative_to(archive)) for p in sorted(archive.rglob("*.nc"))]
+    datasets, dropped = g.open_day(keys, g.Product(19, "TPW", "F"))
+    assert sum(ds.sizes["t"] for ds in datasets) == 2 and dropped == 1
+    assert {u.rsplit("/", 1)[-1] for u in g.known_unreadable(g.Product(19, "TPW", "F"))} == {
+        bad.name
+    }
+
+
 def test_mesoscale_sectors_are_split_by_sector_and_year():
     listing = ["ABI-L2-ACMF", "ABI-L2-ACMM", "ABI-L2-CMIPM", "ABI-L2-DMWM"]
     products = g.products_from_listing(19, listing, sectors=g.MESO_SECTORS)
