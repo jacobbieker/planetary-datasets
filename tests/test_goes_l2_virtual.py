@@ -270,15 +270,41 @@ def test_a_file_that_failed_once_but_is_intact_is_kept_and_not_recorded(
     assert failed and g.known_unreadable(product) == set()
 
 
-def test_a_day_that_cannot_be_read_at_all_records_nothing(archive, local_config):
-    """With no file of the day readable, the source may be down: nothing is ledgered."""
+def test_files_that_cannot_be_fetched_are_not_recorded(archive, local_config, monkeypatch):
+    """Without the bytes, damage is not established: nothing is recorded."""
+    from planetary_datasets.common import download
+
     start = dt.datetime.combine(DAY, dt.time())
     for i in range(2):
         granule(archive, "TPWF", start + dt.timedelta(minutes=10 * i)).write_bytes(b"x" * 512)
+    monkeypatch.setattr(download, "download_one", lambda *a, **kw: None)
     product = g.Product(19, "TPW", "F")
     now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
     assert g.run_product(product, local_config, now=now) == 0
     assert g.known_unreadable(product) == set()
+
+
+def test_a_damaged_file_is_recorded_as_soon_as_its_probe_fails(archive, local_config, monkeypatch):
+    """The ledger entry is on disk before any other file of the day is opened."""
+    import virtualizarr
+
+    start = dt.datetime.combine(DAY, dt.time())
+    bad = granule(archive, "TPWF", start)
+    bad.write_bytes(b"not an HDF5 file" * 64)
+    granule(archive, "TPWF", start + dt.timedelta(minutes=10))
+    product = g.Product(19, "TPW", "F")
+    real_open = virtualizarr.open_virtual_dataset
+    recorded_before = []
+
+    def spy(url, **kw):
+        if not url.endswith(bad.name):
+            recorded_before.append(bool(g.known_unreadable(product)))
+        return real_open(url, **kw)
+
+    monkeypatch.setattr(virtualizarr, "open_virtual_dataset", spy)
+    now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
+    assert g.run_product(product, local_config, now=now) == 1
+    assert recorded_before and all(recorded_before)
 
 
 def test_mesoscale_sectors_are_split_by_sector_and_year():
