@@ -30,6 +30,13 @@ start each counts from is ``time_offset_reference`` along ``file``: an event's t
 Each partition (a day of winds, six hours of lightning) is one commit, recorded in its
 group's ledger; the last week goes first, newest first, then the backlog oldest first.
 
+Packed values are never re-packed or mixed. When NOAA changes a product's packing (GLM's
+``event_lon`` is packed around the satellite's longitude, so its ``add_offset`` moved when
+GOES-19 drifted into the GOES-East slot in 2025), partitions packed the new way go to a
+generation of the group, ``<group>_<DDMMYYYY>`` named for the first partition written to
+it, and a later partition joins whichever generation it is packed like. Open each with
+``xr.open_zarr(store, group="glm_lcfa_15012025", ...)``; together they hold the product.
+
     python -m planetary_datasets.providers.goes_l2_points --satellite 19 --follow
 
 Files are parsed in worker processes (Python's default forkserver start), which import
@@ -428,10 +435,50 @@ def _stripped(parsed: dict) -> bool:
     return not any(attrs for _, _, attrs in parsed.values())
 
 
+def generations_of(repo: icechunk.Repository, group: str) -> list[str]:
+    """``group`` and its packing generations (``<group>_<DDMMYYYY>``), the group first."""
+    try:
+        root = zarr.open_group(repo.readonly_session("main").store, mode="r")
+        names = list(root.group_keys())
+    except (zarr.errors.GroupNotFoundError, FileNotFoundError):
+        return [group]
+    later = sorted(n for n in names if re.fullmatch(rf"{re.escape(group)}_\d{{8}}", n))
+    return [group, *later]
+
+
+def written_partitions(repo: icechunk.Repository, group: str) -> set[str]:
+    """Partitions in the ledger of ``group`` or of any of its generations."""
+    done: set[str] = set()
+    for name in generations_of(repo, group):
+        done |= multidim.ledger(repo, group=name)
+    return done
+
+
+def _generation_name(group: str, partition: str) -> str:
+    """``<group>_<DDMMYYYY>`` for a partition named ``YYYY-MM-DD[...]``."""
+    return f"{group}_{partition[8:10]}{partition[5:7]}{partition[0:4]}"
+
+
+def _target(repo: icechunk.Repository, group: str, partition: str, parsed: list) -> tuple:
+    """The generation ``parsed`` is packed like (or a new one) and the dataset for it."""
+    for name in generations_of(repo, group):
+        ds = combine(parsed, stored_files(repo, name))
+        try:
+            check_packing(ds, stored_packing(repo, name), name)
+        except PackingChanged as exc:
+            logger.info(f"{name}: {partition} is packed differently ({exc})")
+            continue
+        return name, ds
+    name = _generation_name(group, partition)
+    logger.info(f"{group}: {partition} starts a new packing generation, {name}")
+    return name, combine(parsed, stored_files(repo, name))
+
+
 def write_partition(
     repo: icechunk.Repository, group: str, partition: str, bodies: Sequence[tuple[str, bytes]]
 ) -> int:
-    """Copy one partition's files into ``group``; one commit. Returns files written."""
+    """Copy one partition's files into ``group``, or the generation of it they are packed
+    like; one commit. Returns files written."""
     parsed = []
     for key, result in zip((k for k, _ in bodies), _parse(bodies)):
         if isinstance(result, str):
@@ -446,10 +493,9 @@ def write_partition(
     if not parsed:
         multidim.mark_written(repo, partition, label=group, group=group)
         return 0
-    ds = combine(parsed, stored_files(repo, group))
-    check_packing(ds, stored_packing(repo, group), group)
+    target, ds = _target(repo, group, partition, parsed)
     fixed = [d for d in ds.dims if d != FILE_DIM and d not in RAGGED.values()]
-    multidim.append_partition(repo, ds, partition, fixed_dims=fixed, label=group, group=group)
+    multidim.append_partition(repo, ds, partition, fixed_dims=fixed, label=target, group=target)
     return len(parsed)
 
 
@@ -513,7 +559,7 @@ def run_prefix(
             groups.setdefault((group_of(key), partition_of(key, day, family)), []).append(key)
         for (group, partition), members in sorted(groups.items()):
             if group not in ledgers:
-                ledgers[group] = multidim.ledger(repo, group=group)
+                ledgers[group] = written_partitions(repo, group)
             if partition in ledgers[group]:
                 continue
             try:
