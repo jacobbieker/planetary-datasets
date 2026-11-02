@@ -100,6 +100,14 @@ def archive(tmp_path, local_config, monkeypatch):
     return root
 
 
+@pytest.fixture(autouse=True)
+def unreadable_dir(tmp_path, monkeypatch):
+    """Keep the unreadable-file ledgers out of the working directory."""
+    path = tmp_path / "unreadable"
+    monkeypatch.setattr(g, "UNREADABLE_DIR", path)
+    return path
+
+
 def read(product, config, prefix=None):
     repo = g.open_store(prefix or product.store_prefix, product, config, create=False)
     return xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
@@ -194,6 +202,48 @@ def test_a_file_missing_the_grid_variable_is_left_out(archive, local_config):
     product = g.Product(19, "TPW", "F")
     now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
     assert g.run_product(product, local_config, now=now) == 2
+
+
+def test_a_damaged_file_is_recorded_and_never_opened_again(archive, local_config, monkeypatch):
+    import virtualizarr
+
+    start = dt.datetime.combine(DAY, dt.time())
+    granule(archive, "TPWF", start)
+    bad = granule(archive, "TPWF", start + dt.timedelta(minutes=10))
+    bad.write_bytes(b"not an HDF5 file" * 64)
+    granule(archive, "TPWF", start + dt.timedelta(minutes=20), seed=2)
+    product = g.Product(19, "TPW", "F")
+    now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
+    assert g.run_product(product, local_config, now=now) == 2
+    assert {u.rsplit("/", 1)[-1] for u in g.known_unreadable(product)} == {bad.name}
+
+    opened = []
+    real_open, real_mf = virtualizarr.open_virtual_dataset, virtualizarr.open_virtual_mfdataset
+    monkeypatch.setattr(
+        virtualizarr,
+        "open_virtual_dataset",
+        lambda url, **kw: opened.append(url) or real_open(url, **kw),
+    )
+    monkeypatch.setattr(
+        virtualizarr,
+        "open_virtual_mfdataset",
+        lambda urls, **kw: opened.extend(urls) or real_mf(urls, **kw),
+    )
+    keys = [str(p.relative_to(archive)) for p in sorted(archive.rglob("*.nc"))]
+    datasets, dropped = g.open_day(keys, product)
+    assert sum(ds.sizes["t"] for ds in datasets) == 2 and dropped == 1
+    assert opened and not any(u.endswith(bad.name) for u in opened)
+
+
+def test_a_day_that_cannot_be_read_at_all_records_nothing(archive, local_config):
+    """With no file of the day readable, the source may be down: nothing is ledgered."""
+    start = dt.datetime.combine(DAY, dt.time())
+    for i in range(2):
+        granule(archive, "TPWF", start + dt.timedelta(minutes=10 * i)).write_bytes(b"x" * 512)
+    product = g.Product(19, "TPW", "F")
+    now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
+    assert g.run_product(product, local_config, now=now) == 0
+    assert g.known_unreadable(product) == set()
 
 
 def test_mesoscale_sectors_are_split_by_sector_and_year():
