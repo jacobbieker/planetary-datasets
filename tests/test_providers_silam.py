@@ -13,9 +13,10 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-
 from helpers import read_store
+
 from planetary_datasets import config as config_module
+from planetary_datasets.providers import silam
 from planetary_datasets.providers.silam import (
     IncompleteForecast,
     SILAMAerosolProvider,
@@ -153,6 +154,24 @@ def test_dust_run_partition_writes_then_skips(dust):
     stored = read_store(dust)
     assert stored["init_time"].values[0] == np.datetime64(INIT)
     assert stored.sizes["step"] == 3
+
+
+@pytest.mark.parametrize("name", ["dust", "aerosol"])
+def test_write_runs_on_a_bounded_dask_pool(name, request, monkeypatch):
+    """A write must not fan out to every core: a dust forecast is ~71 GB in memory."""
+    import dask
+
+    provider = request.getfixturevalue(name)
+    seen = []
+    real = silam._write_to_icechunk
+
+    def spy(*args, **kwargs):
+        seen.append(dask.config.get("num_workers", None))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(silam, "_write_to_icechunk", spy)
+    assert provider.run_partition(INIT) is True
+    assert seen == [provider.write_threads]
 
 
 def test_aerosol_process_merges_species_and_days(aerosol):
