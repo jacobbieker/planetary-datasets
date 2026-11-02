@@ -423,6 +423,11 @@ def open_day(keys: Sequence[str], product: Product):
                     damaged.add(url)
             return url, None, None, None
         try:
+            if "t" not in ds.variables or ds["t"].ndim != 0:
+                # _add_time needs one scalar time, and a file without it failed its whole
+                # day (GOES-18 ACHA2KMM1 2025-04-10): leave it out like any unusable file.
+                logger.warning(f"{product.name}: {url}: no scalar 't'; left out")
+                return url, None, None, None
             names = list(ds.variables)
             # The layout is the grid variables with their chunking, codecs and dtype:
             # files differing in any (GOES-18 changed chunk shapes mid-day while
