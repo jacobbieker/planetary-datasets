@@ -55,10 +55,13 @@ GUARD_LEAKY_GB=${GUARD_LEAKY_GB:-25}
 #: guard also removes abandoned planetary-datasets-* scratch untouched for this long, and
 #: at once any whose .pid names a process that has exited.
 GUARD_TMP_STALE_MINUTES=${GUARD_TMP_STALE_MINUTES:-120}
-#: Himawari lanes in the order guard pauses them: the extra lanes of each resolution
-#: first, then the last 500 m lane, then the last 1000 m lane; himawari_2000m_0 always
-#: runs. Lanes resume in the reverse order.
-GUARD_PAUSE_ORDER=${GUARD_PAUSE_ORDER-"himawari_500m_3 himawari_500m_2 himawari_500m_1 himawari_1000m_3 himawari_1000m_2 himawari_1000m_1 himawari_2000m_5 himawari_2000m_4 himawari_2000m_3 himawari_2000m_2 himawari_2000m_1 himawari_500m_0 himawari_1000m_0"}
+#: Lanes in the order guard pauses them: the extra Himawari lanes of each resolution
+#: first, then the last 500 m lane, then the last 1000 m lane, then the GOES point-product
+#: backfills (~20 GB each; they resume at the next unwritten partition). Without the GOES
+#: lanes guard had nothing left to pause once Himawari moved off the box, and the OOM
+#: killer took the WIS2 archiver and sat-consumer instead. himawari_2000m_0 always runs.
+#: Lanes resume in the reverse order.
+GUARD_PAUSE_ORDER=${GUARD_PAUSE_ORDER-"himawari_500m_3 himawari_500m_2 himawari_500m_1 himawari_1000m_3 himawari_1000m_2 himawari_1000m_1 himawari_2000m_5 himawari_2000m_4 himawari_2000m_3 himawari_2000m_2 himawari_2000m_1 himawari_500m_0 himawari_1000m_0 goes16_l2_points goes17_l2_points goes18_l2_points goes19_l2_points"}
 export PYTHONPATH=$PWD
 mkdir -p "$LOGS"
 
@@ -488,7 +491,7 @@ guard)
       paused=$name
       break
     done
-    [[ -z $paused ]] && echo "$(date -u '+%F %T') memory short, only himawari_2000m_0 left: ${reasons[*]}"
+    [[ -z $paused ]] && echo "$(date -u '+%F %T') memory short, nothing left to pause: ${reasons[*]}"
     # Then restart what was killed now, rather than leaving it for its retry pause, its
     # next pass or the next noon. The noon catch-up is simply run again: each store's lock
     # leaves any still running alone.
