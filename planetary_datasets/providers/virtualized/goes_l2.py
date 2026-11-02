@@ -452,6 +452,24 @@ def open_day(keys: Sequence[str], product: Product):
         finally:
             ds.close()
 
+    def screened_probe(url):
+        """Check a file's bytes with h5py before the parser opens it.
+
+        Opening a damaged file with HDFParser can crash the process outright (GOES-18
+        ACHA2KMM1 2025-100 20:44 segfaulted the lane with no Python error), while h5py on
+        a downloaded copy raises cleanly. Used where every file of a day is opened.
+        """
+        try:
+            damage = _damage(url)
+        except Exception as check:  # noqa: BLE001 - not known to be damaged
+            unchecked[url] = f"{type(check).__name__}: {check}"
+            return url, None, None, None
+        if damage is not None:
+            _record_unreadable(product, url, damage)
+            damaged.add(url)
+            return url, None, None, None
+        return probe(url)
+
     def combine(keep: list[str], loadable: list[str]):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -483,7 +501,7 @@ def open_day(keys: Sequence[str], product: Product):
             f"{product.name}: day does not combine as is ({type(exc).__name__}); checking each file"
         )
     with ThreadPoolExecutor(OPEN_WORKERS) as pool:
-        probed = list(pool.map(probe, urls))
+        probed = list(pool.map(screened_probe, urls))
     # A file whose grid variables differ from the day's majority (an occasional file
     # missing a field) is left out. The rest are split by layout and grid: each the day
     # holds is combined on its own and goes to its own generation, losing no file.
