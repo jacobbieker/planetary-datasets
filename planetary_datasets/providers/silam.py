@@ -103,6 +103,19 @@ class _SILAMForecastProvider(BaseProvider):
             yield pathlib.Path(td)
 
     def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
+        """Append one forecast to the store, at most ``write_threads`` dask tasks at a time.
+
+        Args:
+            repo: The store's repository.
+            processed: One forecast, as returned by ``process``.
+
+        Returns:
+            True if the forecast was written; False if the store already held it.
+
+        Raises:
+            IncompleteForecast: The store refused a forecast it does not hold, because its
+                variables or step axis do not match the store's.
+        """
         with bounded_compute(self.write_threads):
             written = _write_to_icechunk(
                 repo,
