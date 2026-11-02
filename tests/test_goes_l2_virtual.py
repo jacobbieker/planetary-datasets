@@ -235,6 +235,41 @@ def test_a_damaged_file_is_recorded_and_never_opened_again(archive, local_config
     assert opened and not any(u.endswith(bad.name) for u in opened)
 
 
+def test_a_file_that_failed_once_but_is_intact_is_kept_and_not_recorded(
+    archive, local_config, monkeypatch
+):
+    import virtualizarr
+
+    start = dt.datetime.combine(DAY, dt.time())
+    paths = [
+        granule(archive, "TPWF", start + dt.timedelta(minutes=10 * i), seed=i) for i in range(3)
+    ]
+    flaky = paths[1].name
+    real_open, real_mf = virtualizarr.open_virtual_dataset, virtualizarr.open_virtual_mfdataset
+    failed = []
+
+    def open_once_failing(url, **kw):
+        if url.endswith(flaky) and not failed:
+            failed.append(url)
+            raise OSError("connection reset")
+        return real_open(url, **kw)
+
+    calls = []
+
+    def mf_first_call_fails(urls, **kw):
+        calls.append(urls)
+        if len(calls) == 1:
+            raise ValueError("force the per-file path")
+        return real_mf(urls, **kw)
+
+    monkeypatch.setattr(virtualizarr, "open_virtual_dataset", open_once_failing)
+    monkeypatch.setattr(virtualizarr, "open_virtual_mfdataset", mf_first_call_fails)
+    product = g.Product(19, "TPW", "F")
+    now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
+    assert g.run_product(product, local_config, now=now) == 3
+    assert failed and g.known_unreadable(product) == set()
+
+
 def test_a_day_that_cannot_be_read_at_all_records_nothing(archive, local_config):
     """With no file of the day readable, the source may be down: nothing is ledgered."""
     start = dt.datetime.combine(DAY, dt.time())

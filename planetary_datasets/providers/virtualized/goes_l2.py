@@ -71,7 +71,12 @@ STORE_ROOT = "bkr/geo/virtualized"
 #: (``<url>\t<error>`` lines). A damaged granule (GOES-18 ACHA2KMM1 2025-100 16:09 has a
 #: bad HDF5 metadata checksum) left the HDF5 library unstable: the lane segfaulted minutes
 #: after every attempt at that day, so later passes do not open these files again.
-UNREADABLE_DIR = pathlib.Path(os.environ.get("GOES_L2_UNREADABLE_DIR", "data/goes_l2_unreadable"))
+#: ``GOES_L2_UNREADABLE_DIR`` overrides the default, ``<data_dir>/goes_l2_unreadable``.
+UNREADABLE_DIR: pathlib.Path | None = (
+    pathlib.Path(os.environ["GOES_L2_UNREADABLE_DIR"])
+    if os.environ.get("GOES_L2_UNREADABLE_DIR")
+    else None
+)
 _UNREADABLE_LOCK = threading.Lock()
 #: Sectors archived by default: full disk and CONUS (or PACUS for the west satellites).
 SECTORS = ("F", "C")
@@ -310,7 +315,9 @@ def _add_time_meso(ds):
 
 
 def _unreadable_ledger(product: Product) -> pathlib.Path:
-    return UNREADABLE_DIR / f"{product.name}.txt"
+    """The ledger file of ``product``, under the configured data directory by default."""
+    root = UNREADABLE_DIR or pathlib.Path(get_config().data_dir) / "goes_l2_unreadable"
+    return root / f"{product.name}.txt"
 
 
 def known_unreadable(product: Product) -> set[str]:
@@ -321,7 +328,33 @@ def known_unreadable(product: Product) -> set[str]:
     return {line.split("\t", 1)[0] for line in path.read_text().splitlines() if line.strip()}
 
 
+def _damage(store, key: str) -> str | None:
+    """Download one file and walk every object's attributes with h5py.
+
+    Returns:
+        The error if the file's own bytes are damaged; None if it reads cleanly.
+
+    Raises:
+        Exception: Whatever the download raises. A file that cannot be fetched is not
+            known to be damaged, so its day fails and is retried by a later pass.
+    """
+    import io
+
+    import h5py
+    import obstore
+
+    data = bytes(obstore.get(store, key).bytes())
+    try:
+        with h5py.File(io.BytesIO(data), "r") as f:
+            list(f.attrs.items())
+            f.visititems(lambda _name, obj: list(obj.attrs.items()))
+    except Exception as exc:  # noqa: BLE001 - any HDF5 error means the bytes are bad
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
 def _record_unreadable(product: Product, url: str, error: str) -> None:
+    """Append ``url`` to the product's ledger, so later passes never open it."""
     path = _unreadable_ledger(product)
     with _UNREADABLE_LOCK:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -425,13 +458,19 @@ def open_day(keys: Sequence[str], product: Product):
     # A file whose grid variables differ from the day's majority (an occasional file
     # missing a field) is left out. The rest are split by layout and grid: each the day
     # holds is combined on its own and goes to its own generation, losing no file.
+    # A file that would not open is downloaded and checked with h5py before the day is
+    # combined. Damaged bytes go to the ledger and are never opened again. A file that
+    # reads cleanly failed for some other reason, so it is opened once more and kept if
+    # it opens; a failed download raises, and the day is retried by a later pass.
+    for i, (url, layout, *_) in enumerate(probed):
+        if layout is not None:
+            continue
+        damage = _damage(store, url[len(url_base) + 1 :])
+        if damage is not None:
+            _record_unreadable(product, url, damage)
+        else:
+            probed[i] = probe(url)
     readable = [entry for entry in probed if entry[1] is not None]
-    # Other files of the day opened, so the source was reachable: a file failing twice
-    # is damaged, not caught by a network blip. Record it before combining the rest.
-    if readable:
-        for url, layout, *_ in probed:
-            if layout is None and probe(url)[1] is None:
-                _record_unreadable(product, url, errors[url])
     variables = [frozenset(n for n, *_ in layout) for _, layout, _, _ in readable]
     majority = max(set(variables), key=variables.count)
     groups: dict[tuple, list[str]] = {}
