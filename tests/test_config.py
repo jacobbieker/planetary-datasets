@@ -12,8 +12,6 @@ from planetary_datasets.config import (
 )
 
 
-
-
 def test_defaults_when_nothing_is_set(load_env_config):
     cfg = load_env_config()
     assert cfg.bucket == DEFAULT_BUCKET
@@ -22,7 +20,10 @@ def test_defaults_when_nothing_is_set(load_env_config):
     assert cfg.memory_fraction == 0.8
     assert cfg.endpoint_url is None
     assert cfg.allow_http is False
-    assert cfg.store_path("bkr/dmi/hawaii.icechunk") == f"s3://{DEFAULT_BUCKET}/bkr/dmi/hawaii.icechunk"
+    assert (
+        cfg.store_path("bkr/dmi/hawaii.icechunk")
+        == f"s3://{DEFAULT_BUCKET}/bkr/dmi/hawaii.icechunk"
+    )
 
 
 def test_env_file_is_read(tmp_path):
@@ -95,13 +96,23 @@ def test_custom_endpoint_is_used(load_env_config):
 
 
 def test_path_style_can_be_forced_off(load_env_config):
-    cfg = load_env_config(ICECHUNK_ENDPOINT_URL="https://data.source.coop", ICECHUNK_FORCE_PATH_STYLE="false")
+    cfg = load_env_config(
+        ICECHUNK_ENDPOINT_URL="https://data.source.coop", ICECHUNK_FORCE_PATH_STYLE="false"
+    )
     assert cfg.force_path_style is False
 
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [("1", True), ("true", True), ("YES", True), ("on", True), ("0", False), ("false", False), ("no", False)],
+    [
+        ("1", True),
+        ("true", True),
+        ("YES", True),
+        ("on", True),
+        ("0", False),
+        ("false", False),
+        ("no", False),
+    ],
 )
 def test_bool_env_parsing(load_env_config, raw, expected):
     assert load_env_config(ICECHUNK_ALLOW_HTTP=raw).allow_http is expected
@@ -110,3 +121,17 @@ def test_bool_env_parsing(load_env_config, raw, expected):
 def test_bad_memory_fraction_is_rejected(load_env_config):
     with pytest.raises(ValueError, match="MEMORY_FRACTION"):
         load_env_config(MEMORY_FRACTION="not-a-number")
+
+
+@pytest.mark.parametrize(
+    "prefix", ["bkr/ERR", "bkr/obs/wis2", "bkr/dmi/harmonie.zarr", "bkr/x.icechunk/sub"]
+)
+def test_a_store_prefix_must_end_in_icechunk(prefix, local_config):
+    from planetary_datasets.config import NotAnIcechunkPrefix
+
+    with pytest.raises(NotAnIcechunkPrefix):
+        local_config.icechunk_storage(prefix)
+
+
+def test_a_store_prefix_ending_in_icechunk_opens(local_config):
+    assert local_config.icechunk_repo("bkr/test/store.icechunk/") is not None
