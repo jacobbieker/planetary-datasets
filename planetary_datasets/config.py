@@ -199,8 +199,17 @@ class Config:
         return options
 
     def icechunk_storage(self, prefix: str):
-        """Build an ``icechunk`` storage object for a store prefix."""
+        """Build an ``icechunk`` storage object for a store prefix.
+
+        Raises:
+            NotAnIcechunkPrefix: ``prefix`` does not end in ``.icechunk``. Every store is
+                ``<name>.icechunk``; one opened under any other path (``bkr/ERR``, an empty
+                repository from 2026-10-29) is a bug, and opening creates it.
+        """
         import icechunk
+
+        if not prefix.strip("/").endswith(".icechunk"):
+            raise NotAnIcechunkPrefix(f"store prefix {prefix!r} must end in '.icechunk'")
 
         if self.use_local_store:
             path = self.local_store_path(prefix)
@@ -244,6 +253,10 @@ class Config:
         except icechunk.ConflictError:
             # Another writer created it between this one finding nothing and creating.
             return icechunk.Repository.open(storage, config=config)
+
+
+class NotAnIcechunkPrefix(ValueError):
+    """An Icechunk store prefix that does not end in ``.icechunk``."""
 
 
 def load_config(env_file: str | os.PathLike | None = None, override: bool = False) -> Config:
