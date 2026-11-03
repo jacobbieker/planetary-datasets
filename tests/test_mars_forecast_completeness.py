@@ -1,4 +1,4 @@
-"""Model-level completeness at forecast steps, where MARS archives no geopotential."""
+"""Model-level completeness: MARS archives geopotential only with analyses, CAT only with forecasts."""
 
 import pandas as pd
 
@@ -29,7 +29,7 @@ def _provider(index_rows):
     provider = object.__new__(mi.MARSIcechunkProvider)
     provider._index = pd.DataFrame(index_rows)
     provider._expected_names = {
-        mi.GROUP_ML: {"t", "q", "lnsp", "z"},
+        mi.GROUP_ML: {"t", "q", "lnsp", "z", "cat"},
         mi.GROUP_WAVE: set(),
         mi.GROUP_SPECTRA: set(),
     }
@@ -37,8 +37,8 @@ def _provider(index_rows):
 
 
 def test_a_forecast_step_without_geopotential_is_complete():
-    provider = _provider(_rows(FORECAST, "fc", ["t", "q", "lnsp"]))
-    assert provider.required_names(mi.GROUP_ML, FORECAST) == {"t", "q", "lnsp"}
+    provider = _provider(_rows(FORECAST, "fc", ["t", "q", "lnsp", "cat"]))
+    assert provider.required_names(mi.GROUP_ML, FORECAST) == {"t", "q", "lnsp", "cat"}
     assert provider.ml_is_complete(FORECAST)
 
 
@@ -49,5 +49,17 @@ def test_an_analysis_still_needs_geopotential():
 
 
 def test_a_forecast_step_missing_another_variable_is_still_incomplete():
-    provider = _provider(_rows(FORECAST, "fc", ["t", "lnsp"]))
+    provider = _provider(_rows(FORECAST, "fc", ["t", "lnsp", "cat"]))
+    assert not provider.ml_is_complete(FORECAST)
+
+
+def test_an_analysis_without_clear_air_turbulence_is_complete():
+    provider = _provider(_rows(ANALYSIS, "an", ["t", "q", "lnsp", "z"]))
+    assert provider.required_names(mi.GROUP_ML, ANALYSIS) == {"t", "q", "lnsp", "z"}
+    assert provider.ml_is_complete(ANALYSIS)
+
+
+def test_a_forecast_step_still_needs_clear_air_turbulence():
+    provider = _provider(_rows(FORECAST, "fc", ["t", "q", "lnsp"]))
+    assert "cat" in provider.required_names(mi.GROUP_ML, FORECAST)
     assert not provider.ml_is_complete(FORECAST)

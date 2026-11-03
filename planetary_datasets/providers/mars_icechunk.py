@@ -234,6 +234,11 @@ ML_SURFACE_SHORT_NAMES = frozenset({"z", "lnsp"})
 #: timestep without it is complete rather than truncated.
 ML_ANALYSIS_ONLY_SHORT_NAMES = frozenset({"z"})
 
+#: Archived only with the forecasts: clear-air turbulence is a forecast diagnostic and
+#: no model-level analysis carries it (none of the analysis GRIBs on the box, 2026-09-05
+#: to 09-16, did), so an analysis timestep without it is complete rather than truncated.
+ML_FORECAST_ONLY_SHORT_NAMES = frozenset({"cat"})
+
 #: float32 carries 23 explicit mantissa bits, so keeping 23 or more is a no-op.
 #: Variables set to this get no BitRound filter at all and are stored exactly.
 LOSSLESS_KEEPBITS = 23
@@ -1249,15 +1254,20 @@ class MARSIcechunkProvider(BaseProvider):
         """The variable names `it` must carry for ``group`` to count as complete.
 
         :meth:`expected_names`, less :data:`ML_ANALYSIS_ONLY_SHORT_NAMES` at a
-        timestep the index offers no model-level analysis for. Requiring them there
-        left every forecast-hour timestep unflagged, so its GRIB was never deleted.
+        timestep the index offers no model-level analysis for, and less
+        :data:`ML_FORECAST_ONLY_SHORT_NAMES` at one it offers no model-level forecast
+        for. Requiring them there left those timesteps unflagged, so their GRIBs were
+        never deleted.
         """
         names = self.expected_names(group)
         if group != GROUP_ML:
             return names
         rows = self.select(GROUP_ML, it)
-        if rows.empty or not (rows["data_type"] == "an").any():
-            return names - ML_ANALYSIS_ONLY_SHORT_NAMES
+        types = set() if rows.empty else set(rows["data_type"])
+        if "an" not in types:
+            names = names - ML_ANALYSIS_ONLY_SHORT_NAMES
+        if "fc" not in types:
+            names = names - ML_FORECAST_ONLY_SHORT_NAMES
         return names
 
     def variables(self) -> dict[str, List[str]]:
