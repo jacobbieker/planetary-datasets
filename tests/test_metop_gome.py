@@ -44,4 +44,5 @@ def test_per_product_fields_run_along_time_however_many_products_an_hour_has(
     ds = gome.process(natives, pd.Timestamp("2024-02-29T04:00"))
     assert ds["orbit_index"].dims == ("time",)
     assert ds.sizes["time"] == 3 * len(natives)
-    assert list(np.unique(ds["orbit_index"].values)) == list(range(1, len(natives) + 1))
+    expected = np.repeat(np.arange(1, len(natives) + 1), 3)
+    np.testing.assert_array_equal(ds["orbit_index"].values, expected)
