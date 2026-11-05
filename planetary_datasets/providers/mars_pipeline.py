@@ -162,6 +162,7 @@ def tape_unavailable(messages: Iterable[str]) -> bool:
     """Whether MARS refused a request because the tape holding its data is unavailable."""
     return any("AccessError" in m and "tape" in m and "unavailable" in m for m in messages)
 
+
 #: Ocean wave analysis parameters (GRIB codes, table 140)
 WAVE_PARAMS = (
     "98.140/99.140/100.140/101.140/102.140/103.140/104.140/105.140/112.140/113.140/"
@@ -338,13 +339,23 @@ def _chunked(
 
     With `init_time` and `base_stream` given, each request's stream is resolved
     from its own dates by `forecast_stream`, since which stream holds a 06/18
-    UTC forecast changed at `SHORT_CUTOFF_RETIRED`. A request whose days
-    straddle that change would need two streams at once and is rejected rather
-    than silently retrieved from the wrong one.
+    UTC forecast changed at `SHORT_CUTOFF_RETIRED`. The days are split at that
+    change before chunking, so no request needs two streams at once.
     """
     jobs = []
-    for i in range(0, len(days), days_per_request):
-        chunk = days[i : i + days_per_request]
+    # Requests never span the stream change: the days are split there first, then
+    # chunked, so a range that crosses it becomes two requests, one per stream.
+    segments = [days]
+    if init_time is not None and len(days):
+        streams = [forecast_stream(init_time, base_stream, d) for d in days]
+        cuts = [0] + [i for i in range(1, len(days)) if streams[i] != streams[i - 1]]
+        segments = [days[a:b] for a, b in zip(cuts, cuts[1:] + [len(days)])]
+    chunks = [
+        segment[i : i + days_per_request]
+        for segment in segments
+        for i in range(0, len(segment), days_per_request)
+    ]
+    for chunk in chunks:
         if init_time is not None:
             first = forecast_stream(init_time, base_stream, chunk[0])
             last = forecast_stream(init_time, base_stream, chunk[-1])
@@ -644,9 +655,7 @@ class FlagBook:
         """Names of the stores still lacking `group` at `it`, for logging."""
         with self._lock:
             return [
-                name
-                for name, flags in self._flags.items()
-                if not bool(flags[group].get(it, False))
+                name for name, flags in self._flags.items() if not bool(flags[group].get(it, False))
             ]
 
     def all_done(self, pairs: Iterable[tuple[str, pd.Timestamp]]) -> bool:
@@ -680,9 +689,7 @@ def _worker_state(cfg: dict) -> dict:
         # Config (a test's, or one Dagster supplied) must have its workers
         # write to the same stores `_check_stores` validated, not to the
         # ambient ICECHUNK_BUCKET.
-        config = dataclasses.replace(
-            cfg["config"], memory_ceiling_gb=cfg["memory_ceiling_gb"]
-        )
+        config = dataclasses.replace(cfg["config"], memory_ceiling_gb=cfg["memory_ceiling_gb"])
         native = build_provider(
             source_dir=cfg["source_dir"],
             store_prefix=cfg["store_prefix"],
@@ -796,9 +803,9 @@ class MarsPipeline:
         # Resolved, because the index keys on the path string: the provider
         # records resolved paths, and a relative --source-dir would otherwise
         # make every file on disk look unindexed.
-        self.source_dir = pathlib.Path(
-            source_dir or default_source_dir(self.config)
-        ).expanduser().resolve()
+        self.source_dir = (
+            pathlib.Path(source_dir or default_source_dir(self.config)).expanduser().resolve()
+        )
         # With no range given, cover exactly what is on disk.
         span = dates_on_disk(self.source_dir)
         if (start is None or end is None) and span is None:
@@ -888,8 +895,7 @@ class MarsPipeline:
             f"downloads:   {'on' if self.download else 'off'} "
             f"({self.download_threads} thread(s), "
             f"pausing below {self.min_free_bytes / GB:.0f}GB free)",
-            f"ingest:      {self.ingest_workers} worker(s), "
-            f"{self.memory_ceiling_gb:.1f} GB each",
+            f"ingest:      {self.ingest_workers} worker(s), {self.memory_ceiling_gb:.1f} GB each",
             f"keep:        {self.keep_bytes / TB:.2f}TB of GRIB on disk",
             f"retrievals:  {len(self.jobs)} planned",
         ]
@@ -900,7 +906,9 @@ class MarsPipeline:
 
     def _load_index(self) -> None:
         path = self.native.index_path
-        self.cache = pd.read_parquet(path) if path.exists() else pd.DataFrame(columns=mi._INDEX_COLUMNS)
+        self.cache = (
+            pd.read_parquet(path) if path.exists() else pd.DataFrame(columns=mi._INDEX_COLUMNS)
+        )
         self._prune_index()
         self._reindex()
 

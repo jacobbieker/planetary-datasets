@@ -33,3 +33,16 @@ def test_only_string_variables_against_string_arrays_are_converted():
     out = match_string_dtypes(incoming, existing)
     assert out["s"].dtype == object and out["n"].dtype == np.float64
     assert match_string_dtypes(incoming, xr.Dataset())["s"].dtype.kind == "U"
+
+
+def test_a_narrower_fixed_width_string_is_widened_to_the_stored_width():
+    import numpy as np
+    import xarray as xr
+
+    from planetary_datasets.common.store import match_string_dtypes
+
+    existing = xr.Dataset({"platform_name": ("t", np.array(["NOAA-20xx"], dtype="<U9"))})
+    narrower = xr.Dataset({"platform_name": ("t", np.array(["NOAA-21"], dtype="<U7"))})
+    wider = xr.Dataset({"platform_name": ("t", np.array(["NOAA-2000000"], dtype="<U12"))})
+    assert match_string_dtypes(narrower, existing)["platform_name"].dtype == np.dtype("<U9")
+    assert match_string_dtypes(wider, existing)["platform_name"].dtype == np.dtype("<U12")
