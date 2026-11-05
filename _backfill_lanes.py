@@ -555,6 +555,18 @@ os.execv(sys.argv[2], sys.argv[2:])
 """
 
 
+#: A lane with a recent window plans its pass again after this long, so the newest
+#: partitions are written within hours rather than after a weeks-long backlog pass.
+REPLAN_SECONDS = 3 * 3600
+
+
+def should_replan(lane: "Lane", began: float, now: float | None = None) -> bool:
+    """Whether a pass of ``lane`` begun at ``began`` should stop and be planned again."""
+    if not lane.recent_days:
+        return False
+    return ((time.time() if now is None else now) - began) > REPLAN_SECONDS
+
+
 def pause_lightly(seconds: float, argv: list[str] | None = None) -> None:
     """Wait ``seconds`` before the next pass without holding this pass's memory.
 
@@ -637,7 +649,14 @@ def main(argv) -> int:
             root = provider.archive_root.expanduser().resolve()
             root.mkdir(parents=True, exist_ok=True)
 
+        replan = False
         for offset in range(0, len(todo), batch_size):
+            if should_replan(lane, began):
+                # The recent window only goes first when a pass is planned; a backlog pass
+                # runs for weeks, so it is cut short and planned again.
+                print(f"re-planning: {REPLAN_SECONDS / 3600:.0f} h into a backlog pass", flush=True)
+                replan = True
+                break
             batch = todo[offset : offset + batch_size]
             staged = [True] * len(batch)
             if stager:
@@ -689,6 +708,8 @@ def main(argv) -> int:
         )
         if args.once:
             return 1 if failed else 0
+        if replan:
+            continue
         pause_lightly(args.pause)
 
 
