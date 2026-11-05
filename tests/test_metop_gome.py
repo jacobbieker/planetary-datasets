@@ -24,6 +24,7 @@ def gome_product(start: str, rows: int = 3, orbit: int = 7) -> xr.Dataset:
 
 @pytest.fixture
 def gome(monkeypatch):
+    """A provider whose harp reads two products, one per orbit."""
     products = {
         "a.nat": gome_product("2024-02-29T04:00:00", orbit=1),
         "b.nat": gome_product("2024-02-29T04:10:00", orbit=2),
@@ -38,6 +39,7 @@ def gome(monkeypatch):
 def test_per_product_fields_run_along_time_however_many_products_an_hour_has(
     gome, monkeypatch, natives
 ):
+    """The store holds ``orbit_index`` per row, so a lone product must not leave it scalar."""
     monkeypatch.setattr(gome, "iter_natives", lambda *a, **k: iter(natives))
     ds = gome.process(natives, pd.Timestamp("2024-02-29T04:00"))
     assert ds["orbit_index"].dims == ("time",)
