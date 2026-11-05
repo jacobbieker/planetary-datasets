@@ -109,7 +109,8 @@ def test_a_radar_profile_keeps_heights_winds_and_both_qualities():
     assert header["mean_frequency"] == 5.6e9
     assert header["bulletin_heading"] == "IUPA41LPMG050157"
     assert levels["height"][:2].tolist() == [750.0, 1250.0]
-    assert levels["wind_direction"][0] == 336 and levels["wind_speed"][0] == 4.1
+    assert levels["wind_direction"][0] == 336
+    assert levels["wind_speed"][0] == 4.1
     assert levels["upward_air_velocity"][0] == -1.41
     # 0 33 002 after the wind speed is the horizontal wind's, after w the vertical's.
     assert levels["wind_quality"][:2].tolist() == [0, 0]
@@ -120,9 +121,12 @@ def test_a_radar_profile_keeps_heights_winds_and_both_qualities():
 def test_a_profiler_with_associated_quality_fields_and_averaging_period():
     (profile,) = decode(EGRR)
     header, levels = profile.header, profile.levels
-    assert header["station_id"] == "07625" and header["data_category"] == 2
-    assert header["time_significance"] == 2 and header["time_period"] == -22 * 60
-    assert header["range_gate_length"] == 187.0 and header["beamwidth"] == 8.5
+    assert header["station_id"] == "07625"
+    assert header["data_category"] == 2
+    assert header["time_significance"] == 2
+    assert header["time_period"] == -22 * 60
+    assert header["range_gate_length"] == 187.0
+    assert header["beamwidth"] == 8.5
     assert header["data_sub_category"] is None  # BUFR edition 3
     assert header["local_data_sub_category"] == 1
     assert np.isfinite(levels["signal_to_noise_ratio"]).all()
@@ -133,7 +137,8 @@ def test_a_profiler_with_associated_quality_fields_and_averaging_period():
 def test_windas_bulletins_hold_ten_minute_profiles_of_three_stations():
     profiles = decode(WINDAS_DWD)
     stations = Counter(p.header["station_id"] for p in profiles)
-    assert len(stations) == 3 and set(stations.values()) == {6}
+    assert len(stations) == 3
+    assert set(stations.values()) == {6}
     first = profiles[0]
     assert first.header["time_period"] == -600
     assert np.isfinite(first.levels["height_above_station"]).all()
@@ -148,7 +153,8 @@ def test_windas_bulletins_hold_ten_minute_profiles_of_three_stations():
 
 def test_the_pilot_template_profiler_reads_as_a_profile():
     (profile,) = decode(VHHH)
-    assert profile.header["station_id"] == "45004" and profile.header["data_category"] == 2
+    assert profile.header["station_id"] == "45004"
+    assert profile.header["data_category"] == 2
     assert np.isfinite(profile.levels["geopotential_height"]).all()
     assert np.isnan(profile.levels["height"]).all()
     assert np.isfinite(profile.levels["wind_speed"]).any()
@@ -156,7 +162,8 @@ def test_the_pilot_template_profiler_reads_as_a_profile():
 
 def test_empty_bulletins_and_unprefixed_names():
     counts = Counter()
-    assert decode(EMPTY_EGRR, counts) == [] and decode(EMPTY_EDZW, counts) == []
+    assert decode(EMPTY_EGRR, counts) == []
+    assert decode(EMPTY_EDZW, counts) == []
     assert counts["no_levels"] == 2
     (profile,) = decode(ENMI)
     assert profile.header["bulletin_heading"] == "IUPD40ENMI050706"
@@ -168,7 +175,8 @@ def test_garbage_never_raises():
     counts = Counter()
     assert wp.decode_object("x", b"BUFR\x00\x00\x30\x04" + b"\xff" * 40, None, counts) == []
     assert wp.decode_object("y", b"not bufr", None, counts) == []
-    assert counts["not_bufr"] == 1 and counts["messages"] == 1
+    assert counts["not_bufr"] == 1
+    assert counts["messages"] == 1
 
 
 def test_relayed_copies_collapse_to_one():
@@ -176,7 +184,8 @@ def test_relayed_copies_collapse_to_one():
     copies = [p for key in (LFPW_DWD, LFPW_JMA, AMMC_DWD, AMMC_JMA) for p in decode(key)]
     windas = decode(WINDAS_DWD) + decode(WINDAS_JMA)
     kept = wp.deduplicate(copies + windas, set(), counts)
-    assert len(kept) == 2 + 18 and counts["duplicate"] == 2 + 18
+    assert len(kept) == 2 + 18
+    assert counts["duplicate"] == 2 + 18
     stored = {p.identity for p in decode(LFPW_DWD)}
     assert wp.deduplicate(decode(LFPW_JMA), stored, counts) == []
     assert counts["already_stored"] == 1
@@ -218,19 +227,23 @@ def test_the_group_is_ragged_lossless_and_written_once_per_window(local_config):
 
     repo = local_config.icechunk_repo(ua.STORE_PREFIX)
     raw = zarr.open_group(repo.readonly_session("main").store, path=wp.GROUP, mode="r")
-    assert raw["wind_quality"].dtype.kind == "i" and raw["wind_quality"].attrs["_FillValue"] == -1
+    assert raw["wind_quality"].dtype.kind == "i"
+    assert raw["wind_quality"].attrs["_FillValue"] == -1
     # The soundings at the root are as before.
     root = stored(local_config)
-    assert root.sizes["sounding"] == 1 and "profile" not in root.sizes
+    assert root.sizes["sounding"] == 1
+    assert "profile" not in root.sizes
 
     from planetary_datasets.common.multidim import ledger
 
-    assert PARTITION in ledger(repo) and PARTITION in ledger(repo, group=wp.GROUP)
+    assert PARTITION in ledger(repo)
+    assert PARTITION in ledger(repo, group=wp.GROUP)
 
     # The same window again: both groups decline their objects and nothing is written.
     again = _run(local_config, (*ALL, TEMP))
     assert again["objects"] == 0
-    assert again["soundings"] == 0 and again["profiles"] == 0
+    assert again["soundings"] == 0
+    assert again["profiles"] == 0
     assert stored(local_config, wp.GROUP).sizes["profile"] == summary["profiles"]
     assert stored(local_config).sizes["sounding"] == 1
     # ...and without prepare(), the ledgers still stop a second write.
@@ -239,7 +252,8 @@ def test_the_group_is_ragged_lossless_and_written_once_per_window(local_config):
     assert unprepared["profiler_window_already_written"] == 1
     # A later window carrying the same bulletins: nothing new, but ledgered.
     later = _run(local_config, (LFPW_JMA, WINDAS_JMA), partition="wis2_20261106T0000Z")
-    assert later["profiles"] == 0 and later["profiler_already_stored"] == 1 + 18
+    assert later["profiles"] == 0
+    assert later["profiler_already_stored"] == 1 + 18
     assert "wis2_20261106T0000Z" in ledger(repo, group=wp.GROUP)
 
 
@@ -252,9 +266,11 @@ def test_a_window_already_written_for_soundings_still_gets_its_profiles(local_co
 
     target = ua.UpperAirTarget(local_config)
     target.prepare(PARTITION)
-    assert not target.wants(TEMP, 0) and target.wants(LFPW_DWD, 0)
+    assert not target.wants(TEMP, 0)
+    assert target.wants(LFPW_DWD, 0)
     summary = _run(local_config, (*ALL, TEMP))
-    assert summary["window_already_written"] == 1 and summary["soundings"] == 0
+    assert summary["window_already_written"] == 1
+    assert summary["soundings"] == 0
     assert summary["profiles"] == 25
     after = stored(local_config)
     xr.testing.assert_identical(before.load(), after.load())

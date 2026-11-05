@@ -340,10 +340,10 @@ class Profile:
 
     def fingerprint(self) -> str:
         """A short hash of every float level column."""
-        digest = hashlib.sha1()
+        digest = hashlib.blake2b(digest_size=8)
         for name in FLOAT_LEVELS:
             digest.update(np.nan_to_num(self.levels[name], nan=-1e9).astype("<f8").tobytes())
-        return digest.hexdigest()[:16]
+        return digest.hexdigest()
 
     @property
     def identity(self) -> str:
@@ -398,35 +398,36 @@ class _Walker:
         self.station, self.header, self.replicated, self.last = {}, {}, False, ""
 
     def take(self, name: str, value) -> None:
+        """Take one data element, in message order."""
         if name in REPLICATION_KEYS:
             self.replicated = True
-            return
-        if "->" in name:
+        elif "->" in name:
             self._associated(name, value)
-            return
-        if name in TIME_KEYS or name in ("timePeriod", "timeSignificance"):
-            if self.rows:
-                if name != "year":
-                    return  # a per-level time in a template this walker does not expect
-                self.close()
-                self.header = dict(self.station)
-            self.header[name] = value
-            return
-        if name in LEVEL_START and self.replicated:
+        elif name in TIME_KEYS or name in ("timePeriod", "timeSignificance"):
+            self._time(name, value)
+        elif self.rows and name in (*LEVEL_KEYS, "qualityInformation"):
+            self._level(name, value)
+        elif name in LEVEL_START and self.replicated:
             self.rows.append({LEVEL_START[name]: value})
             self.last = name
-            return
-        if self.rows and name in LEVEL_KEYS:
-            self.rows[-1].setdefault(LEVEL_KEYS[name], value)
-            self.last = name
-            return
-        if self.rows and name == "qualityInformation":
-            column = "wind_quality" if self.last in HORIZONTAL else "vertical_wind_quality"
-            self.rows[-1].setdefault(column, value)
-            return
-        if not self.rows and (name in HEADER_KEYS or name in STATION_KEYS):
+        elif not self.rows and (name in HEADER_KEYS or name in STATION_KEYS):
             self.header.setdefault(name, value)
             self.station.setdefault(name, value)
+
+    def _time(self, name: str, value) -> None:
+        if self.rows:
+            if name != "year":
+                return  # a per-level time in a template this walker does not expect
+            self.close()
+            self.header = dict(self.station)
+        self.header[name] = value
+
+    def _level(self, name: str, value) -> None:
+        if name == "qualityInformation":
+            column = "wind_quality" if self.last in HORIZONTAL else "vertical_wind_quality"
+        else:
+            column, self.last = LEVEL_KEYS[name], name
+        self.rows[-1].setdefault(column, value)
 
     def _associated(self, name: str, value) -> None:
         if not self.rows:
@@ -461,21 +462,24 @@ def _time(header: dict) -> np.datetime64 | None:
         return None
 
 
-def _profile(raw: dict, rows: list[dict]) -> Profile:
-    """A profile from the walker's raw header (ecCodes names) and level rows."""
+def _identifiers(raw: dict) -> tuple[str, str]:
+    """The WMO (IIiii) and WIGOS station identifiers, "" where absent."""
     block, station = raw.get("blockNumber"), raw.get("stationNumber")
     wmo = f"{int(block):02d}{int(station):03d}" if block is not None and station is not None else ""
-    wigos = ""
-    if raw.get("wigosIdentifierSeries") is not None:
-        wigos = "-".join(
-            str(v)
-            for v in (
-                _integer(raw["wigosIdentifierSeries"]),
-                _integer(raw.get("wigosIssuerOfIdentifier")),
-                _integer(raw.get("wigosIssueNumber")),
-                raw.get("wigosLocalIdentifierCharacter") or "",
-            )
-        )
+    if raw.get("wigosIdentifierSeries") is None:
+        return wmo, ""
+    parts = (
+        _integer(raw["wigosIdentifierSeries"]),
+        _integer(raw.get("wigosIssuerOfIdentifier")),
+        _integer(raw.get("wigosIssueNumber")),
+        raw.get("wigosLocalIdentifierCharacter") or "",
+    )
+    return wmo, "-".join(str(v) for v in parts)
+
+
+def _header(raw: dict) -> dict:
+    """Profile variables from the walker's raw header (ecCodes names) and the base."""
+    wmo, wigos = _identifiers(raw)
     header = {k: v for k, v in raw.items() if k in PROFILE_KINDS}
     header.update(
         {
@@ -487,20 +491,25 @@ def _profile(raw: dict, rows: list[dict]) -> Profile:
         }
     )
     for key, name in HEADER_KEYS.items():
-        if raw.get(key) is not None and header.get(name) is None:
-            value = raw[key]
+        value = raw.get(key)
+        if value is not None and header.get(name) is None:
             header[name] = value.strip() if isinstance(value, str) else value
     for name, kind in PROFILE_KINDS.items():
         if kind == "float" and header.get(name) is not None:
             header[name] = _round(header[name], name)
     header["station_id"] = _station_id(header)
+    return header
+
+
+def _profile(raw: dict, rows: list[dict]) -> Profile:
+    """A profile from the walker's raw header and level rows."""
     levels = {}
     for name in FLOAT_LEVELS:
         column = np.array([np.nan if r.get(name) is None else r[name] for r in rows], "float64")
         levels[name] = np.round(column, PLACES[name])
     for name in INT_LEVELS:
         levels[name] = np.array([-1 if r.get(name) is None else int(r[name]) for r in rows])
-    return Profile(header, levels)
+    return Profile(_header(raw), levels)
 
 
 #: Seconds in the units ecCodes gives a time period (0 04 024, 0 04 025, 0 04 026) in.
@@ -687,6 +696,35 @@ def deduplicate(profiles: Iterable[Profile], stored: set[str], counts: Counter) 
     return keep
 
 
+def _profile_columns(profiles: Sequence[Profile]) -> dict[str, tuple]:
+    data = {}
+    for name, kind in PROFILE_KINDS.items():
+        values = [p.identity if name == "profile_id" else p.header.get(name) for p in profiles]
+        attrs = dict(PROFILE_ATTRS[name])
+        column = ua._column(values, kind, fill=attrs.get("_FillValue", -1))
+        if kind == "float":
+            column = ua.narrow(column, PLACES[name])
+            attrs["decimal_places"] = PLACES[name]
+        elif kind == "int":
+            attrs.setdefault("_FillValue", -1)
+        data[name] = ("profile", column, attrs)
+    return data
+
+
+def _level_columns(profiles: Sequence[Profile]) -> dict[str, tuple]:
+    data = {}
+    for name in (*FLOAT_LEVELS, *INT_LEVELS):
+        attrs = dict(LEVEL_ATTRS[name])
+        dtype = "int32" if name in INT_LEVELS else "float64"
+        values = np.concatenate([p.levels[name] for p in profiles] or [np.array([])])
+        values = values.astype(dtype)
+        if name in FLOAT_LEVELS:
+            values = ua.narrow(values, PLACES[name])
+            attrs["decimal_places"] = PLACES[name]
+        data[name] = ("profile_level", values, attrs)
+    return data
+
+
 def to_dataset(profiles: Sequence[Profile], first_profile: int, first_level: int) -> xr.Dataset:
     """Profiles as rows of ``profile`` and their levels as rows of ``profile_level``.
 
@@ -695,37 +733,20 @@ def to_dataset(profiles: Sequence[Profile], first_profile: int, first_level: int
     """
     counts = np.array([p.level_count for p in profiles], dtype="int64")
     starts = first_level + np.concatenate([[0], np.cumsum(counts)[:-1]]).astype("int64")
-    data: dict[str, tuple] = {}
-    for name, kind in PROFILE_KINDS.items():
-        values = [p.identity if name == "profile_id" else p.header.get(name) for p in profiles]
-        attrs = dict(PROFILE_ATTRS[name])
-        fill = attrs.get("_FillValue", -1)
-        column = ua._column(values, kind, fill=fill)
-        if kind == "float":
-            column = ua.narrow(column, PLACES[name])
-            attrs["decimal_places"] = PLACES[name]
-        elif kind == "int":
-            attrs.setdefault("_FillValue", -1)
-        data[name] = ("profile", column, attrs)
-    data["first_level"] = ("profile", starts, dict(PROFILE_ATTRS["first_level"]))
-    data["level_count"] = (
-        "profile",
-        counts.astype("int32"),
-        dict(PROFILE_ATTRS["level_count"]),
-    )
     index = np.repeat(np.arange(len(profiles), dtype="int64") + first_profile, counts)
-    data["profile_index"] = ("profile_level", index, dict(LEVEL_ATTRS["profile_index"]))
-    for name in (*FLOAT_LEVELS, *INT_LEVELS):
-        parts = [p.levels[name] for p in profiles]
-        attrs = dict(LEVEL_ATTRS[name])
-        if name in INT_LEVELS:
-            values = np.concatenate(parts).astype("int32") if parts else np.array([], "int32")
-        else:
-            values = np.concatenate(parts).astype("float64") if parts else np.array([])
-            values = ua.narrow(values, PLACES[name])
-            attrs["decimal_places"] = PLACES[name]
-        data[name] = ("profile_level", values, attrs)
-    ds = xr.Dataset(data)
+    ds = xr.Dataset(
+        {
+            **_profile_columns(profiles),
+            "first_level": ("profile", starts, dict(PROFILE_ATTRS["first_level"])),
+            "level_count": (
+                "profile",
+                counts.astype("int32"),
+                dict(PROFILE_ATTRS["level_count"]),
+            ),
+            "profile_index": ("profile_level", index, dict(LEVEL_ATTRS["profile_index"])),
+            **_level_columns(profiles),
+        }
+    )
     ds.attrs = {
         "title": "Wind profiler and radar wind profiles from the WMO WIS2 Global Cache",
         "source": "s3://wis2globalcache GTS IUP* bulletins (BUFR categories 2 and 6), "
