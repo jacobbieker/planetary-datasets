@@ -360,6 +360,7 @@ class Profile:
 
 
 def _station_id(header: dict) -> str:
+    """The best station identifier: WMO, else WIGOS, else name, else position."""
     return (
         header.get("wmo_station_id")
         or header.get("wigos_station_id")
@@ -380,6 +381,7 @@ class _Walker:
     """
 
     def __init__(self, base: dict):
+        """Start a message whose profiles share ``base`` (source and BUFR header)."""
         self.base = base
         self.profiles: list[Profile] = []
         self.station: dict = {}
@@ -389,11 +391,13 @@ class _Walker:
         self.last = ""
 
     def close(self) -> None:
+        """End the current profile, keeping it if it has levels."""
         if self.rows:
             self.profiles.append(_profile({**self.base, **self.header}, self.rows))
         self.rows = []
 
     def new_subset(self) -> None:
+        """End the current profile and forget the station: a new subset begins."""
         self.close()
         self.station, self.header, self.replicated, self.last = {}, {}, False, ""
 
@@ -415,6 +419,7 @@ class _Walker:
             self.station.setdefault(name, value)
 
     def _time(self, name: str, value) -> None:
+        """A date/time element: a new profile when it follows levels."""
         if self.rows:
             if name != "year":
                 return  # a per-level time in a template this walker does not expect
@@ -423,6 +428,7 @@ class _Walker:
         self.header[name] = value
 
     def _level(self, name: str, value) -> None:
+        """A measured value or quality flag of the current level."""
         if name == "qualityInformation":
             column = "wind_quality" if self.last in HORIZONTAL else "vertical_wind_quality"
         else:
@@ -430,6 +436,7 @@ class _Walker:
         self.rows[-1].setdefault(column, value)
 
     def _associated(self, name: str, value) -> None:
+        """An associated field (quality) on wind direction or ``w``, or its significance."""
         if not self.rows:
             return
         element, _, rest = name.partition("->")
@@ -443,14 +450,17 @@ class _Walker:
 
 
 def _round(value, name: str):
+    """``value`` rounded to the decimal places of ``name``; None stays None."""
     return None if value is None else round(float(value), PLACES[name])
 
 
 def _integer(value) -> int | None:
+    """``value`` as an int; None stays None."""
     return None if value is None else int(value)
 
 
 def _time(header: dict) -> np.datetime64 | None:
+    """The observation time from the date/time elements; None if incomplete."""
     parts = [header.get(k) for k in TIME_KEYS[:5]]
     if any(p is None for p in parts):
         return None
@@ -533,6 +543,7 @@ def _seconds(handle, name: str) -> int | None:
 
 
 def _walk(handle, base: dict) -> list[Profile]:
+    """Every profile of an unpacked message, walking its data elements in order."""
     import eccodes
 
     from planetary_datasets.providers.observations.wis2_targets import _get
@@ -697,6 +708,7 @@ def deduplicate(profiles: Iterable[Profile], stored: set[str], counts: Counter) 
 
 
 def _profile_columns(profiles: Sequence[Profile]) -> dict[str, tuple]:
+    """The variables along ``profile``."""
     data = {}
     for name, kind in PROFILE_KINDS.items():
         values = [p.identity if name == "profile_id" else p.header.get(name) for p in profiles]
@@ -712,6 +724,7 @@ def _profile_columns(profiles: Sequence[Profile]) -> dict[str, tuple]:
 
 
 def _level_columns(profiles: Sequence[Profile]) -> dict[str, tuple]:
+    """The variables along ``profile_level``."""
     data = {}
     for name in (*FLOAT_LEVELS, *INT_LEVELS):
         attrs = dict(LEVEL_ATTRS[name])

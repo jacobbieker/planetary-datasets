@@ -591,6 +591,7 @@ class UpperAirTarget(QueuedTarget):
     store_prefix = STORE_PREFIX
 
     def __init__(self, config: Config | None = None):
+        """A target writing with ``config`` (the process-wide one by default)."""
         super().__init__(config or get_config())
         self.counts: Counter = Counter()
         self.soundings: list[Sounding] = []
