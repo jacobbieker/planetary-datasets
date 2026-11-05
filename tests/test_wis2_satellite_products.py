@@ -228,11 +228,13 @@ SPACE = "data/int-eumetsat/data/core/weather/space-based-observations"
     ],
 )
 def test_objects_are_routed_by_file_name_and_originator(path, group):
+    """Topic products are picked by file name, shared GTS headings by originator."""
     product = sp.product_for(path)
     assert (product.group if product else None) == group
 
 
 def test_the_asr_groups_keep_every_channel_and_category():
+    """FCI and SEVIRI ASR keep all 11 channels and every brightness temperature."""
     _, fci, _ = sat.decode_object(key("asr_fci_gts_iuf"), body("asr_fci_gts_iuf"), ARRIVED)
     _, seviri, _ = sat.decode_object(key("asr_seviri_gts_ixf"), body("asr_seviri_gts_ixf"), ARRIVED)
     assert set(fci["satellite_identifier"].tolist()) == {71}, "Meteosat-12 (MTG-I1)"
@@ -245,6 +247,7 @@ def test_the_asr_groups_keep_every_channel_and_category():
 
 
 def test_new_groups_are_backfilled_into_a_window_the_others_hold(local_config):
+    """A re-run over a written window writes the new groups once, deduplicated."""
     window = "wis2_20261105T1200Z"
     first = sat.SatelliteTarget(local_config, workers=1)
     for name in ("amv_avhrr", "altimetry_sral"):
