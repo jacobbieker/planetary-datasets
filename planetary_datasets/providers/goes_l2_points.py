@@ -460,8 +460,14 @@ def _generation_name(group: str, partition: str) -> str:
 
 
 def _target(repo: icechunk.Repository, group: str, partition: str, parsed: list) -> tuple:
-    """The generation ``parsed`` is packed like (or a new one) and the dataset for it."""
-    for name in generations_of(repo, group):
+    """The generation ``parsed`` is packed like (or a new one) and the dataset for it.
+
+    Raises:
+        PackingChanged: A new generation is needed but one of its name already exists,
+            packed differently; writing into it would mix packings.
+    """
+    generations = generations_of(repo, group)
+    for name in generations:
         ds = combine(parsed, stored_files(repo, name))
         try:
             check_packing(ds, stored_packing(repo, name), name)
@@ -470,8 +476,37 @@ def _target(repo: icechunk.Repository, group: str, partition: str, parsed: list)
             continue
         return name, ds
     name = _generation_name(group, partition)
+    if name in generations:
+        raise PackingChanged(f"{name}: needed for {partition}, but exists packed differently")
     logger.info(f"{group}: {partition} starts a new packing generation, {name}")
     return name, combine(parsed, stored_files(repo, name))
+
+
+def packing_runs(parsed: Sequence[dict]) -> list[list[dict]]:
+    """``parsed`` (in file order) cut wherever a variable's packing changes.
+
+    NOAA occasionally repacks a product partway through a partition (GOES-17 GLM on
+    2018-11-19 and 2019-10-02, among others); :func:`combine` refuses such a mix, so
+    each run of files packed alike is written on its own.
+    """
+    runs: list[list[dict]] = []
+    first: dict[str, dict] = {}
+    for result in parsed:
+        clash = any(
+            name in first and not all(_agrees(k, attrs.get(k), first[name].get(k)) for k in PACKING)
+            for name, (_, _, attrs) in result.items()
+        )
+        if clash or not runs:
+            runs.append([])
+            first = {}
+        runs[-1].append(result)
+        for name, (_, _, attrs) in result.items():
+            reference = first.setdefault(name, attrs)
+            # As combine does: the first units stated hold for the run, so a later file
+            # stating other units starts a new one.
+            if reference.get("units") is None and attrs.get("units") is not None:
+                first[name] = {**reference, "units": attrs["units"]}
+    return runs
 
 
 def write_partition(
@@ -493,9 +528,20 @@ def write_partition(
     if not parsed:
         multidim.mark_written(repo, partition, label=group, group=group)
         return 0
-    target, ds = _target(repo, group, partition, parsed)
-    fixed = [d for d in ds.dims if d != FILE_DIM and d not in RAGGED.values()]
-    multidim.append_partition(repo, ds, partition, fixed_dims=fixed, label=target, group=target)
+    runs = packing_runs(parsed)
+    done: set[str] = set()
+    if len(runs) > 1:
+        logger.info(f"{group}: {partition} changes packing within it; writing {len(runs)} runs")
+        done = written_partitions(repo, group)
+    # The partition is ledgered by its last run, so one interrupted between runs is
+    # written again from the first run not yet in, under ``<partition>#<n>``.
+    for number, run in enumerate(runs, 1):
+        label = partition if number == len(runs) else f"{partition}#{number}"
+        if label in done:
+            continue
+        target, ds = _target(repo, group, partition, run)
+        fixed = [d for d in ds.dims if d != FILE_DIM and d not in RAGGED.values()]
+        multidim.append_partition(repo, ds, label, fixed_dims=fixed, label=target, group=target)
     return len(parsed)
 
 
