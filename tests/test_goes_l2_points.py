@@ -206,6 +206,54 @@ def test_a_changed_packing_starts_a_generation_instead_of_mixing(archive, local_
     assert gp.written_partitions(repo, "glm_lcfa") >= {f"{DAY}T06", f"{DAY}T12", f"{DAY}T18"}
 
 
+def test_a_partition_repacked_partway_is_written_as_runs(archive, local_config):
+    """Files before and after a repack within one partition each go where they belong."""
+    root, src = archive
+    glm_file(root, dt.datetime(2026, 10, 27, 0), events=2, groups=1, flashes=1)
+    gp.run_prefix(19, "GLM-L2-LCFA", local_config, now=NOW, store=src)
+    glm_file(root, dt.datetime(2026, 10, 27, 12), events=2, groups=1, flashes=1)
+    glm_file(root, dt.datetime(2026, 10, 27, 13), events=3, groups=1, flashes=1, energy_scale=3e-17)
+    assert gp.run_prefix(19, "GLM-L2-LCFA", local_config, now=NOW, store=src) == 2
+    assert gp.run_prefix(19, "GLM-L2-LCFA", local_config, now=NOW, store=src) == 0, "ledgered"
+
+    repo = local_config.icechunk_repo(gp.store_prefix(19))
+    generation = f"glm_lcfa_{DAY:%d%m%Y}"
+    assert gp.generations_of(repo, "glm_lcfa") == ["glm_lcfa", generation]
+    base = xr.open_zarr(store(local_config), group="glm_lcfa", consolidated=False)
+    repacked = xr.open_zarr(store(local_config), group=generation, consolidated=False)
+    assert base.sizes["file"] == 2 and repacked.sizes["file"] == 1
+    assert repacked.sizes["event"] == 3
+    assert gp.written_partitions(repo, "glm_lcfa") >= {f"{DAY}T12#1", f"{DAY}T12"}
+
+
+def test_a_repacked_partition_interrupted_between_runs_resumes(archive, local_config, monkeypatch):
+    """The runs already in are not written twice; the partition counts once all are."""
+    root, src = archive
+    glm_file(root, dt.datetime(2026, 10, 27, 12), events=2, groups=1, flashes=1)
+    glm_file(root, dt.datetime(2026, 10, 27, 13), events=3, groups=1, flashes=1, energy_scale=3e-17)
+    append = gp.multidim.append_partition
+    calls = []
+
+    def fail_second(repo, ds, partition, **kwargs):
+        calls.append(partition)
+        if len(calls) == 2:
+            raise ConnectionError("lost the store")
+        return append(repo, ds, partition, **kwargs)
+
+    monkeypatch.setattr(gp.multidim, "append_partition", fail_second)
+    # The lane logs a failed partition and goes on to the next.
+    gp.run_prefix(19, "GLM-L2-LCFA", local_config, now=NOW, store=src)
+    repo = local_config.icechunk_repo(gp.store_prefix(19))
+    done = gp.written_partitions(repo, "glm_lcfa")
+    assert f"{DAY}T12#1" in done and f"{DAY}T12" not in done
+
+    monkeypatch.setattr(gp.multidim, "append_partition", append)
+    assert gp.run_prefix(19, "GLM-L2-LCFA", local_config, now=NOW, store=src) == 2
+    assert f"{DAY}T12" in gp.written_partitions(repo, "glm_lcfa")
+    base = xr.open_zarr(store(local_config), group="glm_lcfa", consolidated=False)
+    assert base.sizes["file"] == 1, "the first run is not written twice"
+
+
 def test_mesoscale_and_glm_are_not_confused_with_gridded_products():
     assert pathlib.Path(gp.store_prefix(16)).name == "goes16_l2_points.icechunk"
     assert gp.family_of("dmwv_m2_c08") == "DMWV" and gp.family_of("glm_lcfa") == "GLM"
