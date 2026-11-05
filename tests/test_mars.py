@@ -345,6 +345,7 @@ def test_a_range_across_the_stream_change_is_split_into_one_request_per_stream(t
     assert jobs
     short = {"scda", "scwv"}
     seen = set()
+    replacement_starts: dict[tuple[str, int], pd.Timestamp] = {}
     for job in jobs:
         dates = job.request["date"].split("/")
         start, end = pd.Timestamp(dates[0]), pd.Timestamp(dates[-1])
@@ -359,7 +360,13 @@ def test_a_range_across_the_stream_change_is_split_into_one_request_per_stream(t
                 assert last < mp.SHORT_CUTOFF_RETIRED
             else:
                 assert first >= mp.SHORT_CUTOFF_RETIRED
+                key = (job.group, hour)
+                replacement_starts[key] = min(replacement_starts.get(key, first), first)
     assert seen & short and seen - short, "both streams are planned around the change"
+    # Each group's replacement stream picks up exactly at the change, not a day later.
+    assert replacement_starts
+    for (group, hour), start in replacement_starts.items():
+        assert start == pd.Timestamp("2026-05-12") + pd.Timedelta(hour, "h"), (group, hour)
 
 
 def test_a_range_is_required_when_there_is_no_grib_on_disk(mars_config):

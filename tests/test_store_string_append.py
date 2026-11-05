@@ -46,3 +46,13 @@ def test_a_narrower_fixed_width_string_is_widened_to_the_stored_width():
     wider = xr.Dataset({"platform_name": ("t", np.array(["NOAA-2000000"], dtype="<U12"))})
     assert match_string_dtypes(narrower, existing)["platform_name"].dtype == np.dtype("<U9")
     assert match_string_dtypes(wider, existing)["platform_name"].dtype == np.dtype("<U12")
+
+
+def test_a_narrower_fixed_width_string_appends_to_a_fixed_width_store(tmp_path):
+    repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(tmp_path)))
+    assert write_to_icechunk(repo, step(0, np.array(["NOAA-20xx"], dtype="<U9")))
+    stored = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    assert stored["platform_name"].dtype == np.dtype("<U9")
+    assert write_to_icechunk(repo, step(1, np.array(["NOAA-21"], dtype="<U7")))
+    got = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    assert got["platform_name"].values.tolist() == ["NOAA-20xx", "NOAA-21"]
