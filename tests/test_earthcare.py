@@ -280,3 +280,12 @@ def test_a_file_with_no_science_data_reads_as_an_empty_frame(tmp_path):
         f.create_group("HeaderData")
     with pytest.raises(earthcare.EmptyFrame):
         earthcare.read_frame(path, earthcare.PRODUCTS["ATL_ICE_2A"])
+
+    # Scalar measurements are data: an unrecognised layout, not an empty frame.
+    scalar = tmp_path / "ECA_EXBA_ATL_ICE_2A_20250528T001000Z_20250528T002000Z_05600B.h5"
+    with h5py.File(scalar, "w") as f:
+        f.create_group("ScienceData").create_dataset("measurement", data=42.0)
+        f.create_group("HeaderData")
+    with pytest.raises(ValueError, match="no along-track dimension") as raised:
+        earthcare.read_frame(scalar, earthcare.PRODUCTS["ATL_ICE_2A"])
+    assert not isinstance(raised.value, earthcare.EmptyFrame)

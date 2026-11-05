@@ -251,11 +251,14 @@ def read_frame(path: pathlib.Path, product: Product) -> xr.Dataset:
         ) as opened:
             parts.append(_name_phony_dims(opened.load()))
     ds = xr.merge(parts, compat="no_conflicts", combine_attrs="drop_conflicts")
-    if not ds.dims:
+    if not ds.data_vars:
         raise EmptyFrame(f"{product.code}: {path.name} holds no data")
     track = next((d for d in ALONG_TRACK_NAMES if d in ds.dims), None)
     if track is None:
-        raise ValueError(f"{product.code}: no along-track dimension in {sorted(ds.dims)}")
+        raise ValueError(
+            f"{product.code}: no along-track dimension in {sorted(ds.dims)} "
+            f"(variables {sorted(ds.data_vars)[:10]})"
+        )
     ds = ds.rename_dims({track: "along_track"}) if track != "along_track" else ds
 
     p = product.prefix
