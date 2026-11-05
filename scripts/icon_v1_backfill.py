@@ -146,20 +146,23 @@ def skipped_archive_runs(path: pathlib.Path, threshold: float = 1.0) -> set[pd.T
     Those are left out by ``--not-skipped``: the archive mirror rarely fills a run in later,
     so planning them again only puts the same skipped runs at the head of every pass. A run
     logged at or above ``threshold`` (skipped under a stricter one) is planned again, and a
-    run logged with defective files (no fraction) is always left out. A run logged more than
-    once is judged by its latest row. A run skipped while
+    run ever logged with defective files (no counts) is always left out; otherwise a run
+    logged more than once is judged by its latest row. A run skipped while
     being read live is not included; DWD may still be publishing it.
     """
     if not path.exists():
         return set()
     table = pd.read_csv(path, sep="\t", usecols=["init_time", "source", "present", "expected"])
-    archive = table[table["source"] == "archive"].drop_duplicates("init_time", keep="last")
+    archive = table[table["source"] == "archive"]
+    # A row without counts records defective files, which no later pass mends.
+    defective = set(archive.loc[archive["present"].isna(), "init_time"])
+    latest = archive.dropna(subset=["present"]).drop_duplicates("init_time", keep="last")
     # From the counts, as RunCompleteness.fraction does: the fraction column is rounded,
     # and 49,999 of 100,000 must not read as 0.5.
-    present, expected = archive["present"], archive["expected"]
-    fraction = (present / expected).where(expected > 0, 1.0).where(present.notna())
-    below = fraction.isna() | (fraction < threshold)
-    return {pd.Timestamp(t) for t in archive.loc[below, "init_time"]}
+    present, expected = latest["present"], latest["expected"]
+    fraction = (present / expected).where(expected > 0, 1.0)
+    below = set(latest.loc[fraction < threshold, "init_time"])
+    return {pd.Timestamp(t) for t in defective | below}
 
 
 #: Failures that come from the archived files themselves, so retrying cannot help.

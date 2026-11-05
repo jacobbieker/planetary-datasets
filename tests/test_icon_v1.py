@@ -906,6 +906,8 @@ def test_not_skipped_judges_a_run_by_its_latest_row_and_always_drops_defective_o
         ("2026-10-01T00:00:00Z", RUN_00, "archive", "0.3", "3", "10", "T 7"),
         ("2026-10-02T00:00:00Z", RUN_00, "archive", "0.6", "6", "10", "T 4"),
         ("2026-10-01T00:00:00Z", RUN_06, "archive", "", "", "", "failed: truncated GRIB2 message"),
+        # A later pass logging counts does not mend the defective files.
+        ("2026-10-03T00:00:00Z", RUN_06, "archive", "0.9", "9", "10", "T 1"),
         ("2026-10-01T00:00:00Z", OLD_RUN, "live", "0.2", "2", "10", "T 8"),
         # Logged as 0.5000, but short of half.
         (
