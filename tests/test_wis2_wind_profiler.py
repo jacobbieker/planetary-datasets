@@ -58,16 +58,19 @@ PARTITION = "wis2_20261105T1200Z"
 
 
 def body(key: str) -> bytes:
+    """The fixture bytes of an object key."""
     name = key.rsplit("/", 1)[-1]
     path = FIXTURES / name
     return (path if path.exists() else UPPER_AIR / name).read_bytes()
 
 
 def decode(key: str, counts: Counter | None = None) -> list[wp.Profile]:
+    """The profiles of a fixture object."""
     return wp.decode_object(key, body(key), ARRIVED, counts if counts is not None else Counter())
 
 
 def stored(local_config, group: str | None = None) -> xr.Dataset:
+    """The local store's root, or ``group``, as a dataset."""
     repo = local_config.icechunk_repo(ua.STORE_PREFIX)
     return xr.open_zarr(repo.readonly_session("main").store, group=group, consolidated=False)
 
@@ -95,11 +98,13 @@ def stored(local_config, group: str | None = None) -> xr.Dataset:
 def test_wind_profile_bulletins_are_picked_by_key_and_not_taken_as_soundings(
     key, profiler, sounding
 ):
+    """IUP* bulletins go to the profiler, never to the soundings."""
     assert wp.wanted(key) is profiler
     assert ua.wanted(key) is sounding
 
 
 def test_a_radar_profile_keeps_heights_winds_and_both_qualities():
+    """A category 6 radar profile decodes with both quality flags."""
     (profile,) = decode(LPMG)
     header, levels = profile.header, profile.levels
     assert header["station_id"] == header["wmo_station_id"] == "08550"
@@ -119,6 +124,7 @@ def test_a_radar_profile_keeps_heights_winds_and_both_qualities():
 
 
 def test_a_profiler_with_associated_quality_fields_and_averaging_period():
+    """Associated-field qualities and the averaging period are kept."""
     (profile,) = decode(EGRR)
     header, levels = profile.header, profile.levels
     assert header["station_id"] == "07625"
@@ -135,6 +141,7 @@ def test_a_profiler_with_associated_quality_fields_and_averaging_period():
 
 
 def test_windas_bulletins_hold_ten_minute_profiles_of_three_stations():
+    """JMA WINDAS bulletins split into one profile per station and time."""
     profiles = decode(WINDAS_DWD)
     stations = Counter(p.header["station_id"] for p in profiles)
     assert len(stations) == 3
@@ -152,6 +159,7 @@ def test_windas_bulletins_hold_ten_minute_profiles_of_three_stations():
 
 
 def test_the_pilot_template_profiler_reads_as_a_profile():
+    """Hong Kong's PILOT-template profiler becomes a profile."""
     (profile,) = decode(VHHH)
     assert profile.header["station_id"] == "45004"
     assert profile.header["data_category"] == 2
@@ -161,6 +169,7 @@ def test_the_pilot_template_profiler_reads_as_a_profile():
 
 
 def test_empty_bulletins_and_unprefixed_names():
+    """Empty bulletins are counted; headings without A_ are still read."""
     counts = Counter()
     assert decode(EMPTY_EGRR, counts) == []
     assert decode(EMPTY_EDZW, counts) == []
@@ -172,6 +181,7 @@ def test_empty_bulletins_and_unprefixed_names():
 
 
 def test_garbage_never_raises():
+    """Undecodable input is counted, never raised."""
     counts = Counter()
     assert wp.decode_object("x", b"BUFR\x00\x00\x30\x04" + b"\xff" * 40, None, counts) == []
     assert wp.decode_object("y", b"not bufr", None, counts) == []
@@ -180,6 +190,7 @@ def test_garbage_never_raises():
 
 
 def test_relayed_copies_collapse_to_one():
+    """The DWD and JMA copies collapse to one profile."""
     counts = Counter()
     copies = [p for key in (LFPW_DWD, LFPW_JMA, AMMC_DWD, AMMC_JMA) for p in decode(key)]
     windas = decode(WINDAS_DWD) + decode(WINDAS_JMA)
@@ -192,6 +203,7 @@ def test_relayed_copies_collapse_to_one():
 
 
 def _run(local_config, keys, partition=PARTITION, prepare=True) -> dict:
+    """Run the upper_air target over ``keys`` as one window."""
     target = ua.UpperAirTarget(local_config)
     if prepare:
         target.prepare(partition)
@@ -202,6 +214,7 @@ def _run(local_config, keys, partition=PARTITION, prepare=True) -> dict:
 
 
 def test_the_group_is_ragged_lossless_and_written_once_per_window(local_config):
+    """The group is ragged, lossless and written once per window."""
     summary = _run(local_config, (*ALL, TEMP))
     assert summary["soundings"] == 1
     assert summary["profiles"] == 1 + 1 + 18 + 1 + 1 + 1 + 1 + 1
@@ -258,6 +271,7 @@ def test_the_group_is_ragged_lossless_and_written_once_per_window(local_config):
 
 
 def test_a_window_already_written_for_soundings_still_gets_its_profiles(local_config):
+    """A window holding soundings gets its profiles; the soundings are untouched."""
     # The window as written before the profiler group existed: soundings only.
     ua.write(
         ua.decode_object(TEMP, body(TEMP), ARRIVED, Counter()), local_config, PARTITION, Counter()
@@ -277,6 +291,7 @@ def test_a_window_already_written_for_soundings_still_gets_its_profiles(local_co
 
 
 def test_profiles_first_then_soundings_in_a_new_store(local_config):
+    """A fresh store can take the group first and root arrays later."""
     assert _run(local_config, (LFPW_DWD,), partition="a")["profiles"] == 1
     assert _run(local_config, (TEMP,), partition="b")["soundings"] == 1
     assert stored(local_config).sizes["sounding"] == 1
@@ -284,6 +299,7 @@ def test_profiles_first_then_soundings_in_a_new_store(local_config):
 
 
 def test_the_group_records_arrival_like_the_soundings():
+    """Arrival times are described as in the soundings."""
     names = ("arrival_time", "first_arrival_time")
     assert {n: wp.PROFILE_ATTRS[n]["long_name"] for n in names} == {
         n: ua.SOUNDING_ATTRS[n]["long_name"] for n in names
