@@ -4,7 +4,10 @@ The fixtures in ``data/wis2_satellite_products`` are real WIS2 Global Cache obje
 core data): radio occultations from Metop-SG A1, Spire and FY-3 (via the JMA GTS relay),
 Sentinel-1 SAR ocean winds, Sentinel-3 SRAL and Jason altimetry (via the DWD relay),
 Metop AVHRR and Meteosat AMVs, Metop-C ASCAT winds, and a Norwegian ``ISX`` bulletin that
-is not satellite data at all. ``<name>.key`` holds the cache key each came from.
+is not satellite data at all; Meteosat-9 SEVIRI all-sky radiances (DWD relay), Himawari-9
+AMVs (JMA relay), a CFOSAT SWIM nadir altimetry message, and the first 60 subsets of an
+MTG-I1 FCI all-sky radiance bulletin (JMA relay; cut with ecCodes' subset extraction, the
+values untouched). ``<name>.key`` holds the cache key each came from.
 """
 
 from __future__ import annotations
@@ -31,7 +34,13 @@ GROUPS = {
     "amv_avhrr": "amv",
     "amv_gts_iev": "amv",
     "scatterometer_gts_isx": "scatterometer",
+    "asr_fci_gts_iuf": "fci_asr",
+    "asr_seviri_gts_ixf": "seviri_asr",
+    "amv_ahi_gts_ixc": "ahi_amv",
+    "swim_nadir": "swim_nadir",
 }
+#: Groups added after the store began, backfilled over windows the others already hold.
+ADDED = ("asr_fci_gts_iuf", "asr_seviri_gts_ixf", "amv_ahi_gts_ixc", "swim_nadir")
 
 
 def key(name: str) -> str:
@@ -171,3 +180,108 @@ def test_the_earliest_copy_of_each_identity_is_kept(tmp_path):
     # 9 only from b.
     assert {k: v.tolist() for k, v in keep.items()} == {0: [0], 1: [0, 1, 3]}
     assert counts["amv_decoded"] == 7 and counts["amv_duplicates"] == 3
+
+
+SPACE = "data/int-eumetsat/data/core/weather/space-based-observations"
+
+
+@pytest.mark.parametrize(
+    "path, group",
+    [
+        (
+            f"{SPACE}/meteosat-12/fci/W_XX-EUMETSAT-Darmstadt,IMG+SAT,MTI1+FCI-2-ASR--FD---",
+            "fci_asr",
+        ),
+        (f"{SPACE}/meteosat-12/fci/W_XX-EUMETSAT-Darmstadt,IMG+SAT,MTI1+FCI-2-AMV--FD---", "amv"),
+        (
+            f"{SPACE}/meteosat-9/seviri/W_XX-EUMETSAT-Darmstadt,SING+LEV+SAT,MET09+ASR_C_EUMG_1",
+            "seviri_asr",
+        ),
+        (
+            f"{SPACE}/meteosat-9/seviri/W_XX-EUMETSAT-Darmstadt,SING+LEV+SAT,MET09+AMV_C_EUMG_1",
+            "amv",
+        ),
+        (
+            f"{SPACE}/cfosat/swim/W_XX-EUMETSAT-Darmstadt,SURFACE+SATELLITE,CFO+NRT+SWIM_OGDR.bin",
+            "swim_nadir",
+        ),
+        (
+            "data/jp-jma-gts-to-wis2/data/core/I/U/F/E/14/EUMT/A_IUFE14EUMT051130_C_RJTD_1.bufr",
+            "fci_asr",
+        ),
+        (
+            "data/de-dwd-gts-to-wis2/data/core/I/U/F/E/20/EUMG/A_IUFE20EUMG051145_C_EDZW_1",
+            "seviri_asr",
+        ),
+        (
+            "data/de-dwd-gts-to-wis2/data/core/I/X/F/H/19/EUMG/A_IXFH19EUMG051145_C_EDZW_1",
+            "seviri_asr",
+        ),
+        (
+            "data/jp-jma-gts-to-wis2/data/core/I/X/C/S/40/RJTD/A_IXCS40RJTD051100_C_RJTD_1.bufr",
+            "ahi_amv",
+        ),
+        # The same headings from originators not known to carry these products.
+        ("data/de-dwd-gts-to-wis2/data/core/I/U/F/A/03/LFPW/A_IUFA03LFPW051145_C_EDZW_1", None),
+        ("data/jp-jma-gts-to-wis2/data/core/I/X/C/N/01/KWBC/A_IXCN01KWBC051100_C_RJTD_1", None),
+        ("data/de-dwd-gts-to-wis2/data/core/I/X/V/D/01/EUMG/A_IXVD01EUMG051145_C_EDZW_1", "amv"),
+    ],
+)
+def test_objects_are_routed_by_file_name_and_originator(path, group):
+    product = sp.product_for(path)
+    assert (product.group if product else None) == group
+
+
+def test_the_asr_groups_keep_every_channel_and_category():
+    _, fci, _ = sat.decode_object(key("asr_fci_gts_iuf"), body("asr_fci_gts_iuf"), ARRIVED)
+    _, seviri, _ = sat.decode_object(key("asr_seviri_gts_ixf"), body("asr_seviri_gts_ixf"), ARRIVED)
+    assert set(fci["satellite_identifier"].tolist()) == {71}, "Meteosat-12 (MTG-I1)"
+    assert set(seviri["satellite_identifier"].tolist()) == {56}, "Meteosat-9 (IODC)"
+    for arrays in (fci, seviri):
+        assert arrays["satellite_channel_centre_frequency"].shape[1] == 11
+        # Per channel: all-sky, clear and cloudy values and their spreads.
+        bt = np.asarray(arrays["brightness_temperature"], dtype="float64")
+        assert bt.shape[1] == 132 and np.nanmax(bt) < 350 and np.isfinite(bt).any()
+
+
+def test_new_groups_are_backfilled_into_a_window_the_others_hold(local_config):
+    window = "wis2_20261105T1200Z"
+    first = sat.SatelliteTarget(local_config, workers=1)
+    for name in ("amv_avhrr", "altimetry_sral"):
+        first.feed(key(name), body(name), ARRIVED)
+    assert set(first.finish(None, None, window)["rows"]) == {"amv", "altimetry"}
+
+    backfill = sat.SatelliteTarget(local_config, workers=1)
+    backfill.prepare(window)
+    assert not backfill.wants(key("amv_avhrr"), 1), "amv holds the window"
+    assert all(backfill.wants(key(name), 1) for name in ADDED)
+    for name in ADDED:
+        backfill.feed(key(name), body(name), ARRIVED)
+    # The same SEVIRI bulletin through the JMA relay, later: one copy kept.
+    relayed = key("asr_seviri_gts_ixf").replace("de-dwd", "jp-jma") + ".bufr"
+    backfill.feed(relayed, body("asr_seviri_gts_ixf"), ARRIVED + dt.timedelta(minutes=3))
+    summary = backfill.finish(None, None, window)
+    expected = {
+        GROUPS[name]: sat.decode_object(key(name), body(name), ARRIVED)[1]["time"].size
+        for name in ADDED
+    }
+    assert summary["rows"] == expected
+    assert summary["seviri_asr_duplicates"] == expected["seviri_asr"]
+
+    tree = xr.open_datatree(store(local_config), engine="zarr", consolidated=False)
+    assert {"amv", "altimetry", *expected} <= set(tree.children)
+    for group, rows in expected.items():
+        ds = xr.open_zarr(store(local_config), group=group, consolidated=False)
+        assert ds.sizes["observation"] == rows
+        assert ds.attrs["partitions_written"] == [window]
+    seviri = xr.open_zarr(store(local_config), group="seviri_asr", consolidated=False)
+    assert not seviri["source_key"].isin([relayed]).any(), "the earlier copy is kept"
+    amv = xr.open_zarr(store(local_config), group="amv", consolidated=False)
+    assert amv.sizes["observation"] == first.counts["amv_observations"]
+
+    again = sat.SatelliteTarget(local_config, workers=1)
+    again.prepare(window)
+    assert not any(again.wants(key(name), 1) for name in ADDED), "written once"
+    for name in ADDED:
+        again.feed(key(name), body(name), ARRIVED)
+    assert set(again.finish(None, None, window)["rows"].values()) == {0}
