@@ -791,6 +791,7 @@ def test_old_and_new_grid_runs_go_to_different_generations(source, local_config)
 
 
 def test_a_run_below_the_threshold_is_skipped_without_a_read(source, local_config):
+    """An archive run under its threshold is skipped unread; at 50% it is written."""
     strict = ICONV1Provider("eu_art", min_archive_completeness=0.95)
     t_ml = {f for f in every_field(strict, RUN_00) if "/p/T/lvt1/150/" in f}
     source.missing |= t_ml
@@ -812,6 +813,7 @@ def test_a_run_below_the_threshold_is_skipped_without_a_read(source, local_confi
 
 
 def test_a_live_run_keeps_the_strict_threshold(source, monkeypatch):
+    """A live run between 50% and 95% is retried, not written."""
     # The archive's 50% would write a run DWD is still publishing, with holes for good.
     monkeypatch.setattr(icon_v1, "choose_source", lambda model, it: "live")
     provider = ICONV1Provider("eu_art")
@@ -827,6 +829,7 @@ def test_a_live_run_keeps_the_strict_threshold(source, monkeypatch):
 
 @pytest.mark.store_names
 def test_a_store_holding_readable_names_counts_as_stored(source, local_config):
+    """A generation written under readable names is consulted for stored runs."""
     # The writer, and the rename tool, give stores readable names; a store holding them is
     # still this provider's, or every run in it would be planned again on every pass.
     provider = ICONV1Provider("eu_art")
@@ -895,6 +898,7 @@ def test_backfill_records_skipped_runs(source, monkeypatch, local_config, tmp_pa
 
 
 def test_not_skipped_judges_a_run_by_its_latest_row_and_always_drops_defective_ones(tmp_path):
+    """Latest row per run, exact counts not the rounded fraction, defective runs always."""
     script = load_backfill_script()
     log = tmp_path / "skipped.tsv"
     head = "\t".join(script.SKIPPED_COLUMNS)
@@ -903,11 +907,25 @@ def test_not_skipped_judges_a_run_by_its_latest_row_and_always_drops_defective_o
         ("2026-10-02T00:00:00Z", RUN_00, "archive", "0.6", "6", "10", "T 4"),
         ("2026-10-01T00:00:00Z", RUN_06, "archive", "", "", "", "failed: truncated GRIB2 message"),
         ("2026-10-01T00:00:00Z", OLD_RUN, "live", "0.2", "2", "10", "T 8"),
+        # Logged as 0.5000, but short of half.
+        (
+            "2026-10-01T00:00:00Z",
+            RUN_00 + pd.Timedelta(12, "h"),
+            "archive",
+            "0.5000",
+            "49999",
+            "100000",
+            "T 50001",
+        ),
     ]
     body = ["\t".join(map(str, (a, b.isoformat(), *rest))) for a, b, *rest in rows]
     log.write_text("\n".join([head, *body]) + "\n")
-    assert script.skipped_archive_runs(log, 0.5) == {RUN_06}
-    assert script.skipped_archive_runs(log, 0.95) == {RUN_00, RUN_06}
+    assert script.skipped_archive_runs(log, 0.5) == {RUN_06, RUN_00 + pd.Timedelta(12, "h")}
+    assert script.skipped_archive_runs(log, 0.95) == {
+        RUN_00,
+        RUN_06,
+        RUN_00 + pd.Timedelta(12, "h"),
+    }
 
 
 def test_params_must_select_variables_in_every_era(source, monkeypatch):
