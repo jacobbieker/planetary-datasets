@@ -105,12 +105,12 @@ Incomplete runs
 
 :meth:`ICONV1Provider.fetch` lists each of a run's ``.../r/<run>/s/`` directories before
 anything is read (about 1,500 for an ICON-Global run, 16 at a time; about 30 s). An
-archive run holding less than :attr:`ICONV1Provider.min_completeness` of its expected
-fields (95% by default) is skipped, so it can be written once the archive mirror fills
-in; the Dagster asset marks such a partition failed rather than green. A live run below
-the threshold is still being published and raises :class:`IncompleteRun` to be retried. A
-run above the threshold is written with NaN for its gaps, and only listed fields are
-requested, so a gap costs no 404s.
+archive run holding less than :attr:`ICONV1Provider.min_archive_completeness` of its
+expected fields (50% by default) is skipped; the Dagster asset marks such a partition
+failed rather than green. A live run below :attr:`ICONV1Provider.min_completeness` (95%)
+is still being published and raises :class:`IncompleteRun` to be retried. A run above its
+threshold is written with NaN for its gaps, and only listed fields are requested, so a gap
+costs no 404s.
 
 Only generations with this provider's variables on its dimensions count when deciding
 whether a run is already stored (:meth:`ICONV1Provider.generations`). A run held only by
@@ -145,6 +145,7 @@ from icechunk.xarray import to_icechunk
 from loguru import logger
 
 from planetary_datasets.base import BaseProvider
+from planetary_datasets.common import naming
 from planetary_datasets.common.dataset import coords_match
 from planetary_datasets.common.download import read_bytes
 from planetary_datasets.common.generations import (
@@ -299,11 +300,15 @@ CHUNK_TARGET_MB = 150.0
 #: How many variables to name in the missing-field summary of a run.
 REPORT_TOP_N = 10
 
-#: Fraction of a run's expected fields that must be listed at the source for it to be
-#: written. Below it an archive run is skipped, not failed: the archive mirror fills in
-#: over time, and a run written with large holes cannot be rewritten without a rebuild. A
-#: live run below it is retried instead (:class:`IncompleteRun`): DWD is still publishing.
+#: Fraction of a live run's expected fields that must be listed on DWD's server for it to
+#: be written. A live run below it is retried (:class:`IncompleteRun`): DWD is still
+#: publishing it, and writing it early would leave holes that never fill.
 DEFAULT_MIN_COMPLETENESS = 0.95
+
+#: The same for an archive run. The mirror is patchy and rarely fills a run in later, so a
+#: run with at least half its fields is written, NaN where the rest would be, rather than
+#: left out; below it the run is skipped.
+DEFAULT_MIN_ARCHIVE_COMPLETENESS = 0.5
 
 #: Concurrent directory listings when checking what a run holds.
 LISTING_WORKERS = 16
@@ -665,9 +670,12 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         fetch_workers: Concurrent reads per block from the archive.
         live_fetch_workers: Concurrent reads per block from DWD's live server.
         max_workers: Upper bound on blocks in flight; fewer if the ceiling requires it.
-        min_completeness: Fraction of a run's expected fields the source must list for the
-            run to be written; below it the run is skipped. See
+        min_completeness: Fraction of a live run's expected fields DWD's server must list
+            for the run to be written; below it the run is retried. See
             :data:`DEFAULT_MIN_COMPLETENESS`.
+        min_archive_completeness: Fraction of an archive run's expected fields the mirror
+            must list for the run to be written, NaN for the rest; below it the run is
+            skipped. See :data:`DEFAULT_MIN_ARCHIVE_COMPLETENESS`.
 
     Each run is laid out by the schema of its grid era
     (:func:`~planetary_datasets.providers.icon_v1_catalog.era_for`). Runs of different
@@ -691,6 +699,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         live_fetch_workers: int = 4,
         max_workers: int = 4,
         min_completeness: float = DEFAULT_MIN_COMPLETENESS,
+        min_archive_completeness: float = DEFAULT_MIN_ARCHIVE_COMPLETENESS,
     ) -> None:
         """Build a provider for one variant; see the class docstring for the arguments."""
         super().__init__(config)
@@ -700,8 +709,12 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             )
         if min(fetch_workers, live_fetch_workers, max_workers) < 1:
             raise ValueError("fetch_workers, live_fetch_workers and max_workers must be >= 1")
-        if not 0.0 <= min_completeness <= 1.0:
-            raise ValueError(f"min_completeness must be in [0, 1], got {min_completeness}")
+        for label, value in (
+            ("min_completeness", min_completeness),
+            ("min_archive_completeness", min_archive_completeness),
+        ):
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{label} must be in [0, 1], got {value}")
         self.variant = variant
         self.model = VARIANT_MODELS[variant]
         self.name = f"icon_v1_{variant}"
@@ -730,6 +743,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
                     f"era on grid {era.grid_number}"
                 )
         self.min_completeness = min_completeness
+        self.min_archive_completeness = min_archive_completeness
         self._ceiling_gb = ceiling_gb
         self.fetch_workers = fetch_workers
         self.live_fetch_workers = live_fetch_workers
@@ -789,14 +803,18 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         wanted = set(self.params)
         return [k for k in keys if k.param in wanted]
 
+    def threshold_for(self, source: Source) -> float:
+        """The fraction of a run's fields ``source`` must list for the run to be written."""
+        return self.min_completeness if source == "live" else self.min_archive_completeness
+
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
         """Return the URIs of the fields the source holds for the run at ``it``.
 
         The source is chosen by :func:`~planetary_datasets.providers.icon_v1_catalog.choose_source`,
         and each of the run's directories is listed (:meth:`list_run`) rather than each file
         requested, so absent fields are known before anything is read and cost no GETs. An
-        archive run holding less than :attr:`min_completeness` of its expected fields is
-        skipped: an empty list, logged as a warning, and recorded in :attr:`completeness`.
+        archive run holding less than :attr:`min_archive_completeness` of its expected fields
+        is skipped: an empty list, logged as a warning, and recorded in :attr:`completeness`.
 
         Raises:
             IncompleteRun: The run is read from the live server and is not fully there:
@@ -814,7 +832,8 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         present, listed = self.list_run(it, source)
         if source == "live":
             self._require_published(it, present)
-        if listed.fraction < self.min_completeness:
+        threshold = self.threshold_for(source)
+        if listed.fraction < threshold:
             if source == "live":
                 raise IncompleteRun(
                     f"{self.name}: live run {it} lists {listed.fraction:.1%} of its fields; "
@@ -823,7 +842,7 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
             logger.warning(
                 f"{self.name}: skipping run {it}: the {source} lists {listed.present:,} of "
                 f"{listed.expected:,} expected fields ({listed.fraction:.1%}), below "
-                f"{self.min_completeness:.0%}. Most missing: {listed.most_missing()}"
+                f"{threshold:.0%}. Most missing: {listed.most_missing()}"
             )
             return []
         logger.info(
@@ -1213,9 +1232,14 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
         ``icon_global.icechunk``, holding a few hand-picked fields, and a ``params`` subset
         is written to a generation of its own; a run in either is not a run in this store,
         and counting it as one would leave a permanent hole in the full store. A store of
-        any of the model's grid eras counts.
+        any of the model's grid eras counts, under the names its writer gives the variables
+        and dimensions (:func:`~planetary_datasets.common.naming.prepare_for_store`) or the
+        source names it held before the store was renamed.
         """
-        layouts = [{v.name: v.dims for v in plan.layout.variables} for plan in self._plans.values()]
+        layouts = [
+            {v.name: tuple(map(str, v.dims)) for v in plan.layout.variables}
+            for plan in self._plans.values()
+        ]
         own = []
         for prefix in super().generations():
             try:
@@ -1227,7 +1251,12 @@ class ICONV1Provider(GenerationalStoreMixin, BaseProvider):
                 logger.debug(f"{prefix}: unreadable ({type(exc).__name__}), not ours")
                 continue
             found = {str(n): tuple(map(str, stored[n].dims)) for n in stored.data_vars}
-            if found in layouts:
+            names, dims = naming.store_names(prefix), naming.store_dims(prefix)
+            named = [
+                {names.get(n, n): tuple(dims.get(d, d) for d in ds) for n, ds in layout.items()}
+                for layout in layouts
+            ]
+            if found in layouts or found in named:
                 own.append(prefix)
             else:
                 logger.debug(f"{prefix}: a different layout, not consulted for {self.name}")
