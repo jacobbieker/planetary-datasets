@@ -148,7 +148,7 @@ def skipped_as_incomplete(
 ) -> RunCompleteness | None:
     """The completeness of a run the provider skipped for holding too little, else None."""
     listed = provider.completeness.get(it)
-    if written or listed is None or listed.fraction >= provider.min_completeness:
+    if written or listed is None or listed.fraction >= provider.threshold_for(listed.source):
         return None
     return listed
 
@@ -233,7 +233,8 @@ def _v1_asset(variant: str):
                 description=(
                     f"{provider.name}: run {it} skipped, the {skipped.source} lists only "
                     f"{skipped.fraction:.1%} of its fields (threshold "
-                    f"{provider.min_completeness:.0%}); most missing: {skipped.most_missing(5)}. "
+                    f"{provider.threshold_for(skipped.source):.0%}); most missing: "
+                    f"{skipped.most_missing(5)}. "
                     "Re-materialise once the archive has it."
                 ),
                 metadata=metadata,

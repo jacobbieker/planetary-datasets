@@ -20,13 +20,14 @@ Runs already stored, in any generation of the store, are skipped, so the script 
 where it stopped. A run that fails is logged and the walk goes on; run the script again to
 retry it.
 
-**Incomplete runs are skipped, not written.** The archive mirror lacks whole parameters of
-some runs. Each run's directories are listed first, and a run holding less than
-``--min-completeness`` of its expected fields (95% by default) is left out, so it can be
-written later if the mirror fills in. Skipped runs are listed at the end and appended to
-``--skipped-log`` (a TSV, ``logs/icon_v1_<variant>_skipped.tsv`` by default), with their
-fraction and the parameters missing most. A run at or above the threshold is written with
-NaN where its fields are missing.
+**Very incomplete runs are skipped, not written.** The archive mirror lacks whole
+parameters of some runs. Each run's directories are listed first, and an archive run
+holding less than ``--min-archive-completeness`` of its expected fields (50% by default) is
+left out; a live run needs ``--min-completeness`` (95%), since DWD may still be publishing
+it. Skipped runs are listed at the end and appended to ``--skipped-log`` (a TSV,
+``logs/icon_v1_<variant>_skipped.tsv`` by default), with their fraction and the parameters
+missing most. A run at or above its threshold is written with NaN where its fields are
+missing.
 
 **Grid eras.** ICON-ART and ICON-ART-EU changed grids with the 2026-10-06T00 run. Walking
 forward from the archive's start, the old-grid runs fill the base store
@@ -77,6 +78,7 @@ from loguru import logger
 from planetary_datasets.common.store import axis_is_sorted
 from planetary_datasets.memory import process_tree_rss_gb
 from planetary_datasets.providers.icon_v1 import (
+    DEFAULT_MIN_ARCHIVE_COMPLETENESS,
     DEFAULT_MIN_COMPLETENESS,
     VARIANT_MODELS,
     ICONV1Provider,
@@ -138,17 +140,22 @@ def plan(
     return list(runs), live_only + sorted(missing - set(live_only))
 
 
-def skipped_archive_runs(path: pathlib.Path) -> set[pd.Timestamp]:
-    """Runs ``path`` (a skipped-run TSV) records as too incomplete in the archive.
+def skipped_archive_runs(path: pathlib.Path, threshold: float = 1.0) -> set[pd.Timestamp]:
+    """Runs ``path`` (a skipped-run TSV) records as below ``threshold`` in the archive.
 
     Those are left out by ``--not-skipped``: the archive mirror rarely fills a run in later,
     so planning them again only puts the same skipped runs at the head of every pass. A run
-    skipped while being read live is not included; DWD may still be publishing it.
+    logged at or above ``threshold`` (skipped under a stricter one) is planned again, and a
+    run logged with defective files (no fraction) is always left out. A run logged more than
+    once is judged by its latest row. A run skipped while
+    being read live is not included; DWD may still be publishing it.
     """
     if not path.exists():
         return set()
-    table = pd.read_csv(path, sep="\t", usecols=["init_time", "source"])
-    return {pd.Timestamp(t) for t in table.loc[table["source"] == "archive", "init_time"]}
+    table = pd.read_csv(path, sep="\t", usecols=["init_time", "source", "fraction"])
+    archive = table[table["source"] == "archive"].drop_duplicates("init_time", keep="last")
+    below = archive["fraction"].isna() | (archive["fraction"] < threshold)
+    return {pd.Timestamp(t) for t in archive.loc[below, "init_time"]}
 
 
 #: Failures that come from the archived files themselves, so retrying cannot help.
@@ -214,7 +221,7 @@ def report_completeness(provider: ICONV1Provider, runs: list[pd.Timestamp]) -> N
             logger.info(f"{provider.name}: {it:%Y-%m-%dT%H:%M} is in no source")
             continue
         _, listed = provider.list_run(it, source)
-        verdict = "write" if listed.fraction >= provider.min_completeness else "SKIP"
+        verdict = "write" if listed.fraction >= provider.threshold_for(source) else "SKIP"
         era = provider.plan_for(it).era
         logger.info(
             f"{provider.name}: {it:%Y-%m-%dT%H:%M} grid {era.grid_number}, {source}: "
@@ -289,7 +296,13 @@ def main(argv: list[str] | None = None) -> int:
         "--min-completeness",
         type=float,
         default=DEFAULT_MIN_COMPLETENESS,
-        help="fraction of a run's fields the archive must list for it to be written",
+        help="fraction of a live run's fields DWD must list for it to be written",
+    )
+    parser.add_argument(
+        "--min-archive-completeness",
+        type=float,
+        default=DEFAULT_MIN_ARCHIVE_COMPLETENESS,
+        help="fraction of an archive run's fields the mirror must list; NaN for the rest",
     )
     parser.add_argument(
         "--skipped-log",
@@ -325,6 +338,7 @@ def main(argv: list[str] | None = None) -> int:
         "live_fetch_workers": args.live_fetch_workers,
         "max_workers": args.max_workers,
         "min_completeness": args.min_completeness,
+        "min_archive_completeness": args.min_archive_completeness,
     }
     provider = ICONV1Provider(args.variant, **provider_kwargs)
     skipped_log = args.skipped_log or pathlib.Path("logs") / f"icon_v1_{args.variant}_skipped.tsv"
@@ -341,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
 
     archived, missing = plan(provider, args.start, args.end, live=not args.archive_only)
     if args.not_skipped:
-        before = skipped_archive_runs(skipped_log)
+        before = skipped_archive_runs(skipped_log, args.min_archive_completeness)
         missing = [run for run in missing if run not in before]
     if args.limit is not None:
         missing = missing[: args.limit]
@@ -386,7 +400,11 @@ def main(argv: list[str] | None = None) -> int:
             continue
         written += int(result.written)
         listed = result.completeness
-        if not result.written and listed is not None and listed.fraction < args.min_completeness:
+        if (
+            not result.written
+            and listed is not None
+            and listed.fraction < provider.threshold_for(listed.source)
+        ):
             skipped.append(listed)
             log_skipped(skipped_log, listed)
         took = time.monotonic() - run_started
