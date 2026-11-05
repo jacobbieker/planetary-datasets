@@ -46,6 +46,7 @@ import pathlib
 import re
 import shutil
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Iterable, List
@@ -68,6 +69,11 @@ from planetary_datasets.common.store import STORE_READ_ERRORS
 
 L1_COLLECTION = "EarthCAREL1Validated_MAAP"
 L2_COLLECTION = "EarthCAREL2Validated_MAAP"
+
+#: Further tries for a catalogued frame MAAP answers 404 for, and the first pause before
+#: them (doubling): see :meth:`EarthCAREProvider._download`.
+MISSING_RETRIES = 3
+MISSING_BACKOFF_S = 60.0
 
 
 @dataclass(frozen=True)
@@ -378,15 +384,30 @@ class EarthCAREProvider(BaseProvider):
     # ------------------------------------------------------------------ writing
 
     def _download(self, item: dict, directory: pathlib.Path) -> pathlib.Path | None:
+        """Download one catalogued frame; None if MAAP still refuses it after the retries.
+
+        :func:`download_one` treats a 404 as permanent, but a frame the catalogue lists is
+        there: MAAP answers 404 for existing files when overloaded. On 2026-11-05 nine lanes
+        logged thousands of them, each skipped at once, so the lanes raced through days
+        and kept MAAP overloaded. A refused frame is tried again after
+        :data:`MISSING_BACKOFF_S`, doubling, :data:`MISSING_RETRIES` times.
+        """
         href = item["assets"]["enclosure_h5"]["href"]
-        return download_one(
-            href,
-            directory / f"{item['id']}.h5",
-            retries=5,
-            backoff=10.0,
-            timeout=1800,
-            storage_options={"headers": self.auth.headers()},
-        )
+        for attempt in range(MISSING_RETRIES + 1):
+            path = download_one(
+                href,
+                directory / f"{item['id']}.h5",
+                retries=5,
+                backoff=10.0,
+                timeout=1800,
+                storage_options={"headers": self.auth.headers()},
+            )
+            if path is not None or attempt == MISSING_RETRIES:
+                return path
+            wait = MISSING_BACKOFF_S * 2**attempt
+            logger.debug(f"{self.name}: MAAP refused {item['id']}; trying again in {wait:.0f}s")
+            time.sleep(wait)
+        return None
 
     def _write(self, product: Product, paths: list[pathlib.Path], first_index: int) -> int:
         frames = [read_frame(path, product) for path in paths]

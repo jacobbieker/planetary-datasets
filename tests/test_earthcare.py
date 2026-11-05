@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import pathlib
 
 import h5py
@@ -158,6 +159,7 @@ def provider(local_config, monkeypatch, tmp_path):
     monkeypatch.setattr(earthcare, "search", fake.search)
     monkeypatch.setattr(earthcare, "download_one", fake.download)
     made = EarthCAREProvider(config=local_config, products=["CPR_CLD_2A"], download_workers=2)
+    made.test_maap = fake  # the tests below wrap its downloads
     monkeypatch.setattr(
         type(made), "auth", property(lambda self: type("A", (), {"headers": lambda s: {}})())
     )
@@ -207,3 +209,44 @@ def test_a_settled_day_is_recorded_complete(provider, monkeypatch):
     provider.run_partition(day)
     assert provider.days_complete(CLD) == {"2026-10-20"}
     assert provider.missing_timesteps(pd.DatetimeIndex([day])) == []
+
+
+def refusing(fake: FakeMaap, refusals: int):
+    """``fake.download``, answering as MAAP does when overloaded ``refusals`` times a frame."""
+    calls: collections.Counter = collections.Counter()
+
+    def download(href, dest, **kwargs):
+        calls[href] += 1
+        if calls[href] <= refusals:
+            return None  # download_one's answer to a 404
+        return fake.download(href, dest, **kwargs)
+
+    return download, calls
+
+
+def test_a_catalogued_frame_refused_for_a_while_is_still_written(provider, monkeypatch):
+    """A 404 for a listed frame is MAAP overloaded: wait and try again, do not skip it."""
+    download, calls = refusing(provider.test_maap, earthcare.MISSING_RETRIES)
+    slept = []
+    monkeypatch.setattr(earthcare, "download_one", download)
+    monkeypatch.setattr(earthcare.time, "sleep", slept.append)
+    day = pd.Timestamp("2026-10-20")
+    assert provider.run_partition(day)
+    ds = stored(provider)
+    assert sorted(ds["cpr_cld_2a_frame_key"].values.tolist()) == ["13601E", "13601F"]
+    assert set(calls.values()) == {earthcare.MISSING_RETRIES + 1}
+    backoff = [earthcare.MISSING_BACKOFF_S * 2**n for n in range(earthcare.MISSING_RETRIES)]
+    assert sorted(slept) == sorted(backoff * len(calls))
+
+
+def test_a_frame_refused_every_time_leaves_its_day_to_a_later_pass(provider, monkeypatch):
+    """After the retries the frame is given up for this pass, and the day stays open."""
+    download, calls = refusing(provider.test_maap, 10**6)
+    monkeypatch.setattr(earthcare, "download_one", download)
+    monkeypatch.setattr(earthcare.time, "sleep", lambda s: None)
+    monkeypatch.setattr(earthcare, "SETTLE_DAYS", -10)
+    day = pd.Timestamp("2026-10-20")
+    assert not provider.run_partition(day)
+    assert set(calls.values()) == {earthcare.MISSING_RETRIES + 1}
+    assert provider.days_complete(CLD) == set()
+    assert provider.missing_timesteps(pd.DatetimeIndex([day])) == [day]
