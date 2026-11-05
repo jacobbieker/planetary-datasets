@@ -20,7 +20,9 @@ Sub-category (C-13)      Seen in the cache as
 Objects are picked out cheaply by key first (:func:`wanted`): the GTS relays' BUFR upper-air
 bulletins (``.../I/U/<A1>/...`` with A1 in ``D J K S W X``; ``IUA`` is aircraft, ``IUE``/
 ``IUF``/``IUT``/``IUV`` satellite, ``IUP``/``IUC`` radar and other) and the WIS2 topics for
-soundings and profilers. TAC text (``U*`` bulletins, ``.txt``) is not parsed.
+soundings and profilers. TAC text (``U*`` bulletins, ``.txt``) is not parsed. Wind-profile
+bulletins (``IUP*``) go to the store's ``wind_profiler`` group instead
+(:mod:`~planetary_datasets.providers.observations.wis2_wind_profiler`).
 
 Layout (``xr.open_zarr`` opens it directly)::
 
@@ -577,27 +579,91 @@ def deduplicate(soundings: Iterable[Sounding], stored: set[str], counts: Counter
 
 @register("upper_air")
 class UpperAirTarget(QueuedTarget):
-    """The archive target: soundings decoded as objects stream past, written per window."""
+    """The archive target: soundings and wind profiles decoded as objects stream past.
+
+    Soundings go to the root of the store and wind profiles (GTS ``IUP*``, see
+    :mod:`~planetary_datasets.providers.observations.wis2_wind_profiler`) to its
+    ``wind_profiler`` group. Each keeps its own ledger of windows, so re-running the target
+    over an archived window writes only the group that lacks it: :meth:`prepare` notes the
+    groups already holding the window and :meth:`wants` declines their objects.
+    """
 
     store_prefix = STORE_PREFIX
 
     def __init__(self, config: Config | None = None):
+        """A target writing with ``config`` (the process-wide one by default)."""
         super().__init__(config or get_config())
         self.counts: Counter = Counter()
         self.soundings: list[Sounding] = []
+        self.profiler_counts: Counter = Counter()
+        self.profiles: list = []
+        #: Groups ("soundings", "wind_profiler") whose ledger lists the coming window.
+        self._written: set[str] = set()
+
+    def prepare(self, partition: str) -> None:
+        """Note the groups that already hold ``partition``, so their objects are declined."""
+        from planetary_datasets.common.multidim import ledger
+        from planetary_datasets.providers.observations import wis2_wind_profiler as profiler
+
+        repo = self.config.icechunk_repo(self.store_prefix)
+        held = set()
+        for name, group in (("soundings", None), ("wind_profiler", profiler.GROUP)):
+            if partition in ledger(repo, group=group):
+                held.add(name)
+        self._written = held
+        if held:
+            logger.info(
+                f"wis2 upper air: {partition} already in {', '.join(sorted(held))}; "
+                "their objects are skipped"
+            )
 
     def wants(self, key: str, size: int) -> bool:
-        return wanted(key)
+        """Soundings and wind profiles (by key), unless their group holds the window."""
+        from planetary_datasets.providers.observations import wis2_wind_profiler as profiler
+
+        if profiler.wanted(key):
+            return "wind_profiler" not in self._written
+        return wanted(key) and "soundings" not in self._written
 
     def decode(self, key: str, body: bytes, arrived) -> None:
-        """On the target's worker thread: keep the object's soundings."""
-        self.soundings += decode_object(key, body, arrived, self.counts)
+        """On the target's worker thread: keep the object's soundings or profiles."""
+        from planetary_datasets.providers.observations import wis2_wind_profiler as profiler
+
+        if profiler.wanted(key):
+            self.profiles += profiler.decode_object(key, body, arrived, self.profiler_counts)
+        else:
+            self.soundings += decode_object(key, body, arrived, self.counts)
 
     def write(self, window_start, window_end, partition: str | None) -> dict:
-        """Drop duplicates and append the window's soundings to the store."""
+        """Drop duplicates and append the window's soundings and profiles, each once.
+
+        Both groups are attempted; the first failure is raised after the other is written.
+        """
+        from planetary_datasets.providers.observations import wis2_wind_profiler as profiler
+
         found, self.soundings = self.soundings, []
-        written = write(found, self.config, partition, self.counts)
-        return {"soundings": written, "levels": self.counts["levels_written"], **self.counts}
+        profiles, self.profiles = self.profiles, []
+        summary: dict = {}
+        failure: Exception | None = None
+        try:
+            written = write(found, self.config, partition, self.counts)
+            summary.update(soundings=written, levels=self.counts["levels_written"], **self.counts)
+        except Exception as exc:  # noqa: BLE001 - the profiles are still written
+            failure = exc
+            logger.exception(f"wis2 upper air {partition}: soundings failed: {exc}")
+        try:
+            count = profiler.write(profiles, self.config, partition, self.profiler_counts)
+            summary.update(
+                profiles=count,
+                profile_levels=self.profiler_counts["levels_written"],
+                **{f"profiler_{k}": v for k, v in self.profiler_counts.items()},
+            )
+        except Exception as exc:  # noqa: BLE001 - raised below, after both groups
+            failure = failure or exc
+            logger.exception(f"wis2 upper air {partition}: wind profiles failed: {exc}")
+        if failure is not None:
+            raise failure
+        return summary
 
 
 # --------------------------------------------------------------------------- store

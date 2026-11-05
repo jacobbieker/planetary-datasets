@@ -478,10 +478,14 @@ def _append_once(
     if clash:
         raise ValueError(f"variables named like dimensions: {clash}")
     session = repo.writable_session("main")
+    node_exists = False
     try:
         group = _open(session.store, path, "r")
         exists = bool(list(group.array_keys()))
         attrs = dict(group.attrs) if exists else {}
+        # A group with no arrays of its own yet may hold other groups (a store whose
+        # first write went to a child group): it is added to, never created over.
+        node_exists = True
     except (*STORE_READ_ERRORS, zarr.errors.GroupNotFoundError) as exc:
         # A group not created yet is expected in a store that holds others.
         missing_group = path and isinstance(exc, zarr.errors.GroupNotFoundError)
@@ -531,7 +535,7 @@ def _append_once(
             for variable in ds.variables.values():
                 variable.attrs = json_safe_attrs(variable.attrs)
             ds.attrs = json_safe_attrs(ds.attrs) if not exists else {}
-            mode = "a" if exists else "w-"
+            mode = "a" if exists or node_exists else "w-"
             # xarray encodes datetime64[s] (or [ms], [us]) under nanosecond units as NaT, so
             # every time column goes to it at nanosecond resolution.
             ds = ds.assign(
