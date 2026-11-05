@@ -322,6 +322,15 @@ def test_units_that_disagree_are_still_refused():
         gp.combine(files, first_file=0)
 
 
+def test_runs_take_the_first_units_stated_as_combine_does():
+    """A file omitting units joins any run; two units stated later split it in two."""
+    none, metres, kilometres = _wind_file(None), _wind_file("m"), _wind_file("km")
+    runs = gp.packing_runs([none, metres, kilometres])
+    assert [len(r) for r in runs] == [2, 1]
+    for run in runs:
+        gp.combine(run, 0)
+
+
 def test_a_file_published_without_any_attributes_is_left_out(archive, local_config):
     """One GOES-18 DMW file on 2024-09-04 carried no attributes at all, _Unsigned included."""
     root, src = archive

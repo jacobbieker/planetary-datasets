@@ -501,7 +501,11 @@ def packing_runs(parsed: Sequence[dict]) -> list[list[dict]]:
             first = {}
         runs[-1].append(result)
         for name, (_, _, attrs) in result.items():
-            first.setdefault(name, attrs)
+            reference = first.setdefault(name, attrs)
+            # As combine does: the first units stated hold for the run, so a later file
+            # stating other units starts a new one.
+            if reference.get("units") is None and attrs.get("units") is not None:
+                first[name] = {**reference, "units": attrs["units"]}
     return runs
 
 
