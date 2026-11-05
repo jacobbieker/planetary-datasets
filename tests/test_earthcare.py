@@ -250,3 +250,42 @@ def test_a_frame_refused_every_time_leaves_its_day_to_a_later_pass(provider, mon
     assert set(calls.values()) == {earthcare.MISSING_RETRIES + 1}
     assert provider.days_complete(CLD) == set()
     assert provider.missing_timesteps(pd.DatetimeIndex([day])) == [day]
+
+
+def test_a_frame_holding_no_data_is_left_out_and_the_day_stays_open(provider, monkeypatch):
+    """The day's other frames are written; the empty one keeps the day from settling."""
+    real = earthcare.read_frame
+
+    def read(path, product):
+        if "13601F" in path.name:
+            raise earthcare.EmptyFrame(f"{product.code}: {path.name} holds no data")
+        return real(path, product)
+
+    monkeypatch.setattr(earthcare, "read_frame", read)
+    monkeypatch.setattr(earthcare, "SETTLE_DAYS", -10)
+    day = pd.Timestamp("2026-10-20")
+    assert provider.run_partition(day)
+    assert stored(provider)["cpr_cld_2a_frame_key"].values.tolist() == ["13601E"]
+    assert provider.days_complete(CLD) == set()
+    assert provider.missing_timesteps(pd.DatetimeIndex([day])) == [day]
+
+
+def test_a_file_with_no_science_data_reads_as_an_empty_frame(tmp_path):
+    """Only a file with no dimensions at all is empty; others still fail loudly."""
+    import h5py
+
+    path = tmp_path / "ECA_EXBA_ATL_ICE_2A_20250528T000000Z_20250528T001000Z_05600A.h5"
+    with h5py.File(path, "w") as f:
+        f.create_group("ScienceData")
+        f.create_group("HeaderData")
+    with pytest.raises(earthcare.EmptyFrame):
+        earthcare.read_frame(path, earthcare.PRODUCTS["ATL_ICE_2A"])
+
+    # Scalar measurements are data: an unrecognised layout, not an empty frame.
+    scalar = tmp_path / "ECA_EXBA_ATL_ICE_2A_20250528T001000Z_20250528T002000Z_05600B.h5"
+    with h5py.File(scalar, "w") as f:
+        f.create_group("ScienceData").create_dataset("measurement", data=42.0)
+        f.create_group("HeaderData")
+    with pytest.raises(ValueError, match="no along-track dimension") as raised:
+        earthcare.read_frame(scalar, earthcare.PRODUCTS["ATL_ICE_2A"])
+    assert not isinstance(raised.value, earthcare.EmptyFrame)

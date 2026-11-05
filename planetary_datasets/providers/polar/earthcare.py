@@ -227,10 +227,15 @@ def _header(path: pathlib.Path) -> dict[str, np.ndarray]:
     return out
 
 
+class EmptyFrame(ValueError):
+    """A frame file whose science groups hold no data at all."""
+
+
 def read_frame(path: pathlib.Path, product: Product) -> xr.Dataset:
     """One frame file as prefixed ``<p>_along_track`` and ``<p>_frame`` variables.
 
     Raises:
+        EmptyFrame: The file's science groups hold no data (ATL_ICE_2A on 2025-05-28).
         ValueError: The file has no along-track dimension this module recognises.
     """
     parts = []
@@ -246,9 +251,14 @@ def read_frame(path: pathlib.Path, product: Product) -> xr.Dataset:
         ) as opened:
             parts.append(_name_phony_dims(opened.load()))
     ds = xr.merge(parts, compat="no_conflicts", combine_attrs="drop_conflicts")
+    if not ds.data_vars:
+        raise EmptyFrame(f"{product.code}: {path.name} holds no data")
     track = next((d for d in ALONG_TRACK_NAMES if d in ds.dims), None)
     if track is None:
-        raise ValueError(f"{product.code}: no along-track dimension in {sorted(ds.dims)}")
+        raise ValueError(
+            f"{product.code}: no along-track dimension in {sorted(ds.dims)} "
+            f"(variables {sorted(ds.data_vars)[:10]})"
+        )
     ds = ds.rename_dims({track: "along_track"}) if track != "along_track" else ds
 
     p = product.prefix
@@ -410,7 +420,16 @@ class EarthCAREProvider(BaseProvider):
         return None
 
     def _write(self, product: Product, paths: list[pathlib.Path], first_index: int) -> int:
-        frames = [read_frame(path, product) for path in paths]
+        frames = []
+        for path in paths:
+            try:
+                frames.append(read_frame(path, product))
+            except EmptyFrame as exc:
+                # Left out, not failed: one empty file must not cost the day's other frames.
+                # The day stays unsettled, so the frame is fetched again on later passes.
+                logger.warning(f"{self.name}: {exc}; left out")
+        if not frames:
+            return 0
         ds = concat_frames(frames, product, first_index)
         repo = self.get_icechunk_repo()
         ds = naming.prepare_for_store(ds, self.store_prefix, naming.stored_arrays(repo), raw=True)
