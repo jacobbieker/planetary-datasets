@@ -37,6 +37,12 @@ class MetopGomeProvider(EumdacProvider):
         ds = harp_to_dataset(filename)
         if "time" not in ds.coords and "datetime" in ds.variables:
             ds = ds.assign_coords(time=ds["datetime"].values).drop_vars("datetime")
+        # harp gives per-product fields such as ``orbit_index`` once, with no dimension.
+        # Concatenating several products broadcasts them along ``time``, which is how the
+        # store holds them, so an hour with a single product has to match that itself.
+        scalars = [name for name, var in ds.data_vars.items() if var.ndim == 0]
+        for name in scalars:
+            ds[name] = ds[name].expand_dims(time=ds.sizes["time"])
         return ds
 
     def process(
