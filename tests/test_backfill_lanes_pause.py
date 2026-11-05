@@ -35,12 +35,23 @@ def test_pause_lightly_execs_the_sleeper_with_the_lane_command(monkeypatch):
     assert args[4:] == [sys.executable, "_backfill_lanes.py", "hafs_a_parent", "--pause", "7200"]
 
 
-def test_lanes_with_a_recent_window_replan_long_passes():
+def test_lanes_with_a_recent_window_replan_long_passes_once_new_partitions_are_due(
+    monkeypatch,
+):
+    import pandas as pd
+
     lanes = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(lanes)
     recent = lanes.LANES["jpss_atms"]
     plain = next(lane for lane in lanes.LANES.values() if not lane.recent_days)
+    planned = pd.Timestamp("2026-11-05T00:00")
     began = 1_000_000.0
-    assert not lanes.should_replan(recent, began, now=began + 60)
-    assert lanes.should_replan(recent, began, now=began + lanes.REPLAN_SECONDS + 1)
-    assert not lanes.should_replan(plain, began, now=began + 10 * lanes.REPLAN_SECONDS)
+    late = began + lanes.REPLAN_SECONDS + 1
+    monkeypatch.setattr(lanes, "window", lambda lane: pd.DatetimeIndex([planned]))
+    assert not lanes.should_replan(recent, began, planned, now=late), "nothing new is due"
+    monkeypatch.setattr(
+        lanes, "window", lambda lane: pd.DatetimeIndex([planned, planned + pd.Timedelta("1h")])
+    )
+    assert not lanes.should_replan(recent, began, planned, now=began + 60), "too soon"
+    assert lanes.should_replan(recent, began, planned, now=late)
+    assert not lanes.should_replan(plain, began, planned, now=late)

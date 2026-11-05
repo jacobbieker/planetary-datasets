@@ -560,11 +560,19 @@ os.execv(sys.argv[2], sys.argv[2:])
 REPLAN_SECONDS = 3 * 3600
 
 
-def should_replan(lane: "Lane", began: float, now: float | None = None) -> bool:
-    """Whether a pass of ``lane`` begun at ``began`` should stop and be planned again."""
-    if not lane.recent_days:
+def should_replan(lane: "Lane", began: float, planned_until, now: float | None = None) -> bool:
+    """Whether a pass of ``lane`` begun at ``began`` should stop and be planned again.
+
+    Only lanes with a recent window, only after :data:`REPLAN_SECONDS`, and only once a
+    partition has come due that the pass did not plan for: re-planning sooner would send
+    a slow lane back over recent days it is already retrying and starve its backlog.
+    """
+    if not lane.recent_days or planned_until is None:
         return False
-    return ((time.time() if now is None else now) - began) > REPLAN_SECONDS
+    if ((time.time() if now is None else now) - began) <= REPLAN_SECONDS:
+        return False
+    due = window(lane)
+    return len(due) > 0 and due[-1] > planned_until
 
 
 def pause_lightly(seconds: float, argv: list[str] | None = None) -> None:
@@ -627,6 +635,7 @@ def main(argv) -> int:
     while True:
         began = time.time()
         hours = window(lane)
+        planned_until = hours[-1] if len(hours) else None
         todo = list(provider.missing_timesteps(hours)) if len(hours) else []
         if lane.earth2studio and todo:
             todo = unstored_partitions(provider, todo)
@@ -651,7 +660,7 @@ def main(argv) -> int:
 
         replan = False
         for offset in range(0, len(todo), batch_size):
-            if should_replan(lane, began):
+            if not args.once and should_replan(lane, began, planned_until):
                 # The recent window only goes first when a pass is planned; a backlog pass
                 # runs for weeks, so it is cut short and planned again.
                 print(f"re-planning: {REPLAN_SECONDS / 3600:.0f} h into a backlog pass", flush=True)
