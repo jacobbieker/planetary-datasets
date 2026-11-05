@@ -85,19 +85,24 @@ def has_committed_data(repo: icechunk.Repository, branch: str = "main") -> bool:
 
 
 def match_string_dtypes(ds: xr.Dataset, existing: xr.Dataset) -> xr.Dataset:
-    """Fixed-width string variables of ``ds`` as objects where the store holds vlen strings.
+    """Fixed-width string variables of ``ds`` in a dtype the store's array accepts.
 
     xarray 2026.9 reads a variable-length string array as ``StringDType`` and refuses to
     append a fixed-width ``<U`` one to it ("Mismatched dtypes"), which earlier versions
     accepted; an object array of the same strings appends, and is stored the same way.
     """
-    cast = {
-        name: ds[name].astype(object)
-        for name in ds.variables
-        if name in existing.variables
-        and ds[name].dtype.kind in "US"
-        and existing[name].dtype.kind in "OT"
-    }
+    cast = {}
+    for name in ds.variables:
+        if name not in existing.variables or ds[name].dtype.kind not in "US":
+            continue
+        stored = existing[name].dtype
+        if stored.kind in "OT":
+            cast[name] = ds[name].astype(object)
+        elif stored.kind == ds[name].dtype.kind and ds[name].dtype.itemsize < stored.itemsize:
+            # A narrower fixed width (<U7 into <U9) widens losslessly; xarray 2026.9
+            # refuses the mismatch. A wider one is left for xarray to refuse: it would
+            # truncate.
+            cast[name] = ds[name].astype(stored)
     return ds.assign(cast) if cast else ds
 
 

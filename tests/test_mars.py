@@ -339,10 +339,34 @@ def test_no_retired_stream_is_planned_after_the_cutover(tmp_path):
     assert {j.request["stream"] for j in older} >= {"scda", "scwv"}
 
 
-def test_a_request_straddling_the_stream_change_is_refused(tmp_path):
-    """Its days would need two streams at once; better to fail than guess."""
-    with pytest.raises(ValueError, match="straddles"):
-        mp.plan_jobs(pd.Timestamp("2026-05-11"), pd.Timestamp("2026-05-13"), tmp_path)
+def test_a_range_across_the_stream_change_is_split_into_one_request_per_stream(tmp_path):
+    """Days on both sides of the change would need two streams in one request."""
+    jobs = mp.plan_jobs(pd.Timestamp("2026-05-11"), pd.Timestamp("2026-05-13"), tmp_path)
+    assert jobs
+    short = {"scda", "scwv"}
+    seen = set()
+    replacement_starts: dict[tuple[str, int], pd.Timestamp] = {}
+    for job in jobs:
+        dates = job.request["date"].split("/")
+        start, end = pd.Timestamp(dates[0]), pd.Timestamp(dates[-1])
+        hours = {int(t[:2]) for t in job.request.get("time", "00").split("/")}
+        if job.request.get("type") != "fc" or not hours & {6, 18}:
+            continue  # analyses, and 00/12 UTC forecasts, never changed stream
+        seen.add(job.request["stream"])
+        for hour in hours & {6, 18}:
+            first = start + pd.Timedelta(hour, "h")
+            last = end + pd.Timedelta(hour, "h")
+            if job.request["stream"] in short:
+                assert last < mp.SHORT_CUTOFF_RETIRED
+            else:
+                assert first >= mp.SHORT_CUTOFF_RETIRED
+                key = (job.group, hour)
+                replacement_starts[key] = min(replacement_starts.get(key, first), first)
+    assert seen & short and seen - short, "both streams are planned around the change"
+    # Each group's replacement stream picks up exactly at the change, not a day later.
+    assert replacement_starts
+    for (group, hour), start in replacement_starts.items():
+        assert start == pd.Timestamp("2026-05-12") + pd.Timedelta(hour, "h"), (group, hour)
 
 
 def test_a_range_is_required_when_there_is_no_grib_on_disk(mars_config):
