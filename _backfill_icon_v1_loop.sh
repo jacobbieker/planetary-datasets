@@ -19,10 +19,12 @@ LIMIT=${LIMIT:-4}
 EXTRA_ARGS=${EXTRA_ARGS:-}
 while true; do
   echo "=== $(date -u '+%F %T') icon_v1_$VARIANT start"
+  # tee -a: stderr is the lane's log file, and on Linux /dev/stderr reopens it, so a plain
+  # tee truncated the log at every pass.
   # shellcheck disable=SC2086 # EXTRA_ARGS is a list of options
   todo=$($PIXI run python scripts/icon_v1_backfill.py "$VARIANT" --limit "$LIMIT" --not-skipped $EXTRA_ARGS \
     --skipped-log "logs/icon_v1_${VARIANT}_skipped.tsv" 2>&1 \
-    | tee /dev/stderr | grep -oE '[0-9]+ to do' | head -1)
+    | tee -a /dev/stderr | grep -oE '[0-9]+ to do' | head -1)
   echo "=== $(date -u '+%F %T') icon_v1_$VARIANT pass done (${todo:-? to do} at its start)"
   if [[ ${todo%% *} == 0 ]]; then
     sleep "$PAUSE"
