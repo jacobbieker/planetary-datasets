@@ -54,9 +54,43 @@ Its identity is the satellite, time (to 0.1 s), position (to 0.01 degrees) and f
 view number; within a window the copy with the most channels is kept (a CIMSS full
 spectrum beats a Météo-France subset), and one already stored is dropped.
 
+GTS radiance bulletins. The DWD and JMA relays republish GTS bulletins under
+``.../data/core/T1/T2/A1/A2/ii/CCCC/``. Most repeat what the topics carry, but some hold
+fields of view no topic does, so a group also takes these headings (``TTAA CCCC``),
+when the message's BUFR template is the instrument's. The identity dedupe drops their
+repeats. Measured over the 2026-11-03T12Z window against every row stored by then:
+
+==========  ===================================  =========  ============================
+Group       Heading (template)                   Stored     New fields of view a window
+==========  ===================================  =========  ============================
+atms        ``INST KWBC`` (310061)               15%        ~520,000 (NOAA-20/21)
+mhs         ``INMI SABM``, ``INMX SBBR``         8%, 41%    ~150,000 with ``IEMX EUMP``
+            (310010), ``IEMX EUMP``              98%
+amsua       ``IEAX EUMP`` (310009)               99.6%      ~700 (one CPU-second)
+iasi        ``INQX SBBR`` (340008)               50%        ~17,000 (Brazil)
+==========  ===================================  =========  ============================
+
+Still skipped, measured on the same window (CPU-seconds to decode in brackets):
+
+* Pure or near-pure repeats: CrIS ``INCX EUMP``/``INCT KWBC`` (99.8-100% stored; ~2,800 s
+  and 3 GB for ~4,600 rows), IASI ``IEIX EUMP``/``EUMR`` (99.2-100%; ~700 s and 2 GB for
+  ~5,400 rows, and ~40 GB of 8,007-channel spool), the EARS and other relays of AMSU-A
+  (``IEAX EUMB/K/L/M/R/V``, ``INAX``, ``INAI``, ``INAJ``) and of MHS (``IEMX EUMB/K/L/M/V``,
+  ``INMJ LFPW``), all 100%.
+* Not radiances: IASI principal-component scores ``IEQX EUMP`` (340008 without
+  radiances; 99% of their fields of view are stored as radiances), IASI L2 temperature
+  and humidity retrievals ``IEDX`` (like the topics' ``*_l2*``), GOME-2 ozone ``IUCX
+  EDMO``. Products (Sentinel-3 OLCI water vapour ``IELX EUMS``, GRAS radio occultation
+  ``IEGX EUMP``) belong to :mod:`.wis2_satellite_products`; the KMA ``INRN``/``INRS RKSL``
+  bulletins are another copy of what is already taken.
+
+A group's ledger records a window's topics and its GTS bulletins apart (``<window>`` and
+``<window>:gts``), so re-running over a window written before a group took bulletins
+decodes only those, and drops the ones stored already wherever they are in the group
+(:func:`_stored_identities_at`); a second re-run takes nothing.
+
 Not parsed (counted, and skipped cheaply by key): IASI and AVHRR L2 products (trace gases,
-clouds: ``*_l2*``) and the GTS radiance bulletins (``IE*``, ``IN*`` other than the AMV
-headings), which repeat what the topics above carry.
+clouds: ``*_l2*``) and the GTS bulletins above that are skipped.
 
 The tar stream never waits on decoding: :meth:`SatelliteTarget.feed` writes each object to
 a spool directory and hands its path to a process pool; workers decode to per-object
@@ -130,6 +164,11 @@ class Instrument:
     #: ATOVS numbers AMSU-A 28-42 and MHS 43-47 across HIRS/MSU/AMSU; channels here are
     #: numbered from 1 in message order and the ATOVS number kept in the channel table.
     renumber: bool = False
+    #: GTS bulletins (``TTAA CCCC`` of the heading) relayed into WIS2 whose radiances
+    #: are not otherwise in the cache; see the module docstring.
+    gts: tuple[str, ...] = ()
+    #: BUFR templates (first unexpanded descriptor) a GTS bulletin's message must have.
+    templates: tuple[int, ...] = ()
 
 
 INSTRUMENTS = {
@@ -146,6 +185,8 @@ INSTRUMENTS = {
                 ("scanLevelQualityFlags", "scan_quality_flags"),
                 ("geolocationQuality", "geolocation_quality"),
             ),
+            gts=("INST KWBC",),
+            templates=(310061,),
         ),
         Instrument(
             renumber=True,
@@ -157,6 +198,8 @@ INSTRUMENTS = {
                 ("scanLineQualityFlagsForAtovs", "scan_quality_flags"),
                 ("fieldOfViewQualityFlagsForAtovs", "field_of_view_quality_flags"),
             ),
+            gts=("IEAX EUMP",),
+            templates=(310009,),
         ),
         Instrument(
             renumber=True,
@@ -168,6 +211,8 @@ INSTRUMENTS = {
                 ("scanLineQualityFlagsForAtovs", "scan_quality_flags"),
                 ("fieldOfViewQualityFlagsForAtovs", "field_of_view_quality_flags"),
             ),
+            gts=("INMX SBBR", "INMI SABM", "IEMX EUMP"),
+            templates=(310010,),
         ),
         Instrument(
             "mwhs2",
@@ -223,10 +268,21 @@ INSTRUMENTS = {
                 ("majorFrameCount", "major_frame_count"),
             ),
             scaled=True,
+            gts=("INQX SBBR",),
+            templates=(340007, 340008),
         ),
     )
 }
 BY_TOPIC = {topic: i for i in INSTRUMENTS.values() for topic in i.topics}
+BY_GTS = {heading: i for i in INSTRUMENTS.values() for heading in i.gts}
+#: A GTS relay's key: ``.../data/core/T1/T2/A1/A2/ii/CCCC/<file>``.
+GTS_KEY = re.compile(
+    r"^data/[^/]+-gts-to-wis2/data/core/(?P<t1>[A-Z])/(?P<t2>[A-Z])/(?P<a1>[A-Z])/(?P<a2>[A-Z])/"
+    r"\d\d/(?P<cccc>[A-Z]{4})/"
+)
+#: Ledger suffix of a window's GTS bulletins, kept apart from its topics' entry so a
+#: window written before a group took bulletins can still take them; see :func:`write_group`.
+GTS_ENTRY = ":gts"
 
 #: Per-observation keys every template has: (BUFR key, variable).
 COMMON = (
@@ -265,12 +321,33 @@ UNITS = {
 }
 
 
+def gts_heading(key: str) -> str | None:
+    """``TTAA CCCC`` of a GTS relay's bulletin (``INST KWBC``), or None for other keys."""
+    match = GTS_KEY.match(key)
+    if match is None:
+        return None
+    return match["t1"] + match["t2"] + match["a1"] + match["a2"] + " " + match["cccc"]
+
+
 def instrument_for(key: str) -> Instrument | None:
     """The instrument whose radiances the object at ``key`` holds, or None."""
+    heading = gts_heading(key)
+    if heading is not None:
+        return BY_GTS.get(heading)
     match = TOPIC.match(key)
     if match is None or NOT_RADIANCES.search(match["name"]):
         return None
     return BY_TOPIC.get(match["instrument"])
+
+
+def ledger_entry(partition: str, key: str) -> str:
+    """The ledger entry an object of ``partition`` is recorded under in its group."""
+    return partition + GTS_ENTRY if gts_heading(key) is not None else partition
+
+
+def window_entries(instrument: Instrument, partition: str) -> list[str]:
+    """Every ledger entry a group records ``partition`` under: topics, then GTS bulletins."""
+    return [partition, partition + GTS_ENTRY] if instrument.gts else [partition]
 
 
 # ----------------------------------------------------------------------------- decoding
@@ -482,6 +559,17 @@ def _concat(parts: list[dict]) -> dict[str, np.ndarray]:
     return out
 
 
+def _template(message: bytes) -> int:
+    """A message's first unexpanded descriptor, read without unpacking its data."""
+    import eccodes
+
+    handle = eccodes.codes_new_from_message(message)
+    try:
+        return int(np.atleast_1d(eccodes.codes_get_array(handle, "unexpandedDescriptors"))[0])
+    finally:
+        eccodes.codes_release(handle)
+
+
 def identities(satellite, times, latitude, longitude, fov) -> np.ndarray:
     """A field of view's identity: satellite, time (0.1 s), position (0.01 deg), FOV."""
     frame = pd.DataFrame(
@@ -519,9 +607,13 @@ def decode_object(
         _provenance(arrays, key, arrived)
         return product.group, arrays, counts
     parts = []
+    templates = instrument.templates if gts_heading(key) is not None else ()
     for message in split_bufr(body):
         counts["messages"] += 1
         try:
+            if templates and _template(message) not in templates:
+                counts["messages_of_other_templates"] += 1
+                continue
             decoded = decode_message(message, instrument)
         except Exception:  # noqa: BLE001 - one bad message must not lose the object
             counts["undecodable_messages"] += 1
@@ -740,6 +832,38 @@ def _stored_identities(repo, group: str) -> set[int]:
     return set(array[max(0, rows - RECENT_IDENTITIES) :].tolist())
 
 
+def _stored_identities_at(repo, group: str, times: np.ndarray) -> set[int]:
+    """Identities of every stored row observed in the same minutes as ``times``.
+
+    A row's identity fixes its time to 0.1 s, so a stored copy of any of these
+    observations lies in one of their minutes; scanning the ``time`` column for those
+    minutes finds it wherever the group holds it, not only among the latest rows. The
+    column is read in blocks and identities only where a block has a match, so memory
+    stays at one block plus the matches.
+    """
+    import zarr
+
+    try:
+        node = zarr.open_group(repo.readonly_session("main").store, path=group, mode="r")
+        stamps, ids = node["time"], node["observation_identity"]
+    except Exception:  # noqa: BLE001 - a group not written yet has none
+        return set()
+    if not str(stamps.attrs.get("units", "")).startswith("milliseconds since 1970-01-01"):
+        logger.warning(f"wis2_satellite {group}: time not in ms; comparing every identity")
+        return set(ids[:].tolist())
+    minutes = np.unique(
+        np.asarray(times).astype("datetime64[ms]").astype("int64")[~np.isnat(times)] // 60_000
+    )
+    found: set[int] = set()
+    step = stamps.chunks[0] * 8
+    for start in range(0, stamps.shape[0], step):
+        block = stamps[start : start + step] // 60_000
+        hit = np.isin(block, minutes)
+        if hit.any():
+            found.update(ids[start : start + block.size][hit].tolist())
+    return found
+
+
 def write_group(
     repo, instrument: Instrument, paths: Sequence[str], partition: str | None, counts: Counter
 ) -> int:
@@ -755,15 +879,27 @@ def write_group(
     )
 
     group = instrument.group
-    if partition is not None and partition in ledger(repo, group=group):
-        counts[f"{group}_already_written"] += 1
-        return 0
+    todo: list[str] = []
+    catching_up = False
+    if partition is not None:
+        entries = window_entries(instrument, partition)
+        held = ledger(repo, group=group)
+        todo = [entry for entry in entries if entry not in held]
+        if not todo:
+            counts[f"{group}_already_written"] += 1
+            return 0
+        # Part of the window is written already (its topics, before this group took GTS
+        # bulletins): those rows may be anywhere in the group, not just the latest.
+        catching_up = len(todo) < len(entries)
     # Identities, channel counts and arrivals only, to choose the copy to keep.
     keys = []
+    observed = []
     for index, path in enumerate(paths):
         with np.load(path, allow_pickle=True) as data:
             ids, valid = data["observation_identity"], data["valid_channels"]
             arrived = data["arrival_time"]
+            if catching_up:
+                observed.append(data["time"])
         keys.append(
             pd.DataFrame(
                 {
@@ -780,6 +916,8 @@ def write_group(
     table = pd.concat(keys, ignore_index=True)
     counts[f"{group}_decoded"] += len(table)
     stored = _stored_identities(repo, group)
+    if catching_up:
+        stored |= _stored_identities_at(repo, group, np.concatenate(observed))
     table = table[~table["id"].isin(stored)]
     first_arrival = table.groupby("id")["arrival"].min()
     table = table.sort_values(["id", "valid"], ascending=[True, False]).drop_duplicates("id")
@@ -808,6 +946,7 @@ def write_group(
             {
                 "title": f"WIS2 Global Cache {instrument.group} radiances",
                 "instrument_topics": list(instrument.topics),
+                "gts_headings": list(instrument.gts),
             }
         )
         session.commit(
@@ -831,11 +970,12 @@ def write_group(
         if values_in_batch >= BATCH_VALUES:
             flush()
     flush()
-    if partition is not None:
+    for entry in todo:
         try:
-            mark_written(repo, partition, label=f"wis2_satellite {group}", group=group)
+            mark_written(repo, entry, label=f"wis2_satellite {group}", group=group)
         except Exception as exc:  # noqa: BLE001 - group not created when nothing was new
             logger.debug(f"wis2_satellite {group}: ledger not updated ({exc})")
+            break
     if written:
         describe_variables(repo, ARRIVAL_ATTRS, label=f"wis2_satellite {group}", group=group)
     return written
@@ -1080,7 +1220,9 @@ class SatelliteTarget(ArchiveTarget):
         """Note the groups that already hold ``partition``, so their objects are declined.
 
         Re-running the target over an archived window (a backfill of new groups) then
-        neither spools nor decodes the radiances written the first time.
+        neither spools nor decodes the radiances written the first time. A group's topics
+        and its GTS bulletins are noted apart (``atms``, ``atms:gts``), so a window written
+        before the group took bulletins takes just those on a re-run.
         """
         from planetary_datasets.common.multidim import ledger
 
@@ -1088,10 +1230,13 @@ class SatelliteTarget(ArchiveTarget):
         written = set()
         for group in [*INSTRUMENTS, *products.PRODUCTS]:
             try:
-                if partition in ledger(repo, group=group):
-                    written.add(group)
+                held = ledger(repo, group=group)
             except Exception:  # noqa: BLE001 - a group not created yet holds nothing
                 continue
+            # "atms" for the window's topic objects, "atms:gts" for its GTS bulletins.
+            for entry in (partition, partition + GTS_ENTRY):
+                if entry in held:
+                    written.add(group + entry.removeprefix(partition))
         self._written = written
         if written:
             logger.info(
@@ -1101,9 +1246,11 @@ class SatelliteTarget(ArchiveTarget):
 
     def wants(self, key: str, size: int) -> bool:
         instrument = instrument_for(key)
-        product = None if instrument is not None else products.product_for(key)
-        group = instrument.group if instrument else (product.group if product else None)
-        return group is not None and group not in getattr(self, "_written", ())
+        if instrument is not None:
+            written = ledger_entry(instrument.group, key)
+            return written not in getattr(self, "_written", ())
+        product = products.product_for(key)
+        return product is not None and product.group not in getattr(self, "_written", ())
 
     def _start(self) -> None:
         root = pathlib.Path(self.config.data_dir) / "wis2_satellite_spool"

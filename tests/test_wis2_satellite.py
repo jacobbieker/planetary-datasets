@@ -76,8 +76,21 @@ def decoded(name: str) -> dict:
             "data/de-dwd-gts-to-wis2/data/core/I/S/X/X/01/EHDB/A_ISXX01EHDB010048_C_EDZW_1.bin",
             True,
         ),
-        # GTS radiance bulletins repeat the topics; upper-air bulletins are another target's.
+        # GTS radiance bulletins: those that repeat the topics are skipped, those with
+        # fields of view of their own taken; upper-air bulletins are another target's.
         ("data/de-dwd-gts-to-wis2/data/core/I/E/I/X/01/EUMP/A_IEIX01EUMP010001_C_EDZW_1", False),
+        ("data/de-dwd-gts-to-wis2/data/core/I/N/C/X/01/EUMP/A_INCX01EUMP010001_C_EDZW_1", False),
+        ("data/de-dwd-gts-to-wis2/data/core/I/E/Q/X/01/EUMP/A_IEQX01EUMP010001_C_EDZW_1", False),
+        (
+            "data/jp-jma-gts-to-wis2/data/core/I/N/S/T/07/KWBC/A_INST07KWBC050650_C_RJTD_1.bufr",
+            True,
+        ),
+        ("data/de-dwd-gts-to-wis2/data/core/I/N/M/X/08/SBBR/A_INMX08SBBR051035_C_EDZW_1", True),
+        (
+            "data/jp-jma-gts-to-wis2/data/core/I/N/Q/X/01/SBBR/A_INQX01SBBR050109_C_RJTD_1.bufr",
+            True,
+        ),
+        ("data/de-dwd-gts-to-wis2/data/core/I/N/A/X/01/SBBR/A_INAX01SBBR010001_C_EDZW_1", False),
         ("data/de-dwd-gts-to-wis2/data/core/I/U/K/X/01/EGRR/A_IUKX01EGRR010000_C_EDZW_1", False),
         ("data/de-dwd/data/core/weather/surface-based-observations/synop/x.bufr", False),
     ],
@@ -319,3 +332,130 @@ def test_groups_already_holding_the_window_are_not_fed_again(local_config):
     fresh = sat.SatelliteTarget(local_config, workers=1)
     fresh.prepare("wis2_20261030T0000Z")
     assert fresh.wants(key("atms"), 1)
+
+
+GTS = {"atms": "gts_atms", "mhs": "gts_mhs", "iasi": "gts_iasi"}
+
+
+def as_gts(name: str, heading: str) -> str:
+    """The topic fixture ``name`` as if relayed under the GTS ``heading`` (``INST KWBC``)."""
+    letters, centre = heading.split()
+    return f"data/de-dwd-gts-to-wis2/data/core/{'/'.join(letters)}/01/{centre}/A_{name}_relayed"
+
+
+@pytest.mark.parametrize(("group", "fixture"), sorted(GTS.items()))
+def test_gts_bulletins_decode_into_their_instrument_group(group, fixture):
+    assert sat.gts_heading(key(fixture)) in sat.INSTRUMENTS[group].gts
+    found, arrays, counts = sat.decode_object(key(fixture), body(fixture), ARRIVED)
+    assert found == group and arrays is not None, counts
+    assert arrays["source_centre"][0].endswith("-gts-to-wis2")
+    assert np.isfinite(arrays["latitude"]).all()
+    assert (arrays["time"] > np.datetime64("2026-11-01")).all()
+    reference = decoded(group)
+    assert arrays["channel_number"].size <= max(reference["channel_number"].size, 8700)
+    if group == "mhs":
+        assert arrays["channel_atovs_number"].tolist() == list(range(43, 48))
+    if group == "atms":
+        assert arrays["channel_number"].tolist() == list(range(1, 23))
+
+
+def test_a_gts_bulletin_of_another_template_is_not_taken_into_the_group():
+    # AMSU-A (310009) under an MHS heading must not land in mhs with 15 channels.
+    group, arrays, counts = sat.decode_object(as_gts("x", "INMX SBBR"), body("amsua"), ARRIVED)
+    assert group == "mhs" and arrays is None
+    assert counts["messages_of_other_templates"] == 1
+
+
+def test_ledger_entries_keep_a_windows_topics_and_gts_bulletins_apart():
+    gts = key("gts_atms")
+    assert sat.ledger_entry("w", gts) == "w:gts" and sat.ledger_entry("w", key("atms")) == "w"
+    assert sat.window_entries(sat.INSTRUMENTS["atms"], "w") == ["w", "w:gts"]
+    assert sat.window_entries(sat.INSTRUMENTS["cris"], "w") == ["w"]
+
+
+def feed_wanted(target: sat.SatelliteTarget, objects: list[tuple[str, bytes]]) -> list[str]:
+    """Feed what the target wants, as the archiver's router does; the keys fed."""
+    fed = []
+    for name, data in objects:
+        if target.wants(name, len(data)):
+            target.feed(name, data, ARRIVED)
+            fed.append(name)
+    return fed
+
+
+def test_a_rerun_adds_only_the_gts_rows_missing_from_a_window_written_before(
+    local_config, monkeypatch
+):
+    window = "wis2_20261029T1200Z"
+    repo = local_config.icechunk_repo(sat.STORE_PREFIX)
+    # The window as written before the groups took GTS bulletins: topics only, ledgered
+    # under the bare window name.
+    with monkeypatch.context() as before:
+        before.setattr(sat, "window_entries", lambda instrument, partition: [partition])
+        first = sat.SatelliteTarget(local_config, workers=1)
+        first.prepare(window)
+        for name in ("atms", "mhs", "iasi"):
+            first.feed(key(name), body(name), ARRIVED)
+        written = first.finish(None, None, window)["rows"]
+    # A later window, so the first one's rows are not the latest the group holds, and no
+    # "recent identities": only the scan of stored rows by minute can find repeats.
+    later = sat.SatelliteTarget(local_config, workers=1)
+    later.feed(key("gts_mhs"), body("gts_mhs"), ARRIVED)
+    later.finish(None, None, "wis2_20261030T0000Z")
+    monkeypatch.setattr(sat, "RECENT_IDENTITIES", 0)
+
+    objects = [(key(name), body(name)) for name in ("atms", "mhs", "iasi")]
+    # GTS copies of fields of view the topics already gave, and GTS-only ones.
+    objects += [(as_gts("atms", "INST KWBC"), body("atms"))]
+    objects += [(as_gts("iasi", "INQX SBBR"), body("iasi"))]
+    objects += [(key(fixture), body(fixture)) for fixture in GTS.values()]
+    rerun = sat.SatelliteTarget(local_config, workers=1)
+    rerun.prepare(window)
+    fed = feed_wanted(rerun, objects)
+    assert fed and all(sat.gts_heading(k) for k in fed), "the topics are written already"
+    summary = rerun.finish(None, None, window)
+
+    new = {group: decoded_gts(fixture)["time"].size for group, fixture in GTS.items()}
+    assert summary["rows"] == {"atms": new["atms"], "iasi": new["iasi"], "mhs": 0}
+    assert summary["atms_duplicates"] == written["atms"]
+    assert summary["iasi_duplicates"] == written["iasi"]
+    # The MHS bulletin's rows were stored by the later window, wherever they now are.
+    assert summary["mhs_duplicates"] == new["mhs"]
+    store = repo.readonly_session("main").store
+    for group in GTS:
+        rows = xr.open_zarr(store, group=group, consolidated=False)["observation_identity"]
+        assert len(np.unique(rows.values)) == rows.size, f"{group} holds a row twice"
+    from planetary_datasets.common.multidim import ledger
+
+    assert {window, f"{window}:gts"} <= ledger(repo, group="atms")
+
+    again = sat.SatelliteTarget(local_config, workers=1)
+    again.prepare(window)
+    assert feed_wanted(again, objects) == []
+    assert again.finish(None, None, window) == {"objects": 0}
+    # Fed regardless of the ledger (a run racing the first), nothing is written twice.
+    forced = sat.SatelliteTarget(local_config, workers=1)
+    for name, data in objects:
+        forced.feed(name, data, ARRIVED)
+    assert set(forced.finish(None, None, window)["rows"].values()) == {0}
+
+
+def decoded_gts(fixture: str) -> dict:
+    group, arrays, counts = sat.decode_object(key(fixture), body(fixture), ARRIVED)
+    assert arrays is not None, counts
+    return arrays
+
+
+def test_a_window_written_with_gts_bulletins_is_ledgered_for_both(local_config):
+    window = "wis2_20261105T1200Z"
+    target = sat.SatelliteTarget(local_config, workers=1)
+    target.feed(key("atms"), body("atms"), ARRIVED)
+    target.feed(key("gts_atms"), body("gts_atms"), ARRIVED)
+    summary = target.finish(None, None, window)
+    assert (
+        summary["rows"]["atms"]
+        == decoded("atms")["time"].size + decoded_gts("gts_atms")["time"].size
+    )
+    again = sat.SatelliteTarget(local_config, workers=1)
+    again.prepare(window)
+    assert not again.wants(key("atms"), 1) and not again.wants(key("gts_atms"), 1)
