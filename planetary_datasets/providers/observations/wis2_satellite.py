@@ -1110,10 +1110,26 @@ def write_product_group(
 
     group = product.group
     label = f"wis2_satellite {group}"
-    if partition is not None and partition in ledger(repo, group=group):
-        counts[f"{group}_already_written"] += 1
-        return 0
-    keep = _earliest_copies(paths, _stored_identities(repo, group), group, counts)
+    todo: list[str] = []
+    catching_up = False
+    if partition is not None:
+        entries = products.window_entries(product, partition)
+        held = ledger(repo, group=group)
+        todo = [entry for entry in entries if entry not in held]
+        if not todo:
+            counts[f"{group}_already_written"] += 1
+            return 0
+        # Part of the window is written already (before the group took a later source):
+        # its copies of these rows may be anywhere in the group, not just the latest.
+        catching_up = len(todo) < len(entries)
+    stored = _stored_identities(repo, group)
+    if catching_up and paths:
+        observed = []
+        for path in paths:
+            with np.load(path, allow_pickle=True) as data:
+                observed.append(data["time"])
+        stored |= _stored_identities_at(repo, group, np.concatenate(observed))
+    keep = _earliest_copies(paths, stored, group, counts)
     if keep is None:
         return 0
     stored_dims = _stored_dims(repo, group)
@@ -1148,11 +1164,12 @@ def write_product_group(
         if values_in_batch >= BATCH_VALUES:
             flush()
     flush()
-    if partition is not None:
+    for entry in todo:
         try:
-            mark_written(repo, partition, label=label, group=group)
+            mark_written(repo, entry, label=label, group=group)
         except Exception as exc:  # noqa: BLE001 - group not created when nothing was new
             logger.debug(f"{label}: ledger not updated ({exc})")
+            break
     if written:
         describe_variables(repo, ARRIVAL_ATTRS, label=label, group=group)
     return written
@@ -1260,8 +1277,13 @@ class SatelliteTarget(ArchiveTarget):
                 held = ledger(repo, group=group)
             except Exception:  # noqa: BLE001 - a group not created yet holds nothing
                 continue
-            # "atms" for the window's topic objects, "atms:gts" for its GTS bulletins.
-            for entry in (partition, partition + GTS_ENTRY):
+            # "atms" for the window's topic objects, "atms:gts" for its GTS bulletins,
+            # "amv:ami" for a product's later source.
+            for entry in (
+                partition,
+                partition + GTS_ENTRY,
+                *(partition + suffix for suffix in products.LEDGER_SUFFIXES),
+            ):
                 if entry in held:
                     written.add(group + entry.removeprefix(partition))
         self._written = written
@@ -1272,12 +1294,16 @@ class SatelliteTarget(ArchiveTarget):
             )
 
     def wants(self, key: str, size: int) -> bool:
+        """Whether the object goes to a group whose ledger lacks its entry for the window."""
         instrument = instrument_for(key)
         if instrument is not None:
             written = ledger_entry(instrument.group, key)
             return written not in getattr(self, "_written", ())
-        product = products.product_for(key)
-        return product is not None and product.group not in getattr(self, "_written", ())
+        routed = products.route(key)
+        if routed is None:
+            return False
+        product, suffix = routed
+        return product.group + suffix not in getattr(self, "_written", ())
 
     def _start(self) -> None:
         root = pathlib.Path(self.config.data_dir) / "wis2_satellite_spool"

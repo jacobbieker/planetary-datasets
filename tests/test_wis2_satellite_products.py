@@ -7,7 +7,9 @@ Metop AVHRR and Meteosat AMVs, Metop-C ASCAT winds, and a Norwegian ``ISX`` bull
 is not satellite data at all; Meteosat-9 SEVIRI all-sky radiances (DWD relay), Himawari-9
 AMVs (JMA relay), a CFOSAT SWIM nadir altimetry message, and the first 60 subsets of an
 MTG-I1 FCI all-sky radiance bulletin (JMA relay; cut with ecCodes' subset extraction, the
-values untouched). ``<name>.key`` holds the cache key each came from.
+values untouched); and the first 40 subsets of a GK-2A AMI clear-sky radiance object and of
+an AMI motion vector object from KMA's ``ami`` topic (cut the same way). ``<name>.key``
+holds the cache key each came from.
 """
 
 from __future__ import annotations
@@ -288,3 +290,99 @@ def test_new_groups_are_backfilled_into_a_window_the_others_hold(local_config):
     for name in ADDED:
         again.feed(key(name), body(name), ARRIVED)
     assert set(again.finish(None, None, window)["rows"].values()) == {0}
+
+
+AMI = "data/kr-kma/data/core/weather/space-based-observations/geo-kompsat-2a/ami"
+
+
+@pytest.mark.parametrize(
+    "path, routed",
+    [
+        (f"{AMI}/A_INVN01RKSL010000_C_RKSL_20261101000020_ir112.bin", ("amv", ":ami")),
+        (
+            f"{AMI}/kr-kma_core.weather.space-based-observations.geo-kompsat-2a.ami_"
+            "A_INVN03RKSL302100_C_RKSL_20261030210040_wv069.bufr",
+            ("amv", ":ami"),
+        ),
+        (f"{AMI}/A_INRN01RKSL010000_C_RKSL_20261101000030.bin", ("ami_csr", "")),
+        (
+            f"{AMI}/kr-kma_core.weather.space-based-observations.geo-kompsat-2a.ami_"
+            "A_INRS01RKSL301630_C_RKSL_20261030163020.bufr",
+            ("ami_csr", ""),
+        ),
+        (
+            "data/de-dwd-gts-to-wis2/data/core/I/N/V/N/01/RKSL/A_INVN01RKSL010000_C_EDZW_1",
+            ("amv", ""),
+        ),
+    ],
+)
+def test_ami_motion_vectors_go_to_amv_under_their_own_ledger_entry(path, routed):
+    """GK-2A's AMVs leave ami_csr for amv, ledgered as <window>:ami."""
+    product, suffix = sp.route(path)
+    assert (product.group, suffix) == routed
+    assert sp.window_entries(sp.PRODUCTS["amv"], "w") == ["w", "w:ami"]
+    assert sp.window_entries(sp.PRODUCTS["ami_csr"], "w") == ["w"]
+
+
+def test_ami_csr_takes_only_the_clear_sky_radiances():
+    """ami_csr decodes the category-101 radiances and declines a motion vector message."""
+    group, csr, _ = sat.decode_object(key("ami_csr"), body("ami_csr"), ARRIVED)
+    assert group == "ami_csr" and csr["time"].size == 40
+    assert np.asarray(csr["brightness_temperature"]).shape == (40, 22)
+    # A vector message reaching ami_csr under an unexpected name is not taken.
+    arrays, counts = sp.decode_object(key("ami_csr"), body("ami_amv"), sp.PRODUCTS["ami_csr"])
+    assert arrays is None and counts["ami_csr_messages_of_other_products"] == 1
+    group, amv, _ = sat.decode_object(key("ami_amv"), body("ami_amv"), ARRIVED)
+    assert group == "amv" and amv["time"].size == 40
+    assert "wind_speed" in amv and amv["bufr_template"][0] == "310077"
+
+
+@pytest.mark.parametrize("relayed_before", [True, False])
+def test_ami_vectors_are_backfilled_into_amv_once_without_repeats(
+    local_config, monkeypatch, tmp_path, relayed_before
+):
+    """A window written before the split takes just the ami vectors amv lacks, once."""
+    import dataclasses
+    from collections import Counter
+
+    # Stored copies must be found by the minute scan, not among the latest identities.
+    monkeypatch.setattr(sat, "RECENT_IDENTITIES", 0)
+    old_amv = dataclasses.replace(sp.PRODUCTS["amv"], later=())
+    relayed = "data/de-dwd-gts-to-wis2/data/core/I/N/V/N/01/RKSL/A_INVN01RKSL010000_C_EDZW_1"
+
+    def spool(object_key: str, data: bytes) -> str:
+        arrays, _ = sp.decode_object(object_key, data, old_amv)
+        sat._provenance(arrays, object_key, ARRIVED)
+        path = tmp_path / f"{len(list(tmp_path.glob('*.npz')))}.npz"
+        np.savez(path, **{k.replace(".", "__"): v for k, v in sat._compact(arrays).items()})
+        return str(path)
+
+    repo = local_config.icechunk_repo(sat.STORE_PREFIX)
+    sat.ensure_root(repo)
+    # Before the split: amv took Metop AVHRR and, where relayed, the GK-2A vectors through
+    # the GTS; ami_csr took the radiances.
+    paths = [spool(key("amv_avhrr"), body("amv_avhrr"))]
+    if relayed_before:
+        paths.append(spool(relayed, body("ami_amv")))
+    stored = sat.write_product_group(repo, old_amv, paths, "w", Counter())
+    csr = sat.SatelliteTarget(local_config, workers=1)
+    csr.feed(key("ami_csr"), body("ami_csr"), ARRIVED)
+    csr.finish(None, None, "w")
+
+    again = sat.SatelliteTarget(local_config, workers=1)
+    again.prepare("w")
+    assert again.wants(key("ami_amv"), 1), "amv holds w but not w:ami"
+    assert not again.wants(key("amv_avhrr"), 1) and not again.wants(relayed, 1)
+    assert not again.wants(key("ami_csr"), 1), "ami_csr holds w"
+    again.feed(key("ami_amv"), body("ami_amv"), ARRIVED)
+    summary = again.finish(None, None, "w")
+    assert summary["rows"] == {"amv": 0 if relayed_before else 40}, summary
+
+    amv = xr.open_zarr(store(local_config), group="amv", consolidated=False)
+    ids = amv["observation_identity"].values
+    assert ids.size == stored + (0 if relayed_before else 40)
+    assert ids.size == np.unique(ids).size, "a relayed copy is found, not repeated"
+    assert set(amv.attrs["partitions_written"]) == {"w", "w:ami"}
+    last = sat.SatelliteTarget(local_config, workers=1)
+    last.prepare("w")
+    assert not last.wants(key("ami_amv"), 1), "w:ami is written"
