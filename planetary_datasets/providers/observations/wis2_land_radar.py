@@ -409,6 +409,11 @@ def gamic_shifts(handle, zone: str | None, reference: float) -> dict[str, float]
     }
 
 
+def _applied(shift: float) -> float:
+    """Seconds to subtract: the shift, or 0 when it is unrecognised (NaN)."""
+    return shift if np.isfinite(shift) else 0.0
+
+
 def _gamic_header(handle, country: str, key: str = "") -> dict[str, Any] | None:
     site = re.sub(r"[^a-z0-9]+", "", _text(_attr(_child(handle, "how"), "site_name")).lower())
     stamp = _iso_seconds(_attr(_child(handle, "what"), "date"))
@@ -418,8 +423,7 @@ def _gamic_header(handle, country: str, key: str = "") -> dict[str, Any] | None:
     if not site or not np.isfinite(stamp) or not quantities:
         return None
     shifts = gamic_shifts(handle, LOCAL_ZONES.get(country), name_time(key))
-    if np.isfinite(shifts["nominal"]):
-        stamp -= shifts["nominal"]
+    stamp -= _applied(shifts["nominal"])
     return {
         "node": f"{country}{site}",
         "time": np.datetime64(int(round(stamp)), "s"),
@@ -435,8 +439,7 @@ def _gamic_volume(handle, quantity: str, shifts: dict) -> dict[str, Any]:
     nominal_shift = shifts.get("nominal", 0.0)
     scan_shift = shifts.get("scans", 0.0)
     # An unrecognised offset is left as given (and recorded as NaN).
-    nominal_by = nominal_shift if np.isfinite(nominal_shift) else 0.0
-    scan_by = scan_shift if np.isfinite(scan_shift) else 0.0
+    nominal_by, scan_by = _applied(nominal_shift), _applied(scan_shift)
     sweeps = []
     moment = ""
     wavelength = np.nan
