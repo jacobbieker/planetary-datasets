@@ -1199,7 +1199,6 @@ def _pool(workers: int) -> concurrent.futures.ProcessPoolExecutor:
     return concurrent.futures.ProcessPoolExecutor(workers, mp_context=context)
 
 
-@register("satellite")
 def remove_orphan_spools(root: pathlib.Path) -> list[str]:
     """Remove spools (``<pid>-*``) left in ``root`` by processes no longer running.
 
@@ -1224,6 +1223,7 @@ def remove_orphan_spools(root: pathlib.Path) -> list[str]:
     return removed
 
 
+@register("satellite")
 class SatelliteTarget(ArchiveTarget):
     """Sounder radiances into ``bkr/obs/wis2_satellite.icechunk``, decoded off the stream."""
 
