@@ -1199,6 +1199,33 @@ def _pool(workers: int) -> concurrent.futures.ProcessPoolExecutor:
     return concurrent.futures.ProcessPoolExecutor(workers, mp_context=context)
 
 
+def remove_orphan_spools(root: pathlib.Path) -> list[str]:
+    """Remove spools (``<pid>-*``) left in ``root`` by processes no longer running.
+
+    A window's spool reaches tens of GB and is removed when the window is written; an
+    archiver stopped mid-window (a restart onto new code) left its spool behind, 45 GB on
+    2026-11-06. Returns the directories removed.
+    """
+    removed = []
+    for directory in root.iterdir():
+        pid = directory.name.split("-", 1)[0]
+        if not directory.is_dir() or not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        try:
+            os.kill(int(pid), 0)
+        except ProcessLookupError:
+            shutil.rmtree(directory, ignore_errors=True)
+            if directory.exists():
+                logger.warning(f"wis2 satellite: could not remove stale spool {directory}")
+            else:
+                removed.append(directory.name)
+        except PermissionError:
+            continue
+    if removed:
+        logger.info(f"wis2 satellite: removed {len(removed)} spool(s) of stopped processes")
+    return removed
+
+
 @register("satellite")
 class SatelliteTarget(ArchiveTarget):
     """Sounder radiances into ``bkr/obs/wis2_satellite.icechunk``, decoded off the stream."""
@@ -1255,6 +1282,7 @@ class SatelliteTarget(ArchiveTarget):
     def _start(self) -> None:
         root = pathlib.Path(self.config.data_dir) / "wis2_satellite_spool"
         root.mkdir(parents=True, exist_ok=True)
+        remove_orphan_spools(root)
         self._spool = pathlib.Path(tempfile.mkdtemp(prefix=f"{os.getpid()}-", dir=root))
         (self._spool / "decoded").mkdir()
         self._pool = _pool(self.workers)

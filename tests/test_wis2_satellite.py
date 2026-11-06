@@ -459,3 +459,33 @@ def test_a_window_written_with_gts_bulletins_is_ledgered_for_both(local_config):
     again = sat.SatelliteTarget(local_config, workers=1)
     again.prepare(window)
     assert not again.wants(key("atms"), 1) and not again.wants(key("gts_atms"), 1)
+
+
+def test_spools_of_stopped_processes_are_removed_and_live_ones_kept(tmp_path):
+    """A spool whose process has gone is removed; this process's and a live one's stay."""
+    import os
+    import subprocess
+    import sys
+
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    gone = tmp_path / f"{child.pid}-abc"
+    mine = tmp_path / f"{os.getpid()}-def"
+    alive = tmp_path / f"{os.getppid()}-ghi"
+    for directory in (gone, mine, alive):
+        directory.mkdir()
+        (directory / "00000001.bufr").write_bytes(b"BUFR")
+    assert sat.remove_orphan_spools(tmp_path) == [gone.name]
+    assert not gone.exists() and mine.exists() and alive.exists()
+
+
+def test_a_spool_that_cannot_be_removed_is_not_reported_removed(tmp_path, monkeypatch):
+    """A failed deletion is left out of the result, so the disk it holds is not hidden."""
+    import subprocess
+    import sys
+
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    (tmp_path / f"{child.pid}-abc").mkdir()
+    monkeypatch.setattr(sat.shutil, "rmtree", lambda path, ignore_errors=False: None)
+    assert sat.remove_orphan_spools(tmp_path) == []
