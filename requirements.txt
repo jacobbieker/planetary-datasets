@@ -32,3 +32,4 @@ icechunk
 loguru
 requests
 python-dotenv
+pymetdecoder
