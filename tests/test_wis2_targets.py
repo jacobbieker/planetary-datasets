@@ -396,7 +396,8 @@ def test_follow_does_not_sleep_past_a_due_window_it_has_not_archived(monkeypatch
         if len(pauses) == 2:
             raise StopIteration
 
-    unarchived = [[due], []]
+    # Two checks a loop: which windows to archive first, then whether one is still due.
+    unarchived = [[due], [due], [], []]
     monkeypatch.setattr(wis2, "window_ends", lambda now: [due])
     monkeypatch.setattr(wis2, "archive", lambda end, config, targets=None: None)
     monkeypatch.setattr(wis2, "finish_pending", lambda *a, **k: 0)
@@ -476,6 +477,27 @@ def test_failed_pending_archives_count_toward_the_limit(monkeypatch):
     later = now + dt.timedelta(hours=9)
     assert wis2.finish_pending(later, _config(), now=lambda: now, limit=1) == 0
     assert tried == keys[:1]
+
+
+def test_windows_with_no_archive_are_archived_before_pending_ones(monkeypatch):
+    """A new window is archived before archived windows' pending targets are finished."""
+    old, newer, due = (
+        dt.datetime(2026, 11, d, h, tzinfo=UTC) for d, h in ((5, 0), (5, 12), (6, 0))
+    )
+    order = []
+    checks = [[due], []]
+
+    def stop(*args, **kwargs):
+        raise StopIteration
+
+    monkeypatch.setattr(wis2, "window_ends", lambda now: [old, newer, due])
+    monkeypatch.setattr(wis2, "_unarchived", lambda ends, config: checks.pop(0) if checks else [])
+    monkeypatch.setattr(wis2, "archive", lambda end, config, targets=None: order.append(end))
+    monkeypatch.setattr(wis2, "finish_pending", lambda *a, **k: 0)
+    monkeypatch.setattr(wis2, "wait", stop)
+    with pytest.raises(StopIteration):
+        wis2.follow(_config())
+    assert order == [due, old, newer]
 
 
 def test_finish_pending_stops_at_its_limit(monkeypatch):
