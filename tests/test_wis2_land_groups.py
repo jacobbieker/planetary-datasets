@@ -380,3 +380,14 @@ def test_later_volumes_with_fewer_or_more_sweeps_and_bins_are_padded(local_confi
     )
     assert np.isnat(ds["sweep_start_time"].values[1, 2])
     assert np.isnan(ds["elevation"].values[0, 3])
+
+
+def test_a_spool_left_by_a_dead_process_is_removed(local_config, tmp_path):
+    root = tmp_path / "spool"
+    orphan = root / "hydrometric" / "999999999-abc"
+    orphan.mkdir(parents=True)
+    (orphan / "00000001").write_bytes(b"x")
+    spool = hydrometric.Spool(root, "hydrometric")
+    spool.add("key", b"body", ARRIVED)
+    assert not orphan.exists() and len(spool.items) == 1
+    spool.clear()

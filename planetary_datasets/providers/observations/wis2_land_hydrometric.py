@@ -193,6 +193,7 @@ class Spool:
         try:
             if self.directory is None:
                 self.root.mkdir(parents=True, exist_ok=True)
+                self._remove_orphans()
                 self.directory = pathlib.Path(
                     tempfile.mkdtemp(prefix=f"{os.getpid()}-", dir=self.root)
                 )
@@ -202,6 +203,19 @@ class Spool:
         except Exception as exc:  # noqa: BLE001 - a target must never break the archive
             self.failed += 1
             logger.warning(f"wis2 land: could not spool {key}: {exc}")
+
+    def _remove_orphans(self) -> None:
+        """Remove spools left by processes that died before finishing their window."""
+        for directory in self.root.iterdir():
+            pid = directory.name.split("-", 1)[0]
+            if not pid.isdigit() or int(pid) == os.getpid():
+                continue
+            try:
+                os.kill(int(pid), 0)
+            except ProcessLookupError:
+                shutil.rmtree(directory, ignore_errors=True)
+            except PermissionError:
+                continue
 
     def in_arrival_order(self) -> list[tuple[str, str, dt.datetime | None]]:
         """The spooled objects, earliest arrival first (unknown arrivals last)."""
