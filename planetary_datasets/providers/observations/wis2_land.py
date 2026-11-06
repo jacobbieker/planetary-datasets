@@ -803,6 +803,10 @@ def to_dataset(rows: Sequence[dict]) -> xr.Dataset:
 # ------------------------------------------------------------------------------ target
 
 
+class IncompleteWindow(RuntimeError):
+    """A part of the window (hydrometric, radar) was not wholly written and ledgered."""
+
+
 @register("land")
 class LandTarget(ArchiveTarget):
     """Archive target: a window's land surface reports into :data:`STORE_PREFIX`.
@@ -972,7 +976,19 @@ class LandTarget(ArchiveTarget):
             # Written after the reports, so a store created by this window gets its root
             # arrays first; each part on its own, so one failing never loses another.
             summary_parts = self._finish_parts(repo, partition)
-        return {**summary, **summary_parts}
+        summary = {**summary, **summary_parts}
+        incomplete = [
+            part
+            for part, result in summary_parts.items()
+            if "error" in result
+            or result.get("ledgered") is False
+            or any(str(v).startswith("error") for v in result.get("volumes_written", {}).values())
+        ]
+        if incomplete:
+            # Recorded as failed in the window's target record, so it shows and can be
+            # re-run (mark_pending); the parts written are not written again.
+            raise IncompleteWindow(f"{', '.join(incomplete)} incomplete: {summary}")
+        return summary
 
     def _finish_parts(self, repo, partition: str) -> dict:
         """Append the spooled hydrometric and radar objects; a summary of each."""

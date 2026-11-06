@@ -285,6 +285,10 @@ def to_dataset(volumes: list[dict], quantity: str, centre: list[str], arrivals: 
     first = next(s for v in volumes for s in v["sweeps"])
     dtype = np.result_type(*(s["counts"].dtype for v in volumes for s in v["sweeps"]))
     nodata = first["nodata"]
+    others = {s["nodata"] for v in volumes for s in v["sweeps"]} - {nodata}
+    if others:
+        # The fill would be a valid count in the other sweeps, and read as missing.
+        raise ValueError(f"{quantity}: nodata differs between sweeps ({nodata}, {others})")
     fill = (
         int(nodata) if np.isfinite(nodata) and float(nodata).is_integer() else np.iinfo(dtype).max
     )
@@ -416,6 +420,17 @@ def grow_fixed_dims(repo, group: str, ds: xr.Dataset, label: str) -> bool:
     return grown
 
 
+def _stored_fill(repo, group: str):
+    """The fill value of a group's stored ``counts`` (None before it is written)."""
+    import zarr
+
+    try:
+        node = zarr.open_group(repo.readonly_session("main").store, path=group, mode="r")
+        return node["counts"].attrs.get("_FillValue")
+    except (KeyError, zarr.errors.GroupNotFoundError):
+        return None
+
+
 def _stored_times(repo, group: str) -> set[int]:
     """Nominal times (int64 seconds) of the volumes a group holds."""
     import zarr
@@ -489,6 +504,10 @@ def write(repo, spool: Spool, partition: str | None) -> dict[str, Any]:
             def flush() -> int:
                 volumes = [b[0] for b in batch]
                 ds = to_dataset(volumes, batch[0][1], [b[2] for b in batch], [b[3] for b in batch])
+                stored = _stored_fill(repo, group)
+                fill = ds["counts"].attrs["_FillValue"]
+                if stored is not None and stored != fill:
+                    raise ValueError(f"nodata {fill} differs from the group's fill {stored}")
                 grow_fixed_dims(repo, group, ds, f"wis2_land {group}")
                 append_partition(
                     repo,

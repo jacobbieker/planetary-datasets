@@ -285,9 +285,9 @@ def test_a_window_with_objects_that_could_not_be_spooled_is_not_ledgered(local_c
         real(self, key, body, arrived)
 
     monkeypatch.setattr(hydrometric.Spool, "add", flaky)
-    _, summary = run(local_config, window_objects())
+    with pytest.raises(land.IncompleteWindow, match="hydrometric incomplete"):
+        run(local_config, window_objects())
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
-    assert summary["hydrometric"]["ledgered"] is False
     assert PARTITION not in ledger(repo, group="hydrometric")
     assert PARTITION in ledger(repo, group="radar")
     monkeypatch.setattr(hydrometric.Spool, "add", real)
@@ -424,3 +424,20 @@ def test_a_spool_left_by_a_dead_process_is_removed(local_config, tmp_path):
     spool.add("key", b"body", ARRIVED)
     assert not orphan.exists() and len(spool.items) == 1
     spool.clear()
+
+
+def test_a_volume_whose_nodata_differs_from_the_group_fill_is_refused(local_config):
+    run(local_config, [(RADAR_KEY.format("a.hdf"), odim_volume("000000"), ARRIVED)])
+    buffer = io.BytesIO(odim_volume("000500"))
+    with h5py.File(buffer, "r+") as f:
+        for name in ("dataset1", "dataset2"):
+            f[f"{name}/data1/what"].attrs["nodata"] = 254.0
+    with pytest.raises(land.IncompleteWindow, match="radar incomplete"):
+        run(
+            local_config,
+            [(RADAR_KEY.format("b.hdf"), buffer.getvalue(), ARRIVED)],
+            "wis2_20261102T0000Z",
+        )
+    repo = local_config.icechunk_repo(land.STORE_PREFIX)
+    assert "wis2_20261102T0000Z" not in ledger(repo, group="radar")
+    assert sizes(repo)["radar/bewid_dbzh"] == 1
