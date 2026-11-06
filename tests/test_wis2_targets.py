@@ -372,6 +372,7 @@ def test_a_window_due_during_a_backfill_is_archived_before_the_next_old_one(monk
         wis2, "archive", lambda end, config, targets=None: calls.append(("live", end))
     )
     monkeypatch.setattr(wis2, "finish_pending", pending)
+    monkeypatch.setattr(wis2, "_unarchived", lambda ends, config: [])
     monkeypatch.setattr(wis2, "wait", stop)
     with pytest.raises(StopIteration):
         wis2.follow(_config())
@@ -383,6 +384,73 @@ def test_a_window_due_during_a_backfill_is_archived_before_the_next_old_one(monk
         ("live", due),
         ("pending", 1),
     ]
+
+
+def test_follow_does_not_sleep_past_a_due_window_it_has_not_archived(monkeypatch):
+    """A window still unarchived when follow() would sleep is retried within a minute."""
+    due = dt.datetime(2026, 11, 6, 0, tzinfo=UTC)
+    pauses = []
+
+    def record(upcoming, pause):
+        pauses.append(pause)
+        if len(pauses) == 2:
+            raise StopIteration
+
+    unarchived = [[due], []]
+    monkeypatch.setattr(wis2, "window_ends", lambda now: [due])
+    monkeypatch.setattr(wis2, "archive", lambda end, config, targets=None: None)
+    monkeypatch.setattr(wis2, "finish_pending", lambda *a, **k: 0)
+    monkeypatch.setattr(wis2, "_unarchived", lambda ends, config: unarchived.pop(0))
+    monkeypatch.setattr(wis2, "wait", record)
+    with pytest.raises(StopIteration):
+        wis2.follow(_config())
+    assert pauses[0] == 60.0 and pauses[1] >= 60.0
+
+
+def test_a_window_whose_archive_failed_is_retried_after_a_while_not_at_once(monkeypatch):
+    """Each try lists the whole cache, so a failed window waits RETRY_FAILED, not a minute."""
+    due = dt.datetime(2026, 11, 6, 0, tzinfo=UTC)
+    pauses = []
+
+    def fail(end, config, targets=None):
+        raise ConnectionError("cache listing failed")
+
+    def record(upcoming, pause):
+        pauses.append(pause)
+        raise StopIteration
+
+    monkeypatch.setattr(wis2, "window_ends", lambda now: [due])
+    monkeypatch.setattr(wis2, "archive", fail)
+    monkeypatch.setattr(wis2, "finish_pending", lambda *a, **k: 0)
+    monkeypatch.setattr(wis2, "_unarchived", lambda ends, config: [due])
+    monkeypatch.setattr(wis2, "wait", record)
+    with pytest.raises(StopIteration):
+        wis2.follow(_config())
+    assert pauses == [wis2.RETRY_FAILED.total_seconds()]
+
+
+def test_failed_pending_archives_count_toward_the_limit(monkeypatch):
+    """A failing archive uses the call's one attempt, so the live windows come next."""
+    dest = FakeDest()
+    keys = ["bkr/obs/wis2/wis2_20261027T1200Z.tar", "bkr/obs/wis2/wis2_20261028T0000Z.tar"]
+    for key in keys:
+        _archived_tar(dest, key)
+        dest.objects[f"{key}.targets.json"] = json.dumps(
+            {"pending": ["recorder"], "done": [], "failed": []}
+        ).encode()
+    tried = []
+    monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
+    monkeypatch.setattr(wis2, "archived_tars", lambda config=None: keys)
+
+    def boom(key, *args, **kwargs):
+        tried.append(key)
+        raise ConnectionError("source unreachable")
+
+    monkeypatch.setattr(wis2, "targets_from_tar", boom)
+    now = dt.datetime(2026, 11, 1, 15, tzinfo=UTC)
+    later = now + dt.timedelta(hours=9)
+    assert wis2.finish_pending(later, _config(), now=lambda: now, limit=1) == 0
+    assert tried == keys[:1]
 
 
 def test_finish_pending_stops_at_its_limit(monkeypatch):
