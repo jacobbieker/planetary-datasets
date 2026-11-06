@@ -441,3 +441,21 @@ def test_a_volume_whose_nodata_differs_from_the_group_fill_is_refused(local_conf
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
     assert "wis2_20261102T0000Z" not in ledger(repo, group="radar")
     assert sizes(repo)["radar/bewid_dbzh"] == 1
+
+
+def test_a_window_backfilled_long_after_later_ones_writes_nothing_twice(
+    local_config, monkeypatch
+):
+    # Only the last row counts as recent: the earlier window's lines have left the tail
+    # and are found through the appends' time spans.
+    monkeypatch.setattr(hydrometric, "RECENT_IDENTITIES", 1)
+    first = [o for o in window_objects() if "AB_05AA004" in o[0]][:1]
+    other = [o for o in window_objects() if "AB_05AA008" in o[0]]
+    run(local_config, first, "wis2_20261101T1200Z")
+    run(local_config, other, "wis2_20261102T0000Z")
+    repo = local_config.icechunk_repo(land.STORE_PREFIX)
+    before = sizes(repo)["hydrometric"]
+    _, summary = run(local_config, first, "wis2_20261101T0000Z")
+    assert summary["hydrometric"]["rows_written"] == 0
+    assert summary["hydrometric"]["lines_in_older_rows"] == 24
+    assert sizes(repo)["hydrometric"] == before == 36

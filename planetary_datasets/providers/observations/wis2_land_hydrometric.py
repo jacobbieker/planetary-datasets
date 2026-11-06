@@ -29,8 +29,9 @@ Duplicates
     revised (a discharge filled in, a QA/QC code raised) is stored again as it was
     revised, so readers wanting the latest values take the last ``arrival_time`` per
     ``station_id`` and ``time``. Identities in the group's last
-    :data:`RECENT_IDENTITIES` rows (more than the 30 days the daily files repeat) are not
-    written again.
+    :data:`RECENT_IDENTITIES` rows (more than the 30 days the daily files repeat), and
+    in older appends whose times overlap (an archived window backfilled long after later
+    windows), are not written again.
 """
 
 from __future__ import annotations
@@ -229,17 +230,75 @@ class Spool:
         self.directory, self.items = None, []
 
 
-def stored_identities(repo) -> np.ndarray:
-    """Sorted identities of the group's last :data:`RECENT_IDENTITIES` rows."""
+#: Group attribute listing each append's rows and the span of times they hold:
+#: ``[[start_row, stop_row, earliest, latest], ...]`` (times in seconds since 1970).
+RANGES_ATTR = "row_time_ranges"
+
+
+def _identities(repo):
+    """The group's ``observation_identity`` array and attributes (None before it exists)."""
     import zarr
 
     try:
         node = zarr.open_group(repo.readonly_session("main").store, path=GROUP, mode="r")
-        array = node["observation_identity"]
+        return node["observation_identity"], dict(node.attrs)
     except (KeyError, zarr.errors.GroupNotFoundError):  # not written yet; others propagate
+        return None, {}
+
+
+def stored_identities(repo) -> tuple[np.ndarray, int]:
+    """Sorted identities of the group's last :data:`RECENT_IDENTITIES` rows.
+
+    Returns:
+        The identities and the first row they cover.
+    """
+    array, _ = _identities(repo)
+    if array is None:
+        return np.empty(0, dtype="int64"), 0
+    start = max(0, array.shape[0] - RECENT_IDENTITIES)
+    return np.unique(array[start:]), start
+
+
+def older_identities(repo, earliest: int, latest: int, before: int, loaded: set) -> np.ndarray:
+    """Identities of rows before row ``before`` whose append spans ``earliest..latest``.
+
+    An archived window backfilled long after later ones repeats lines that have left the
+    recent rows; the appends' time spans (:data:`RANGES_ATTR`) find where they are. Ranges
+    in ``loaded`` are skipped and the ones read are added to it.
+    """
+    array, attrs = _identities(repo)
+    if array is None:
         return np.empty(0, dtype="int64")
-    rows = array.shape[0]
-    return np.unique(array[max(0, rows - RECENT_IDENTITIES) :])
+    parts = []
+    for start, stop, first, last in attrs.get(RANGES_ATTR, []):
+        if start >= before or last < earliest or first > latest or start in loaded:
+            continue
+        loaded.add(start)
+        parts.append(array[start : min(stop, before)])
+    return np.unique(np.concatenate(parts)) if parts else np.empty(0, dtype="int64")
+
+
+def _record_range(repo, start: int, stop: int, earliest: int, latest: int) -> None:
+    """Add one append's rows and time span to :data:`RANGES_ATTR`."""
+    import icechunk
+    import zarr
+
+    from planetary_datasets.common.multidim import COMMIT_ATTEMPTS
+
+    for attempt in range(1, COMMIT_ATTEMPTS + 1):
+        session = repo.writable_session("main")
+        node = zarr.open_group(session.store, path=GROUP, mode="a")
+        ranges = list(node.attrs.get(RANGES_ATTR, []))
+        ranges.append([int(start), int(stop), int(earliest), int(latest)])
+        node.attrs[RANGES_ATTR] = ranges
+        try:
+            session.commit(
+                f"wis2_land {GROUP}: rows {start}..{stop}", rebase_with=icechunk.ConflictDetector()
+            )
+            return
+        except (icechunk.ConflictError, icechunk.RebaseFailedError):
+            if attempt == COMMIT_ATTEMPTS:
+                raise
 
 
 def contains(sorted_values: np.ndarray, values: np.ndarray) -> np.ndarray:
@@ -271,7 +330,8 @@ def write(repo, spool: Spool, partition: str | None) -> dict[str, Any]:
     if partition is not None and partition in ledger(repo, group=GROUP):
         counts["already_written"] = 1
         return dict(counts)
-    seen = stored_identities(repo)
+    seen, recent_from = stored_identities(repo)
+    loaded: set[int] = set()  # older appends whose identities are in ``seen``
     # identity -> (line, arrival): lines are parsed only when their batch is written.
     batch: dict[int, tuple[str, np.datetime64]] = {}
     written = 0
@@ -289,9 +349,21 @@ def write(repo, spool: Spool, partition: str | None) -> dict[str, Any]:
             row["arrival_time"] = stamp
             row["observation_identity"] = ident
             rows.append(row)
+        if rows:
+            times = np.array([r["time"] for r in rows], dtype="datetime64[s]").astype("int64")
+            older = older_identities(repo, int(times.min()), int(times.max()), recent_from, loaded)
+            if older.size:
+                seen = np.union1d(seen, older)
+                held = contains(seen, np.array([r["observation_identity"] for r in rows]))
+                counts["lines_in_older_rows"] += int(held.sum())
+                rows = [r for r, h in zip(rows, held, strict=True) if not h]
         rows.sort(key=lambda r: (r["time"], r["station_id"]))
         if rows:
+            array, _ = _identities(repo)
+            start = 0 if array is None else array.shape[0]
             append_partition(repo, to_dataset(rows), None, label=f"wis2_land {GROUP}", group=GROUP)
+            times = np.array([r["time"] for r in rows], dtype="datetime64[s]").astype("int64")
+            _record_range(repo, start, start + len(rows), int(times.min()), int(times.max()))
         written += len(rows)
         seen = np.union1d(seen, np.fromiter(batch, dtype="int64", count=len(batch)))
         batch = {}
