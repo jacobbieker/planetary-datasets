@@ -238,3 +238,13 @@ def test_the_target_is_registered():
     from planetary_datasets.providers.observations import wis2_targets
 
     assert wis2_targets.load_targets()["tac"] is tac.TacTarget
+
+
+def test_a_failure_in_one_store_does_not_stop_the_other(local_config, monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("land store unreadable")
+
+    monkeypatch.setattr(tac, "land_positions", broken)
+    _, summary = run(local_config, objects())
+    assert summary["synop_tac"] == {"error": "RuntimeError: land store unreadable"}
+    assert summary["ship_tac"]["rows_written"] == 2

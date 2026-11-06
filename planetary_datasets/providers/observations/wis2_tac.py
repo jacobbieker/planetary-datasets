@@ -506,7 +506,7 @@ def _tail(repo, group: str | None, names: tuple[str, ...], rows: int) -> dict[st
     try:
         node = zarr.open_group(repo.readonly_session("main").store, path=group or "", mode="r")
         size = node[names[0]].shape[0]
-    except Exception:  # noqa: BLE001 - a store or group not written yet holds nothing
+    except (KeyError, zarr.errors.GroupNotFoundError):  # not written yet; others propagate
         return {}
     start = max(0, size - rows)
     out = {}
@@ -561,7 +561,8 @@ def land_positions(repo, rows: int) -> dict[str, tuple[float, float, float]]:
         tail["station_id"], tail["latitude"], tail["longitude"], tail["station_elevation"]
     ):
         if np.isfinite(lat) and np.isfinite(lon):
-            out[str(station)] = (float(lat), float(lon), float(height))
+            elevation = float(height) if isinstance(height, (float, np.floating)) else np.nan
+            out[str(station)] = (float(lat), float(lon), elevation)
     return out
 
 
@@ -654,6 +655,30 @@ class TacTarget(QueuedTarget):
             )
             self.rows[ident] = row
 
+    def _write_part(
+        self, prefix: str, group: str, part: list[dict], station: str, partition: str
+    ) -> dict[str, int]:
+        """Drop one group's reports held already (as TAC or as BUFR); append the rest."""
+        repo = self.config.icechunk_repo(prefix)
+        ids = stored_identities(repo, group)
+        fresh = [r for r in part if not _contains(ids, r["observation_identity"])]
+        bufr_group = None if group == LAND_GROUP else "surface"
+        held = bufr_reports(repo, bufr_group, station, BUFR_TAIL_ROWS[prefix])
+        kept = [r for r in fresh if (r["station_id"], int(r["time"].astype("int64"))) not in held]
+        if group == LAND_GROUP and kept:
+            positions = land_positions(repo, BUFR_TAIL_ROWS[prefix])
+            for row in kept:
+                known = positions.get(row["station_id"])
+                if known and not np.isfinite(row["latitude"]):
+                    row["latitude"], row["longitude"], row["station_elevation"] = known
+        written = write_group(repo, kept, group, partition, f"wis2_tac {group}")
+        return {
+            "reports": len(part),
+            "already_stored_as_tac": len(part) - len(fresh),
+            "held_as_bufr": len(fresh) - len(kept),
+            "rows_written": written,
+        }
+
     def write(self, window_start, window_end, partition: str) -> dict[str, Any]:
         """Drop reports held already (as TAC, or as BUFR) and append the rest."""
         rows, self.rows, self._undecodable = list(self.rows.values()), {}, set()
@@ -668,32 +693,11 @@ class TacTarget(QueuedTarget):
             if group in self._written:
                 summary[group] = "already written"
                 continue
-            repo = self.config.icechunk_repo(prefix)
-            ids = stored_identities(repo, group)
-            fresh = [r for r in part if not _contains(ids, r["observation_identity"])]
-            bufr_group = None if group == LAND_GROUP else "surface"
-            held = bufr_reports(repo, bufr_group, station, BUFR_TAIL_ROWS[prefix])
-            kept = [
-                r for r in fresh if (r["station_id"], int(r["time"].astype("int64"))) not in held
-            ]
-            if group == LAND_GROUP and kept:
-                positions = land_positions(repo, BUFR_TAIL_ROWS[prefix])
-                for row in kept:
-                    known = positions.get(row["station_id"])
-                    if known and not np.isfinite(row["latitude"]):
-                        row["latitude"], row["longitude"], row["station_elevation"] = known
             try:
-                written = write_group(repo, kept, group, partition, f"wis2_tac {group}")
+                summary[group] = self._write_part(prefix, group, part, station, partition)
             except Exception as exc:  # noqa: BLE001 - one store must not lose the other
                 logger.exception(f"wis2 tac {group}: write failed: {exc}")
                 summary[group] = {"error": f"{type(exc).__name__}: {exc}"}
-                continue
-            summary[group] = {
-                "reports": len(part),
-                "already_stored_as_tac": len(part) - len(fresh),
-                "held_as_bufr": len(fresh) - len(kept),
-                "rows_written": written,
-            }
         return summary
 
 
