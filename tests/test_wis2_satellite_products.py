@@ -292,7 +292,7 @@ def test_new_groups_are_backfilled_into_a_window_the_others_hold(local_config):
     assert set(again.finish(None, None, window)["rows"].values()) == {0}
 
 
-AMI = f"data/kr-kma/data/core/weather/space-based-observations/geo-kompsat-2a/ami"
+AMI = "data/kr-kma/data/core/weather/space-based-observations/geo-kompsat-2a/ami"
 
 
 @pytest.mark.parametrize(
