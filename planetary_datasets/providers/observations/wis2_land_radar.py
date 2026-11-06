@@ -406,7 +406,44 @@ def gamic_shifts(handle, zone: str | None, reference: float) -> dict[str, float]
     return {
         "nominal": local_offset(nominal, reference, zone),
         "scans": local_offset(first, reference, zone, SCAN_START_TOLERANCE),
+        "zone": zone,
     }
+
+
+def _zone_offset(zone: str, utc: float) -> float:
+    from zoneinfo import ZoneInfo
+
+    when = dt.datetime.fromtimestamp(utc, dt.timezone.utc)
+    return when.astimezone(ZoneInfo(zone)).utcoffset().total_seconds()
+
+
+def local_to_utc(local: float, zone: str, after: float, shift: float) -> tuple[float, float]:
+    """A local time stamped as if UTC (seconds since 1970), converted to UTC.
+
+    Each time takes the zone's offset at its own instant, so a volume scanned across a
+    clock change converts correctly. In the repeated hour after clocks go back, the
+    reading at or after ``after`` (the previous time converted, NaN for the first) is
+    taken, else the one with the volume's ``shift``.
+
+    Returns:
+        The UTC time and the offset removed.
+    """
+    if not np.isfinite(local):
+        return np.nan, np.nan
+    offsets = {_zone_offset(zone, local - hours * 3600) for hours in (-27, -3, 0, 3, 27)}
+    candidates = sorted(
+        (local - offset, offset)
+        for offset in offsets
+        if _zone_offset(zone, local - offset) == offset
+    )
+    if not candidates:  # a local time the clock skipped: keep the volume's offset
+        return local - shift, shift
+    if np.isfinite(after):
+        later = [c for c in candidates if c[0] >= after - SCAN_START_TOLERANCE]
+        if later:
+            return later[0]
+    same = [c for c in candidates if c[1] == shift]
+    return (same or candidates)[0]
 
 
 def _applied(shift: float) -> float:
@@ -440,6 +477,10 @@ def _gamic_volume(handle, quantity: str, shifts: dict) -> dict[str, Any]:
     scan_shift = shifts.get("scans", 0.0)
     # An unrecognised offset is left as given (and recorded as NaN).
     nominal_by, scan_by = _applied(nominal_shift), _applied(scan_shift)
+    zone = shifts.get("zone")
+    # Local times are converted one by one (a volume can span a clock change).
+    local = bool(zone) and scan_by > 0
+    previous = np.nan
     sweeps = []
     moment = ""
     wavelength = np.nan
@@ -461,14 +502,21 @@ def _gamic_volume(handle, quantity: str, shifts: dict) -> dict[str, Any]:
         names = rays.dtype.names if rays is not None else ()
         if np.isnan(wavelength):
             wavelength = _number(show, "radar_wave_length") * 100.0  # m to cm
+        start = _iso_seconds(_attr(show, "timestamp"))
+        end = float(rays["timestamp"][-1]) / 1e6 if "timestamp" in names and len(rays) else np.nan
+        if local:
+            start, removed = local_to_utc(start, zone, previous, scan_by)
+            end, _ = local_to_utc(end, zone, start, removed)
+        else:
+            start, end, removed = start - scan_by, end - scan_by, scan_shift
+        previous = end if np.isfinite(end) else start
         sweeps.append(
             {
                 "counts": counts,
                 "elevation": _number(show, "elevation"),
-                "sweep_start_time": _iso_seconds(_attr(show, "timestamp")) - scan_by,
-                "sweep_end_time": float(rays["timestamp"][-1]) / 1e6 - scan_by
-                if "timestamp" in names and len(rays)
-                else np.nan,
+                "sweep_start_time": start,
+                "sweep_end_time": end,
+                "sweep_time_offset_removed": removed,
                 "range_start": _number(show, "range_start") / 1000.0,
                 "range_step": _number(show, "range_step"),
                 "nrays": nrays,
@@ -620,6 +668,21 @@ def to_dataset(volumes: list[dict], quantity: str, centre: list[str], arrivals: 
         "odim_version": ("str", {"long_name": "ODIM what/version"}),
     }
     if "time_offset_removed" in volumes[0]:
+        removed = np.full((len(volumes), sweeps), np.nan)
+        for i, volume in enumerate(volumes):
+            for j, sweep in enumerate(volume["sweeps"]):
+                removed[i, j] = sweep.get("sweep_time_offset_removed", np.nan)
+        data["sweep_time_offset_removed"] = xr.Variable(
+            ("volume", "sweep"),
+            removed,
+            {
+                "units": "s",
+                "long_name": "seconds subtracted from this sweep's times to make them UTC",
+                "comment": "each local time takes the zone's offset at its own instant, so "
+                "this differs from time_offset_removed only in a volume scanned across a "
+                "clock change",
+            },
+        )
         # GAMIC groups only: what was done to make the file's times UTC.
         scalars["nominal_time_offset_removed"] = (
             "float64",
@@ -634,7 +697,8 @@ def to_dataset(volumes: list[dict], quantity: str, centre: list[str], arrivals: 
             {
                 "units": "s",
                 "long_name": "seconds subtracted from the file's scan and ray times "
-                "(sweep_start_time, sweep_end_time, start_time, end_time) to make them UTC",
+                "(sweep_start_time, sweep_end_time, start_time, end_time) to make them UTC, "
+                "judged by the first scan (per sweep: sweep_time_offset_removed)",
                 "comment": "the station's local UTC offset (Asia/Nicosia: 7200 in winter, "
                 "10800 in summer) when its times were found to be local; 0 when they "
                 "were UTC; NaN when the offset matched neither, times as given",
@@ -819,9 +883,10 @@ def write(
             continue
         shifts = head.get("shifts")
         if shifts is not None:
-            if not all(np.isfinite(v) for v in shifts.values()):
+            offsets = (shifts["nominal"], shifts["scans"])
+            if not all(np.isfinite(v) for v in offsets):
                 counts["unrecognised_time_offset"] += 1
-            elif any(shifts.values()):
+            elif any(offsets):
                 counts["local_time_converted"] += 1
         stamp = int(head["time"].astype("int64"))
         for quantity in head["quantities"]:

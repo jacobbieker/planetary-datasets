@@ -619,6 +619,7 @@ def test_lca_local_times_are_converted_to_utc(local_config, date, hours):
     assert ds["sweep_end_time"].values[0, 0] == nominal + np.timedelta64(4, "ms")
     assert ds["start_time"].values[0] == nominal
     assert float(ds["time_offset_removed"][0]) == hours * 3600
+    assert ds["sweep_time_offset_removed"].values[0].tolist() == [hours * 3600] * 2
     assert float(ds["nominal_time_offset_removed"][0]) == 0
 
 
@@ -652,3 +653,17 @@ def test_local_offset_follows_nicosia_daylight_saving():
         radar.name_time("x/LONGRANGE_LCA_20261104053656_00.h5.bin")
         == dt.datetime(2026, 11, 4, 5, 36, 56, tzinfo=dt.timezone.utc).timestamp()
     )
+
+
+def test_a_volume_scanned_across_the_clock_change_converts_each_time():
+    zone = "Asia/Nicosia"
+    # 2026-10-25 01:00 UTC: Nicosia goes from UTC+3 to UTC+2 (04:00 local becomes 03:00).
+    before = dt.datetime(2026, 10, 25, 0, 59, 50, tzinfo=dt.timezone.utc).timestamp()
+    after = dt.datetime(2026, 10, 25, 1, 0, 15, tzinfo=dt.timezone.utc).timestamp()
+    first, removed = radar.local_to_utc(before + 10800, zone, np.nan, 10800)
+    assert (first, removed) == (before, 10800)
+    # 03:00:15 local is ambiguous; the reading after the previous scan is taken.
+    second, removed = radar.local_to_utc(after + 7200, zone, first, 10800)
+    assert (second, removed) == (after, 7200)
+    # Without a previous time, the volume's offset decides.
+    assert radar.local_to_utc(after + 7200, zone, np.nan, 7200) == (after, 7200)
