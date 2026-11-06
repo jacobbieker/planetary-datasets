@@ -53,7 +53,7 @@ GROUP = "hydrometric"
 #: 5-minute values from ~2,200 stations is ~19 million.
 RECENT_IDENTITIES = 32_000_000
 #: Rows per append, bounding memory while writing.
-BATCH_ROWS = 1_000_000
+BATCH_ROWS = 250_000
 #: The header of the Water Survey of Canada real-time CSV (after a byte-order mark).
 HEADER = (
     "ID,Date,Water Level / Niveau d'eau (m),Grade,Symbol / Symbole,QA/QC,"
