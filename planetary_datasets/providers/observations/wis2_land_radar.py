@@ -418,12 +418,14 @@ def grow_fixed_dims(repo, group: str, ds: xr.Dataset, label: str) -> bool:
 
 def _stored_times(repo, group: str) -> set[int]:
     """Nominal times (int64 seconds) of the volumes a group holds."""
+    import zarr
+
     try:
         ds = xr.open_zarr(
             repo.readonly_session("main").store, group=group, consolidated=False, chunks=None
         )
         times = ds["time"].values
-    except Exception:  # noqa: BLE001 - a group not written yet holds none
+    except (KeyError, zarr.errors.GroupNotFoundError):  # not written yet; others propagate
         return set()
     return set(times.astype("datetime64[s]").astype("int64").tolist())
 

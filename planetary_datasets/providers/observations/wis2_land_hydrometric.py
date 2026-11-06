@@ -236,7 +236,7 @@ def stored_identities(repo) -> np.ndarray:
     try:
         node = zarr.open_group(repo.readonly_session("main").store, path=GROUP, mode="r")
         array = node["observation_identity"]
-    except Exception:  # noqa: BLE001 - a group not written yet has none
+    except (KeyError, zarr.errors.GroupNotFoundError):  # not written yet; others propagate
         return np.empty(0, dtype="int64")
     rows = array.shape[0]
     return np.unique(array[max(0, rows - RECENT_IDENTITIES) :])

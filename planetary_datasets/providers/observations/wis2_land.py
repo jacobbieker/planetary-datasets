@@ -983,9 +983,14 @@ class LandTarget(ArchiveTarget):
             if spool is None:
                 continue
             try:
-                out[part] = writer(repo, spool, partition)
-                if spool.failed:
+                # Objects that could not be spooled are missing from this run: what was
+                # spooled is written, but the window is not ledgered, so a re-run over the
+                # archived tar takes them (the rows written now are not written again).
+                complete = not spool.failed
+                out[part] = writer(repo, spool, partition if complete else None)
+                if not complete:
                     out[part]["unspooled_objects"] = spool.failed
+                    out[part]["ledgered"] = False
             except Exception as exc:  # noqa: BLE001 - one part must not lose the others
                 logger.exception(f"wis2 land {part} {partition}: failed: {exc}")
                 out[part] = {"error": f"{type(exc).__name__}: {exc}"}

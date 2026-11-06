@@ -21,6 +21,7 @@ import zarr
 from planetary_datasets.common.multidim import ledger
 from planetary_datasets.providers.observations import wis2_land as land
 from planetary_datasets.providers.observations import wis2_land_hydrometric as hydrometric
+from planetary_datasets.providers.observations import wis2_land_radar as radar
 
 DATA = pathlib.Path(__file__).parent / "data"
 HYDRO = DATA / "wis2_land_hydrometric"
@@ -259,6 +260,40 @@ def test_a_window_writes_each_group_with_copies_collapsed(local_config):
     assert float(dbzh["gain"][0, 0]) == 0.5 and float(dbzh["elevation"][1, 2]) == 2.3
     assert dbzh["azimuth_start"].values[0, 0].tolist() == [0.0, 90.0, 180.0, 270.0]
     assert str(dbzh["centre"].values[0]) == "be-rmib"
+
+
+def test_small_batches_write_each_line_and_volume_once(local_config, monkeypatch):
+    monkeypatch.setattr(hydrometric, "BATCH_ROWS", 5)
+    monkeypatch.setattr(radar, "BATCH_BYTES", 1)
+    _, summary = run(local_config, window_objects())
+    assert summary["hydrometric"]["rows_written"] == 36
+    assert summary["radar"]["volumes_written"] == {"radar/bewid_dbzh": 2, "radar/bewid_vrad": 1}
+    repo = local_config.icechunk_repo(land.STORE_PREFIX)
+    assert sizes(repo)["hydrometric"] == 36
+    raw = zarr.open_group(repo.readonly_session("main").store, path="radar/bewid_dbzh", mode="r")
+    assert raw["counts"].shape == (2, 3, 4, 8)
+    assert (raw["counts"][0, 2] == 255).all() and (raw["counts"][0, 0, :, 6:] == 255).all()
+
+
+def test_a_window_with_objects_that_could_not_be_spooled_is_not_ledgered(local_config, monkeypatch):
+    real = hydrometric.Spool.add
+
+    def flaky(self, key, body, arrived):
+        if "AB_05AA008" in key:
+            self.failed += 1
+            return
+        real(self, key, body, arrived)
+
+    monkeypatch.setattr(hydrometric.Spool, "add", flaky)
+    _, summary = run(local_config, window_objects())
+    repo = local_config.icechunk_repo(land.STORE_PREFIX)
+    assert summary["hydrometric"]["ledgered"] is False
+    assert PARTITION not in ledger(repo, group="hydrometric")
+    assert PARTITION in ledger(repo, group="radar")
+    monkeypatch.setattr(hydrometric.Spool, "add", real)
+    _, summary = run(local_config, window_objects())
+    assert summary["hydrometric"]["rows_written"] == 12  # only the station missed before
+    assert PARTITION in ledger(repo, group="hydrometric")
 
 
 def test_a_second_run_over_the_same_window_writes_nothing(local_config):
