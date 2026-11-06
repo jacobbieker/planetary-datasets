@@ -112,6 +112,13 @@ def archive_name(end: dt.datetime) -> str:
     return f"{DEST_PREFIX}/wis2_{end:%Y%m%dT%H%M}Z.tar"
 
 
+def archive_key(end: dt.datetime, config: Config) -> str:
+    """The tar's key in ``config``'s bucket: :func:`archive_name` under its prefix."""
+    return (
+        config.prefix.strip("/") + "/" + archive_name(end) if config.prefix else archive_name(end)
+    )
+
+
 def last_boundary(when: dt.datetime) -> dt.datetime:
     """The latest 00Z or 12Z at or before ``when``."""
     floor = when.replace(minute=0, second=0, microsecond=0)
@@ -449,7 +456,7 @@ def archive(
     end = end.astimezone(dt.timezone.utc) if end.tzinfo else end.replace(tzinfo=dt.timezone.utc)
     start = end - LOOKBACK
     dest = dest_client(config)
-    key = config.prefix.strip("/") + "/" + archive_name(end) if config.prefix else archive_name(end)
+    key = archive_key(end, config)
     summary = Summary(key=key)
     if not force and exists(dest, config.bucket, key):
         state = _load_target_state(dest, config.bucket, key) or {}
@@ -734,7 +741,7 @@ def _unarchived(ends: Sequence[dt.datetime], config: Config | None) -> list[dt.d
     try:
         config = config or get_config()
         client = dest_client(config)
-        return [end for end in ends if not exists(client, config.bucket, archive_name(end))]
+        return [end for end in ends if not exists(client, config.bucket, archive_key(end, config))]
     except Exception as exc:  # noqa: BLE001 - the schedule must not stop on a listing error
         logger.warning(f"wis2: could not check for due windows: {exc}")
         return list(ends)

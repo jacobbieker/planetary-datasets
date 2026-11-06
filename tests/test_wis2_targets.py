@@ -440,6 +440,20 @@ def test_a_failed_due_window_check_counts_every_window_as_unarchived(monkeypatch
     assert wis2._unarchived(ends, _config()) == ends
 
 
+def test_the_due_window_check_looks_under_the_configured_prefix(monkeypatch):
+    """An archive written under the bucket prefix counts as archived."""
+    import dataclasses
+
+    end = dt.datetime(2026, 11, 6, 0, tzinfo=UTC)
+    config = dataclasses.replace(_config(), prefix="pfx")
+    dest = FakeDest()
+    dest.objects[wis2.archive_key(end, config)] = b"tar"
+    monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
+    monkeypatch.setattr(wis2, "exists", lambda client, bucket, key: key in dest.objects)
+    assert wis2.archive_key(end, config).startswith("pfx/bkr/obs/wis2/")
+    assert wis2._unarchived([end], config) == []
+
+
 def test_failed_pending_archives_count_toward_the_limit(monkeypatch):
     """A failing archive uses the call's one attempt, so the live windows come next."""
     dest = FakeDest()
