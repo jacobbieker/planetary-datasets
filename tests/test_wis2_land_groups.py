@@ -30,6 +30,7 @@ PARTITION = "wis2_20261101T1200Z"
 
 HYDRO_KEY = "data/ca-eccc-msc/data/core/hydrology/experimental/{}"
 RADAR_KEY = "data/be-rmib/data/core/weather/experimental/bel-radar/{}"
+CY_KEY = "data/cy-dom/data/core/weather/experimental/surface-based-observations/radar/{}"
 SYNOP_KEY = "data/de-dwd-gts-to-wis2/data/core/I/S/M/N/07/LFPW/A_ISMN07LFPW280600_C_EDZW"
 
 
@@ -187,8 +188,11 @@ def sizes(repo) -> dict[str, int]:
         (
             "data/cy-dom/data/core/weather/experimental/surface-based-observations/radar/"
             "LONGRANGE_PFO_20261105001038_00.h5",
-            None,
+            "radar_gamic",
         ),
+        (CY_KEY.format("LONGRANGE_LCA_20261105001038_00.h5.30807"), "radar_gamic"),
+        (CY_KEY.format("LONGRANGE_LCA_20261105001038_00.h5.bin"), "radar_gamic"),
+        (CY_KEY.format("sgp-mss-weather-radar-cappi-2km.json"), None),
         (
             "data/uk-metoffice/data/core/weather/experimental/surface-based-observations/"
             "weather-radar/A_PAAL21EGRR050345_C_EGRR_20261105035026.929.000.bufr",
@@ -392,7 +396,7 @@ def test_objects_that_are_not_odim_or_csv_are_counted_not_fatal(local_config):
     ]
     _, summary = run(local_config, objects)
     assert summary["hydrometric"]["unrecognised_objects"] == 1
-    assert summary["radar"]["not_odim_polar_volumes"] == 1
+    assert summary["radar"]["not_polar_volumes"] == 1
 
 
 def test_later_volumes_with_fewer_or_more_sweeps_and_bins_are_padded(local_config):
@@ -443,9 +447,7 @@ def test_a_volume_whose_nodata_differs_from_the_group_fill_is_refused(local_conf
     assert sizes(repo)["radar/bewid_dbzh"] == 1
 
 
-def test_a_window_backfilled_long_after_later_ones_writes_nothing_twice(
-    local_config, monkeypatch
-):
+def test_a_window_backfilled_long_after_later_ones_writes_nothing_twice(local_config, monkeypatch):
     # Only the last row counts as recent: the earlier window's lines have left the tail
     # and are found through the appends' time spans.
     monkeypatch.setattr(hydrometric, "RECENT_IDENTITIES", 1)
@@ -459,3 +461,116 @@ def test_a_window_backfilled_long_after_later_ones_writes_nothing_twice(
     assert summary["hydrometric"]["rows_written"] == 0
     assert summary["hydrometric"]["lines_in_older_rows"] == 24
     assert sizes(repo)["hydrometric"] == before == 36
+
+
+def gamic_volume(
+    date: str = "2026-11-01T00:00:00.000Z", scans: int = 2, rays: int = 5, bins: int = 7
+) -> bytes:
+    """A small GAMIC HDF5 volume, laid out as the Cyprus Department of Meteorology's."""
+    rng = np.random.default_rng(3)
+    buffer = io.BytesIO()
+    ray_type = np.dtype([("azimuth_start", "<f8"), ("azimuth_stop", "<f8"), ("timestamp", "<i8")])
+    with h5py.File(buffer, "w") as f:
+        f.create_group("what").attrs.update(
+            {"date": date, "object": "PVOL", "sets": np.uint32(scans), "version": "9"}
+        )
+        f.create_group("where").attrs.update({"lat": 34.77085, "lon": 32.54716, "height": 392.0})
+        f.create_group("how").attrs.update(
+            {
+                "site_name": "PFO",
+                "host_name": "radpfo",
+                "template_name": "LONGRANGE",
+                "azimuth_beam": 1.0,
+            }
+        )
+        start = np.datetime64(date.rstrip("Z"), "ms").astype("int64") * 1000
+        for i in range(scans):
+            scan = f.create_group(f"scan{i}")
+            scan.create_group("what").attrs.update({"product": "SCAN", "scan_type": "PPI"})
+            scan.create_group("how").attrs.update(
+                {
+                    "elevation": 0.5 + i,
+                    "range_start": 0.0,
+                    "range_step": 100.0,
+                    "bin_count": np.uint32(bins),
+                    "ray_count": np.uint32(rays),
+                    "timestamp": str(np.datetime64(int(start // 1000) + 25000 * i, "ms")) + "Z",
+                    "nyquist_velocity": "3.351",
+                    "radar_wave_length": 0.0335099995136261,
+                }
+            )
+            header = np.zeros(rays, dtype=ray_type)
+            header["azimuth_start"] = (73.0 + np.arange(rays)) % 360
+            header["azimuth_stop"] = (74.0 + np.arange(rays)) % 360
+            header["timestamp"] = start + 25_000_000 * i + 1000 * np.arange(rays)
+            scan.create_dataset("ray_header", data=header)
+            for k, (moment, fmt, low, high) in enumerate(
+                [("Zh", "UV16", -64.0, 128.0), ("UZh", "UV8", -32.0, 95.5)]
+            ):
+                dtype = "uint16" if fmt == "UV16" else "uint8"
+                data = rng.integers(0, 250, size=(rays, bins)).astype(dtype)
+                ds = scan.create_dataset(f"moment_{k}", data=data, compression="gzip")
+                ds.attrs.update(
+                    {
+                        "moment": moment,
+                        "format": fmt,
+                        "dyn_range_min": np.float32(low),
+                        "dyn_range_max": np.float32(high),
+                        "unit": "dBZ",
+                    }
+                )
+    return buffer.getvalue()
+
+
+def test_a_gamic_volume_is_stored_raw_under_odim_quantity_names(local_config):
+    body = gamic_volume()
+    _, summary = run(
+        local_config, [(CY_KEY.format("LONGRANGE_PFO_20261101000000_00.h5"), body, ARRIVED)]
+    )
+    assert summary["radar_gamic"]["volumes_written"] == {"radar/cypfo_dbzh": 1, "radar/cypfo_th": 1}
+    repo = local_config.icechunk_repo(land.STORE_PREFIX)
+    raw = zarr.open_group(repo.readonly_session("main").store, path="radar/cypfo_dbzh", mode="r")
+    source = h5py.File(io.BytesIO(body), "r")
+    np.testing.assert_array_equal(raw["counts"][0, 1], source["scan1/moment_0"][()])
+    assert raw["counts"].dtype == np.uint16 and raw["counts"].attrs["gamic_moment"] == "Zh"
+    assert raw["counts"].attrs["_FillValue"] == 0
+    # 1 is dyn_range_min, 65535 dyn_range_max.
+    gain, offset = raw["gain"][0, 0], raw["offset"][0, 0]
+    assert offset + gain == pytest.approx(-64.0) and offset + gain * 65535 == pytest.approx(128.0)
+    th = zarr.open_group(repo.readonly_session("main").store, path="radar/cypfo_th", mode="r")
+    assert th["offset"][0, 0] + th["gain"][0, 0] * 255 == pytest.approx(95.5)
+    ds = xr.open_zarr(
+        repo.readonly_session("main").store, group="radar/cypfo_dbzh", consolidated=False
+    )
+    # Rays stay in scan order, with their azimuths.
+    assert ds["azimuth_start"].values[0, 0, :3].tolist() == [73.0, 74.0, 75.0]
+    assert ds["first_ray"].values[0].tolist() == [0, 0]
+    assert ds["time"].values[0] == np.datetime64("2026-11-01T00:00:00", "ns")
+    assert ds["sweep_start_time"].values[0, 1] == np.datetime64("2026-11-01T00:00:25", "ns")
+    assert ds["sweep_end_time"].values[0, 0] == np.datetime64("2026-11-01T00:00:00.004", "ns")
+    assert float(ds["wavelength"][0]) == pytest.approx(3.351)
+    assert float(ds["nyquist_velocity"][0, 0]) == 3.351
+    assert str(ds["centre"].values[0]) == "cy-dom"
+
+
+def test_gamic_volumes_backfill_windows_already_written_for_odim_once(local_config):
+    # The window as written before GAMIC volumes were taken: ODIM radar ledgered.
+    run(local_config, window_objects())
+    repo = local_config.icechunk_repo(land.STORE_PREFIX)
+    assert PARTITION in ledger(repo, group="radar")
+    body = gamic_volume()
+    cyprus = [
+        (CY_KEY.format("LONGRANGE_PFO_20261101000000_00.h5"), body, ARRIVED),
+        (CY_KEY.format("LONGRANGE_PFO_20261101000000_00.h5.bin"), body, ARRIVED),
+    ]
+    target, summary = run(local_config, window_objects() + cyprus)
+    assert {"reports", "hydrometric", "radar"} <= target._written
+    assert summary["radar_gamic"]["duplicate_copies"] == 2
+    assert summary["radar_gamic"]["volumes_written"] == {"radar/cypfo_dbzh": 1, "radar/cypfo_th": 1}
+    assert PARTITION in radar.parent_ledger(repo, radar.GAMIC_LEDGER)
+    before = sizes(repo)
+    again = land.LandTarget(local_config, workers=1)
+    again.prepare(PARTITION)
+    assert not any(again.wants(k, len(b)) for k, b, _ in window_objects() + cyprus)
+    _, summary = run(local_config, window_objects() + cyprus)
+    assert sizes(repo) == before and "radar_gamic" not in summary

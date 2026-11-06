@@ -16,9 +16,11 @@ What is read
     radars, reflectivity ``DBZH``, total reflectivity ``TH`` and radial velocity
     ``VRAD``/``VRADH``, each every 5 minutes, ~1,200 objects or 0.5 GB a window) and any
     other ``*.pvol.*`` file on a radar topic. A file with several quantities adds a volume
-    to each quantity's group. Not read: the Cyprus Department of Meteorology's volumes,
-    which are GAMIC HDF5 rather than ODIM and come to 3 to 9 GB a window, and the Met
-    Office's radar BUFR (category 6, local sequence 3 21 193 that ecCodes cannot expand).
+    to each quantity's group. Also read, as a part of its own (:data:`GAMIC_LEDGER`): the
+    Cyprus Department of Meteorology's long-range volumes (``LONGRANGE_PFO_*.h5``,
+    ``LONGRANGE_LCA_*.h5``; GAMIC HDF5, 13 moments, 3 to 9 GB a window), mapped onto the
+    same layout (see GAMIC below). Not read: the Met Office's radar BUFR (category 6, local
+    sequence 3 21 193 that ecCodes cannot expand).
 
 Layout
     ``counts`` (``volume``, ``sweep``, ``azimuth``, ``range``) holds the raw ODIM values,
@@ -35,6 +37,20 @@ Layout
     ``time``, ``start_time``, ``end_time``, the radar's ``latitude``, ``longitude`` and
     ``antenna_height``, ``source``, ``scan_task``, ``beamwidth``, ``wavelength``,
     ``odim_version``, ``centre`` and ``arrival_time``.
+
+GAMIC
+    A GAMIC volume's group is named for the centre's country and the site
+    (``radar/cypfo_dbzh``, ``radar/cylca_vradh``, ...), its moments by their ODIM names
+    (:data:`GAMIC_QUANTITIES`; the GAMIC name is kept in the ``counts`` attribute
+    ``gamic_moment``). ``counts`` are the raw ``UV8``/``UV16`` values, unchanged: 0 is no
+    data (``nodata``, the fill), and ``value = offset + gain * counts`` with
+    ``gain = (dyn_range_max - dyn_range_min) / (2**bits - 2)`` and
+    ``offset = dyn_range_min - gain``, so 1 is ``dyn_range_min`` and ``2**bits - 1`` is
+    ``dyn_range_max``. Rays are stored in the order scanned, not by azimuth (the first is
+    wherever the antenna was; ``first_ray`` is 0), with each ray's ``azimuth_start`` and
+    ``azimuth_stop``; a sweep can have 361 rays. Sweep times are the scan's ``timestamp``
+    and its last ray's time, as the file gives them (LCA's run two hours ahead of its
+    nominal ``time``, which matches the arrival: they appear to be local time).
 
 Duplicates
     RMI publishes each volume under two names (``T_PAGW41_C_EBUM_...hdf`` and
@@ -57,6 +73,26 @@ from planetary_datasets.providers.observations.wis2_land_hydrometric import Spoo
 
 #: Parent group of the radar groups; its ledger lists the windows written to all of them.
 PARENT = "radar"
+#: Attribute of :data:`PARENT` listing the windows whose GAMIC volumes are written: a ledger
+#: of its own, so archived windows already written for the ODIM volumes still get them.
+GAMIC_LEDGER = "gamic_partitions_written"
+#: GAMIC moment names and the ODIM quantities they are stored as.
+GAMIC_QUANTITIES = {
+    "Zh": "DBZH",
+    "Zv": "DBZV",
+    "UZh": "TH",
+    "UZv": "TV",
+    "ZDR": "ZDR",
+    "Vh": "VRADH",
+    "Vv": "VRADV",
+    "Wh": "WRADH",
+    "Wv": "WRADV",
+    "PHIDP": "PHIDP",
+    "KDP": "KDP",
+    "SNRh": "SNRH",
+    "SNRv": "SNRV",
+}
+GAMIC_BITS = {"UV8": 8, "UV16": 16}
 #: Uncompressed bytes of ``counts`` per append, bounding memory while writing.
 BATCH_BYTES = 256 * 2**20
 #: Times that can be missing (padded sweeps) are float seconds, exact for whole seconds
@@ -78,6 +114,17 @@ def wants(key: str, size: int = 0) -> bool:
         return True
     name = key.rsplit("/", 1)[-1]
     return "radar" in key and ".pvol." in name
+
+
+def wants_gamic(key: str, size: int = 0) -> bool:
+    """Whether an object can be a GAMIC volume: an HDF5 name on a radar topic, not ODIM's."""
+    name = key.rsplit("/", 1)[-1]
+    return (
+        "/radar/" in key
+        and "/bel-radar/" not in key
+        and ".pvol." not in name
+        and re.search(r"\.h5(\.|$)", name) is not None
+    )
 
 
 def _text(value) -> str:
@@ -163,8 +210,13 @@ def _quantities(dataset) -> dict[str, str]:
     return out
 
 
-def header(path: str) -> dict[str, Any] | None:
-    """A volume's node, nominal time and quantities; None if it is not an ODIM PVOL."""
+def header(path: str, country: str = "") -> dict[str, Any] | None:
+    """A volume's node, nominal time and quantities; None if it is not a polar volume.
+
+    Args:
+        path: The spooled file (ODIM_H5 or GAMIC HDF5).
+        country: Prefix of a GAMIC radar's node (its centre's country, ``cy``).
+    """
     import h5py
 
     try:
@@ -172,6 +224,8 @@ def header(path: str) -> dict[str, Any] | None:
             what = _child(handle, "what")
             if _text(_attr(what, "object")).upper() != "PVOL":
                 return None
+            if _gamic_scans(handle):
+                return _gamic_header(handle, country)
             source = _text(_attr(what, "source"))
             node = node_name(source)
             time = _stamp(_attr(what, "date"), _attr(what, "time"))
@@ -190,6 +244,8 @@ def read_volume(path: str, quantity: str) -> dict[str, Any]:
     import h5py
 
     with h5py.File(path, "r") as handle:
+        if _gamic_scans(handle):
+            return _gamic_volume(handle, quantity)
         what, where, how = (_child(handle, n) for n in ("what", "where", "how"))
         sweeps = []
         for name in _sweeps(handle):
@@ -245,6 +301,121 @@ def read_volume(path: str, quantity: str) -> dict[str, Any]:
             "odim_version": _text(_attr(what, "version")),
             "sweeps": sweeps,
         }
+
+
+def _gamic_scans(handle) -> list[str]:
+    """A GAMIC file's sweeps (``scan0``, ``scan1``, ...); empty for an ODIM file."""
+    names = [k for k in handle if re.fullmatch(r"scan\d+", k)]
+    return sorted(names, key=lambda k: int(k[4:]))
+
+
+def _gamic_moments(scan) -> dict[str, tuple[str, Any]]:
+    """``{ODIM quantity: (dataset name, attributes)}`` of one GAMIC sweep."""
+    out = {}
+    for name in sorted((k for k in scan if k.startswith("moment_")), key=lambda k: int(k[7:])):
+        attrs = scan[name].attrs
+        moment = _text(attrs.get("moment"))
+        if moment in GAMIC_QUANTITIES and _text(attrs.get("format")) in GAMIC_BITS:
+            out.setdefault(GAMIC_QUANTITIES[moment], (name, attrs))
+    return out
+
+
+def _iso_seconds(value) -> float:
+    """An ISO 8601 UTC time (``2026-11-06T06:41:41.295Z``) as float seconds since 1970."""
+    text = _text(value).rstrip("Z")
+    try:
+        return np.datetime64(text, "ms").astype("int64") / 1000.0
+    except ValueError:
+        return np.nan
+
+
+def _gamic_header(handle, country: str) -> dict[str, Any] | None:
+    site = re.sub(r"[^a-z0-9]+", "", _text(_attr(_child(handle, "how"), "site_name")).lower())
+    stamp = _iso_seconds(_attr(_child(handle, "what"), "date"))
+    quantities = set()
+    for name in _gamic_scans(handle):
+        quantities |= set(_gamic_moments(handle[name]))
+    if not site or not np.isfinite(stamp) or not quantities:
+        return None
+    return {
+        "node": f"{country}{site}",
+        "time": np.datetime64(int(round(stamp)), "s"),
+        "quantities": sorted(quantities),
+        "source": f"GAMIC site:{site.upper()}",
+    }
+
+
+def _gamic_volume(handle, quantity: str) -> dict[str, Any]:
+    """One ODIM quantity of a GAMIC volume, in :func:`read_volume`'s form."""
+    what, where, how = (_child(handle, n) for n in ("what", "where", "how"))
+    sweeps = []
+    moment = ""
+    wavelength = np.nan
+    for name in _gamic_scans(handle):
+        scan = handle[name]
+        found = _gamic_moments(scan).get(quantity)
+        if found is None:
+            continue
+        dataset, attrs = found
+        moment = _text(attrs.get("moment"))
+        counts = scan[dataset][()]
+        nrays, nbins = counts.shape
+        bits = GAMIC_BITS[_text(attrs.get("format"))]
+        low = float(attrs["dyn_range_min"])
+        high = float(attrs["dyn_range_max"])
+        gain = (high - low) / (2**bits - 2)
+        show = _child(scan, "how")
+        rays = scan["ray_header"][()] if "ray_header" in scan else None
+        names = rays.dtype.names if rays is not None else ()
+        if np.isnan(wavelength):
+            wavelength = _number(show, "radar_wave_length") * 100.0  # m to cm
+        sweeps.append(
+            {
+                "counts": counts,
+                "elevation": _number(show, "elevation"),
+                "sweep_start_time": _iso_seconds(_attr(show, "timestamp")),
+                "sweep_end_time": float(rays["timestamp"][-1]) / 1e6
+                if "timestamp" in names and len(rays)
+                else np.nan,
+                "range_start": _number(show, "range_start") / 1000.0,
+                "range_step": _number(show, "range_step"),
+                "nrays": nrays,
+                "nbins": nbins,
+                "first_ray": 0,
+                "gain": gain,
+                "offset": low - gain,
+                "nodata": 0.0,
+                "undetect": np.nan,
+                "nyquist_velocity": _number(show, "nyquist_velocity"),
+                "azimuth_start": _ray(rays, "azimuth_start", nrays),
+                "azimuth_stop": _ray(rays, "azimuth_stop", nrays),
+            }
+        )
+    starts = [s["sweep_start_time"] for s in sweeps]
+    ends = [s["sweep_end_time"] for s in sweeps]
+    site = _text(_attr(how, "site_name"))
+    host = _text(_attr(how, "host_name"))
+    return {
+        "time": np.datetime64(int(round(_iso_seconds(_attr(what, "date")))), "s"),
+        "start_time": starts[0] if starts else np.nan,
+        "end_time": ends[-1] if ends else np.nan,
+        "latitude": _number(where, "lat"),
+        "longitude": _number(where, "lon"),
+        "antenna_height": _number(where, "height"),
+        "source": f"GAMIC site:{site} host:{host}",
+        "scan_task": _text(_attr(how, "template_name")),
+        "beamwidth": _number(how, "azimuth_beam"),
+        "wavelength": wavelength,
+        "odim_version": f"GAMIC {_text(_attr(what, 'version'))}".strip(),
+        "gamic_moment": moment,
+        "sweeps": sweeps,
+    }
+
+
+def _ray(rays, name: str, nrays: int) -> np.ndarray:
+    if rays is None or name not in (rays.dtype.names or ()) or len(rays) != nrays:
+        return np.full(nrays, np.nan)
+    return np.asarray(rays[name], dtype="float64")
 
 
 def _per_ray(how, name: str, nrays: int) -> np.ndarray:
@@ -310,21 +481,27 @@ def to_dataset(volumes: list[dict], quantity: str, centre: list[str], arrivals: 
                 per_sweep[name][i, j] = sweep[name]
             for name in RAY_VARIABLES:
                 per_ray[name][i, j, : sweep[name].size] = sweep[name]
-    data = {
-        "counts": xr.Variable(
-            ("volume", "sweep", "azimuth", "range"),
-            counts,
-            {
-                "long_name": f"raw ODIM {quantity} counts",
-                "quantity": quantity,
-                "comment": (
-                    "physical value = offset + gain * counts (per sweep); counts == undetect "
-                    "is below detection; nodata, the fill, was not scanned"
-                ),
-                "_FillValue": fill,
-            },
-        )
+    moment = volumes[0].get("gamic_moment")
+    attrs = {
+        "long_name": f"raw ODIM {quantity} counts",
+        "quantity": quantity,
+        "comment": (
+            "physical value = offset + gain * counts (per sweep); counts == undetect "
+            "is below detection; nodata, the fill, was not scanned"
+        ),
+        "_FillValue": fill,
     }
+    if moment:
+        attrs.update(
+            long_name=f"raw GAMIC {moment} counts (ODIM {quantity})",
+            gamic_moment=moment,
+            comment=(
+                "physical value = offset + gain * counts (per sweep), i.e. dyn_range_min at "
+                "1 and dyn_range_max at 2**bits - 1; 0, the fill, is no data; rays in scan "
+                "order (see azimuth_start)"
+            ),
+        )
+    data = {"counts": xr.Variable(("volume", "sweep", "azimuth", "range"), counts, attrs)}
     for name, (kind, attrs) in SWEEP_VARIABLES.items():
         attrs = dict(attrs)
         if kind == "int32":
@@ -451,34 +628,82 @@ def _arrival(arrived: dt.datetime | None) -> np.datetime64:
     return np.datetime64(arrived.astimezone(dt.timezone.utc).replace(tzinfo=None), "s")
 
 
-def write(repo, spool: Spool, partition: str | None) -> dict[str, Any]:
+def parent_ledger(repo, attr: str) -> set[str]:
+    """Windows listed in :data:`PARENT`'s ledger ``attr`` (empty before it exists)."""
+    import zarr
+
+    from planetary_datasets.common.multidim import LEDGER_ATTR, ledger
+
+    if attr == LEDGER_ATTR:
+        return ledger(repo, group=PARENT)
+    try:
+        node = zarr.open_group(repo.readonly_session("main").store, path=PARENT, mode="r")
+    except (KeyError, zarr.errors.GroupNotFoundError):
+        return set()
+    return set(node.attrs.get(attr, []))
+
+
+def mark_parent(repo, partition: str, attr: str) -> None:
+    """Add ``partition`` to :data:`PARENT`'s ledger ``attr``."""
+    import icechunk
+    import zarr
+
+    from planetary_datasets.common.multidim import COMMIT_ATTEMPTS, LEDGER_ATTR, mark_written
+
+    if attr == LEDGER_ATTR:
+        mark_written(repo, partition, label=f"wis2_land {PARENT}", group=PARENT)
+        return
+    for attempt in range(1, COMMIT_ATTEMPTS + 1):
+        session = repo.writable_session("main")
+        node = zarr.open_group(session.store, path=PARENT, mode="a")
+        written = set(node.attrs.get(attr, []))
+        if partition in written:
+            return
+        node.attrs[attr] = sorted(written | {partition})
+        try:
+            session.commit(
+                f"wis2_land {PARENT}: {partition} ({attr})",
+                rebase_with=icechunk.ConflictDetector(),
+            )
+            return
+        except (icechunk.ConflictError, icechunk.RebaseFailedError):
+            if attempt == COMMIT_ATTEMPTS:
+                raise
+
+
+def write(
+    repo, spool: Spool, partition: str | None, ledger_attr: str | None = None
+) -> dict[str, Any]:
     """Deduplicate the spooled volumes and append the new ones to their groups.
 
     Each group is appended in batches of :data:`BATCH_BYTES` and its own ledger updated;
-    the window goes into :data:`PARENT`'s ledger once every group is written.
+    the window goes into :data:`PARENT`'s ledger ``ledger_attr`` (the shared one by
+    default, :data:`GAMIC_LEDGER` for the GAMIC part) once every group is written.
 
     Returns:
         Counts: objects, volumes written per group, and objects skipped.
     """
     from planetary_datasets.common.multidim import (
+        LEDGER_ATTR,
         append_partition,
         describe_variables,
         ledger,
         mark_written,
     )
 
+    ledger_attr = ledger_attr or LEDGER_ATTR
     counts: Counter = Counter(objects=len(spool.items))
-    if partition is not None and partition in ledger(repo, group=PARENT):
+    if partition is not None and partition in parent_ledger(repo, ledger_attr):
         counts["already_written"] = 1
         return dict(counts)
     # Pass 1: headers only, to choose one copy of each volume.
     chosen: dict[str, dict[int, tuple]] = {}
     for path, key, arrived in spool.in_arrival_order():
-        head = header(path)
-        if head is None:
-            counts["not_odim_polar_volumes"] += 1
-            continue
         centre = key.split("/")[1] if key.startswith("data/") else ""
+        head = header(path, country=centre.split("-", 1)[0])
+        if head is None:
+            counts["not_polar_volumes"] += 1
+            continue
         stamp = int(head["time"].astype("int64"))
         for quantity in head["quantities"]:
             group = group_name(head["node"], quantity)
@@ -545,5 +770,5 @@ def write(repo, spool: Spool, partition: str | None) -> dict[str, Any]:
             logger.exception(f"wis2_land {group}: write failed: {exc}")
             written[group] = f"error: {type(exc).__name__}: {exc}"
     if partition is not None and chosen and not failed:
-        mark_written(repo, partition, label=f"wis2_land {PARENT}", group=PARENT)
+        mark_parent(repo, partition, ledger_attr)
     return {**dict(counts), "volumes_written": written}
