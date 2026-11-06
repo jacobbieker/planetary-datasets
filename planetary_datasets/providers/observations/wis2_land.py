@@ -62,7 +62,8 @@ Other groups
     The station reports are the store's root group. The same target also writes, as
     groups of the store with ledgers of their own, real-time river levels and discharge
     (``hydrometric``, :mod:`.wis2_land_hydrometric`) and weather-radar polar volumes
-    (``radar/<radar>_<quantity>``, :mod:`.wis2_land_radar`). Their objects are spooled to
+    (``radar/<radar>_<quantity>``, :mod:`.wis2_land_radar`; ODIM and GAMIC volumes are
+    two parts with separate ledgers). Their objects are spooled to
     disk while the window streams and appended after the reports. Re-running the target
     over an archived window writes each part only if its ledger lacks the window
     (:meth:`LandTarget.prepare`).
@@ -71,6 +72,7 @@ Other groups
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import math
 import os
 import pathlib
@@ -96,6 +98,8 @@ from planetary_datasets.providers.observations.wis2_targets import (
 STORE_PREFIX = "bkr/obs/wis2_land.icechunk"
 #: The station reports at the store's root, as named in summaries and :meth:`prepare`.
 ROOT = "reports"
+#: The GAMIC radar volumes (Cyprus), a part with a ledger of its own under ``radar/``.
+GAMIC = "radar_gamic"
 #: Rows at the end of the store whose reports a new window is checked against.
 DEDUP_ROWS = 3_000_000
 #: Objects decoded per worker task.
@@ -853,6 +857,11 @@ class LandTarget(ArchiveTarget):
                     written.add(part)
             except Exception:  # noqa: BLE001 - a part not created yet holds nothing
                 continue
+        try:
+            if partition in radar.parent_ledger(repo, radar.GAMIC_LEDGER):
+                written.add(GAMIC)
+        except Exception:  # noqa: BLE001 - a part not created yet holds nothing
+            pass
         self._written = written
         if written:
             logger.info(
@@ -869,6 +878,8 @@ class LandTarget(ArchiveTarget):
             return hydrometric.GROUP
         if radar.wants(key, size):
             return radar.PARENT
+        if radar.wants_gamic(key, size):
+            return GAMIC
         return None
 
     def wants(self, key: str, size: int = 0) -> bool:
@@ -993,7 +1004,11 @@ class LandTarget(ArchiveTarget):
     def _finish_parts(self, repo, partition: str) -> dict:
         """Append the spooled hydrometric and radar objects; a summary of each."""
         out = {}
-        writers = {hydrometric.GROUP: hydrometric.write, radar.PARENT: radar.write}
+        writers = {
+            hydrometric.GROUP: hydrometric.write,
+            radar.PARENT: radar.write,
+            GAMIC: functools.partial(radar.write, ledger_attr=radar.GAMIC_LEDGER),
+        }
         for part, writer in writers.items():
             spool = self._spools.pop(part, None)
             if spool is None:
