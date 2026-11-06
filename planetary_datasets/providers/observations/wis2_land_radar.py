@@ -49,8 +49,13 @@ GAMIC
     ``dyn_range_max``. Rays are stored in the order scanned, not by azimuth (the first is
     wherever the antenna was; ``first_ray`` is 0), with each ray's ``azimuth_start`` and
     ``azimuth_stop``; a sweep can have 361 rays. Sweep times are the scan's ``timestamp``
-    and its last ray's time, as the file gives them (LCA's run two hours ahead of its
-    nominal ``time``, which matches the arrival: they appear to be local time).
+    and its last ray's time. All times are UTC: LCA stamps its scans and rays in local
+    time (Asia/Nicosia, UTC+2 in winter, UTC+3 in summer). Per volume, the file's times
+    are compared with the UTC time in its name (``LONGRANGE_LCA_20261104053656_00.h5``):
+    a time already within minutes of it is kept, one ahead by exactly the Nicosia offset
+    at that instant is converted, and anything else is stored as given and counted
+    (``unrecognised_time_offset`` in the window summary). ``time_offset_removed`` and
+    ``nominal_time_offset_removed`` record the seconds subtracted (NaN: left as given).
 
 Duplicates
     RMI publishes each volume under two names (``T_PAGW41_C_EBUM_...hdf`` and
@@ -210,12 +215,13 @@ def _quantities(dataset) -> dict[str, str]:
     return out
 
 
-def header(path: str, country: str = "") -> dict[str, Any] | None:
+def header(path: str, country: str = "", key: str = "") -> dict[str, Any] | None:
     """A volume's node, nominal time and quantities; None if it is not a polar volume.
 
     Args:
         path: The spooled file (ODIM_H5 or GAMIC HDF5).
         country: Prefix of a GAMIC radar's node (its centre's country, ``cy``).
+        key: The object's WIS2 key, whose file name gives a GAMIC volume's UTC time.
     """
     import h5py
 
@@ -225,7 +231,7 @@ def header(path: str, country: str = "") -> dict[str, Any] | None:
             if _text(_attr(what, "object")).upper() != "PVOL":
                 return None
             if _gamic_scans(handle):
-                return _gamic_header(handle, country)
+                return _gamic_header(handle, country, key)
             source = _text(_attr(what, "source"))
             node = node_name(source)
             time = _stamp(_attr(what, "date"), _attr(what, "time"))
@@ -239,13 +245,20 @@ def header(path: str, country: str = "") -> dict[str, Any] | None:
     return {"node": node, "time": time, "quantities": sorted(quantities), "source": source}
 
 
-def read_volume(path: str, quantity: str) -> dict[str, Any]:
-    """One quantity of a polar volume: the raw counts per sweep and their metadata."""
+def read_volume(path: str, quantity: str, shifts: dict | None = None) -> dict[str, Any]:
+    """One quantity of a polar volume: the raw counts per sweep and their metadata.
+
+    Args:
+        path: The spooled file.
+        quantity: The ODIM quantity to read.
+        shifts: For a GAMIC volume, the local-time offsets :func:`header` found
+            (``nominal``, ``scans``; seconds to subtract, NaN when unrecognised).
+    """
     import h5py
 
     with h5py.File(path, "r") as handle:
         if _gamic_scans(handle):
-            return _gamic_volume(handle, quantity)
+            return _gamic_volume(handle, quantity, shifts or {})
         what, where, how = (_child(handle, n) for n in ("what", "where", "how"))
         sweeps = []
         for name in _sweeps(handle):
@@ -330,7 +343,115 @@ def _iso_seconds(value) -> float:
     return np.nan if np.isnat(stamp) else float(stamp.astype("int64")) / 1000.0
 
 
-def _gamic_header(handle, country: str) -> dict[str, Any] | None:
+#: Time zone of the GAMIC radars that stamp local time (the Cyprus Department of
+#: Meteorology's), keyed by node prefix.
+LOCAL_ZONES = {"cy": "Asia/Nicosia"}
+#: How far a volume's first scan may start from its nominal time.
+SCAN_START_TOLERANCE = 600.0
+NAME_TIME = re.compile(r"_(\d{14})(?:_|\.|$)")
+
+
+def name_time(key: str) -> float:
+    """The UTC time in a GAMIC file name as seconds since 1970; NaN when it has none.
+
+    The Cyprus volumes are named for their nominal time in UTC
+    (``LONGRANGE_LCA_20261104053656_00.h5``), which matches their arrival.
+    """
+    match = NAME_TIME.search(key.rsplit("/", 1)[-1])
+    if not match:
+        return np.nan
+    try:
+        stamp = dt.datetime.strptime(match[1], "%Y%m%d%H%M%S").replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return np.nan
+    return stamp.timestamp()
+
+
+def local_offset(given: float, utc: float, zone: str | None, tolerance: float = 0.0) -> float:
+    """Seconds to subtract from ``given`` to make it UTC, or NaN if that is unclear.
+
+    0 when ``given`` already agrees with the UTC time ``utc`` (within ``tolerance``); the
+    zone's UTC offset at that instant when ``given`` is that many whole hours ahead; NaN
+    for any other difference, or a missing time.
+    """
+    from zoneinfo import ZoneInfo
+
+    if not (np.isfinite(given) and np.isfinite(utc)):
+        return np.nan
+    delta = given - utc
+    if abs(delta) <= tolerance:
+        return 0.0
+    if zone is None:
+        return np.nan
+    when = dt.datetime.fromtimestamp(utc, dt.timezone.utc)
+    offset = when.astimezone(ZoneInfo(zone)).utcoffset()
+    if offset is None:
+        return np.nan
+    offset = offset.total_seconds()
+    return offset if abs(delta - offset) <= tolerance else np.nan
+
+
+def gamic_shifts(handle, zone: str | None, reference: float) -> dict[str, float]:
+    """The local-time offsets of a GAMIC volume's times, from the UTC ``reference``.
+
+    ``nominal`` is for ``what/date``; ``scans`` for the scan and ray timestamps, judged
+    by the first scan's start (minutes after the nominal time). Each is the seconds to
+    subtract: 0 for UTC, the zone's offset for local time, NaN when neither fits.
+    """
+    nominal = _iso_seconds(_attr(_child(handle, "what"), "date"))
+    if not np.isfinite(reference):
+        reference = nominal
+    scans = _gamic_scans(handle)
+    first = _iso_seconds(_attr(_child(handle[scans[0]], "how"), "timestamp")) if scans else np.nan
+    return {
+        "nominal": local_offset(nominal, reference, zone),
+        "scans": local_offset(first, reference, zone, SCAN_START_TOLERANCE),
+        "zone": zone,
+    }
+
+
+def _zone_offset(zone: str, utc: float) -> float:
+    from zoneinfo import ZoneInfo
+
+    when = dt.datetime.fromtimestamp(utc, dt.timezone.utc)
+    return when.astimezone(ZoneInfo(zone)).utcoffset().total_seconds()
+
+
+def local_to_utc(local: float, zone: str, after: float, shift: float) -> tuple[float, float]:
+    """A local time stamped as if UTC (seconds since 1970), converted to UTC.
+
+    Each time takes the zone's offset at its own instant, so a volume scanned across a
+    clock change converts correctly. In the repeated hour after clocks go back, the
+    reading at or after ``after`` (the previous time converted, NaN for the first) is
+    taken, else the one with the volume's ``shift``.
+
+    Returns:
+        The UTC time and the offset removed.
+    """
+    if not np.isfinite(local):
+        return np.nan, np.nan
+    offsets = {_zone_offset(zone, local - hours * 3600) for hours in (-27, -3, 0, 3, 27)}
+    candidates = sorted(
+        (local - offset, offset)
+        for offset in offsets
+        if _zone_offset(zone, local - offset) == offset
+    )
+    if not candidates:  # a local time the clock skipped: keep the volume's offset
+        return local - shift, shift
+    if np.isfinite(after):
+        later = [c for c in candidates if c[0] >= after - SCAN_START_TOLERANCE]
+        if later:
+            return later[0]
+    same = [c for c in candidates if c[1] == shift]
+    return (same or candidates)[0]
+
+
+def _applied(shift: float) -> float:
+    """Seconds to subtract: the shift, or 0 when it is unrecognised (NaN)."""
+    return shift if np.isfinite(shift) else 0.0
+
+
+def _gamic_header(handle, country: str, key: str = "") -> dict[str, Any] | None:
     site = re.sub(r"[^a-z0-9]+", "", _text(_attr(_child(handle, "how"), "site_name")).lower())
     stamp = _iso_seconds(_attr(_child(handle, "what"), "date"))
     quantities = set()
@@ -338,17 +459,28 @@ def _gamic_header(handle, country: str) -> dict[str, Any] | None:
         quantities |= set(_gamic_moments(handle[name]))
     if not site or not np.isfinite(stamp) or not quantities:
         return None
+    shifts = gamic_shifts(handle, LOCAL_ZONES.get(country), name_time(key))
+    stamp -= _applied(shifts["nominal"])
     return {
         "node": f"{country}{site}",
         "time": np.datetime64(int(round(stamp)), "s"),
         "quantities": sorted(quantities),
         "source": f"GAMIC site:{site.upper()}",
+        "shifts": shifts,
     }
 
 
-def _gamic_volume(handle, quantity: str) -> dict[str, Any]:
-    """One ODIM quantity of a GAMIC volume, in :func:`read_volume`'s form."""
+def _gamic_volume(handle, quantity: str, shifts: dict) -> dict[str, Any]:
+    """One ODIM quantity of a GAMIC volume, in :func:`read_volume`'s form, in UTC."""
     what, where, how = (_child(handle, n) for n in ("what", "where", "how"))
+    nominal_shift = shifts.get("nominal", 0.0)
+    scan_shift = shifts.get("scans", 0.0)
+    # An unrecognised offset is left as given (and recorded as NaN).
+    nominal_by, scan_by = _applied(nominal_shift), _applied(scan_shift)
+    zone = shifts.get("zone")
+    # Local times are converted one by one (a volume can span a clock change).
+    local = bool(zone) and scan_by > 0
+    previous = np.nan
     sweeps = []
     moment = ""
     wavelength = np.nan
@@ -370,14 +502,21 @@ def _gamic_volume(handle, quantity: str) -> dict[str, Any]:
         names = rays.dtype.names if rays is not None else ()
         if np.isnan(wavelength):
             wavelength = _number(show, "radar_wave_length") * 100.0  # m to cm
+        start = _iso_seconds(_attr(show, "timestamp"))
+        end = float(rays["timestamp"][-1]) / 1e6 if "timestamp" in names and len(rays) else np.nan
+        if local:
+            start, removed = local_to_utc(start, zone, previous, scan_by)
+            end, _ = local_to_utc(end, zone, start, removed)
+        else:
+            start, end, removed = start - scan_by, end - scan_by, scan_shift
+        previous = end if np.isfinite(end) else start
         sweeps.append(
             {
                 "counts": counts,
                 "elevation": _number(show, "elevation"),
-                "sweep_start_time": _iso_seconds(_attr(show, "timestamp")),
-                "sweep_end_time": float(rays["timestamp"][-1]) / 1e6
-                if "timestamp" in names and len(rays)
-                else np.nan,
+                "sweep_start_time": start,
+                "sweep_end_time": end,
+                "sweep_time_offset_removed": removed,
                 "range_start": _number(show, "range_start") / 1000.0,
                 "range_step": _number(show, "range_step"),
                 "nrays": nrays,
@@ -397,7 +536,9 @@ def _gamic_volume(handle, quantity: str) -> dict[str, Any]:
     site = _text(_attr(how, "site_name"))
     host = _text(_attr(how, "host_name"))
     return {
-        "time": np.datetime64(int(round(_iso_seconds(_attr(what, "date")))), "s"),
+        "time": np.datetime64(int(round(_iso_seconds(_attr(what, "date")) - nominal_by)), "s"),
+        "nominal_time_offset_removed": nominal_shift,
+        "time_offset_removed": scan_shift,
         "start_time": starts[0] if starts else np.nan,
         "end_time": ends[-1] if ends else np.nan,
         "latitude": _number(where, "lat"),
@@ -526,6 +667,43 @@ def to_dataset(volumes: list[dict], quantity: str, centre: list[str], arrivals: 
         "wavelength": ("float64", {"units": "cm", "long_name": "radar wavelength"}),
         "odim_version": ("str", {"long_name": "ODIM what/version"}),
     }
+    if "time_offset_removed" in volumes[0]:
+        removed = np.full((len(volumes), sweeps), np.nan)
+        for i, volume in enumerate(volumes):
+            for j, sweep in enumerate(volume["sweeps"]):
+                removed[i, j] = sweep.get("sweep_time_offset_removed", np.nan)
+        data["sweep_time_offset_removed"] = xr.Variable(
+            ("volume", "sweep"),
+            removed,
+            {
+                "units": "s",
+                "long_name": "seconds subtracted from this sweep's times to make them UTC",
+                "comment": "each local time takes the zone's offset at its own instant, so "
+                "this differs from time_offset_removed only in a volume scanned across a "
+                "clock change",
+            },
+        )
+        # GAMIC groups only: what was done to make the file's times UTC.
+        scalars["nominal_time_offset_removed"] = (
+            "float64",
+            {
+                "units": "s",
+                "long_name": "seconds subtracted from the file's nominal time to make it UTC",
+                "comment": "0: the file gave UTC; NaN: offset unrecognised, time as given",
+            },
+        )
+        scalars["time_offset_removed"] = (
+            "float64",
+            {
+                "units": "s",
+                "long_name": "seconds subtracted from the file's scan and ray times "
+                "(sweep_start_time, sweep_end_time, start_time, end_time) to make them UTC, "
+                "judged by the first scan (per sweep: sweep_time_offset_removed)",
+                "comment": "the station's local UTC offset (Asia/Nicosia: 7200 in winter, "
+                "10800 in summer) when its times were found to be local; 0 when they "
+                "were UTC; NaN when the offset matched neither, times as given",
+            },
+        )
     for name, (kind, attrs) in scalars.items():
         values = [v[name] for v in volumes]
         array = np.array(values, dtype=object if kind == "str" else kind)
@@ -699,17 +877,24 @@ def write(
     chosen: dict[str, dict[int, tuple]] = {}
     for path, key, arrived in spool.in_arrival_order():
         centre = key.split("/")[1] if key.startswith("data/") else ""
-        head = header(path, country=centre.split("-", 1)[0])
+        head = header(path, country=centre.split("-", 1)[0], key=key)
         if head is None:
             counts["not_polar_volumes"] += 1
             continue
+        shifts = head.get("shifts")
+        if shifts is not None:
+            offsets = (shifts["nominal"], shifts["scans"])
+            if not all(np.isfinite(v) for v in offsets):
+                counts["unrecognised_time_offset"] += 1
+            elif any(offsets):
+                counts["local_time_converted"] += 1
         stamp = int(head["time"].astype("int64"))
         for quantity in head["quantities"]:
             group = group_name(head["node"], quantity)
             if stamp in chosen.setdefault(group, {}):
                 counts["duplicate_copies"] += 1
                 continue
-            chosen[group][stamp] = (path, quantity, centre, _arrival(arrived))
+            chosen[group][stamp] = (path, quantity, centre, _arrival(arrived), shifts)
     # Pass 2: per group, read the new volumes in time order and append them in batches.
     written: dict[str, Any] = {}
     failed = False
@@ -744,9 +929,9 @@ def write(
                 )
                 return len(volumes)
 
-            for path, quantity, centre, arrival in new:
+            for path, quantity, centre, arrival, shifts in new:
                 try:
-                    volume = read_volume(path, quantity)
+                    volume = read_volume(path, quantity, shifts)
                 except (OSError, KeyError, ValueError) as exc:
                     counts["unreadable_volumes"] += 1
                     logger.warning(f"wis2_land {group}: {path}: {exc}")
