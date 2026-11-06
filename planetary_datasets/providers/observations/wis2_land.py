@@ -57,6 +57,15 @@ Arrival times
     stores; the name predates them), and ``first_arrival_time``, the earliest arrival of
     any copy the window collapsed into the row. Both are UTC, to the second; rows written
     before ``first_arrival_time`` was added read NaT there.
+
+Other groups
+    The station reports are the store's root group. The same target also writes, as
+    groups of the store with ledgers of their own, real-time river levels and discharge
+    (``hydrometric``, :mod:`.wis2_land_hydrometric`) and weather-radar polar volumes
+    (``radar/<radar>_<quantity>``, :mod:`.wis2_land_radar`). Their objects are spooled to
+    disk while the window streams and appended after the reports. Re-running the target
+    over an archived window writes each part only if its ledger lacks the window
+    (:meth:`LandTarget.prepare`).
 """
 
 from __future__ import annotations
@@ -64,6 +73,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 import os
+import pathlib
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
@@ -73,6 +83,8 @@ import pandas as pd
 import xarray as xr
 from loguru import logger
 
+from planetary_datasets.providers.observations import wis2_land_hydrometric as hydrometric
+from planetary_datasets.providers.observations import wis2_land_radar as radar
 from planetary_datasets.providers.observations.wis2_targets import (
     MISSING_DOUBLE,
     MISSING_LONG,
@@ -82,6 +94,8 @@ from planetary_datasets.providers.observations.wis2_targets import (
 )
 
 STORE_PREFIX = "bkr/obs/wis2_land.icechunk"
+#: The station reports at the store's root, as named in summaries and :meth:`prepare`.
+ROOT = "reports"
 #: Rows at the end of the store whose reports a new window is checked against.
 DEDUP_ROWS = 3_000_000
 #: Objects decoded per worker task.
@@ -789,6 +803,10 @@ def to_dataset(rows: Sequence[dict]) -> xr.Dataset:
 # ------------------------------------------------------------------------------ target
 
 
+class IncompleteWindow(RuntimeError):
+    """A part of the window (hydrometric, radar) was not wholly written and ledgered."""
+
+
 @register("land")
 class LandTarget(ArchiveTarget):
     """Archive target: a window's land surface reports into :data:`STORE_PREFIX`.
@@ -804,14 +822,76 @@ class LandTarget(ArchiveTarget):
         super().__init__(config)
         self.workers = workers
         self.pending: list[tuple[str, bytes, dt.datetime | None]] = []
+        self._spools: dict[str, hydrometric.Spool] = {}
+        #: Parts of the store whose ledger already lists the coming window; see
+        #: :meth:`prepare`.
+        self._written: set[str] = set()
+
+    def _config(self):
+        from planetary_datasets.config import get_config
+
+        return self.config or get_config()
+
+    def prepare(self, partition: str) -> None:
+        """Note the parts of the store that already hold ``partition``.
+
+        Their objects are then declined by :meth:`wants`, so re-running the target over an
+        archived window (a backfill of the hydrometric or radar groups) neither keeps nor
+        decodes the reports written the first time.
+        """
+        from planetary_datasets.common.multidim import ledger
+
+        repo = self._repo()
+        written = set()
+        for part, group in (
+            (ROOT, None),
+            (hydrometric.GROUP, hydrometric.GROUP),
+            (radar.PARENT, radar.PARENT),
+        ):
+            try:
+                if partition in ledger(repo, group=group):
+                    written.add(part)
+            except Exception:  # noqa: BLE001 - a part not created yet holds nothing
+                continue
+        self._written = written
+        if written:
+            logger.info(
+                f"wis2 land: {partition} already in {', '.join(sorted(written))}; "
+                "their objects are skipped"
+            )
+
+    @staticmethod
+    def part(key: str, size: int = 0) -> str | None:
+        """Which part of the store an object belongs to (None: not wanted)."""
+        if wants(key, size):
+            return ROOT
+        if hydrometric.wants(key, size):
+            return hydrometric.GROUP
+        if radar.wants(key, size):
+            return radar.PARENT
+        return None
 
     def wants(self, key: str, size: int = 0) -> bool:
-        return wants(key, size)
+        """Whether to take an object: one of the store's, for a part not yet written."""
+        part = self.part(key, size)
+        return part is not None and part not in self._written
 
     def feed(self, key: str, body: bytes, arrived: dt.datetime | None = None) -> None:
-        """Keep the object for decoding at :meth:`finish`; never raises."""
+        """Keep an object for :meth:`finish`; never raises.
+
+        Report objects are kept in memory (a window's come to ~100 MB); hydrometric and
+        radar ones (~3 GB a window) are spooled to disk.
+        """
         try:
-            self.pending.append((key, bytes(body), arrived))
+            part = self.part(key)
+            if part == ROOT:
+                self.pending.append((key, bytes(body), arrived))
+                return
+            spool = self._spools.get(part)
+            if spool is None:
+                root = pathlib.Path(self._config().data_dir) / "wis2_land_spool"
+                spool = self._spools[part] = hydrometric.Spool(root, part)
+            spool.add(key, body, arrived)
         except Exception as exc:  # noqa: BLE001 - a target must never break the archive
             logger.warning(f"wis2 land: could not keep {key}: {exc}")
 
@@ -834,9 +914,7 @@ class LandTarget(ArchiveTarget):
         return total
 
     def _repo(self):
-        from planetary_datasets.config import get_config
-
-        return (self.config or get_config()).icechunk_repo(self.store_prefix)
+        return self._config().icechunk_repo(self.store_prefix)
 
     def stored_identities(self, repo) -> set[tuple]:
         """Identities of the reports in the store's last :data:`DEDUP_ROWS` rows."""
@@ -876,23 +954,65 @@ class LandTarget(ArchiveTarget):
         from planetary_datasets.common.multidim import append_partition, describe_variables
 
         objects = len(self.pending)
-        decoded = self.decode_pending()
-        fill_positions(decoded.rows)
         repo = self._repo()
-        rows = deduplicate(decoded.rows, self.stored_identities(repo))
-        written = False
-        if rows:
-            written = append_partition(repo, to_dataset(rows), partition, label="wis2_land")
-            describe_variables(repo, ARRIVAL_ATTRS, label="wis2_land")
-        return {
-            "objects": objects,
-            "messages": decoded.messages,
-            "other_category_messages": decoded.other_category,
-            "undecodable_messages": decoded.failed,
-            "skipped_reports": decoded.incomplete,  # NIL, or no station or time
-            "reports": len(decoded.rows),
-            "rows_written": len(rows) if written else 0,
-        }
+        try:
+            decoded = self.decode_pending()
+            fill_positions(decoded.rows)
+            rows = deduplicate(decoded.rows, self.stored_identities(repo))
+            written = False
+            if rows:
+                written = append_partition(repo, to_dataset(rows), partition, label="wis2_land")
+                describe_variables(repo, ARRIVAL_ATTRS, label="wis2_land")
+            summary = {
+                "objects": objects,
+                "messages": decoded.messages,
+                "other_category_messages": decoded.other_category,
+                "undecodable_messages": decoded.failed,
+                "skipped_reports": decoded.incomplete,  # NIL, or no station or time
+                "reports": len(decoded.rows),
+                "rows_written": len(rows) if written else 0,
+            }
+        finally:
+            # Written after the reports, so a store created by this window gets its root
+            # arrays first; each part on its own, so one failing never loses another.
+            summary_parts = self._finish_parts(repo, partition)
+        summary = {**summary, **summary_parts}
+        incomplete = [
+            part
+            for part, result in summary_parts.items()
+            if "error" in result
+            or result.get("ledgered") is False
+            or any(str(v).startswith("error") for v in result.get("volumes_written", {}).values())
+        ]
+        if incomplete:
+            # Recorded as failed in the window's target record, so it shows and can be
+            # re-run (mark_pending); the parts written are not written again.
+            raise IncompleteWindow(f"{', '.join(incomplete)} incomplete: {summary}")
+        return summary
+
+    def _finish_parts(self, repo, partition: str) -> dict:
+        """Append the spooled hydrometric and radar objects; a summary of each."""
+        out = {}
+        writers = {hydrometric.GROUP: hydrometric.write, radar.PARENT: radar.write}
+        for part, writer in writers.items():
+            spool = self._spools.pop(part, None)
+            if spool is None:
+                continue
+            try:
+                # Objects that could not be spooled are missing from this run: what was
+                # spooled is written, but the window is not ledgered, so a re-run over the
+                # archived tar takes them (the rows written now are not written again).
+                complete = not spool.failed
+                out[part] = writer(repo, spool, partition if complete else None)
+                if not complete:
+                    out[part]["unspooled_objects"] = spool.failed
+                    out[part]["ledgered"] = False
+            except Exception as exc:  # noqa: BLE001 - one part must not lose the others
+                logger.exception(f"wis2 land {part} {partition}: failed: {exc}")
+                out[part] = {"error": f"{type(exc).__name__}: {exc}"}
+            finally:
+                spool.clear()
+        return out
 
 
 def rows_frame(rows: Sequence[dict]) -> pd.DataFrame:
