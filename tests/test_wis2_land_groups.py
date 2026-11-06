@@ -574,6 +574,10 @@ def test_gamic_volumes_backfill_windows_already_written_for_odim_once(local_conf
     assert not any(again.wants(k, len(b)) for k, b, _ in window_objects() + cyprus)
     _, summary = run(local_config, window_objects() + cyprus)
     assert sizes(repo) == before and "radar_gamic" not in summary
+    for group in ("radar/cypfo_dbzh", "radar/cypfo_th"):
+        stored = zarr.open_group(repo.readonly_session("main").store, path=group, mode="r")
+        assert stored["time"].shape[0] == 1
+        assert PARTITION in radar.parent_ledger(repo, radar.GAMIC_LEDGER, group)
 
 
 def test_a_missing_gamic_time_is_nan_not_a_sentinel():

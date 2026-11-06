@@ -629,41 +629,41 @@ def _arrival(arrived: dt.datetime | None) -> np.datetime64:
     return np.datetime64(arrived.astimezone(dt.timezone.utc).replace(tzinfo=None), "s")
 
 
-def parent_ledger(repo, attr: str) -> set[str]:
-    """Windows listed in :data:`PARENT`'s ledger ``attr`` (empty before it exists)."""
+def parent_ledger(repo, attr: str, group: str = PARENT) -> set[str]:
+    """Windows listed in ``group``'s ledger ``attr`` (empty before it exists)."""
     import zarr
 
     from planetary_datasets.common.multidim import LEDGER_ATTR, ledger
 
     if attr == LEDGER_ATTR:
-        return ledger(repo, group=PARENT)
+        return ledger(repo, group=group)
     try:
-        node = zarr.open_group(repo.readonly_session("main").store, path=PARENT, mode="r")
+        node = zarr.open_group(repo.readonly_session("main").store, path=group, mode="r")
     except (KeyError, zarr.errors.GroupNotFoundError):
         return set()
     return set(node.attrs.get(attr, []))
 
 
-def mark_parent(repo, partition: str, attr: str) -> None:
-    """Add ``partition`` to :data:`PARENT`'s ledger ``attr``."""
+def mark_parent(repo, partition: str, attr: str, group: str = PARENT) -> None:
+    """Add ``partition`` to ``group``'s ledger ``attr`` (:data:`PARENT`'s by default)."""
     import icechunk
     import zarr
 
     from planetary_datasets.common.multidim import COMMIT_ATTEMPTS, LEDGER_ATTR, mark_written
 
     if attr == LEDGER_ATTR:
-        mark_written(repo, partition, label=f"wis2_land {PARENT}", group=PARENT)
+        mark_written(repo, partition, label=f"wis2_land {group}", group=group)
         return
     for attempt in range(1, COMMIT_ATTEMPTS + 1):
         session = repo.writable_session("main")
-        node = zarr.open_group(session.store, path=PARENT, mode="a")
+        node = zarr.open_group(session.store, path=group, mode="a")
         written = set(node.attrs.get(attr, []))
         if partition in written:
             return
         node.attrs[attr] = sorted(written | {partition})
         try:
             session.commit(
-                f"wis2_land {PARENT}: {partition} ({attr})",
+                f"wis2_land {group}: {partition} ({attr})",
                 rebase_with=icechunk.ConflictDetector(),
             )
             return
@@ -688,8 +688,6 @@ def write(
         LEDGER_ATTR,
         append_partition,
         describe_variables,
-        ledger,
-        mark_written,
     )
 
     ledger_attr = ledger_attr or LEDGER_ATTR
@@ -716,7 +714,8 @@ def write(
     written: dict[str, Any] = {}
     failed = False
     for group, by_time in sorted(chosen.items()):
-        if partition is not None and partition in ledger(repo, group=group):
+        # Each format keeps its own group ledgers too, so one never skips the other.
+        if partition is not None and partition in parent_ledger(repo, ledger_attr, group):
             written[group] = "already written"
             continue
         try:
@@ -764,7 +763,7 @@ def write(
             if rows:
                 describe_variables(repo, ARRIVAL_ATTRS, label=f"wis2_land {group}", group=group)
             if partition is not None and (rows or stored):
-                mark_written(repo, partition, label=f"wis2_land {group}", group=group)
+                mark_parent(repo, partition, ledger_attr, group)
             written[group] = rows
         except Exception as exc:  # noqa: BLE001 - one group must not lose the others
             failed = True
