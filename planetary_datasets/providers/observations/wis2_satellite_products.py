@@ -24,10 +24,33 @@ sar_ocean      Sentinel-1 SAR ocean winds, swell      ``sar-c``                 
 ami_csr        GK-2A AMI clear-sky radiances (KMA)    ``ami``                        --
 olci_wv        Sentinel-3 OLCI total column water     ``olci``                       --
                vapour
+fci_asr        MTG-I FCI all-sky radiances            ``fci`` (``*-ASR-*``)          ``IUF``
+               (EUMETSAT ASR: clear, cloudy and all                                  EUMT
+               sky brightness temperatures per
+               segment and channel)
+seviri_asr     Meteosat SEVIRI all-sky radiances      ``seviri`` (``*+ASR_*``)       ``IUF``
+               (0-degree service and IODC)                                           ``IXF``
+                                                                                     EUMG
+ahi_amv        Himawari AHI atmospheric motion        --                             ``IXC``
+               vectors (JMA, 310014)                                                 RJTD
+swim_nadir     CFOSAT SWIM nadir altimetry (OGDR,     ``swim``                       --
+               340019): ranges, wave height,
+               backscatter, corrections
 =============  =====================================  =============================  =======
 
 A message is only taken into a group when its own header agrees (BUFR data category and
-template), whatever the object is called.
+template), whatever the object is called. Where an instrument topic carries several
+products (Meteosat AMVs and all-sky radiances under ``fci`` and ``seviri``), the file name
+picks the group; where one GTS heading is used by several originators (``IUF`` from
+EUMETSAT's MTG and MSG ground segments), the originator (CCCC) does.
+
+Groups added after the store began (``fci_asr``, ``seviri_asr``, ``ahi_amv``,
+``swim_nadir``) are new groups rather than new sources of existing ones, so the per-group
+ledger lets a re-run over an archived window write them while declining everything
+written the first time. ``fci_asr`` and ``seviri_asr`` take EUMETSAT's own topic and both
+GTS relays of the same bulletins; the copies are the same subsets value for value and
+collapse to one row (see below). SWIM's OGDR carries the nadir beam only; its off-nadir
+wave spectra are not on WIS2.
 
 Layout. One row per BUFR subset (dimension ``observation``: one wind vector, one
 altimeter measurement, one occultation). Every element of the message is kept, named in
@@ -80,7 +103,10 @@ TOPIC = re.compile(
     r"^data/(?P<centre>[^/]+)/data/core/weather/(?:experimental/)?space-based-observations/"
     r"(?P<platform>[^/]+)/(?P<instrument>[^/]+)/(?P<name>[^/]+)$"
 )
-GTS = re.compile(r"-gts-to-wis2/data/core/(?P<t1>[A-Z])/(?P<t2>[A-Z])/(?P<a1>[A-Z])/")
+GTS = re.compile(
+    r"-gts-to-wis2/data/core/(?P<t1>[A-Z])/(?P<t2>[A-Z])/(?P<a1>[A-Z])/"
+    r"(?:[A-Z]/\d\d/(?P<cccc>[A-Z0-9]{4})/)?"
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -90,14 +116,19 @@ class Product:
     group: str
     title: str
     topics: tuple[str, ...] = ()
-    #: GTS T1T2A1 of the relayed bulletins (``ISX``: BUFR, surface, satellite).
+    #: GTS T1T2A1 of the relayed bulletins (``ISX``: BUFR, surface, satellite), or
+    #: T1T2A1 and originator (``"IUF EUMT"``) where the heading alone is ambiguous.
     gts: tuple[str, ...] = ()
     #: BUFR data categories taken; empty takes any (a topic that only carries this).
     categories: tuple[int, ...] = ()
     #: Top-level template descriptors, or their leading digits (``"340"``); empty: any.
     templates: tuple[str, ...] = ()
+    #: Regular expression the object's file name must match under ``topics``; empty: any.
+    #: A product with one is tried before the topic's product without.
+    names: str = ""
 
     def takes(self, category: int, descriptors: tuple[int, ...]) -> bool:
+        """Whether a message of this data category and top-level template is this one's."""
         if self.categories and category not in self.categories:
             return False
         if not self.templates:
@@ -136,9 +167,47 @@ PRODUCTS = {
         Product("sar_ocean", "Sentinel-1 SAR ocean winds and waves", ("sar-c",)),
         Product("ami_csr", "GK-2A AMI clear-sky radiances", ("ami",)),
         Product("olci_wv", "Sentinel-3 OLCI total column water vapour", ("olci",)),
+        Product(
+            "fci_asr",
+            "MTG-I FCI all-sky radiances",
+            ("fci",),
+            ("IUF EUMT",),
+            (5,),
+            ("304037",),
+            names=r"-ASR-",
+        ),
+        Product(
+            "seviri_asr",
+            "Meteosat SEVIRI all-sky radiances",
+            ("seviri",),
+            ("IUF EUMG", "IXF EUMG"),
+            (5,),
+            ("304037",),
+            names=r"\+ASR_",
+        ),
+        Product(
+            "ahi_amv",
+            "Himawari AHI atmospheric motion vectors (JMA)",
+            (),
+            ("IXC RJTD",),
+            (5,),
+            ("310014",),
+        ),
+        Product("swim_nadir", "CFOSAT SWIM nadir altimetry", ("swim",), (), (12,), ("340",)),
     )
 }
-BY_TOPIC = {topic: p for p in PRODUCTS.values() for topic in p.topics}
+
+
+def _by_topic() -> dict[str, tuple[Product, ...]]:
+    """Each topic's products, those that pick by file name first."""
+    out: dict[str, list[Product]] = {}
+    for product in PRODUCTS.values():
+        for topic in product.topics:
+            out.setdefault(topic, []).append(product)
+    return {t: tuple(sorted(ps, key=lambda p: not p.names)) for t, ps in out.items()}
+
+
+BY_TOPIC = _by_topic()
 BY_GTS = {heading: p for p in PRODUCTS.values() for heading in p.gts}
 
 
@@ -146,10 +215,16 @@ def product_for(key: str) -> Product | None:
     """The product group the object at ``key`` may hold, or None."""
     match = TOPIC.match(key)
     if match is not None:
-        return BY_TOPIC.get(match["instrument"])
+        for product in BY_TOPIC.get(match["instrument"], ()):
+            if not product.names or re.search(product.names, match["name"]):
+                return product
+        return None
     match = GTS.search(key)
     if match is not None:
-        return BY_GTS.get(match["t1"] + match["t2"] + match["a1"])
+        heading = match["t1"] + match["t2"] + match["a1"]
+        if match["cccc"] and f"{heading} {match['cccc']}" in BY_GTS:
+            return BY_GTS[f"{heading} {match['cccc']}"]
+        return BY_GTS.get(heading)
     return None
 
 
