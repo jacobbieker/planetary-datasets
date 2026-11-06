@@ -588,6 +588,10 @@ def write_group(repo, rows: list[dict], group: str, partition: str | None, label
 # ---------------------------------------------------------------------------- target
 
 
+class IncompleteWindow(RuntimeError):
+    """A TAC group could not be written for the window."""
+
+
 @register("tac")
 class TacTarget(QueuedTarget):
     """Archive target: relayed SYNOP and SHIP text into the land and ocean stores."""
@@ -698,6 +702,13 @@ class TacTarget(QueuedTarget):
             except Exception as exc:  # noqa: BLE001 - one store must not lose the other
                 logger.exception(f"wis2 tac {group}: write failed: {exc}")
                 summary[group] = {"error": f"{type(exc).__name__}: {exc}"}
+        failed = [
+            g for g, result in summary.items() if isinstance(result, dict) and "error" in result
+        ]
+        if failed:
+            # After both groups were tried: the window's target record then says failed,
+            # and a re-run (mark_pending) writes only the group that is not ledgered.
+            raise IncompleteWindow(f"{', '.join(failed)} not written: {summary}")
         return summary
 
 

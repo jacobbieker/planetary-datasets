@@ -245,6 +245,9 @@ def test_a_failure_in_one_store_does_not_stop_the_other(local_config, monkeypatc
         raise RuntimeError("land store unreadable")
 
     monkeypatch.setattr(tac, "land_positions", broken)
-    _, summary = run(local_config, objects())
-    assert summary["synop_tac"] == {"error": "RuntimeError: land store unreadable"}
-    assert summary["ship_tac"]["rows_written"] == 2
+    with pytest.raises(tac.IncompleteWindow, match="synop_tac not written"):
+        run(local_config, objects())
+    assert PARTITION in ledger(local_config.icechunk_repo(tac.OCEAN_STORE), group="ship_tac")
+    assert PARTITION not in ledger(local_config.icechunk_repo(tac.LAND_STORE), group="synop_tac")
+    ships = open_group(local_config, tac.OCEAN_STORE, "ship_tac")
+    assert ships.sizes["observation"] == 2
