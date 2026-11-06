@@ -429,6 +429,17 @@ def test_a_window_whose_archive_failed_is_retried_after_a_while_not_at_once(monk
     assert pauses == [wis2.RETRY_FAILED.total_seconds()]
 
 
+def test_a_failed_due_window_check_counts_every_window_as_unarchived(monkeypatch):
+    """If the archives cannot be checked, follow() must not assume they exist."""
+    ends = [dt.datetime(2026, 11, 6, 0, tzinfo=UTC)]
+
+    def broken(config):
+        raise ConnectionError("S3 unreachable")
+
+    monkeypatch.setattr(wis2, "dest_client", broken)
+    assert wis2._unarchived(ends, _config()) == ends
+
+
 def test_failed_pending_archives_count_toward_the_limit(monkeypatch):
     """A failing archive uses the call's one attempt, so the live windows come next."""
     dest = FakeDest()

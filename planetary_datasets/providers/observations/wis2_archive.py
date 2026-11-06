@@ -729,14 +729,15 @@ def follow(config: Config | None = None, targets: Sequence[str] | None = None) -
 
 
 def _unarchived(ends: Sequence[dt.datetime], config: Config | None) -> list[dt.datetime]:
-    """The window ends among ``ends`` with no archive yet; none if that cannot be checked."""
+    """The window ends among ``ends`` with no archive yet; all of them if that cannot be
+    checked, so a failed check means trying again soon rather than sleeping past them."""
     try:
         config = config or get_config()
         client = dest_client(config)
         return [end for end in ends if not exists(client, config.bucket, archive_name(end))]
     except Exception as exc:  # noqa: BLE001 - the schedule must not stop on a listing error
         logger.warning(f"wis2: could not check for due windows: {exc}")
-        return []
+        return list(ends)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
