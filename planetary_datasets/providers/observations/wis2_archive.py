@@ -702,7 +702,12 @@ def follow(config: Config | None = None, targets: Sequence[str] | None = None) -
     while True:
         now = dt.datetime.now(dt.timezone.utc)
         failed: set[dt.datetime] = set()
-        for end in window_ends(now):
+        ends = window_ends(now)
+        # Windows with no archive first: an archived one with targets still pending (a
+        # backfill reaching the last two days) is finished inside archive() and can take
+        # twenty minutes, which a window waiting to be archived should not.
+        new = set(_unarchived(ends, config))
+        for end in sorted(ends, key=lambda e: (e not in new, e)):
             try:
                 archive(end, config, targets=targets)
             except Exception as exc:  # noqa: BLE001 - the next window must still be tried
