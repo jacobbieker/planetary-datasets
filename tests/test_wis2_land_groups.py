@@ -354,12 +354,10 @@ def test_a_later_window_adds_only_new_and_revised_lines(local_config):
     hydro = xr.open_zarr(
         repo.readonly_session("main").store, group="hydrometric", consolidated=False
     ).compute()
-    at = hydro.where(
-        (hydro["station_id"] == "05AA004")
-        & (hydro["time"] == hydrometric.utc(lines[5].split(",")[1])),
-        drop=True,
+    at = (hydro["station_id"].values.astype(str) == "05AA004") & (
+        hydro["time"].values == hydrometric.utc(lines[5].split(",")[1])
     )
-    assert sorted(at["discharge"].values.tolist()) == [0.315, 0.999]
+    assert sorted(hydro["discharge"].values[at].tolist()) == [0.315, 0.999]
 
 
 def test_a_run_cut_short_before_its_ledger_is_finished_without_duplicates(local_config):
