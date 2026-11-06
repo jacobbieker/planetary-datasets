@@ -1215,7 +1215,10 @@ def remove_orphan_spools(root: pathlib.Path) -> list[str]:
             os.kill(int(pid), 0)
         except ProcessLookupError:
             shutil.rmtree(directory, ignore_errors=True)
-            removed.append(directory.name)
+            if directory.exists():
+                logger.warning(f"wis2 satellite: could not remove stale spool {directory}")
+            else:
+                removed.append(directory.name)
         except PermissionError:
             continue
     if removed:

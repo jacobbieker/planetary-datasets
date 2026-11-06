@@ -477,3 +477,15 @@ def test_spools_of_stopped_processes_are_removed_and_live_ones_kept(tmp_path):
         (directory / "00000001.bufr").write_bytes(b"BUFR")
     assert sat.remove_orphan_spools(tmp_path) == [gone.name]
     assert not gone.exists() and mine.exists() and alive.exists()
+
+
+def test_a_spool_that_cannot_be_removed_is_not_reported_removed(tmp_path, monkeypatch):
+    """A failed deletion is left out of the result, so the disk it holds is not hidden."""
+    import subprocess
+    import sys
+
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    (tmp_path / f"{child.pid}-abc").mkdir()
+    monkeypatch.setattr(sat.shutil, "rmtree", lambda path, ignore_errors=False: None)
+    assert sat.remove_orphan_spools(tmp_path) == []
