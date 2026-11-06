@@ -464,7 +464,12 @@ def test_a_window_backfilled_long_after_later_ones_writes_nothing_twice(local_co
 
 
 def gamic_volume(
-    date: str = "2026-11-01T00:00:00.000Z", scans: int = 2, rays: int = 5, bins: int = 7
+    date: str = "2026-11-01T00:00:00.000Z",
+    scans: int = 2,
+    rays: int = 5,
+    bins: int = 7,
+    site: str = "PFO",
+    local_hours: int = 0,
 ) -> bytes:
     """A small GAMIC HDF5 volume, laid out as the Cyprus Department of Meteorology's."""
     rng = np.random.default_rng(3)
@@ -477,13 +482,16 @@ def gamic_volume(
         f.create_group("where").attrs.update({"lat": 34.77085, "lon": 32.54716, "height": 392.0})
         f.create_group("how").attrs.update(
             {
-                "site_name": "PFO",
+                "site_name": site,
                 "host_name": "radpfo",
                 "template_name": "LONGRANGE",
                 "azimuth_beam": 1.0,
             }
         )
-        start = np.datetime64(date.rstrip("Z"), "ms").astype("int64") * 1000
+        # Scan and ray times in microseconds, ``local_hours`` ahead of UTC (as LCA's).
+        start = (
+            np.datetime64(date.rstrip("Z"), "ms").astype("int64") + local_hours * 3_600_000
+        ) * 1000
         for i in range(scans):
             scan = f.create_group(f"scan{i}")
             scan.create_group("what").attrs.update({"product": "SCAN", "scan_type": "PPI"})
@@ -583,3 +591,64 @@ def test_gamic_volumes_backfill_windows_already_written_for_odim_once(local_conf
 def test_a_missing_gamic_time_is_nan_not_a_sentinel():
     assert np.isnan(radar._iso_seconds(None)) and np.isnan(radar._iso_seconds("garbage"))
     assert radar._iso_seconds("2026-11-06T06:41:41.295Z") == 1793947301.295
+
+
+def cyprus(site: str, date: str, local_hours: int) -> tuple:
+    name = f"LONGRANGE_{site}_{date[:19].replace('-', '').replace(':', '').replace('T', '')}_00.h5"
+    return (CY_KEY.format(name), gamic_volume(date, site=site, local_hours=local_hours), ARRIVED)
+
+
+def cyprus_group(config, group: str) -> xr.Dataset:
+    repo = config.icechunk_repo(land.STORE_PREFIX)
+    return xr.open_zarr(repo.readonly_session("main").store, group=group, consolidated=False)
+
+
+@pytest.mark.parametrize(
+    ("date", "hours"),
+    [("2026-11-01T00:00:00.000Z", 2), ("2026-07-01T12:00:00.000Z", 3)],
+    ids=["winter", "summer"],
+)
+def test_lca_local_times_are_converted_to_utc(local_config, date, hours):
+    _, summary = run(local_config, [cyprus("LCA", date, hours)])
+    assert summary["radar_gamic"]["local_time_converted"] == 1
+    ds = cyprus_group(local_config, "radar/cylca_dbzh")
+    nominal = np.datetime64(date.rstrip("Z"), "ns")
+    assert ds["time"].values[0] == nominal
+    assert ds["sweep_start_time"].values[0, 0] == nominal
+    assert ds["sweep_start_time"].values[0, 1] == nominal + np.timedelta64(25, "s")
+    assert ds["sweep_end_time"].values[0, 0] == nominal + np.timedelta64(4, "ms")
+    assert ds["start_time"].values[0] == nominal
+    assert float(ds["time_offset_removed"][0]) == hours * 3600
+    assert float(ds["nominal_time_offset_removed"][0]) == 0
+
+
+def test_pfo_utc_times_are_unchanged_and_agree_with_lca(local_config):
+    date = "2026-11-01T00:00:00.000Z"
+    run(local_config, [cyprus("PFO", date, 0), cyprus("LCA", date, 2)])
+    pfo = cyprus_group(local_config, "radar/cypfo_dbzh")
+    lca = cyprus_group(local_config, "radar/cylca_dbzh")
+    assert float(pfo["time_offset_removed"][0]) == 0
+    np.testing.assert_array_equal(pfo["sweep_start_time"].values, lca["sweep_start_time"].values)
+    assert pfo["end_time"].values[0] == lca["end_time"].values[0]
+
+
+def test_an_unrecognised_offset_is_stored_as_given_and_counted(local_config):
+    date = "2026-11-01T00:00:00.000Z"
+    _, summary = run(local_config, [cyprus("LCA", date, 5)])
+    assert summary["radar_gamic"]["unrecognised_time_offset"] == 1
+    ds = cyprus_group(local_config, "radar/cylca_dbzh")
+    assert np.isnan(float(ds["time_offset_removed"][0]))
+    assert ds["sweep_start_time"].values[0, 0] == np.datetime64("2026-11-01T05:00:00", "ns")
+
+
+def test_local_offset_follows_nicosia_daylight_saving():
+    winter = dt.datetime(2026, 10, 25, 1, 30, tzinfo=dt.timezone.utc).timestamp()  # after
+    summer = dt.datetime(2026, 10, 24, 23, 30, tzinfo=dt.timezone.utc).timestamp()  # before
+    assert radar.local_offset(winter + 7200, winter, "Asia/Nicosia") == 7200
+    assert radar.local_offset(summer + 10800, summer, "Asia/Nicosia") == 10800
+    assert np.isnan(radar.local_offset(winter + 10800, winter, "Asia/Nicosia"))
+    assert radar.local_offset(winter + 30, winter, "Asia/Nicosia", 600) == 0
+    assert (
+        radar.name_time("x/LONGRANGE_LCA_20261104053656_00.h5.bin")
+        == dt.datetime(2026, 11, 4, 5, 36, 56, tzinfo=dt.timezone.utc).timestamp()
+    )
