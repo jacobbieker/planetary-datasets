@@ -95,9 +95,10 @@ def write_bufr(config):
 def rows_of(ds, name, value):
     """The rows of ``ds`` whose ``name`` is ``value``.
 
-    Selected with a numpy mask: CI's xarray cannot promote StringDType in ``where``.
+    Selected by position: CI's numpy reads the strings as StringDType, which neither
+    ``where`` nor ``astype(str)`` take.
     """
-    return ds.isel(observation=np.flatnonzero(ds[name].values.astype(str) == value))
+    return ds.isel(observation=[i for i, v in enumerate(ds[name].values) if str(v) == value])
 
 
 def open_group(config, prefix, group):
