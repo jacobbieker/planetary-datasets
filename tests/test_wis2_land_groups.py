@@ -354,7 +354,7 @@ def test_a_later_window_adds_only_new_and_revised_lines(local_config):
     hydro = xr.open_zarr(
         repo.readonly_session("main").store, group="hydrometric", consolidated=False
     ).compute()
-    at = (hydro["station_id"].values.astype(str) == "05AA004") & (
+    at = (np.array([str(v) for v in hydro["station_id"].values]) == "05AA004") & (
         hydro["time"].values == hydrometric.utc(lines[5].split(",")[1])
     )
     assert sorted(hydro["discharge"].values[at].tolist()) == [0.315, 0.999]
