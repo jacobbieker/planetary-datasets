@@ -106,3 +106,32 @@ def test_it_keeps_only_the_radiances_once_amv_holds_every_vector(mixed, local_co
     assert after.attrs["partitions_written"] == ["w"]
     # Nothing left to move: a second run changes nothing.
     assert tool.split(mixed, apply=True)["amv_rows"] == 0
+
+
+def test_a_later_window_appends_to_the_split_group(mixed, local_config, tmp_path):
+    """Radiances of a window after the split append; elements removed come back as fill."""
+    backfill = sat.SatelliteTarget(local_config, workers=1)
+    backfill.prepare("w")
+    backfill.feed(key("ami_amv"), body("ami_amv"), ARRIVED)
+    backfill.finish(None, None, "w")
+    tool.split(mixed, apply=True)
+    split = open_group(mixed, "ami_csr")
+    assert "pressure" not in split, "KMA sends it missing in every radiance subset"
+
+    # The next window's radiances: the same subsets moved a degree north, so new rows.
+    arrays, _ = sp.decode_object(key("ami_csr"), body("ami_csr"), sp.PRODUCTS["ami_csr"])
+    arrays["latitude"] = arrays["latitude"] + 1.0
+    arrays["observation_identity"] = sp.identities(arrays)
+    sat._provenance(arrays, key("ami_csr"), ARRIVED)
+    path = tmp_path / "later.npz"
+    np.savez(path, **{k.replace(".", "__"): v for k, v in sat._compact(arrays).items()})
+    rows = sat.write_product_group(mixed, sp.PRODUCTS["ami_csr"], [str(path)], "w2", Counter())
+    assert rows == 40
+    after = open_group(mixed, "ami_csr")
+    assert after.sizes["observation"] == 80
+    assert after["satellite_channel_centre_frequency"].shape[1] == 24
+    assert after["pressure"].isnull().all()
+    np.testing.assert_array_equal(
+        after["brightness_temperature"].values[:40], split["brightness_temperature"].values
+    )
+    assert set(after.attrs["partitions_written"]) == {"w", "w2"}

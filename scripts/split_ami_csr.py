@@ -12,8 +12,10 @@ ones ``amv`` lacked. This script then rewrites ``ami_csr`` to hold only the othe
 It refuses to write unless every AMV row it would drop has its ``observation_identity``
 in ``amv``, checked against the same snapshot the rewrite starts from. The rewrite
 compacts every array in place to the rows kept, removes arrays that hold no value for
-them (the vectors' own elements) and trims a 2-D array's trailing columns that hold none,
-keeping the group's attributes and ledger. It is one commit: a failure, or an append to
+them and trims a 2-D array's trailing columns that hold none, keeping the group's
+attributes and ledger. The arrays removed are the vectors' own elements and the
+radiance elements KMA always sends missing (``pressure``, ``radiance``, ``cloud_type``,
+...); a later window's append adds those back, filled for the rows before it. It is one commit: a failure, or an append to
 ``ami_csr`` meanwhile (a conflict), leaves the group as it was. Run it between windows.
 """
 
