@@ -574,3 +574,8 @@ def test_gamic_volumes_backfill_windows_already_written_for_odim_once(local_conf
     assert not any(again.wants(k, len(b)) for k, b, _ in window_objects() + cyprus)
     _, summary = run(local_config, window_objects() + cyprus)
     assert sizes(repo) == before and "radar_gamic" not in summary
+
+
+def test_a_missing_gamic_time_is_nan_not_a_sentinel():
+    assert np.isnan(radar._iso_seconds(None)) and np.isnan(radar._iso_seconds("garbage"))
+    assert radar._iso_seconds("2026-11-06T06:41:41.295Z") == 1793947301.295

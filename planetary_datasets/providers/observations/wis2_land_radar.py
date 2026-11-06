@@ -324,9 +324,10 @@ def _iso_seconds(value) -> float:
     """An ISO 8601 UTC time (``2026-11-06T06:41:41.295Z``) as float seconds since 1970."""
     text = _text(value).rstrip("Z")
     try:
-        return np.datetime64(text, "ms").astype("int64") / 1000.0
+        stamp = np.datetime64(text, "ms")
     except ValueError:
         return np.nan
+    return np.nan if np.isnat(stamp) else float(stamp.astype("int64")) / 1000.0
 
 
 def _gamic_header(handle, country: str) -> dict[str, Any] | None:
