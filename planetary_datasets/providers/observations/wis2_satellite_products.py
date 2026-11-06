@@ -12,16 +12,17 @@ gnss_ro        GNSS radio occultation (310026):       ``ro`` (Metop-SG), ``gras`
                where sent, temperature/pressure       ``stratos`` (Spire)
 amv            atmospheric motion vectors (310077)    ``seviri``, ``fci``,           ``IEV``
                                                       ``avhrr-3``, ``viirs``,        ``INV``
-                                                      ``imager`` (INSAT)             ``IRV``
-                                                                                     ``IUV``
-                                                                                     ``IXV``
+                                                      ``imager`` (INSAT),            ``IRV``
+                                                      ``ami`` (``*A_INV*``, GK-2A,   ``IUV``
+                                                      since the ``:ami`` entry)      ``IXV``
 altimetry      radar altimetry (340010/11/17/19):     ``sral``, ``poseidon-3b``,     ``ISZ``
                ranges, wave height, backscatter,      ``poseidon-3c``,
                corrections                            ``poseidon-4``, ``altika``
 scatterometer  scatterometer surface winds (312xxx)   --                             ``ISX``
 sar_ocean      Sentinel-1 SAR ocean winds, swell      ``sar-c``                      --
                partitions and wave spectra
-ami_csr        GK-2A AMI clear-sky radiances (KMA)    ``ami``                        --
+ami_csr        GK-2A AMI clear-sky radiances (KMA,    ``ami`` (all but ``*A_INV*``)  --
+               local data category 101)
 olci_wv        Sentinel-3 OLCI total column water     ``olci``                       --
                vapour
 fci_asr        MTG-I FCI all-sky radiances            ``fci`` (``*-ASR-*``)          ``IUF``
@@ -51,6 +52,16 @@ written the first time. ``fci_asr`` and ``seviri_asr`` take EUMETSAT's own topic
 GTS relays of the same bulletins; the copies are the same subsets value for value and
 collapse to one row (see below). SWIM's OGDR carries the nadir beam only; its off-nadir
 wave spectra are not on WIS2.
+
+GK-2A's motion vectors. The ``ami`` topic carries KMA's AMVs (``A_INV*`` files, 310077)
+beside its clear-sky radiances (``A_INR*``, data category 101). ``ami_csr`` took both
+until it filtered by category; the AMVs now go to ``amv``, where the same vectors also
+arrive through the ``INV RKSL`` relays and collapse with them by identity. ``amv``
+records these windows under their own ledger entry, ``<window>:ami``, so a re-run over a
+window written before the change adds the topic's vectors that ``amv`` lacks and nothing
+else; the rows found already stored are looked for in the same minutes anywhere in the
+group. ``scripts/split_ami_csr.py`` then drops the AMV rows from ``ami_csr`` once each is
+verified present in ``amv``.
 
 Layout. One row per BUFR subset (dimension ``observation``: one wind vector, one
 altimeter measurement, one occultation). Every element of the message is kept, named in
@@ -126,6 +137,10 @@ class Product:
     #: Regular expression the object's file name must match under ``topics``; empty: any.
     #: A product with one is tried before the topic's product without.
     names: str = ""
+    #: Sources taken after the group's first windows were written: (topic, file-name
+    #: regular expression, ledger suffix). Their objects record a window under
+    #: ``<window><suffix>``, so a re-run over a window written before takes just them.
+    later: tuple[tuple[str, str, str], ...] = ()
 
     def takes(self, category: int, descriptors: tuple[int, ...]) -> bool:
         """Whether a message of this data category and top-level template is this one's."""
@@ -135,6 +150,10 @@ class Product:
             return True
         return any(str(d).zfill(6).startswith(t) for d in descriptors for t in self.templates)
 
+
+#: GK-2A AMI motion vector files under the ``ami`` topic (``A_INVN01RKSL...``, also
+#: prefixed ``kr-kma_core...ami_A_INV...``).
+AMI_AMV = r"A_INV"
 
 PRODUCTS = {
     p.group: p
@@ -154,6 +173,7 @@ PRODUCTS = {
             ("IEV", "INV", "IRV", "IUV", "IXV"),
             (5,),
             ("310077", "310014"),
+            later=(("ami", AMI_AMV, ":ami"),),
         ),
         Product(
             "altimetry",
@@ -165,7 +185,13 @@ PRODUCTS = {
         ),
         Product("scatterometer", "scatterometer surface winds", (), ("ISX",), (12,), ("312",)),
         Product("sar_ocean", "Sentinel-1 SAR ocean winds and waves", ("sar-c",)),
-        Product("ami_csr", "GK-2A AMI clear-sky radiances", ("ami",)),
+        Product(
+            "ami_csr",
+            "GK-2A AMI clear-sky radiances",
+            ("ami",),
+            categories=(101,),
+            names=rf"^(?!.*{AMI_AMV})",
+        ),
         Product("olci_wv", "Sentinel-3 OLCI total column water vapour", ("olci",)),
         Product(
             "fci_asr",
@@ -198,34 +224,56 @@ PRODUCTS = {
 }
 
 
-def _by_topic() -> dict[str, tuple[Product, ...]]:
-    """Each topic's products, those that pick by file name first."""
-    out: dict[str, list[Product]] = {}
+def _by_topic() -> dict[str, tuple[tuple[Product, str, str], ...]]:
+    """Each topic's (product, file-name pattern, ledger suffix), patterned ones first."""
+    out: dict[str, list[tuple[Product, str, str]]] = {}
     for product in PRODUCTS.values():
         for topic in product.topics:
-            out.setdefault(topic, []).append(product)
-    return {t: tuple(sorted(ps, key=lambda p: not p.names)) for t, ps in out.items()}
+            out.setdefault(topic, []).append((product, product.names, ""))
+        for topic, pattern, suffix in product.later:
+            out.setdefault(topic, []).append((product, pattern, suffix))
+    return {t: tuple(sorted(rules, key=lambda r: not r[1])) for t, rules in out.items()}
 
 
 BY_TOPIC = _by_topic()
 BY_GTS = {heading: p for p in PRODUCTS.values() for heading in p.gts}
+#: Every ledger suffix a product group may record a window under besides ``<window>``.
+LEDGER_SUFFIXES = tuple(dict.fromkeys(s for p in PRODUCTS.values() for _, _, s in p.later))
 
 
-def product_for(key: str) -> Product | None:
-    """The product group the object at ``key`` may hold, or None."""
+def route(key: str) -> tuple[Product, str] | None:
+    """The product group the object at ``key`` may hold and its ledger suffix, or None."""
     match = TOPIC.match(key)
     if match is not None:
-        for product in BY_TOPIC.get(match["instrument"], ()):
-            if not product.names or re.search(product.names, match["name"]):
-                return product
+        for product, pattern, suffix in BY_TOPIC.get(match["instrument"], ()):
+            if not pattern or re.search(pattern, match["name"]):
+                return product, suffix
         return None
     match = GTS.search(key)
     if match is not None:
         heading = match["t1"] + match["t2"] + match["a1"]
         if match["cccc"] and f"{heading} {match['cccc']}" in BY_GTS:
-            return BY_GTS[f"{heading} {match['cccc']}"]
-        return BY_GTS.get(heading)
+            return BY_GTS[f"{heading} {match['cccc']}"], ""
+        product = BY_GTS.get(heading)
+        return (product, "") if product is not None else None
     return None
+
+
+def product_for(key: str) -> Product | None:
+    """The product group the object at ``key`` may hold, or None."""
+    routed = route(key)
+    return routed[0] if routed is not None else None
+
+
+def ledger_suffix(key: str) -> str:
+    """The suffix the object's group records its window under (``""`` or ``":ami"``)."""
+    routed = route(key)
+    return routed[1] if routed is not None else ""
+
+
+def window_entries(product: Product, partition: str) -> list[str]:
+    """Every ledger entry ``product``'s group records ``partition`` under."""
+    return [partition, *(partition + s for s in dict.fromkeys(s for _, _, s in product.later))]
 
 
 def snake(name: str) -> str:
