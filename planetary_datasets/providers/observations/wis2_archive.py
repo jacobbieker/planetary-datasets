@@ -654,17 +654,18 @@ def finish_pending(
     config: Config | None = None,
     targets: Sequence[str] | None = None,
     now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.timezone.utc),
+    limit: int | None = None,
 ) -> int:
     """Run pending targets over older archives, oldest first, while time allows.
 
     One is only started with :data:`PENDING_BUDGET` left before ``deadline`` (the next
-    live window). Returns the archives worked on.
+    live window), and at most ``limit`` are worked on. Returns the archives worked on.
     """
     config = config or get_config()
     client = dest_client(config)
     worked = 0
     for key in archived_tars(config):
-        if now() + PENDING_BUDGET > deadline:
+        if now() + PENDING_BUDGET > deadline or (limit is not None and worked >= limit):
             break
         state = _load_target_state(client, config.bucket, key) or {}
         pending = [n for n in state.get("pending", []) if targets is None or n in targets]
@@ -697,7 +698,10 @@ def follow(config: Config | None = None, targets: Sequence[str] | None = None) -
         now = dt.datetime.now(dt.timezone.utc)
         upcoming = last_boundary(now - SETTLE) + EVERY + SETTLE
         try:
-            if finish_pending(upcoming, config, targets):
+            # One archive at a time, then the live windows again: a window that came due
+            # while the backfill ran waits for at most one archive, not the whole backfill
+            # (the 2026-11-06 00Z window waited eight hours behind nineteen).
+            if finish_pending(upcoming, config, targets, limit=1):
                 continue
         except Exception as exc:  # noqa: BLE001 - listing the archives must not stop the loop
             logger.exception(f"wis2: checking pending targets failed: {exc}")

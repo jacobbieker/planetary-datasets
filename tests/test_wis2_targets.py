@@ -350,6 +350,64 @@ def test_marked_targets_are_finished_between_windows_while_time_allows(monkeypat
     assert wis2.finish_pending(later, _config(), now=lambda: now) == 0, "nothing left"
 
 
+def test_a_window_due_during_a_backfill_is_archived_before_the_next_old_one(monkeypatch):
+    """follow() takes one pending archive at a time and checks the live windows between."""
+    due = dt.datetime(2026, 11, 6, 0, tzinfo=dt.timezone.utc)
+    calls = []
+    left = [2]
+    ends = [[], [due], [due]]
+
+    def pending(deadline, config, targets, limit=None):
+        calls.append(("pending", limit))
+        if left[0]:
+            left[0] -= 1
+            return 1
+        return 0
+
+    def stop(*args, **kwargs):
+        raise StopIteration
+
+    monkeypatch.setattr(wis2, "window_ends", lambda now: ends.pop(0) if ends else [due])
+    monkeypatch.setattr(
+        wis2, "archive", lambda end, config, targets=None: calls.append(("live", end))
+    )
+    monkeypatch.setattr(wis2, "finish_pending", pending)
+    monkeypatch.setattr(wis2, "wait", stop)
+    with pytest.raises(StopIteration):
+        wis2.follow(_config())
+    # The window that came due during the first pending archive is archived right after it.
+    assert calls == [
+        ("pending", 1),
+        ("live", due),
+        ("pending", 1),
+        ("live", due),
+        ("pending", 1),
+    ]
+
+
+def test_finish_pending_stops_at_its_limit(monkeypatch):
+    """With a limit, only that many archives are worked on per call."""
+    dest = FakeDest()
+    old, new = "bkr/obs/wis2/wis2_20261027T1200Z.tar", "bkr/obs/wis2/wis2_20261028T0000Z.tar"
+    for key in (old, new):
+        _archived_tar(dest, key)
+        dest.objects[f"{key}.targets.json"] = json.dumps(
+            {"pending": ["recorder"], "done": [], "failed": []}
+        ).encode()
+    built: list[Recorder] = []
+    monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
+    monkeypatch.setattr(wis2, "archived_tars", lambda config=None: [old, new])
+    monkeypatch.setattr(
+        wis2, "build_targets", lambda config, names: built.append(Recorder()) or [built[-1]]
+    )
+    now = dt.datetime(2026, 11, 1, 15, tzinfo=UTC)
+    later = now + dt.timedelta(hours=9)
+    assert wis2.finish_pending(later, _config(), now=lambda: now, limit=1) == 1
+    assert _state(dest, old)["pending"] == [] and _state(dest, new)["pending"] == ["recorder"]
+    assert wis2.finish_pending(later, _config(), now=lambda: now, limit=1) == 1
+    assert wis2.finish_pending(later, _config(), now=lambda: now, limit=1) == 0
+
+
 def test_a_pending_target_that_raises_is_not_retried_in_a_loop(monkeypatch):
     dest = FakeDest()
     key = _archived_tar(dest)
