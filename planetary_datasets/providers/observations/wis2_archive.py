@@ -84,6 +84,8 @@ CATCH_UP = dt.timedelta(days=2)
 #: A pending target is only started over an older archive with this long left before the
 #: next window, so backfilling never holds up the live schedule.
 PENDING_BUDGET = dt.timedelta(hours=3)
+#: How soon a window whose archive failed is tried again.
+RETRY_FAILED = dt.timedelta(minutes=30)
 
 #: Directories listed, and objects fetched, at once.
 LIST_WORKERS = 256
@@ -108,6 +110,13 @@ class Entry:
 def archive_name(end: dt.datetime) -> str:
     """The tar's key for the window ending at ``end``."""
     return f"{DEST_PREFIX}/wis2_{end:%Y%m%dT%H%M}Z.tar"
+
+
+def archive_key(end: dt.datetime, config: Config) -> str:
+    """The tar's key in ``config``'s bucket: :func:`archive_name` under its prefix."""
+    return (
+        config.prefix.strip("/") + "/" + archive_name(end) if config.prefix else archive_name(end)
+    )
 
 
 def last_boundary(when: dt.datetime) -> dt.datetime:
@@ -447,7 +456,7 @@ def archive(
     end = end.astimezone(dt.timezone.utc) if end.tzinfo else end.replace(tzinfo=dt.timezone.utc)
     start = end - LOOKBACK
     dest = dest_client(config)
-    key = config.prefix.strip("/") + "/" + archive_name(end) if config.prefix else archive_name(end)
+    key = archive_key(end, config)
     summary = Summary(key=key)
     if not force and exists(dest, config.bucket, key):
         state = _load_target_state(dest, config.bucket, key) or {}
@@ -654,23 +663,26 @@ def finish_pending(
     config: Config | None = None,
     targets: Sequence[str] | None = None,
     now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.timezone.utc),
+    limit: int | None = None,
 ) -> int:
     """Run pending targets over older archives, oldest first, while time allows.
 
     One is only started with :data:`PENDING_BUDGET` left before ``deadline`` (the next
-    live window). Returns the archives worked on.
+    live window), and at most ``limit`` are attempted, failed ones included. Returns the
+    archives worked on.
     """
     config = config or get_config()
     client = dest_client(config)
-    worked = 0
+    worked = attempted = 0
     for key in archived_tars(config):
-        if now() + PENDING_BUDGET > deadline:
+        if now() + PENDING_BUDGET > deadline or (limit is not None and attempted >= limit):
             break
         state = _load_target_state(client, config.bucket, key) or {}
         pending = [n for n in state.get("pending", []) if targets is None or n in targets]
         if not pending:
             continue
         logger.info(f"wis2: finishing {', '.join(pending)} over {key}")
+        attempted += 1
         try:
             targets_from_tar(key, config, targets=pending)
         except Exception as exc:  # noqa: BLE001 - the live schedule must carry on
@@ -689,25 +701,50 @@ def follow(config: Config | None = None, targets: Sequence[str] | None = None) -
     """
     while True:
         now = dt.datetime.now(dt.timezone.utc)
+        failed: set[dt.datetime] = set()
         for end in window_ends(now):
             try:
                 archive(end, config, targets=targets)
             except Exception as exc:  # noqa: BLE001 - the next window must still be tried
+                failed.add(end)
                 logger.exception(f"wis2: archive ending {end:%Y-%m-%dT%H:%MZ} failed: {exc}")
         now = dt.datetime.now(dt.timezone.utc)
         upcoming = last_boundary(now - SETTLE) + EVERY + SETTLE
         try:
-            if finish_pending(upcoming, config, targets):
+            # One archive at a time, then the live windows again: a window that came due
+            # while the backfill ran waits for at most one archive, not the whole backfill
+            # (the 2026-11-06 00Z window waited eight hours behind nineteen).
+            if finish_pending(upcoming, config, targets, limit=1):
                 continue
         except Exception as exc:  # noqa: BLE001 - listing the archives must not stop the loop
             logger.exception(f"wis2: checking pending targets failed: {exc}")
         now = dt.datetime.now(dt.timezone.utc)
         upcoming = last_boundary(now - SETTLE) + EVERY + SETTLE
         pause = max(60.0, (upcoming - now).total_seconds())
+        unarchived = _unarchived(window_ends(now), config)
+        if unarchived:
+            # A window still unarchived is tried again soon rather than after the next
+            # window: within a minute if it came due while pending targets ran, after
+            # RETRY_FAILED if its archive just failed (each try lists the whole cache).
+            wait_for = RETRY_FAILED if set(unarchived) <= failed else dt.timedelta(seconds=60)
+            upcoming, pause = now + wait_for, wait_for.total_seconds()
+            logger.info(f"wis2: {unarchived[0]:%Y-%m-%dT%H:%MZ} is due and not archived")
         logger.info(
             f"wis2: next archive at {upcoming:%Y-%m-%dT%H:%MZ}; sleeping {pause / 3600:.1f} h"
         )
         wait(upcoming, pause)
+
+
+def _unarchived(ends: Sequence[dt.datetime], config: Config | None) -> list[dt.datetime]:
+    """The window ends among ``ends`` with no archive yet; all of them if that cannot be
+    checked, so a failed check means trying again soon rather than sleeping past them."""
+    try:
+        config = config or get_config()
+        client = dest_client(config)
+        return [end for end in ends if not exists(client, config.bucket, archive_key(end, config))]
+    except Exception as exc:  # noqa: BLE001 - the schedule must not stop on a listing error
+        logger.warning(f"wis2: could not check for due windows: {exc}")
+        return list(ends)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
