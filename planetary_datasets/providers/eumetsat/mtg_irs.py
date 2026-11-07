@@ -104,6 +104,18 @@ class CollectionUnavailable(RuntimeError):
     """The Data Store could not search a collection."""
 
 
+class DamagedDwell(ValueError):
+    """A dwell whose own content is invalid (an out-of-range time, a repeated wavenumber).
+
+    One such dwell failed its whole hour on every pass (2026-10-15 03:00-05:00 UTC); the
+    partition leaves it out instead and writes the hour's other dwells.
+    """
+
+
+#: Product times are seconds since 2000; anything past about 300 years is a fill or garbage.
+MAX_PRODUCT_SECONDS = 1e10
+
+
 class PackingChanged(RuntimeError):
     """A file's radiance packing differs from the one the store is created with."""
 
@@ -138,9 +150,16 @@ def entry_overlaps(entry: str, start: pd.Timestamp, end: pd.Timestamp) -> bool:
 
 
 def seconds_since_2000(seconds: Any) -> np.datetime64:
-    """Decode a product time to whole seconds, which is what the store's ``time`` holds."""
+    """Decode a product time to whole seconds, which is what the store's ``time`` holds.
+
+    Raises:
+        DamagedDwell: The value is not a finite time within :data:`MAX_PRODUCT_SECONDS`.
+    """
+    value = float(seconds)
+    if not np.isfinite(value) or abs(value) > MAX_PRODUCT_SECONDS:
+        raise DamagedDwell(f"product time {seconds!r} is not a valid seconds-since-2000 value")
     return (
-        (EPOCH + np.timedelta64(int(round(float(seconds) * 1e3)), "ms"))
+        (EPOCH + np.timedelta64(int(round(value * 1e3)), "ms"))
         .astype("datetime64[s]")
         .astype("datetime64[ns]")
     )
@@ -182,6 +201,7 @@ def read_dwell(path: str) -> xr.Dataset:
 
     Raises:
         PackingChanged: when a band's radiance is not packed as :data:`RADIANCE_PACKING`.
+        DamagedDwell: when the dwell's times or a band's wavenumbers are invalid.
     """
     with xr.open_dataset(path, engine="h5netcdf", group="data", decode_times=False) as data:
         # latitude/longitude arrive as coordinates; they vary per dwell, so are data here.
@@ -213,6 +233,8 @@ def read_dwell(path: str) -> xr.Dataset:
             )
         with xr.open_dataset(path, engine="h5netcdf", group=f"data/{band}") as spectral:
             wavenumber = spectral["wavenumber"].values.astype("float32")
+        if np.unique(wavenumber).size != wavenumber.size:
+            raise DamagedDwell(f"{pathlib.Path(path).name}: {band} repeats a wavenumber")
         radiance = radiance.drop_encoding().rename({"wavenumber": f"wavenumber_{band}"})
         radiance.attrs = {
             "long_name": f"Effective radiance, {band.upper()}",
@@ -346,7 +368,14 @@ class MtgIrsProvider(EumdacProvider):
         **kwargs,
     ) -> xr.Dataset:
         """Stack the partition's dwells along ``time``, lazily, chunked for the store."""
-        dwells = [read_dwell(path) for path in input_files]
+        dwells = []
+        for path in input_files:
+            try:
+                dwells.append(read_dwell(path))
+            except DamagedDwell as exc:
+                logger.warning(f"{self.name} {it}: leaving out a damaged dwell: {exc}")
+        if not dwells:
+            raise DamagedDwell(f"{self.name} {it}: every dwell of the hour is damaged")
         ds = self.restrict_to_window(self.concat_granules(dwells), it)
         if ds.sizes.get("time", 0) == 0:
             return ds

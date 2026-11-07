@@ -58,6 +58,8 @@ def write_dwell(
     lac: int = 4,
     seed: int = 0,
     scale: dict[str, float] | None = None,
+    cycle_start: float | None = None,
+    repeat_wavenumber: str | None = None,
 ) -> str:
     """Write a dwell file shaped like the real product."""
     shape = ("dwell_row", "dwell_column")
@@ -83,13 +85,19 @@ def write_dwell(
     instrument = xr.Dataset(
         {
             "repeat_cycle_lac_id": ((), np.int8(lac)),
-            "repeat_cycle_start_time": ((), _seconds("2026-10-13T00:45:03")),
+            "repeat_cycle_start_time": (
+                (),
+                _seconds("2026-10-13T00:45:03") if cycle_start is None else cycle_start,
+            ),
         }
     )
     instrument.to_netcdf(path, group="state/instrument", engine="h5netcdf", mode="a")
     for band in mtg_irs.BANDS:
         n = N_WAVENUMBERS[band]
-        spectral = xr.Dataset({"wavenumber": ("wavenumber", np.arange(n, dtype="float32") + 1e5)})
+        wavenumbers = np.arange(n, dtype="float32") + 1e5
+        if band == repeat_wavenumber:
+            wavenumbers[1] = wavenumbers[0]
+        spectral = xr.Dataset({"wavenumber": ("wavenumber", wavenumbers)})
         spectral.to_netcdf(path, group=f"data/{band}", engine="h5netcdf", mode="a")
         band_scale, offset = mtg_irs.RADIANCE_PACKING[band]
         if scale and band in scale:
@@ -234,6 +242,24 @@ def test_the_partition_keeps_only_its_own_hour(provider, dwells):
     ds = provider.process(dwells, pd.Timestamp("2026-10-13T00:00"))
     assert ds.sizes["time"] == 2
     assert ds["dwell_number"].values.tolist() == [225, 263]
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [{"cycle_start": 1.8e308}, {"cycle_start": float("nan")}, {"repeat_wavenumber": "lwir"}],
+)
+def test_a_damaged_dwell_is_left_out_and_the_hour_written(provider, dwells, tmp_path, damage):
+    bad = write_dwell(tmp_path / "bad.nc", "2026-10-13T00:50:00", dwell_number=250, **damage)
+    with pytest.raises(mtg_irs.DamagedDwell):
+        mtg_irs.read_dwell(bad)
+    ds = provider.process([dwells[0], bad, dwells[1]], pd.Timestamp("2026-10-13T00:00"))
+    assert ds["dwell_number"].values.tolist() == [225, 263]
+
+
+def test_an_hour_of_only_damaged_dwells_fails(provider, tmp_path):
+    bad = write_dwell(tmp_path / "bad.nc", "2026-10-13T00:50:00", repeat_wavenumber="mwir")
+    with pytest.raises(mtg_irs.DamagedDwell):
+        provider.process([bad], pd.Timestamp("2026-10-13T00:00"))
 
 
 def test_a_dwell_fetched_twice_is_one_step(provider, dwells):
