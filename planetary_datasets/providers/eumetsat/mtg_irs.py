@@ -112,8 +112,9 @@ class DamagedDwell(ValueError):
     """
 
 
-#: Product times are seconds since 2000; anything past about 300 years is a fill or garbage.
-MAX_PRODUCT_SECONDS = 1e10
+#: Product times are seconds since 2000. 2e9 s spans 1936-2063, well past the mission, and
+#: stays inside datetime64[ns] (which ends in 2262); anything beyond is a fill or garbage.
+MAX_PRODUCT_SECONDS = 2e9
 
 
 class PackingChanged(RuntimeError):
