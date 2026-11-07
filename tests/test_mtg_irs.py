@@ -246,7 +246,13 @@ def test_the_partition_keeps_only_its_own_hour(provider, dwells):
 
 @pytest.mark.parametrize(
     "damage",
-    [{"cycle_start": 1.8e308}, {"cycle_start": float("nan")}, {"repeat_wavenumber": "lwir"}],
+    [
+        {"cycle_start": 1.8e308},
+        {"cycle_start": float("nan")},
+        # Finite, but past datetime64[ns]: would wrap to an unrelated date if accepted.
+        {"cycle_start": 9e9},
+        {"repeat_wavenumber": "lwir"},
+    ],
 )
 def test_a_damaged_dwell_is_left_out_and_the_hour_written(provider, dwells, tmp_path, damage):
     bad = write_dwell(tmp_path / "bad.nc", "2026-10-13T00:50:00", dwell_number=250, **damage)
