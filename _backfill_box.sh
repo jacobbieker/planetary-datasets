@@ -5,6 +5,7 @@
 #                                       # runs this every 15 minutes as a watchdog)
 #     ./_backfill_box.sh status         # which lanes run, and each log's last line
 #     ./_backfill_box.sh stop           # stop every lane
+#     ./_backfill_box.sh stop LANE...   # stop only these lanes (start brings them back)
 #     ./_backfill_box.sh noon           # the daily short-retention catch-up (cron, 12:00 UTC)
 #     ./_backfill_box.sh guard          # pause/resume Himawari lanes by memory (cron, */10)
 #
@@ -394,7 +395,21 @@ start)
   done
   ;;
 stop)
-  for name in "${!LANES[@]}" "${!SCRIPTS[@]}"; do
+  shift
+  # Named lanes only, or every lane with no names. A name that is not a lane stops nothing,
+  # so a typo cannot fall through to "every lane".
+  if (( $# )); then
+    for name in "$@"; do
+      if [[ ! -v LANES[$name] && ! -v SCRIPTS[$name] ]]; then
+        echo "no lane named $name; nothing stopped" >&2
+        exit 2
+      fi
+    done
+    names=("$@")
+  else
+    names=("${!LANES[@]}" "${!SCRIPTS[@]}")
+  fi
+  for name in "${names[@]}"; do
     if running "$name"; then
       kill -- -"$(cat "$LOGS/$name.pid")" 2>/dev/null && echo "stopped $name"
     fi
