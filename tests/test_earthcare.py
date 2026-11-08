@@ -27,6 +27,7 @@ CLD = PRODUCTS["CPR_CLD_2A"]
 
 
 def frame_name(code: str, start: str, key: str, cls: str = "EXBC") -> str:
+    """A MAAP product name for a frame of ``code`` starting at ``start``."""
     return f"ECA_{cls}_{code}_{start}Z_20261020T035358Z_{key}"
 
 
@@ -61,17 +62,20 @@ def write_frame(
 
 
 def test_frame_key_and_baseline():
+    """The frame key and baseline come out of a product name."""
     name = frame_name("ACM_RT__2B", "20261020T015847", "13601E")
     assert frame_key(name) == "13601E"
     assert baseline(name) == "BC"
 
 
 def test_prefixes_collapse_underscores():
+    """A product's store prefix is its code lower-cased, runs of underscores collapsed."""
     assert PRODUCTS["ACM_RT__2B"].prefix == "acm_rt_2b"
     assert PRODUCTS["CPR_CLD_2A"].prefix == "cpr_cld_2a"
 
 
 def test_read_frame_prefixes_transposes_and_keeps_raw_values(tmp_path):
+    """read_frame prefixes names, puts the track first and keeps the file's raw values."""
     path = write_frame(tmp_path, frame_name("CPR_CLD_2A", "20261020T015847", "13601E"))
     ds = read_frame(path, CLD)
     assert ds["cpr_cld_2a_water_content"].dims == (
@@ -89,6 +93,7 @@ def test_read_frame_prefixes_transposes_and_keeps_raw_values(tmp_path):
 
 
 def test_concat_frames_indexes_each_row_by_frame(tmp_path):
+    """concat_frames points each along-track row at its frame."""
     a = read_frame(
         write_frame(tmp_path, frame_name("CPR_CLD_2A", "20261020T015847", "13601E")), CLD
     )
@@ -102,6 +107,7 @@ def test_concat_frames_indexes_each_row_by_frame(tmp_path):
 
 
 def test_phony_dims_take_the_majority_name():
+    """A phony dimension takes the name most of its variables give it."""
     ds = xr.Dataset(
         {
             "a": (
@@ -131,13 +137,16 @@ class FakeMaap:
     """Catalogue items for a day of frames, and downloads that copy local files."""
 
     def __init__(self, files: dict[str, pathlib.Path]):
+        """Serve ``files``, keyed by product name."""
         self.files = files
 
     def search(self, collection, start, end, filters=None, session=None):
+        """Yield a catalogue item for each file."""
         for name in self.files:
             yield {"id": name, "assets": {"enclosure_h5": {"href": name}}}
 
     def download(self, href, dest, **kwargs):
+        """Copy the file behind ``href`` to ``dest``."""
         dest = pathlib.Path(dest)
         dest.write_bytes(self.files[href].read_bytes())
         return dest
@@ -145,6 +154,7 @@ class FakeMaap:
 
 @pytest.fixture
 def provider(local_config, monkeypatch, tmp_path):
+    """A CPR_CLD_2A provider on a local store, reading frames from a fake MAAP."""
     source = tmp_path / "source"
     source.mkdir()
     names = [
@@ -167,11 +177,13 @@ def provider(local_config, monkeypatch, tmp_path):
 
 
 def stored(provider) -> xr.Dataset:
+    """The provider's store as written so far."""
     repo = provider.get_icechunk_repo()
     return xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
 
 
 def test_a_day_is_written_once_with_the_newest_baseline(provider):
+    """A day's frames are written once, each at its newest baseline."""
     day = pd.Timestamp("2026-10-20")
     assert provider.run_partition(day)
     ds = stored(provider)
@@ -183,6 +195,7 @@ def test_a_day_is_written_once_with_the_newest_baseline(provider):
 
 
 def test_the_store_decodes_like_the_source(provider):
+    """Fill values and types read back as they do from the source files."""
     provider.run_partition(pd.Timestamp("2026-10-20"))
     ds = stored(provider)
     assert np.isnan(ds["cpr_cld_2a_water_content"].values[0, 0])
@@ -201,6 +214,7 @@ def test_the_store_decodes_like_the_source(provider):
 
 
 def test_a_settled_day_is_recorded_complete(provider, monkeypatch):
+    """A day is recorded complete only once it has settled."""
     day = pd.Timestamp("2026-10-20")
     monkeypatch.setattr(earthcare, "SETTLE_DAYS", 10_000)
     provider.run_partition(day)
@@ -209,6 +223,17 @@ def test_a_settled_day_is_recorded_complete(provider, monkeypatch):
     provider.run_partition(day)
     assert provider.days_complete(CLD) == {"2026-10-20"}
     assert provider.missing_timesteps(pd.DatetimeIndex([day])) == []
+
+
+def test_a_skipped_day_is_never_fetched_and_counts_as_done(provider, monkeypatch):
+    """A day in SKIPPED_DAYS is neither listed nor written, and no lane asks for it again."""
+    day = pd.Timestamp("2026-10-20")
+    monkeypatch.setitem(earthcare.SKIPPED_DAYS, "CPR_CLD_2A", frozenset({"2026-10-20"}))
+    monkeypatch.setattr(earthcare, "search", lambda *a, **k: pytest.fail("searched MAAP"))
+    assert not provider.run_partition(day)
+    assert not provider.run_partition(day, check_present=False)
+    assert provider.missing_timesteps(pd.DatetimeIndex([day])) == []
+    assert "2026-10-20" in provider.days_complete(CLD)
 
 
 def refusing(fake: FakeMaap, refusals: int):
