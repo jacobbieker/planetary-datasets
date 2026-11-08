@@ -174,3 +174,46 @@ def test_pad_to_pads_every_variable_on_a_dimension_together():
     )
     out = pad_to(ds, {"lev": 4})
     assert out.sizes["lev"] == 4 and out["b"].values.tolist() == [1, 2, 0, 0]
+
+
+def test_an_array_narrower_than_its_siblings_on_a_fixed_dimension_is_widened(repo):
+    """EarthCARE ATL_FM__2A: one array stored 2 wide on ``nvals`` while the rest are 4 wide.
+
+    The store's size for the dimension was read off whichever array came first, so the
+    narrow one was never widened and a 4-wide partition failed to write into it.
+    """
+    import zarr
+
+    append_partition(repo, xr.Dataset({"v": (("x", "nvals"), np.ones((1, 2)))}), "p0", ["nvals"])
+    session = repo.writable_session("main")
+    group = zarr.open_group(session.store, mode="a")
+    wide = group.create_array(
+        "a_wide", shape=(1, 4), dtype="float64", fill_value=np.nan, dimension_names=["x", "nvals"]
+    )
+    wide[:] = 3.0
+    session.commit("a wider sibling")
+    partition = xr.Dataset(
+        {
+            "v": (("x", "nvals"), np.full((1, 4), 2.0)),
+            "a_wide": (("x", "nvals"), np.full((1, 4), 5.0)),
+        }
+    )
+    append_partition(repo, partition, "p1", ["nvals"])
+    v = read(repo)["v"].values
+    assert v.shape == (2, 4)
+    assert v[1].tolist() == [2.0, 2.0, 2.0, 2.0]
+    assert v[0, :2].tolist() == [1.0, 1.0] and np.isnan(v[0, 2:]).all()
+
+
+def test_padding_an_integer_array_uses_its_stored_fill_value(repo):
+    """Zeros padded into an array whose fill is nonzero would read back as data."""
+    first = xr.Dataset({"n": (("x", "lev"), np.full((1, 3), 5, dtype="int16"))})
+    first["n"].attrs["_FillValue"] = np.int16(-1)
+    append_partition(repo, first, "p0", ["lev"])
+    append_partition(
+        repo, xr.Dataset({"n": (("x", "lev"), np.full((1, 2), 7, dtype="int16"))}), "p1", ["lev"]
+    )
+    raw = xr.open_zarr(
+        repo.readonly_session("main").store, consolidated=False, mask_and_scale=False
+    )
+    assert raw["n"].values[1].tolist() == [7, 7, -1]

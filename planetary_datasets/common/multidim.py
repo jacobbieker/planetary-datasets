@@ -138,15 +138,22 @@ def pad_value(attrs: Mapping, dtype: np.dtype, array_fill=None):
     return 0
 
 
-def pad_to(ds: xr.Dataset, sizes: Mapping[str, int]) -> xr.Dataset:
-    """``ds`` with every variable padded at the end of each dimension in ``sizes``."""
+def pad_to(
+    ds: xr.Dataset, sizes: Mapping[str, int], stored_fills: Mapping[str, object] | None = None
+) -> xr.Dataset:
+    """``ds`` with every variable padded at the end of each dimension in ``sizes``.
+
+    ``stored_fills`` gives the fill value a variable already has in the store, used when the
+    partition does not state one: zeros padded into an integer array whose stored fill is
+    nonzero would read back as data.
+    """
     variables = {}
     changed = False
     for name, variable in ds.variables.items():
         widths = [(0, max(0, sizes.get(d, n) - n)) for d, n in zip(variable.dims, variable.shape)]
         if any(w[1] for w in widths):
             values = variable.values
-            fill = pad_value(variable.attrs, values.dtype)
+            fill = pad_value(variable.attrs, values.dtype, (stored_fills or {}).get(name))
             if values.dtype.kind in "OUS":
                 values = values.astype(object)
             variable = xr.Variable(
@@ -159,11 +166,17 @@ def pad_to(ds: xr.Dataset, sizes: Mapping[str, int]) -> xr.Dataset:
 
 
 def _stored_size(group: zarr.Group, dim: str) -> int | None:
-    for name in group.array_keys():
-        dims = _array_dims(group[name])
-        if dim in dims:
-            return group[name].shape[dims.index(dim)]
-    return None
+    """The widest any stored array is on ``dim``; None if no array has it.
+
+    Arrays can differ (EarthCARE ATL_FM__2A stored one 2 wide on ``nvals`` and the rest 4
+    wide), so the first array found is not the store's size.
+    """
+    sizes = [
+        group[name].shape[dims.index(dim)]
+        for name in group.array_keys()
+        if dim in (dims := _array_dims(group[name]))
+    ]
+    return max(sizes) if sizes else None
 
 
 def _grow_dim(group: zarr.Group, dim: str, size: int) -> None:
@@ -319,9 +332,16 @@ def _append(
     for dim in fixed:
         stored = _stored_size(group, dim)
         targets[dim] = max(ds.sizes[dim], stored or 0)
-        if stored is not None and targets[dim] > stored:
+        if stored is not None:
+            # Every array narrower than the target, not only when the store as a whole grows.
             _grow_dim(group, dim, targets[dim])
-    ds = pad_to(ds, targets)
+    # Floats pad with NaN, which reads as missing whatever the stored fill; integers need it.
+    stored_fills = {
+        name: group[name].attrs.get("_FillValue")
+        for name in ds.variables
+        if name in group and ds[name].dtype.kind in "iub"
+    }
+    ds = pad_to(ds, targets, stored_fills)
     for dim in ds.dims:
         if dim in fixed or not ds.sizes[dim]:
             continue
