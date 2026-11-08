@@ -111,7 +111,8 @@ def open_virtual_repo(
             directory by the shared config.
         virtual_buckets: Source bucket URIs the references point into, e.g.
             ``s3://noaa-gk2a-pds``. Each gets an anonymous virtual chunk
-            container.
+            container. ``https://`` (and ``http://``) prefixes get an HTTP
+            container and ``file://`` a local one, both without credentials.
         split_size: Manifest rows per split along ``split_dim``. Default 144 is
             one day of ten-minute full-disk slots.
         split_dim: Dimension the manifest is split along.
@@ -161,12 +162,11 @@ def open_virtual_repo(
     for url_prefix in url_prefixes:
         repo_config.set_virtual_chunk_container(
             icechunk.VirtualChunkContainer(
-                url_prefix=url_prefix,
-                store=icechunk.s3_store(region=source_region, anonymous=True),
+                url_prefix=url_prefix, store=_container_store(url_prefix, source_region)
             ),
         )
     virtual_credentials = icechunk.containers_credentials(
-        {url_prefix: icechunk.s3_anonymous_credentials() for url_prefix in url_prefixes}
+        {url_prefix: _container_credentials(url_prefix) for url_prefix in url_prefixes}
     )
 
     logger.info(f"opening virtual store {cfg.store_path(prefix)} over {', '.join(url_prefixes)}")
@@ -186,6 +186,28 @@ def _as_url_prefix(bucket: str) -> str:
     """Normalise ``noaa-x`` or ``s3://noaa-x`` to the ``s3://noaa-x/`` Icechunk wants."""
     url = bucket if "://" in bucket else f"s3://{bucket}"
     return url if url.endswith("/") else f"{url}/"
+
+
+def _container_store(url_prefix: str, source_region: str):
+    """The object store a virtual chunk container reads: S3, HTTP(S) or a local directory."""
+    import icechunk
+
+    if url_prefix.startswith(("http://", "https://")):
+        return icechunk.http_store()
+    if url_prefix.startswith("file://"):
+        return icechunk.local_filesystem_store(url_prefix.removeprefix("file://"))
+    return icechunk.s3_store(region=source_region, anonymous=True)
+
+
+def _container_credentials(url_prefix: str):
+    """Access for one container: anonymous S3, or the explicit no-credentials markers."""
+    import icechunk
+
+    if url_prefix.startswith(("http://", "https://")):
+        return icechunk.Credentials.HttpAccess()
+    if url_prefix.startswith("file://"):
+        return icechunk.Credentials.LocalFileSystemAccess()
+    return icechunk.s3_anonymous_credentials()
 
 
 def committed_times(
