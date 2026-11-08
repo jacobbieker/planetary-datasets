@@ -73,6 +73,11 @@ CONTAINER = f"{HOST}/"
 STORE_ROOT = "bkr/geos"
 #: Root attribute listing the days (analysis) or runs (forecasts) a store holds.
 LEDGER_ATTR = "geos_cf_written"
+#: Root attribute listing, per day or run, the files left out of it (for a later repair).
+LEFT_OUT_ATTR = "geos_cf_left_out"
+#: Further attempts at a file that would not open, and the seconds before the first.
+OPEN_RETRIES = 2
+OPEN_RETRY_PAUSE = 15.0
 #: Root attribute fixing a store's layout; a different layout goes to a new generation.
 SIGNATURE_ATTR = "geos_cf_layout"
 #: A day or run younger than this is written only once complete; older, with what exists.
@@ -521,17 +526,31 @@ def open_unit(
     """The files of one day (analysis) or run (forecast) combined in the store's layout.
 
     Files are opened in ``pool`` (see :func:`open_pool`), or by ``opener`` in this process
-    without one. Returns ``(dataset, files left out)``; dataset is None if nothing could be
+    without one. Returns ``(dataset, URLs left out)``; dataset is None if nothing could be
     opened. A file that will not open fails the unit while it is recent (the next pass
     retries it) and is left out once the unit has settled.
     """
-    urls = [f.url for f in files]
-    if pool is None:
-        results = [_open_url(url, opener) for url in urls]
-    else:
-        results = list(pool.map(_open_url, urls))
-    errors = {url: error for url, _, error in results if error}
+
+    def attempt(urls: list[str]):
+        if pool is None:
+            return [_open_url(url, opener) for url in urls]
+        return list(pool.map(_open_url, urls))
+
+    results = attempt([f.url for f in files])
     by_url = {url: ds for url, ds, _ in results if ds is not None}
+    errors = {url: error for url, _, error in results if error}
+    # A failure can be the portal's, not the file's: try again before leaving a file out,
+    # since a unit once written is not visited again.
+    for retry in range(OPEN_RETRIES):
+        if not errors:
+            break
+        time.sleep(OPEN_RETRY_PAUSE * 2**retry)
+        for url, ds, error in attempt(list(errors)):
+            if ds is not None:
+                by_url[url] = ds
+                errors.pop(url)
+            else:
+                errors[url] = error
     opened = [(f, by_url[f.url]) for f in files if f.url in by_url]
     if errors and not settled:
         first = next(iter(errors.items()))
@@ -541,7 +560,7 @@ def open_unit(
     for url, error in errors.items():
         logger.warning(f"{collection.label}: {url}: {error}; left out")
     if not opened:
-        return None, len(errors)
+        return None, sorted(errors)
     codes: dict[str, dict] = {}
     for _, ds in opened:
         for n, v in ds.data_vars.items():
@@ -575,7 +594,7 @@ def open_unit(
         if missing:
             logger.info(f"{collection.label} {init}: {missing} step(s) not published; left missing")
     vds.attrs["geos_cf_variable_source_names"] = json.dumps({n: c for c, n in names.items()})
-    return vds, len(errors)
+    return vds, sorted(errors)
 
 
 # ----------------------------------------------------------------------------- stores
@@ -694,7 +713,7 @@ def write_unit(
     key: str,
     when: dt.date,
     vds,
-    left_out: int,
+    left_out: Sequence[str],
     config: Config,
     container: str = CONTAINER,
 ) -> int:
@@ -713,10 +732,14 @@ def write_unit(
         vds.vz.to_icechunk(session.store)
     root = zarr.open_group(session.store, mode="a")
     ledger = set(root.attrs.get(LEDGER_ATTR, [])) | {key}
+    left_out_by_unit = dict(root.attrs.get(LEFT_OUT_ATTR, {}))
+    if left_out:
+        left_out_by_unit[key] = list(left_out)
     root.attrs.update(
         {
             SIGNATURE_ATTR: signature,
             LEDGER_ATTR: sorted(ledger),
+            LEFT_OUT_ATTR: left_out_by_unit,
             "source": f"{PORTAL}/{collection.stream.path}/",
             "collection": collection.name,
             "model": "NASA GMAO GEOS-CF",
@@ -724,10 +747,10 @@ def write_unit(
     )
     n = int(vds.sizes["step" if collection.stream.forecast else "time"])
     session.commit(
-        f"{collection.label}: {key} ({n} file(s), {left_out} left out)",
+        f"{collection.label}: {key} ({n} file(s), {len(left_out)} left out)",
         rebase_with=icechunk.ConflictDetector(),
     )
-    logger.info(f"{collection.label} {key}: {n} file(s) -> {prefix} ({left_out} left out)")
+    logger.info(f"{collection.label} {key}: {n} file(s) -> {prefix} ({len(left_out)} left out)")
     return n
 
 
@@ -834,8 +857,11 @@ def run_stream(
                         ledgers[c.name].add(key)
                     except Exception as exc:  # noqa: BLE001 - one bad unit must not stop the rest
                         logger.exception(f"{c.label} {key}: {type(exc).__name__}: {exc}")
-                        if not settled:
-                            # Retried next pass; later units wait behind it, as above.
+                        # Recent units are retried next pass, and so are I/O and storage
+                        # failures of any unit: later units wait behind it, as above. A
+                        # deterministic failure (ValueError, RuntimeError) of a settled unit
+                        # would block the collection for good, so later units go on.
+                        if not settled or not isinstance(exc, (ValueError, RuntimeError)):
                             deferred.add(c.name)
                             break
                 return count

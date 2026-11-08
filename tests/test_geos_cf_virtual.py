@@ -441,3 +441,40 @@ def test_later_days_wait_behind_a_day_still_being_published(portal, local_config
     assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 25
     ds, _ = read(g.Collection(stream, collection), local_config, p.container)
     assert (np.diff(ds["time"].values) > np.timedelta64(0)).all()
+
+
+def test_a_file_that_fails_once_is_retried_and_one_that_keeps_failing_is_recorded(
+    portal, local_config, monkeypatch
+):
+    """A settled unit is written once: a transient failure must not become a silent gap."""
+    root, p = portal
+    monkeypatch.setattr(g, "OPEN_RETRY_PAUSE", 0.0)
+    stream = g.STREAMS["v2_hindcast"]
+    collection = "aqc_tavg_1hr_glo_L1440x721_slv"
+    paths = [
+        ana_file(
+            root,
+            "v2_hindcast/ana",
+            "CF2_hindcast",
+            collection,
+            pd.Timestamp("2024-06-01T00:30") + pd.Timedelta(hours=h),
+            levels=1,
+            seed=h,
+        )
+        for h in range(3)
+    ]
+    flaky, broken = f"file://{paths[1]}", f"file://{paths[2]}"
+    calls: dict[str, int] = {}
+    real = g._open_url
+
+    def open_url(url, opener=None):
+        calls[url] = calls.get(url, 0) + 1
+        if url == broken or (url == flaky and calls[url] == 1):
+            return url, None, "OSError: portal hiccup"
+        return real(url, opener)
+
+    monkeypatch.setattr(g, "_open_url", open_url)
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 2
+    assert calls[flaky] == 2 and calls[broken] == 1 + g.OPEN_RETRIES
+    ds, _ = read(g.Collection(stream, collection), local_config, p.container)
+    assert ds.attrs[g.LEFT_OUT_ATTR] == {"2024-06-01": [broken]}
