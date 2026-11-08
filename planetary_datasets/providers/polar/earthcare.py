@@ -128,6 +128,12 @@ SETTLE_DAYS = 3
 #: product's own array, not the store's root, so writers of different products running
 #: side by side never change the same metadata.
 DAYS_ATTR = "days_complete"
+#: Days left out of a product for good, treated as complete. ATL_FM__2A on these days
+#: mixes in baseline-BA frames whose ``mie_free_time`` has 4 values per row where the
+#: store holds 2 (``nvals2``), so their batches can never append. Skipped on 2026-11-08.
+SKIPPED_DAYS: dict[str, frozenset[str]] = {
+    "ATL_FM__2A": frozenset({"2025-03-13", "2025-03-15", "2025-03-26"}),
+}
 #: Uncompressed bytes of frames read into memory before they are written.
 BATCH_BYTES = 3 * 2**30
 #: Names the track dimension goes by across the products.
@@ -340,12 +346,13 @@ class EarthCAREProvider(BaseProvider):
     @staticmethod
     def _days(group: zarr.Group | None, product: Product) -> set[str]:
         name = f"{product.prefix}_frame_key"
+        skipped = set(SKIPPED_DAYS.get(product.code, ()))
         if group is None or name not in group:
-            return set()
-        return set(group[name].attrs.get(DAYS_ATTR, []))
+            return skipped
+        return set(group[name].attrs.get(DAYS_ATTR, [])) | skipped
 
     def days_complete(self, product: Product) -> set[str]:
-        """Days (``YYYY-MM-DD``) recorded complete for ``product``."""
+        """Days (``YYYY-MM-DD``) recorded complete for ``product``, or skipped for good."""
         return self._days(self._group(), product)
 
     def missing_timesteps(self, desired: pd.DatetimeIndex) -> List[pd.Timestamp]:
