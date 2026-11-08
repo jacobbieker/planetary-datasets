@@ -203,3 +203,17 @@ def test_an_array_narrower_than_its_siblings_on_a_fixed_dimension_is_widened(rep
     assert v.shape == (2, 4)
     assert v[1].tolist() == [2.0, 2.0, 2.0, 2.0]
     assert v[0, :2].tolist() == [1.0, 1.0] and np.isnan(v[0, 2:]).all()
+
+
+def test_padding_an_integer_array_uses_its_stored_fill_value(repo):
+    """Zeros padded into an array whose fill is nonzero would read back as data."""
+    first = xr.Dataset({"n": (("x", "lev"), np.full((1, 3), 5, dtype="int16"))})
+    first["n"].attrs["_FillValue"] = np.int16(-1)
+    append_partition(repo, first, "p0", ["lev"])
+    append_partition(
+        repo, xr.Dataset({"n": (("x", "lev"), np.full((1, 2), 7, dtype="int16"))}), "p1", ["lev"]
+    )
+    raw = xr.open_zarr(
+        repo.readonly_session("main").store, consolidated=False, mask_and_scale=False
+    )
+    assert raw["n"].values[1].tolist() == [7, 7, -1]
