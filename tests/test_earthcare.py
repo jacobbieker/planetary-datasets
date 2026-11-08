@@ -236,6 +236,21 @@ def test_a_skipped_day_is_never_fetched_and_counts_as_done(provider, monkeypatch
     assert "2026-10-20" in provider.days_complete(CLD)
 
 
+def test_the_skipped_atl_days_count_as_done_for_that_product_only(local_config):
+    """The real SKIPPED_DAYS: the three ATL_FM__2A days are done, other products still run."""
+    atl, cld = PRODUCTS["ATL_FM__2A"], CLD
+    days = {"2025-03-13", "2025-03-15", "2025-03-26"}
+    assert set(earthcare.SKIPPED_DAYS) <= set(PRODUCTS)
+    assert earthcare.SKIPPED_DAYS["ATL_FM__2A"] == days
+    assert days <= EarthCAREProvider._days(None, atl)
+    assert not days & EarthCAREProvider._days(None, cld)
+    made = EarthCAREProvider(config=local_config, products=["ATL_FM__2A", "CPR_CLD_2A"])
+    wanted = pd.DatetimeIndex(sorted(days))
+    assert made.missing_timesteps(wanted) == list(wanted)
+    only_atl = EarthCAREProvider(config=local_config, products=["ATL_FM__2A"])
+    assert only_atl.missing_timesteps(wanted) == []
+
+
 def refusing(fake: FakeMaap, refusals: int):
     """``fake.download``, answering as MAAP does when overloaded ``refusals`` times a frame."""
     calls: collections.Counter = collections.Counter()
