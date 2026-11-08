@@ -64,18 +64,21 @@ def write_file(
 
 @pytest.fixture
 def portal(tmp_path):
+    """A local directory laid out like the portal, and a Portal over it."""
     root = tmp_path / "geos-cf"
     root.mkdir()
     return root, g.Portal(f"file://{root}")
 
 
 def ana_file(root, stream_path, prefix, collection, when, revision=".R0", **kwargs):
+    """Write one analysis file where the portal would list it."""
     day = f"{stream_path}/Y{when:%Y}/M{when:%m}/D{when:%d}"
     name = f"{prefix}.{collection}.{when:%Y%m%d_%H%M}z{revision}.nc4"
     return write_file(root / day / name, when, **kwargs)
 
 
 def read(collection, config, container):
+    """Open a written store for reading, with its repository."""
     repo = g.open_store(
         collection.store_prefix, collection, config, create=False, container=container
     )
@@ -86,6 +89,7 @@ def read(collection, config, container):
 
 
 def test_file_names_parse_for_every_stream():
+    """File names parse for every stream."""
     ana = g.parse_name(
         "GEOS.cf.ana.chm_inst_1hr_glo_L1440x721_v72.20261101_0030z.R1.nc4", "https://x/d"
     )
@@ -111,6 +115,7 @@ def test_file_names_parse_for_every_stream():
 
 
 def test_the_latest_revision_of_a_file_wins():
+    """The latest revision of a file wins."""
     files = [
         g.parse_name(f"GEOS.cf.ana.aqc_tavg_1hr_glo_L1440x721_slv.20261101_0030z{r}.nc4", "d")
         for r in ("", ".R0", ".R1")
@@ -120,6 +125,7 @@ def test_the_latest_revision_of_a_file_wins():
 
 
 def test_collections_know_their_levels_steps_and_store():
+    """Collections know their levels steps and store."""
     stream = g.STREAMS["v2_fcst"]
     averaged = g.Collection(stream, "aqc_tavg_1hr_glo_L1440x721_slv")
     instant = g.Collection(stream, "htf_inst_15mn_glo_L1440x721_slv")
@@ -158,10 +164,12 @@ def test_collections_know_their_levels_steps_and_store():
     ],
 )
 def test_variables_get_explicit_era5_style_names(code, attrs, expected):
+    """Variables get explicit era5 style names."""
     assert variable_name(code, attrs)[0] == expected
 
 
 def test_two_codes_naming_one_variable_is_refused():
+    """Two codes naming one variable is refused."""
     with pytest.raises(ValueError, match="both name"):
         variable_names({"HCHO": {"units": "mol mol-1"}, "CH2O": {"units": "mol mol-1"}})
 
@@ -170,6 +178,7 @@ def test_two_codes_naming_one_variable_is_refused():
 
 
 def test_analysis_days_are_referenced_renamed_and_resumed(portal, local_config):
+    """Analysis days are referenced renamed and resumed."""
     root, p = portal
     stream = g.STREAMS["v2_ana"]
     collection = "chm_inst_1hr_glo_L1440x721_v72"
@@ -223,6 +232,7 @@ def test_analysis_days_are_referenced_renamed_and_resumed(portal, local_config):
 
 
 def test_a_recent_incomplete_day_waits_until_complete_or_settled(portal, local_config):
+    """A recent incomplete day waits until complete or settled."""
     root, p = portal
     stream = g.STREAMS["v2_ana"]
     collection = "met_inst_1hr_glo_L1440x721_p23"
@@ -238,6 +248,7 @@ def test_a_recent_incomplete_day_waits_until_complete_or_settled(portal, local_c
 
 
 def test_single_level_collections_drop_lev_and_keep_it_as_a_coordinate(portal, local_config):
+    """Single level collections drop lev and keep it as a coordinate."""
     root, p = portal
     stream = g.STREAMS["v2_hindcast"]
     collection = "chm_tavg_1hr_glo_L1440x721_slv"
@@ -270,6 +281,7 @@ def test_single_level_collections_drop_lev_and_keep_it_as_a_coordinate(portal, l
 
 
 def test_v1_single_level_only_leaves_the_3d_collections_out(portal, local_config):
+    """V1 single level only leaves the 3d collections out."""
     root, p = portal
     when = pd.Timestamp("2025-06-01T00:30")
     ana_file(
@@ -304,6 +316,7 @@ def test_v1_single_level_only_leaves_the_3d_collections_out(portal, local_config
 
 
 def test_a_forecast_run_has_every_step_with_unpublished_ones_missing(portal, local_config):
+    """A forecast run has every step with unpublished ones missing."""
     root, p = portal
     stream = g.STREAMS["v2_fcst"]
     collection = "ghg_inst_3hr_glo_L1440x721_v72"
@@ -329,6 +342,7 @@ def test_a_forecast_run_has_every_step_with_unpublished_ones_missing(portal, loc
 
 
 def test_v1_forecast_runs_are_found_under_their_run_directory(portal, local_config):
+    """V1 forecast runs are found under their run directory."""
     root, p = portal
     stream = g.STREAMS["v1_fcst"]
     collection = "aqc_tavg_1hr_g1440x721_v1"
@@ -352,6 +366,7 @@ def test_a_downloaded_copy_is_referenced_at_its_portal_url(tmp_path, monkeypatch
     source = write_file(tmp_path / "src" / "f.nc4", pd.Timestamp("2025-06-01"), levels=1, seed=1)
 
     def fake_download(url, dest, retries=3, **kwargs):
+        """Fake download."""
         pathlib.Path(dest).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(source, dest)
         return pathlib.Path(dest)
@@ -366,3 +381,63 @@ def test_a_downloaded_copy_is_referenced_at_its_portal_url(tmp_path, monkeypatch
     # Coordinates were read before the copy went away.
     np.testing.assert_array_equal(ds["lat"].values, LAT)
     assert not list((tmp_path).glob("geos-cf-*"))
+
+
+def test_a_layout_change_continues_in_a_dated_generation(portal, local_config):
+    """A day whose variables differ goes to a store named for it; both ledgers count."""
+    root, p = portal
+    stream = g.STREAMS["v2_ana"]
+    collection = "ems_tavg_1hr_glo_L1440x721_slv"
+    ana_file(
+        root,
+        "v2/ana",
+        "GEOS.cf.ana",
+        collection,
+        pd.Timestamp("2026-11-01T00:30"),
+        levels=1,
+        seed=1,
+    )
+    ana_file(
+        root,
+        "v2/ana",
+        "GEOS.cf.ana",
+        collection,
+        pd.Timestamp("2026-11-02T00:30"),
+        levels=1,
+        seed=2,
+        extra=True,
+    )
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 2
+    c = g.Collection(stream, collection)
+    prefixes = g.generations(local_config, c.store_prefix)
+    assert prefixes == [c.store_prefix, c.store_prefix.replace(".icechunk", "_02112026.icechunk")]
+    assert g.written(c, local_config, p.container) == {"2026-11-01", "2026-11-02"}
+    later = g.open_store(prefixes[1], c, local_config, create=False, container=p.container)
+    ds = xr.open_zarr(later.readonly_session("main").store, consolidated=False)
+    assert "carbon_monoxide_anthropogenic_emission_flux" in ds and ds.sizes["time"] == 1
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 0
+
+
+def test_later_days_wait_behind_a_day_still_being_published(portal, local_config):
+    """Appending a complete later day first would put the store's times out of order."""
+    root, p = portal
+    stream = g.STREAMS["v2_ana"]
+    collection = "met_tavg_1hr_glo_L1440x721_slv"
+    ana_file(
+        root,
+        "v2/ana",
+        "GEOS.cf.ana",
+        collection,
+        pd.Timestamp("2026-11-06T00:30"),
+        levels=1,
+        seed=1,
+    )
+    for hour in range(24):
+        when = pd.Timestamp("2026-11-07T00:30") + pd.Timedelta(hours=hour)
+        ana_file(root, "v2/ana", "GEOS.cf.ana", collection, when, levels=1, seed=hour)
+    recent = dt.datetime(2026, 11, 8, 6)
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=recent) == 0
+    # Once the first day settles, both go in, in order.
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 25
+    ds, _ = read(g.Collection(stream, collection), local_config, p.container)
+    assert (np.diff(ds["time"].values) > np.timedelta64(0)).all()

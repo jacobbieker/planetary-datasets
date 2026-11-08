@@ -124,7 +124,14 @@ class Stream:
 
 STREAMS: dict[str, Stream] = {
     "v1_ana": Stream("v1_ana", "v1/ana", single_level_only=True, download=True),
-    "v1_fcst": Stream("v1_fcst", "v1/forecast", forecast=True, run_dir="H12", download=True),
+    "v1_fcst": Stream(
+        "v1_fcst",
+        "v1/forecast",
+        forecast=True,
+        run_dir="H12",
+        single_level_only=True,
+        download=True,
+    ),
     "v2_ana": Stream("v2_ana", "v2/ana"),
     "v2_fcst": Stream("v2_fcst", "v2/fcst", forecast=True),
     "v2_hindcast": Stream("v2_hindcast", "v2_hindcast/ana"),
@@ -596,11 +603,17 @@ def open_store(
 
 
 def _root_attrs(repo) -> dict:
+    """The store's root attributes; empty only for a store with no root group yet.
+
+    Any other failure propagates: read as "empty", a ledger that failed to load would
+    write its days again, and a signature that failed to load would pick a generation.
+    """
     import zarr
+    from zarr.errors import GroupNotFoundError
 
     try:
         return dict(zarr.open_group(repo.readonly_session("main").store, mode="r").attrs)
-    except Exception:  # noqa: BLE001 - an empty store has no root group yet
+    except GroupNotFoundError:
         return {}
 
 
@@ -608,9 +621,11 @@ def stored_attrs(
     prefix: str, collection: Collection, config: Config, container: str = CONTAINER
 ) -> dict:
     """Root attributes of the store at ``prefix``; empty when there is none (never creates)."""
+    import icechunk
+
     try:
         repo = open_store(prefix, collection, config, create=False, container=container)
-    except Exception:  # noqa: BLE001 - no repository there yet
+    except (FileNotFoundError, icechunk.RepositoryNotFoundError):
         return {}
     return _root_attrs(repo)
 
@@ -759,59 +774,77 @@ def run_stream(
     scratch = pathlib.Path(config.scratch_dir)
     opener = Opener(stream, portal, scratch=scratch)
     pool = open_pool(stream, portal, scratch, open_workers)
-    ledgers: dict[str, set[str]] = {}
     total = 0
+    try:
+        ledgers: dict[str, set[str]] = {}
+        #: Collections with a unit waiting (still published, or failed while recent).
+        deferred: set[str] = set()
+        total = 0
 
-    def collection_of(name: str) -> Collection | None:
-        c = Collection(stream, name)
-        if stream.single_level_only and not c.single_level:
-            return None
-        if only and c.short not in only:
-            return None
-        return c
+        def collection_of(name: str) -> Collection | None:
+            c = Collection(stream, name)
+            if stream.single_level_only and not c.single_level:
+                return None
+            if only and c.short not in only:
+                return None
+            return c
 
-    for day in days:
-        stamp = day.isoformat()
-        if ledgers and all(any(k.startswith(stamp) for k in ledger) for ledger in ledgers.values()):
-            continue  # every collection seen so far has this day; nothing to list
-        try:
-            files = day_files(portal, stream, day)
-        except Exception as exc:  # noqa: BLE001 - one unlistable day must not stop the stream
-            logger.warning(f"geos_{stream.name} {day}: listing failed: {exc}")
-            continue
-        names = sorted({f.collection for f in files})
-        collections = [c for c in map(collection_of, names) if c is not None]
-        for c in collections:
-            if c.name not in ledgers:
-                ledgers[c.name] = written(c, config, portal.container)
+        for day in days:
+            stamp = day.isoformat()
+            if ledgers and all(
+                any(k.startswith(stamp) for k in ledger) for ledger in ledgers.values()
+            ):
+                continue  # every collection seen so far has this day; nothing to list
+            try:
+                files = day_files(portal, stream, day)
+            except Exception as exc:  # noqa: BLE001 - one unlistable day must not stop the stream
+                logger.warning(f"geos_{stream.name} {day}: listing failed: {exc}")
+                continue
+            names = sorted({f.collection for f in files})
+            collections = [c for c in map(collection_of, names) if c is not None]
+            for c in collections:
+                if c.name not in ledgers:
+                    ledgers[c.name] = written(c, config, portal.container)
 
-        def write_collection(c: Collection) -> int:
-            count = 0
-            for key, unit_files in sorted(units(c, files).items()):
-                if key in ledgers[c.name]:
-                    continue
-                when = dt.datetime.fromisoformat(key)
-                settled = now - when >= SETTLE + (
-                    FORECAST_LENGTH.to_pytimedelta() if stream.forecast else dt.timedelta(days=1)
-                )
-                if len(unit_files) < expected(c) and not settled:
-                    continue  # still being published
-                try:
-                    vds, left_out = open_unit(opener, c, unit_files, settled, pool)
-                    if vds is None:
+            def write_collection(c: Collection) -> int:
+                if c.name in deferred:
+                    return 0
+                count = 0
+                for key, unit_files in sorted(units(c, files).items()):
+                    if key in ledgers[c.name]:
                         continue
-                    count += write_unit(
-                        c, key, when.date(), vds, left_out, config, portal.container
+                    when = dt.datetime.fromisoformat(key)
+                    settled = now - when >= SETTLE + (
+                        FORECAST_LENGTH.to_pytimedelta()
+                        if stream.forecast
+                        else dt.timedelta(days=1)
                     )
-                    ledgers[c.name].add(key)
-                except Exception as exc:  # noqa: BLE001 - one bad unit must not stop the rest
-                    logger.exception(f"{c.label} {key}: {type(exc).__name__}: {exc}")
-            return count
+                    if len(unit_files) < expected(c) and not settled:
+                        # Still being published. Later units wait behind it, so the store's
+                        # times stay in order.
+                        deferred.add(c.name)
+                        break
+                    try:
+                        vds, left_out = open_unit(opener, c, unit_files, settled, pool)
+                        if vds is None:
+                            continue
+                        count += write_unit(
+                            c, key, when.date(), vds, left_out, config, portal.container
+                        )
+                        ledgers[c.name].add(key)
+                    except Exception as exc:  # noqa: BLE001 - one bad unit must not stop the rest
+                        logger.exception(f"{c.label} {key}: {type(exc).__name__}: {exc}")
+                        if not settled:
+                            # Retried next pass; later units wait behind it, as above.
+                            deferred.add(c.name)
+                            break
+                return count
 
-        with ThreadPoolExecutor(max(1, workers)) as threads:
-            total += sum(threads.map(write_collection, collections))
-    if pool is not None:
-        pool.shutdown()
+            with ThreadPoolExecutor(max(1, workers)) as threads:
+                total += sum(threads.map(write_collection, collections))
+    finally:
+        if pool is not None:
+            pool.shutdown()
     return total
 
 
@@ -839,9 +872,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     only = args.collections.split(",") if args.collections else None
     while True:
         for stream in streams:
-            written_files = run_stream(
-                stream, config, portal, args.start, args.end, only, args.workers, args.open_workers
-            )
+            try:
+                written_files = run_stream(
+                    stream,
+                    config,
+                    portal,
+                    args.start,
+                    args.end,
+                    only,
+                    args.workers,
+                    args.open_workers,
+                )
+            except Exception as exc:  # noqa: BLE001 - following: retry at the next pass
+                if not args.follow:
+                    raise
+                logger.exception(f"geos_{stream.name}: pass failed: {type(exc).__name__}: {exc}")
+                continue
             logger.info(f"geos_{stream.name}: pass done, {written_files:,} file(s) referenced")
         if not args.follow:
             return 0
