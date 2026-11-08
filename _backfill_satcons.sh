@@ -24,6 +24,9 @@ target="s3://us-west-2.opendata.source.coop/bkr/geo/${STORE}.icechunk"
 # Low-memory mode (one worker) for 500 m unless the wrapper says otherwise; SATCONS_MAX_WORKERS
 # and SATCONS_BUFFER_SIZE pass straight through to satellite-consumer when set.
 low=${SATCONS_LOW_MEMORY:-false}; [[ -z ${SATCONS_LOW_MEMORY:-} && $RES == 500 ]] && low=true
+# A month whose consumer was killed is retried this many times, this many seconds apart.
+KILLED_RETRIES=${SATCONS_KILLED_RETRIES:-2}
+KILLED_PAUSE=${SATCONS_KILLED_PAUSE:-600}
 
 while true; do
   month=${FIXED_NEWEST:-$(date -u '+%Y%m')}
@@ -38,13 +41,22 @@ while true; do
     # The store's readable variable names (planetary_datasets/naming), for satellite-consumer.
     renames="$PWD/data/satcons_names_${STORE}.json"
     PYTHONPATH=$PWD $PIXI run python scripts/store_names_json.py "bkr/geo/${STORE}.icechunk" "$renames"
-    (cd "$SCRATCH" && SATCONS_SATELLITE=$SAT SATCONS_RESOLUTION=$RES SATCONS_RENAME_JSON=$renames \
-      SATCONS_START_TIMESTAMP=$start SATCONS_END_TIMESTAMP=$end SATCONS_RAW_PATH=. \
-      SATCONS_ZARR_PATH=$target SATCONS_ICECHUNK=True SATCONS_LOW_MEMORY=$low \
-      SATCONS_S3_LISTING_CACHE_DIR=$LISTINGS \
-      $PIXI run --manifest-path "$CONSUMER/pyproject.toml" sat-consumer)
-    echo "=== $(date -u '+%F %T') $STORE $month exited $?"
-    find "$SCRATCH" -mindepth 1 -delete
+    tries=0
+    while :; do
+      (cd "$SCRATCH" && SATCONS_SATELLITE=$SAT SATCONS_RESOLUTION=$RES SATCONS_RENAME_JSON=$renames \
+        SATCONS_START_TIMESTAMP=$start SATCONS_END_TIMESTAMP=$end SATCONS_RAW_PATH=. \
+        SATCONS_ZARR_PATH=$target SATCONS_ICECHUNK=True SATCONS_LOW_MEMORY=$low \
+        SATCONS_S3_LISTING_CACHE_DIR=$LISTINGS \
+        $PIXI run --manifest-path "$CONSUMER/pyproject.toml" sat-consumer)
+      rc=$?  # before any $(...) below, which would reset it
+      echo "=== $(date -u '+%F %T') $STORE $month exited $rc"
+      find "$SCRATCH" -mindepth 1 -delete
+      # Killed by a signal (the OOM killer gives 137): run the month again rather than leave
+      # its gap for the next walk, which takes weeks. A month that keeps dying moves on.
+      (( rc > 128 && ++tries <= KILLED_RETRIES )) || break
+      echo "=== $(date -u '+%F %T') $STORE $month killed; retry $tries/$KILLED_RETRIES in ${KILLED_PAUSE}s"
+      sleep "$KILLED_PAUSE"
+    done
     month=$(date -u -d "$y-$m-01 -1 month" '+%Y%m')
   done
   echo "=== $(date -u '+%F %T') $STORE reached $OLDEST; walking again in an hour"
