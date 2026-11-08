@@ -12,6 +12,7 @@ LANES = ("kenda", "uk_radar")
 
 
 def _start_ticks(pid: int) -> str:
+    """Start time of ``pid`` in clock ticks, as the box script records it."""
     stat = pathlib.Path(f"/proc/{pid}/stat").read_text()
     return stat.rsplit(") ", 1)[1].split()[19]
 
@@ -34,6 +35,7 @@ def lanes(tmp_path):
 
 
 def stop(home: pathlib.Path, *names: str) -> subprocess.CompletedProcess:
+    """Run ``_backfill_box.sh stop`` with ``HOME`` pointed at ``home``."""
     return subprocess.run(
         ["bash", str(ROOT / "_backfill_box.sh"), "stop", *names],
         env={**os.environ, "HOME": str(home)},
@@ -44,6 +46,7 @@ def stop(home: pathlib.Path, *names: str) -> subprocess.CompletedProcess:
 
 
 def test_stop_with_a_name_stops_only_that_lane(lanes):
+    """Naming a lane stops it and leaves the others running."""
     home, procs = lanes
     done = stop(home, "kenda")
     assert done.returncode == 0, done.stderr
@@ -53,6 +56,7 @@ def test_stop_with_a_name_stops_only_that_lane(lanes):
 
 
 def test_an_unknown_name_stops_nothing(lanes):
+    """A name that is not a lane stops nothing, even alongside a real one."""
     home, procs = lanes
     done = stop(home, "kenda", "no_such_lane")
     assert done.returncode == 2
@@ -61,6 +65,7 @@ def test_an_unknown_name_stops_nothing(lanes):
 
 
 def test_stop_with_no_names_stops_every_lane(lanes):
+    """No names still stops every lane."""
     home, procs = lanes
     assert stop(home).returncode == 0
     for proc in procs.values():
