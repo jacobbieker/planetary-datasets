@@ -244,8 +244,9 @@ declare -A SCRIPTS=(
   [mtg_500m]="_backfill_mtg_500m.sh"
   [mtg_highres_1000m]="_backfill_mtg_highres_1000m.sh"
   [mtg_1000m]="_backfill_mtg_1000m.sh"
-  # NOT STARTED: another host still writes mtg_2000m live (2026-10-24); a second writer
-  # would race its commits. Enable once that host stops writing it.
+  # Another host still writes mtg_2000m live (2026-11-08), so the box only fills the months
+  # before the current one. Swap for the full lane once that host stops writing it.
+  [mtg_2000m_archive]="_backfill_mtg_2000m_archive.sh"
   # [mtg_2000m]="_backfill_mtg_2000m.sh"
   # IODC SEVIRI 1 km: stalled at 2026-06-15 with 2025-12-06..2026-01-01 missing; filled
   # back to 2025-01 and kept current. (iodc_3000m_test is still written live elsewhere.)
