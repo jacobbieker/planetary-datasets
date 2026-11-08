@@ -20,6 +20,9 @@ OLDEST=${3:?oldest month YYYYMM}
 LANE=${4:-0}
 LANES=${5:-1}
 PIXI=${PIXI:-~/.pixi/bin/pixi}
+# A month killed by a signal (OOM, the guard) is run again this many times before moving on.
+KILLED_RETRIES=${SATCONS_KILLED_RETRIES:-2}
+KILLED_PAUSE=${SATCONS_KILLED_PAUSE:-600}
 CONSUMER=${SATCONS_DIR:-~/satellite-consumer}
 SCRATCH=$PWD/data/himawari_raw/$RES-${4:-0}
 LISTINGS=$PWD/data/himawari_listing_cache
@@ -47,13 +50,20 @@ while true; do
     renames="$PWD/data/satcons_names_himawari_${RES}m_${month}.json"
     PYTHONPATH=$PWD $PIXI run python scripts/store_names_json.py \
       "bkr/geo/himawari_${RES}m_backfill_${month}.icechunk" "$renames"
-    (cd "$SCRATCH" && SATCONS_SATELLITE=himawari SATCONS_RESOLUTION=$RES SATCONS_RENAME_JSON=$renames \
-      SATCONS_START_TIMESTAMP=$start SATCONS_END_TIMESTAMP=$end SATCONS_RAW_PATH=. \
-      SATCONS_ZARR_PATH=$store SATCONS_ICECHUNK=True SATCONS_LOW_MEMORY=$low \
-      SATCONS_S3_LISTING_CACHE_DIR=$LISTINGS \
-      $PIXI run --manifest-path "$CONSUMER/pyproject.toml" sat-consumer)
-    echo "=== $(date -u '+%F %T') himawari ${RES}m $month exited $?"
-    find "$SCRATCH" -mindepth 1 -delete
+    tries=0
+    while true; do
+      (cd "$SCRATCH" && SATCONS_SATELLITE=himawari SATCONS_RESOLUTION=$RES SATCONS_RENAME_JSON=$renames \
+        SATCONS_START_TIMESTAMP=$start SATCONS_END_TIMESTAMP=$end SATCONS_RAW_PATH=. \
+        SATCONS_ZARR_PATH=$store SATCONS_ICECHUNK=True SATCONS_LOW_MEMORY=$low \
+        SATCONS_S3_LISTING_CACHE_DIR=$LISTINGS \
+        $PIXI run --manifest-path "$CONSUMER/pyproject.toml" sat-consumer)
+      rc=$?  # before any $(...) below, which would reset it
+      echo "=== $(date -u '+%F %T') himawari ${RES}m $month exited $rc"
+      find "$SCRATCH" -mindepth 1 -delete
+      (( rc > 128 && ++tries <= KILLED_RETRIES )) || break
+      echo "=== $(date -u '+%F %T') himawari ${RES}m $month killed; retry $tries/$KILLED_RETRIES in ${KILLED_PAUSE}s"
+      sleep "$KILLED_PAUSE"
+    done
     month=$(date -u -d "$y-$m-01 -1 month" '+%Y%m')
   done
   echo "=== $(date -u '+%F %T') himawari ${RES}m lane $LANE/$LANES reached $OLDEST; walking again"
