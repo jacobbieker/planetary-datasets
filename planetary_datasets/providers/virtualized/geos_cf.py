@@ -528,7 +528,9 @@ def open_unit(
     Files are opened in ``pool`` (see :func:`open_pool`), or by ``opener`` in this process
     without one. Returns ``(dataset, URLs left out)``; dataset is None if nothing could be
     opened. A file that will not open fails the unit while it is recent (the next pass
-    retries it) and is left out once the unit has settled.
+    retries it) and is left out once the unit has settled. A settled unit none of whose
+    files opens is taken for a portal outage, not damage: :func:`run_stream` holds its
+    collection back behind it until a later pass opens it, keeping the times in order.
     """
 
     def attempt(urls: list[str]):
@@ -850,7 +852,11 @@ def run_stream(
                     try:
                         vds, left_out = open_unit(opener, c, unit_files, settled, pool)
                         if vds is None:
-                            continue
+                            # Nothing opened, even after retries: an outage. Later units
+                            # wait behind it rather than be appended ahead of it.
+                            logger.warning(f"{c.label} {key}: no file opened; retrying next pass")
+                            deferred.add(c.name)
+                            break
                         count += write_unit(
                             c, key, when.date(), vds, left_out, config, portal.container
                         )

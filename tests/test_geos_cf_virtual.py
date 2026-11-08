@@ -478,3 +478,43 @@ def test_a_file_that_fails_once_is_retried_and_one_that_keeps_failing_is_recorde
     assert calls[flaky] == 2 and calls[broken] == 1 + g.OPEN_RETRIES
     ds, _ = read(g.Collection(stream, collection), local_config, p.container)
     assert ds.attrs[g.LEFT_OUT_ATTR] == {"2024-06-01": [broken]}
+
+
+def test_a_settled_day_none_of_whose_files_open_holds_back_later_days(
+    portal, local_config, monkeypatch
+):
+    """An outage over a whole day must not let the next day be appended ahead of it."""
+    root, p = portal
+    monkeypatch.setattr(g, "OPEN_RETRY_PAUSE", 0.0)
+    stream = g.STREAMS["v2_hindcast"]
+    collection = "aqc_tavg_1hr_glo_L1440x721_slv"
+    first = ana_file(
+        root,
+        "v2_hindcast/ana",
+        "CF2_hindcast",
+        collection,
+        pd.Timestamp("2024-06-01T00:30"),
+        levels=1,
+        seed=1,
+    )
+    ana_file(
+        root,
+        "v2_hindcast/ana",
+        "CF2_hindcast",
+        collection,
+        pd.Timestamp("2024-06-02T00:30"),
+        levels=1,
+        seed=2,
+    )
+    real = g._open_url
+    down = {f"file://{first}"}
+    monkeypatch.setattr(
+        g,
+        "_open_url",
+        lambda url, opener=None: (url, None, "OSError: down") if url in down else real(url, opener),
+    )
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 0
+    down.clear()
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 2
+    ds, _ = read(g.Collection(stream, collection), local_config, p.container)
+    assert (np.diff(ds["time"].values) > np.timedelta64(0)).all()
