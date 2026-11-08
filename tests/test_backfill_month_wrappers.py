@@ -63,6 +63,7 @@ exit "${{code:-0}}"
             **os.environ,
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "PIXI": str(bin_dir / "pixi"),
+            "SATCONS_KILLED_RETRIES": "2",
             "SATCONS_KILLED_PAUSE": "1",
         }
         log = subprocess.run(
