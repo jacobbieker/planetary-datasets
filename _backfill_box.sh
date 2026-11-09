@@ -163,13 +163,14 @@ declare -A LANES=(
   # GMGSI and GEOS-CF v2 are near-realtime: once caught up, a pass every two hours.
   [gmgsi_v3]="_backfill_gmgsi.py --follow --period 7200"
   [geos_v2]="_backfill_lanes.py geos_v2 --threads 8 --pause 7200"
-  # GEOS-CF virtual references, every collection (bkr/geos/geos_<stream>_<collection>.icechunk,
-  # next to the 15-minute subsets): v2 analysis and forecasts followed hourly, each its own
-  # lane so a long analysis backfill never holds back forecasts; the finished
-  # v2 hindcast and v1 single-level analysis and forecasts referenced once, rechecked daily.
+  # GEOS-CF virtual references, one store per stream with a group per collection
+  # (bkr/geos/geos_cf_<stream>.icechunk, next to the 15-minute subsets): the v2 analysis
+  # (the v2 hindcast from 2023-01, then the live analysis) and the v2 forecasts followed
+  # hourly, each its own lane so a long analysis backfill never holds back forecasts; the
+  # finished v1 single-level analysis and forecasts referenced once, rechecked daily.
   [geos_cf_v2_ana]="-m planetary_datasets.providers.virtualized.geos_cf --streams v2_ana --follow --pause 3600 --workers 4"
   [geos_cf_v2_fcst]="-m planetary_datasets.providers.virtualized.geos_cf --streams v2_fcst --follow --pause 3600 --workers 4"
-  [geos_cf_archive]="-m planetary_datasets.providers.virtualized.geos_cf --streams v2_hindcast,v1_ana,v1_fcst --follow --pause 86400 --workers 4"
+  [geos_cf_v1]="-m planetary_datasets.providers.virtualized.geos_cf --streams v1_ana,v1_fcst --follow --pause 86400 --workers 4"
   # Virtual references (gribberish) to NOAA's HRRR Alaska and NAM Hawaii nests, from each
   # archive's first run, then a pass every two hours.
   [hrrr_alaska_sfc]="_backfill_lanes.py hrrr_alaska_sfc --threads 2 --pause 7200"

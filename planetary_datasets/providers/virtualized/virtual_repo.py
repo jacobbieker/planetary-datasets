@@ -49,6 +49,7 @@ class NothingCommitted(RuntimeError):
     retried.
     """
 
+
 #: The NOAA Open Data mirrors of the foreign geostationary archives all live in
 #: us-east-1, and are readable without credentials.
 DEFAULT_SOURCE_REGION = "us-east-1"
@@ -102,6 +103,7 @@ def open_virtual_repo(
     config: Config | None = None,
     create: bool = True,
     extra_splits: Mapping[str, int] | None = None,
+    path_splits: Mapping[str, Mapping[str, int]] | None = None,
 ) -> "icechunk.Repository":
     """Open or create the virtual-reference store at ``prefix``.
 
@@ -127,6 +129,11 @@ def open_virtual_repo(
             wide in a second dimension needs this to keep each manifest small,
             e.g. ``{"gid": 3700}`` for millions of sites. Sizes count chunks,
             not elements, as ``split_size`` does.
+        path_splits: Splits for the arrays whose path matches a regular expression, as
+            ``{regex: {dimension: chunks per split}}``, tried in order before the
+            ``split_dim`` default, which covers every other array. A store whose groups
+            append at different rates (a group per collection) sizes each group's splits
+            this way.
 
     Returns:
         An open repository, ready to append to.
@@ -151,9 +158,16 @@ def open_virtual_repo(
     dim_splits = {icechunk.config.ManifestSplitDimCondition.DimensionName(split_dim): split_size}
     for dim, size in (extra_splits or {}).items():
         dim_splits[icechunk.config.ManifestSplitDimCondition.DimensionName(dim)] = size
-    split_config = icechunk.config.ManifestSplittingConfig.from_dict(
-        {icechunk.config.ManifestSplitCondition.AnyArray(): dim_splits}
-    )
+    conditions = {
+        icechunk.config.ManifestSplitCondition.path_matches(regex): {
+            icechunk.config.ManifestSplitDimCondition.DimensionName(dim): size
+            for dim, size in sizes.items()
+        }
+        for regex, sizes in (path_splits or {}).items()
+    }
+    # The first matching condition wins, so the catch-all goes last.
+    conditions[icechunk.config.ManifestSplitCondition.AnyArray()] = dim_splits
+    split_config = icechunk.config.ManifestSplittingConfig.from_dict(conditions)
     repo_config = icechunk.RepositoryConfig(
         manifest=icechunk.config.ManifestConfig(splitting=split_config)
     )
@@ -171,9 +185,7 @@ def open_virtual_repo(
 
     logger.info(f"opening virtual store {cfg.store_path(prefix)} over {', '.join(url_prefixes)}")
     if not create:
-        return icechunk.Repository.open(
-            storage, authorize_virtual_chunk_access=virtual_credentials
-        )
+        return icechunk.Repository.open(storage, authorize_virtual_chunk_access=virtual_credentials)
 
     repo = icechunk.Repository.open_or_create(
         storage, repo_config, authorize_virtual_chunk_access=virtual_credentials
@@ -284,9 +296,7 @@ def guard_append_order(
     covered, newest = day_coverage(repo, date, branch=branch, group=group)
     if covered:
         return covered
-    if newest is not None and newest.astype("datetime64[D]") > np.datetime64(
-        date.isoformat(), "D"
-    ):
+    if newest is not None and newest.astype("datetime64[D]") > np.datetime64(date.isoformat(), "D"):
         raise OutOfOrderPartition(
             f"{what}: {date.isoformat()} is older than the store's newest timestep "
             f"({newest}). Icechunk only appends along the time dimension, so this day "

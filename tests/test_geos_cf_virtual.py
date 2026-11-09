@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+import zarr
 
 from planetary_datasets.providers.virtualized import geos_cf as g
 from planetary_datasets.providers.virtualized.geos_cf_names import variable_name, variable_names
@@ -77,12 +78,11 @@ def ana_file(root, stream_path, prefix, collection, when, revision=".R0", **kwar
     return write_file(root / day / name, when, **kwargs)
 
 
-def read(collection, config, container):
-    """Open a written store for reading, with its repository."""
-    repo = g.open_store(
-        collection.store_prefix, collection, config, create=False, container=container
-    )
-    return xr.open_zarr(repo.readonly_session("main").store, consolidated=False), repo
+def read(collection, config, container, group=None):
+    """Open a collection's group of a written store for reading, with the repository."""
+    repo = g.open_store(collection.stream, config, create=False, container=container)
+    store = repo.readonly_session("main").store
+    return xr.open_zarr(store, group=group or collection.group, consolidated=False), repo
 
 
 # ----------------------------------------------------------------------------- names
@@ -136,9 +136,17 @@ def test_collections_know_their_levels_steps_and_store():
     assert averaged.single_level and averaged.level_dim is None
     assert three_hourly.level_dim == "model_level"
     assert g.Collection(stream, "chm_inst_1hr_glo_L1440x721_p23").level_dim == "pressure_level"
-    assert three_hourly.store_prefix == "bkr/geos/geos_v2_fcst_ghg_inst_3hr_v72.icechunk"
+    assert three_hourly.store_prefix == "bkr/geos/geos_cf_v2_fcst.icechunk"
+    assert three_hourly.group == "ghg_inst_3hr_v72"
     sat = g.Collection(g.STREAMS["v1_ana"], "sat_inst_1hr_r721x361_v72")
-    assert sat.store_prefix == "bkr/geos/geos_v1_ana_sat_inst_1hr_v72_0p5deg.icechunk"
+    assert sat.store_prefix == "bkr/geos/geos_cf_v1_ana.icechunk"
+    assert sat.group == "sat_inst_1hr_v72_0p5deg"
+    assert {s.store_prefix for s in g.STREAMS.values()} == {
+        "bkr/geos/geos_cf_v2_ana.icechunk",
+        "bkr/geos/geos_cf_v2_fcst.icechunk",
+        "bkr/geos/geos_cf_v1_ana.icechunk",
+        "bkr/geos/geos_cf_v1_fcst.icechunk",
+    }
 
 
 @pytest.mark.parametrize(
@@ -250,7 +258,7 @@ def test_a_recent_incomplete_day_waits_until_complete_or_settled(portal, local_c
 def test_single_level_collections_drop_lev_and_keep_it_as_a_coordinate(portal, local_config):
     """Single level collections drop lev and keep it as a coordinate."""
     root, p = portal
-    stream = g.STREAMS["v2_hindcast"]
+    stream = g.STREAMS["v2_ana"]
     collection = "chm_tavg_1hr_glo_L1440x721_slv"
     ana_file(
         root,
@@ -305,11 +313,9 @@ def test_v1_single_level_only_leaves_the_3d_collections_out(portal, local_config
         seed=1,
     )
     assert g.run_stream(g.STREAMS["v1_ana"], local_config, p, open_workers=0, now=LATER) == 1
-    assert not pathlib.Path(
-        local_config.store_path(
-            g.Collection(g.STREAMS["v1_ana"], "xgc_tavg_1hr_g1440x721_v36").store_prefix
-        )
-    ).exists()
+    repo = g.open_store(g.STREAMS["v1_ana"], local_config, create=False, container=p.container)
+    root = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    assert sorted(root.group_keys()) == ["xgc_tavg_1hr_x1"]
 
 
 # ----------------------------------------------------------------------------- forecasts
@@ -409,12 +415,16 @@ def test_a_layout_change_continues_in_a_dated_generation(portal, local_config):
     )
     assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 2
     c = g.Collection(stream, collection)
-    prefixes = g.generations(local_config, c.store_prefix)
-    assert prefixes == [c.store_prefix, c.store_prefix.replace(".icechunk", "_02112026.icechunk")]
-    assert g.written(c, local_config, p.container) == {"2026-11-01", "2026-11-02"}
-    later = g.open_store(prefixes[1], c, local_config, create=False, container=p.container)
-    ds = xr.open_zarr(later.readonly_session("main").store, consolidated=False)
+    _, repo = read(c, local_config, p.container)
+    groups = g.generations(repo, c)
+    assert groups == ["ems_tavg_1hr_slv", "ems_tavg_1hr_slv_02112026"]
+    assert g.written(repo, c) == {"2026-11-01", "2026-11-02"}
+    ds, _ = read(c, local_config, p.container, group=groups[1])
     assert "carbon_monoxide_anthropogenic_emission_flux" in ds and ds.sizes["time"] == 1
+    # A sibling group, not a new store: the stream keeps its one store.
+    assert [s.name for s in pathlib.Path(local_config.store_path("bkr/geos")).iterdir()] == [
+        "geos_cf_v2_ana.icechunk"
+    ]
     assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 0
 
 
@@ -449,7 +459,7 @@ def test_a_file_that_fails_once_is_retried_and_one_that_keeps_failing_is_recorde
     """A settled unit is written once: a transient failure must not become a silent gap."""
     root, p = portal
     monkeypatch.setattr(g, "OPEN_RETRY_PAUSE", 0.0)
-    stream = g.STREAMS["v2_hindcast"]
+    stream = g.STREAMS["v2_ana"]
     collection = "aqc_tavg_1hr_glo_L1440x721_slv"
     paths = [
         ana_file(
@@ -486,7 +496,7 @@ def test_a_settled_day_none_of_whose_files_open_holds_back_later_days(
     """An outage over a whole day must not let the next day be appended ahead of it."""
     root, p = portal
     monkeypatch.setattr(g, "OPEN_RETRY_PAUSE", 0.0)
-    stream = g.STREAMS["v2_hindcast"]
+    stream = g.STREAMS["v2_ana"]
     collection = "aqc_tavg_1hr_glo_L1440x721_slv"
     first = ana_file(
         root,
@@ -518,3 +528,181 @@ def test_a_settled_day_none_of_whose_files_open_holds_back_later_days(
     assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 2
     ds, _ = read(g.Collection(stream, collection), local_config, p.container)
     assert (np.diff(ds["time"].values) > np.timedelta64(0)).all()
+
+
+# ----------------------------------------------------------------------------- one store
+
+
+def test_a_streams_collections_are_groups_of_one_store(portal, local_config):
+    """Every collection of a stream is a group of the stream's one store, attrs per group."""
+    root, p = portal
+    stream = g.STREAMS["v2_ana"]
+    when = pd.Timestamp("2026-11-01T00:30")
+    met, chm = "met_tavg_1hr_glo_L1440x721_slv", "chm_inst_1hr_glo_L1440x721_p23"
+    ana_file(root, "v2/ana", "GEOS.cf.ana", met, when, levels=1, seed=1)
+    ana_file(root, "v2/ana", "GEOS.cf.ana", chm, when, levels=2, seed=2)
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 2
+    assert [s.name for s in pathlib.Path(local_config.store_path("bkr/geos")).iterdir()] == [
+        "geos_cf_v2_ana.icechunk"
+    ]
+    repo = g.open_store(stream, local_config, create=False, container=p.container)
+    top = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    assert sorted(top.group_keys()) == ["chm_inst_1hr_p23", "met_tavg_1hr_slv"]
+    # Nothing that tracks a collection is kept at the root.
+    assert g.LEDGER_ATTR not in top.attrs and top.attrs["geos_cf_stream"] == "v2_ana"
+    met_ds, _ = read(g.Collection(stream, met), local_config, p.container)
+    chm_ds, _ = read(g.Collection(stream, chm), local_config, p.container)
+    # The same variable name in two collections, each in its own group.
+    assert met_ds["nitrogen_dioxide_mole_fraction"].dims == ("time", "latitude", "longitude")
+    assert chm_ds["nitrogen_dioxide_mole_fraction"].dims[:2] == ("time", "pressure_level")
+    assert met_ds.attrs["collection"] == met
+    assert met_ds.attrs[g.LEDGER_ATTR] == chm_ds.attrs[g.LEDGER_ATTR] == ["2026-11-01"]
+
+
+def test_analysis_groups_split_their_manifests_a_day_at_a_time(portal, local_config):
+    """Each group's manifest splits by its own interval; forecasts one run a split."""
+    _, p = portal
+    ana = g.open_store(g.STREAMS["v2_ana"], local_config, container=p.container)
+    sizes = [(str(c), [n for _, n in s]) for c, s in ana.config.manifest.splitting.split_sizes]
+    assert [n for _, n in sizes] == [[96], [24], [8], [24]]
+    assert "_15mn_" in sizes[0][0] and "any_array" in sizes[-1][0]
+    fcst = g.open_store(g.STREAMS["v2_fcst"], local_config, container=p.container)
+    ((_, ((dim, n),)),) = fcst.config.manifest.splitting.split_sizes
+    assert "init_time" in str(dim) and n == 1
+
+
+def test_the_hindcast_runs_into_the_live_analysis_without_repeating_a_time(portal, local_config):
+    """Hindcast to the day before a collection's first live day, then live only."""
+    root, p = portal
+    stream = g.STREAMS["v2_ana"]
+    met = "met_tavg_1hr_glo_L1440x721_slv"
+    aqc = "aqc_tavg_1hr_glo_L1440x721_slv"
+    ghg = "ghg_inst_3hr_glo_L1440x721_v72"
+
+    def hindcast(collection, day, seed):
+        when = pd.Timestamp(day) + pd.Timedelta(minutes=30)
+        ana_file(root, "v2_hindcast/ana", "CF2_hindcast", collection, when, levels=1, seed=seed)
+
+    def live(collection, day, seed, levels=1, minutes=30):
+        when = pd.Timestamp(day) + pd.Timedelta(minutes=minutes)
+        ana_file(root, "v2/ana", "GEOS.cf.ana", collection, when, levels=levels, seed=seed)
+
+    # met: hindcast 08-02..08-04, live from 08-03 but missing 08-04: a hole the hindcast must
+    # not fill, as that would go back to the hindcast after the live analysis began.
+    for i, day in enumerate(("2025-08-02", "2025-08-03", "2025-08-04")):
+        hindcast(met, day, 100 + i)
+    live(met, "2025-08-03", 1)
+    live(met, "2025-08-05", 3)
+    # aqc: the live analysis has it only from 08-05; the hindcast covers up to then.
+    for i, day in enumerate(("2025-08-02", "2025-08-03", "2025-08-04")):
+        hindcast(aqc, day, 200 + i)
+    live(aqc, "2025-08-05", 5)
+    # ghg is in the live analysis only.
+    live(ghg, "2025-08-05", 7, levels=2, minutes=0)
+
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 8
+
+    def series(collection):
+        ds, _ = read(g.Collection(stream, collection), local_config, p.container)
+        no2 = ds["nitrogen_dioxide_mole_fraction"]
+        means = no2.mean([d for d in no2.dims if d != "time"]).values
+        return ds, [str(t)[:10] for t in ds["time"].values], [float(m) for m in means]
+
+    ds, days, values = series(met)
+    assert days == ["2025-08-02", "2025-08-03", "2025-08-05"]
+    assert values == [100, 1, 3]
+    assert ds.attrs[g.LIVE_FROM_ATTR] == "2025-08-03"
+    assert (np.diff(ds["time"].values) > np.timedelta64(0, "ns")).all()
+    ds, days, values = series(aqc)
+    assert days == ["2025-08-02", "2025-08-03", "2025-08-04", "2025-08-05"]
+    assert values == [200, 201, 202, 5]
+    assert ds.attrs[g.LIVE_FROM_ATTR] == "2025-08-05"
+    ds, days, _ = series(ghg)
+    assert days == ["2025-08-05"] and ds.attrs[g.LIVE_FROM_ATTR] == "2025-08-05"
+
+
+def test_a_resumed_pass_remembers_where_the_live_analysis_began(portal, local_config):
+    """Per-group ledgers resume, and the live start is read back from the group."""
+    root, p = portal
+    stream = g.STREAMS["v2_ana"]
+    met = "met_tavg_1hr_glo_L1440x721_slv"
+    for i, day in enumerate(("2025-08-02", "2025-08-03", "2025-08-04")):
+        when = pd.Timestamp(day) + pd.Timedelta(minutes=30)
+        ana_file(root, "v2_hindcast/ana", "CF2_hindcast", met, when, levels=1, seed=100 + i)
+    for day in ("2025-08-03", "2025-08-05"):
+        when = pd.Timestamp(day) + pd.Timedelta(minutes=30)
+        ana_file(root, "v2/ana", "GEOS.cf.ana", met, when, levels=1, seed=1)
+    end = dt.date(2025, 8, 3)
+    assert g.run_stream(stream, local_config, p, end=end, open_workers=0, now=LATER) == 2
+    # The next pass skips 08-02 and 08-03 without listing them, so only the group's
+    # attribute says the live analysis began on 08-03: the hindcast's 08-04 stays out.
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 1
+    c = g.Collection(stream, met)
+    ds, repo = read(c, local_config, p.container)
+    days = ["2025-08-02", "2025-08-03", "2025-08-05"]
+    assert [str(t)[:10] for t in ds["time"].values] == days
+    assert g.written(repo, c) == set(days)
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 0
+
+
+def test_a_layout_change_forks_only_its_own_group(portal, local_config):
+    """One collection's new layout makes it a dated group; the others carry on as they were."""
+    root, p = portal
+    stream = g.STREAMS["v2_ana"]
+    ems, met = "ems_tavg_1hr_glo_L1440x721_slv", "met_tavg_1hr_glo_L1440x721_slv"
+    for day, extra in (("2026-11-01", False), ("2026-11-02", True)):
+        when = pd.Timestamp(day) + pd.Timedelta(minutes=30)
+        ana_file(root, "v2/ana", "GEOS.cf.ana", ems, when, levels=1, seed=1, extra=extra)
+        ana_file(root, "v2/ana", "GEOS.cf.ana", met, when, levels=1, seed=2)
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 4
+    repo = g.open_store(stream, local_config, create=False, container=p.container)
+    top = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    assert sorted(top.group_keys()) == [
+        "ems_tavg_1hr_slv",
+        "ems_tavg_1hr_slv_02112026",
+        "met_tavg_1hr_slv",
+    ]
+    ds, _ = read(g.Collection(stream, met), local_config, p.container)
+    assert ds.sizes["time"] == 2
+
+
+def test_collections_written_at_once_do_not_lose_a_commit(portal, local_config, monkeypatch):
+    """Two collections' sessions open on one snapshot; both commits land, by rebasing."""
+    import threading
+
+    root, p = portal
+    stream = g.STREAMS["v2_ana"]
+    names = ["met_tavg_1hr_glo_L1440x721_slv", "aqc_tavg_1hr_glo_L1440x721_slv"]
+    for day in ("2026-11-01", "2026-11-02"):
+        for seed, name in enumerate(names):
+            when = pd.Timestamp(day) + pd.Timedelta(minutes=30)
+            ana_file(root, "v2/ana", "GEOS.cf.ana", name, when, levels=1, seed=seed)
+    barrier = threading.Barrier(2)
+    real_open = g.open_store
+
+    class Together:
+        """A repository whose writable sessions open in pairs, on the same snapshot."""
+
+        def __init__(self, repo):
+            self.repo = repo
+
+        def __getattr__(self, name):
+            return getattr(self.repo, name)
+
+        def writable_session(self, branch):
+            session = self.repo.writable_session(branch)
+            barrier.wait(timeout=60)
+            return session
+
+    monkeypatch.setattr(g, "open_store", lambda *a, **k: Together(real_open(*a, **k)))
+    assert g.run_stream(stream, local_config, p, workers=2, open_workers=0, now=LATER) == 4
+    monkeypatch.setattr(g, "open_store", real_open)
+    for name in names:
+        ds, _ = read(g.Collection(stream, name), local_config, p.container)
+        assert ds.sizes["time"] == 2 and ds.attrs[g.LEDGER_ATTR] == ["2026-11-01", "2026-11-02"]
+
+
+def test_the_hindcast_is_no_longer_a_stream_of_its_own():
+    """``--streams v2_hindcast`` is refused: the hindcast is the start of ``v2_ana``."""
+    with pytest.raises(SystemExit):
+        g.main(["--streams", "v2_hindcast"])
