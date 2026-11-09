@@ -295,9 +295,10 @@ declare -A SCRIPTS=(
 NOON_STORES="silam_dust dmi_harmonie_model_level dmi_harmonie arome_france_0025 arome_france_hd
   arome_new_caledonia arome_indian_ocean arome_french_guiana arome_caribbean arome_polynesia
   meps_det"
-#: Lanes paused when the noon catch-up starts; guard resumes them afterwards, so each must be
-#: in GUARD_PAUSE_ORDER. On 2026-11-09 the catch-up and mtg_1000m (~70 GB) were OOM-killed
-#: with every Himawari lane already paused.
+#: Lanes paused when the noon catch-up starts; guard resumes them afterwards, after the lanes
+#: of GUARD_PAUSE_ORDER (where each also belongs, so memory pressure can pause it). On
+#: 2026-11-09 the catch-up and mtg_1000m (~70 GB) were OOM-killed with every Himawari lane
+#: already paused.
 NOON_MAKE_ROOM="himawari_500m_3 himawari_500m_2 himawari_500m_1 himawari_1000m_3
   himawari_1000m_2 himawari_1000m_1 himawari_2000m_5 himawari_2000m_4 himawari_2000m_3
   mtg_1000m"
@@ -576,7 +577,8 @@ guard)
   last=$(cat "$state/last_pressure" 2>/dev/null || echo 0)
   (( available >= GUARD_RESUME_AVAILABLE_GB )) || exit 0
   (( $(date -u +%s) - last >= GUARD_QUIET_MINUTES * 60 )) || exit 0
-  for name in $(echo $GUARD_PAUSE_ORDER | tr ' ' '\n' | tac); do
+  # Noon's lanes come last, so they resume even if GUARD_PAUSE_ORDER is overridden without them.
+  for name in $(echo $GUARD_PAUSE_ORDER | tr ' ' '\n' | tac) $NOON_MAKE_ROOM; do
     [[ -f $LOGS/$name.paused ]] || continue
     grep -q '^manual' "$LOGS/$name.paused" && continue
     [[ -n ${GUARD_DRY_RUN:-} ]] && { echo "would resume $name (${available} GB)"; exit 0; }
