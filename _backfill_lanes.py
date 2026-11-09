@@ -330,15 +330,17 @@ LANES: dict[str, Lane] = {
     "uk_radar": Lane(_provider("radar", "UKRadarProvider"), "2026-10-13", "1h", 2),
     # JPSS products NOAA deletes ~90 days after publication (VIIRS M-band SDR, ATMS snowfall
     # rate, MiRS imaging/sounding): a trailing window inside the retention, oldest first.
+    # One lane per product, each the only writer of its group of bkr/polar/jpss.icechunk
+    # and writing all three spacecraft; the lanes share the repository and rebase past
+    # each other's commits.
     **{
-        f"{store}_{sat}": Lane(_provider("polar", cls, satellite=sat), "-90D", "1h", 3)
-        for store, cls in (
+        lane: Lane(_provider("polar", cls), "-90D", "1h", 3)
+        for lane, cls in (
             ("jpss_viirs_mband", "JpssViirsMbandProvider"),
             ("jpss_atms_sfr", "JpssAtmsSfrProvider"),
             ("jpss_mirs_img", "JpssMirsImgProvider"),
             ("jpss_mirs_snd", "JpssMirsSndProvider"),
         )
-        for sat in ("n20", "n21", "snpp")
     },
     # AMPS (WRF24, from 2017-10-10T12; DRAKE and NZ from 2020-08-08), first 48 h of each
     # 00/12 UTC run, to bkr/dmi/amps_<domain>. GDEX archives a run within about a day. The
@@ -459,9 +461,9 @@ LANES: dict[str, Lane] = {
             "harp2_mapol_ocean",
         )
     },
-    # JPSS ATMS SDR, every satellite in one store (NOAA keeps the SDRs). The store is
-    # complete from 2022-11 to 2025-09 and nearly empty since; this fills that and keeps
-    # it current.
+    # JPSS ATMS SDR, every satellite, into the atms group of bkr/polar/jpss.icechunk (NOAA
+    # keeps the SDRs). The group starts empty; the old jpss_atms.icechunk store (2022-11 to
+    # 2025-09) is left as it is. Newest week first, then forward from 2025-08.
     "jpss_atms": Lane(_provider("polar", "JpssAtmsProvider"), "2025-08-01", "1h", 3, recent_days=7),
     # GOES-East GLM 0.1 degree lightning density, staged by the earth2studio image like
     # the Dagster asset, which had only just started the store when it stopped on

@@ -304,7 +304,7 @@ CHANNELS: dict[str, tuple[str, str, float]] = {
     "5": ("5", _BT, 12.0),
 }
 #: Microwave sounders: channels named by number, frequency kept as an attribute.
-MICROWAVE_STORES = ("jpss_atms",)
+MICROWAVE_STORES = ("jpss_atms", "polar/jpss.icechunk")
 
 #: Source names whose generic rules disagree between stores, fixed by hand.
 OVERRIDES = {

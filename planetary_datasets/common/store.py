@@ -84,6 +84,24 @@ def has_committed_data(repo: icechunk.Repository, branch: str = "main") -> bool:
     return next(itertools.islice(repo.ancestry(branch=branch), 1, None), None) is not None
 
 
+def holds_data(repo: icechunk.Repository, group: str | None = None, session=None) -> bool:
+    """True when ``group`` of the repository (or the repository, for None) holds data.
+
+    For the whole repository this is :func:`has_committed_data`. A repository holding
+    several groups, each written by its own lane, has commits while one of its groups is
+    still absent; that group is empty rather than unreadable, so the check is whether its
+    node exists in the snapshot being read.
+    """
+    if group is None:
+        return has_committed_data(repo)
+    store = (session or repo.readonly_session("main")).store
+    try:
+        zarr.open_group(store, path=group.strip("/"), mode="r", zarr_format=3)
+    except STORE_READ_ERRORS:
+        return False
+    return True
+
+
 def match_string_dtypes(ds: xr.Dataset, existing: xr.Dataset) -> xr.Dataset:
     """Fixed-width string variables of ``ds`` in a dtype the store's array accepts.
 
@@ -279,18 +297,23 @@ def bitround_dataset(ds: xr.Dataset, keepbits) -> xr.Dataset:
     return out
 
 
-def existing_times(repo: icechunk.Repository, append_dim: str = "time") -> np.ndarray:
-    """Return the values already present along ``append_dim``.
+def existing_times(
+    repo: icechunk.Repository, append_dim: str = "time", group: str | None = None
+) -> np.ndarray:
+    """Return the values already present along ``append_dim`` (in ``group``, if given).
 
-    An empty array is returned when the store does not exist yet or has no such
+    An empty array is returned when the store or group does not exist yet or has no such
     coordinate, which is the normal state before the first write.
     """
     try:
         ds = xr.open_zarr(
-            repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+            repo.readonly_session("main").store,
+            group=group,
+            consolidated=False,
+            decode_timedelta=True,
         )
     except STORE_READ_ERRORS as exc:
-        if has_committed_data(repo):
+        if holds_data(repo, group):
             raise StoreReadError(
                 f"store holds committed data but could not be read ({type(exc).__name__}: {exc}). "
                 "Refusing to report it as empty."
@@ -559,6 +582,7 @@ def write_to_icechunk(
     require_monotonic: bool = False,
     attempts: int = COMMIT_ATTEMPTS,
     encoding_overrides: Mapping[str, Mapping] | None = None,
+    group: str | None = None,
 ) -> bool:
     """Write ``ds`` to ``repo``, creating the store or adding to it along ``append_dim``.
 
@@ -595,6 +619,10 @@ def write_to_icechunk(
             the store is created, e.g. ``{"radiance": {"dtype": "int16", "scale_factor":
             ...}}`` to keep a packed source packed. Appends ignore it: xarray encodes them
             with the encoding already stored, which is what keeps them consistent.
+        group: Zarr group to write into, for a repository holding several datasets. A
+            group is created by its own first write and every commit touches only its own
+            group, so lanes writing different groups of one repository rebase past each
+            other instead of conflicting.
     """
     if append_dim not in ds.coords:
         raise ValueError(f"dataset has no {append_dim!r} coordinate to append along")
@@ -610,6 +638,7 @@ def write_to_icechunk(
                 alignment_coords=alignment_coords,
                 require_monotonic=require_monotonic,
                 encoding_overrides=encoding_overrides,
+                group=group,
             )
         except RACE_ERRORS as exc:
             # Another writer committed under us. Everything the decision rested on - what
@@ -633,16 +662,19 @@ def _write_once(
     alignment_coords: Iterable[str],
     require_monotonic: bool,
     encoding_overrides: Mapping[str, Mapping] | None = None,
+    group: str | None = None,
 ) -> bool:
     """One attempt at :func:`write_to_icechunk`; raises on a raced commit."""
     session = repo.writable_session("main")
     try:
-        existing = xr.open_zarr(session.store, consolidated=False, decode_timedelta=True)
+        existing = xr.open_zarr(
+            session.store, group=group, consolidated=False, decode_timedelta=True
+        )
         first_write = append_dim not in existing.coords
     except STORE_READ_ERRORS as exc:
         # A read failure against a store that already holds data must not fall through to
         # the create-fresh path: that would overwrite the whole archive with one timestep.
-        if has_committed_data(repo):
+        if holds_data(repo, group, session=session):
             raise StoreReadError(
                 f"store holds committed data but could not be read ({type(exc).__name__}: {exc}). "
                 "Refusing to overwrite it with a fresh write."
@@ -660,8 +692,14 @@ def _write_once(
             if name in ds.variables:
                 encoding[name] = {**encoding.get(name, {}), **extra}
         with quiet_timedelta_decoding():
-            to_icechunk(ds, session, encoding=encoding)
-        session.commit(message or f"Initial write of {append_dim} {incoming[0]}")
+            to_icechunk(ds, session, encoding=encoding, group=group)
+        # A group can be created while another lane appends to a sibling group; the
+        # detector lets the two commits rebase past each other. Two groups created at
+        # once both write the root group and do conflict; the retry above settles that.
+        session.commit(
+            message or f"Initial write of {append_dim} {incoming[0]}",
+            rebase_with=icechunk.ConflictDetector() if group is not None else None,
+        )
         logger.info(f"created store with {ds.sizes.get(append_dim, 1)} step(s)")
         return True
 
@@ -728,7 +766,7 @@ def _write_once(
     # 2-D latitude/longitude, say - was written with the store and was just checked
     # against it; plain "a" would rewrite it on every append.
     with quiet_timedelta_decoding():
-        to_icechunk(ds, session, append_dim=append_dim, mode="a-")
+        to_icechunk(ds, session, append_dim=append_dim, mode="a-", group=group)
     session.commit(
         message or f"Append {append_dim} {incoming[0]}",
         rebase_with=icechunk.ConflictDetector(),

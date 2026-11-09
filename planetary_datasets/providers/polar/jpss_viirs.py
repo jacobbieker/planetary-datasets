@@ -9,11 +9,12 @@ rather than referenced virtually — a virtual reference would dangle once the s
 file expires. The rolling imagery EDRs (``VIIRS-I*-IMG-EDR``, ``VIIRS-NCC-EDR``) are
 resamplings of the I-band and DNB SDRs that stay in the archive, so they are not copied.
 
-**Layout.** One store per spacecraft, ``bkr/polar/jpss_viirs_mband_<sat>.icechunk``, so
-NOAA-20, NOAA-21 and Suomi-NPP backfill in parallel against the retention deadline. One
-granule (48 scans, ~85 s) is one step along ``time`` — the middle of its sensing
-interval — with the swath on ``(y, x) = (768, 3200)`` and per-scan times on ``scan``.
-Every 2-D field is chunked one granule per chunk.
+**Layout.** The ``viirs_mband`` group of ``bkr/polar/jpss.icechunk``, holding NOAA-21,
+NOAA-20 and Suomi-NPP together (see
+:class:`~planetary_datasets.providers.polar._jpss.JpssProductProvider`). One granule (48
+scans, ~85 s) is one row along ``granule``, with its sensing time on ``time(granule)``,
+its spacecraft on ``platform_name(granule)``, the swath on ``(y, x) = (768, 3200)`` and
+per-scan times on ``scan``. Every 2-D field is chunked one granule per chunk.
 
 **Precision.** Each quantity is kept the way the source carries it:
 
@@ -32,8 +33,8 @@ Every 2-D field is chunked one granule per chunk.
 Reflective bands M1–M6 and M9 are not processed at night; those granules are all-NaN
 for those bands and compress to almost nothing.
 
-Granules are read lazily, one HDF5 dataset per dask task, so an hour of a spacecraft
-(~42 granules, ~4.5 GB of HDF5 by day) never has to be resident at once.
+Granules are read lazily, one HDF5 dataset per dask task, so an hour of the
+constellation (~126 granules, ~13.5 GB of HDF5 by day) never has to be resident at once.
 """
 
 from __future__ import annotations
@@ -49,16 +50,16 @@ import xarray as xr
 from loguru import logger
 
 from planetary_datasets.common import download_many
-from planetary_datasets.providers.polar._granule import mid_time
-from planetary_datasets.providers.polar._jpss import (
+from planetary_datasets.providers.polar._jpss import (  # noqa: F401 - re-exported
     BUCKETS,
-    GRANULE_TIME_ENCODING,
-    PLATFORM_NAMES,
+    IDPS_SPACECRAFT,
     IncompleteDownload,
-    JpssGranuleProvider,
+    JpssProductProvider,
+    PackingChanged,
     granule_end,
     granule_key,
     granule_start,
+    idps_satellite,
 )
 
 #: Rows and columns of one M-band granule: 48 scans of 16 detectors, 3200 samples.
@@ -83,10 +84,6 @@ GEO_FILE_PREFIX = "GMTCO"
 
 #: Mantissa bits kept for float fields that are not packed in the source.
 FLOAT_KEEPBITS = 16
-
-
-class PackingChanged(RuntimeError):
-    """A granule is packed differently from the store's fixed packing."""
 
 
 @dataclass(frozen=True)
@@ -181,9 +178,6 @@ GEO_FIELDS: Dict[str, Tuple[str, str, str]] = {
     "terrain_height": ("Height", "m", "Terrain height above the ellipsoid"),
 }
 
-#: Spacecraft code used in IDPS filenames.
-IDPS_SPACECRAFT: Dict[str, str] = {"n20": "j01", "n21": "j02", "snpp": "npp"}
-
 #: Variables kept to full precision.
 EXACT_FLOATS = ("latitude", "longitude", "scan_start_offset")
 
@@ -249,7 +243,7 @@ def _check_shape(array: np.ndarray, where: str) -> None:
 
 
 def read_band_field(path: str, band: str, quantity: str) -> np.ndarray:
-    """Read one band quantity of one granule as a ``(1, y, x)`` float32 array."""
+    """Read one band quantity of one granule as a ``(y, x)`` float32 array."""
     import h5py
 
     field = BANDS[band][quantity]
@@ -263,28 +257,28 @@ def read_band_field(path: str, band: str, quantity: str) -> np.ndarray:
         else:
             factors = h5[f"{group}/{field.dataset}Factors"][()]
             out = _decode_packed(raw, factors, field.packing, where)
-    return out[np.newaxis]
+    return out
 
 
 def read_band_flags(path: str, band: str) -> np.ndarray:
-    """Read one band's per-pixel quality flags as a ``(1, y, x)`` uint8 array."""
+    """Read one band's per-pixel quality flags as a ``(y, x)`` uint8 array."""
     import h5py
 
     with h5py.File(path, "r") as h5:
         raw = h5[f"All_Data/{band_product(band)}_All/QF1_VIIRSMBANDSDR"][()]
     _check_shape(raw, f"{pathlib.Path(path).name}:QF1_VIIRSMBANDSDR")
-    return raw.astype(np.uint8)[np.newaxis]
+    return raw.astype(np.uint8)
 
 
 def read_geo_field(path: str, name: str) -> np.ndarray:
-    """Read one geolocation field of one granule as a ``(1, y, x)`` float32 array."""
+    """Read one geolocation field of one granule as a ``(y, x)`` float32 array."""
     import h5py
 
     dataset = GEO_FIELDS[name][0]
     with h5py.File(path, "r") as h5:
         raw = h5[f"All_Data/{GEO_PRODUCT}_All/{dataset}"][()]
     _check_shape(raw, f"{pathlib.Path(path).name}:{dataset}")
-    return _decode_float(raw)[np.newaxis]
+    return _decode_float(raw)
 
 
 def read_scan_offsets(path: str, reference: pd.Timestamp) -> np.ndarray:
@@ -325,68 +319,49 @@ def _lazy(func, *args, shape: Tuple[int, ...], dtype):
 # ------------------------------------------------------------------ provider
 
 
-class JpssViirsMbandProvider(JpssGranuleProvider):
-    """VIIRS M-band SDRs and geolocation for one JPSS spacecraft.
+class JpssViirsMbandProvider(JpssProductProvider):
+    """VIIRS M-band SDRs and geolocation for the JPSS constellation.
 
     Attributes:
-        satellite: ``n20``, ``n21`` or ``snpp``.
-        download_workers: Concurrent downloads; an hour is ~714 files.
+        satellites: Spacecraft ingested, all three by default.
+        download_workers: Concurrent downloads; an hour is ~714 files per spacecraft.
     """
 
-    append_dim = "time"
-    window = pd.Timedelta(1, "h")
+    name = "jpss_viirs_mband"
+    group = "viirs_mband"
+    source_product = f"VIIRS-M*-SDR, {GEO_PRODUCT}"
     keepbits = FLOAT_KEEPBITS
     keepbits_by_variable = {
         **{name: None for name in packed_variables()},
         **{name: None for name in EXACT_FLOATS},
     }
-    encoding_overrides = {
-        **{
-            name: {
-                "dtype": "uint16",
-                "scale_factor": scale,
-                "add_offset": offset,
-                "_FillValue": np.uint16(PACKED_FILL),
-            }
-            for name, (scale, offset) in packed_variables().items()
-        },
-    }
 
     def __init__(
         self,
-        satellite: str,
         config=None,
+        satellites: Tuple[str, ...] = ("n21", "n20", "snpp"),
         granule_limit: int | None = None,
-        download_workers: int = 16,
+        download_workers: int = 32,
     ):
-        """Build a provider for one spacecraft.
+        """Build a provider for some or all of the constellation.
 
         Args:
-            satellite: One of :data:`~planetary_datasets.providers.polar._jpss.BUCKETS`.
             config: Override the process-wide configuration.
+            satellites: Subset of :data:`~planetary_datasets.providers.polar._jpss.BUCKETS`.
             granule_limit: Stop after this many granules per partition. For smoke tests
                 against the live archive, not for production backfills.
             download_workers: Concurrent downloads.
         """
-        super().__init__(config=config)
-        if satellite not in BUCKETS:
-            raise ValueError(f"unknown JPSS satellite {satellite!r}; expected {sorted(BUCKETS)}")
-        self.satellite = satellite
-        self.bucket = BUCKETS[satellite]
-        self.name = f"jpss_viirs_mband_{satellite}"
-        self.store_prefix = f"bkr/polar/jpss_viirs_mband_{satellite}.icechunk"
-        self.granule_limit = granule_limit
-        self.download_workers = download_workers
-        overrides = dict(type(self).encoding_overrides)
-        for name in self.swath_variables():
-            overrides[name] = {**overrides.get(name, {}), "chunks": (1, *GRANULE_SHAPE)}
-        for name in ("start_time", "end_time"):
-            overrides[name] = dict(GRANULE_TIME_ENCODING)
-        self.encoding_overrides = overrides
+        super().__init__(
+            config=config,
+            satellites=satellites,
+            granule_limit=granule_limit,
+            download_workers=download_workers,
+        )
 
     @staticmethod
     def swath_variables() -> List[str]:
-        """Every stored ``(time, y, x)`` variable."""
+        """Every stored ``(granule, y, x)`` variable."""
         names = [
             variable_name(band, quantity) for band, fields in BANDS.items() for quantity in fields
         ]
@@ -400,10 +375,34 @@ class JpssViirsMbandProvider(JpssGranuleProvider):
         out[GEO_PRODUCT] = GEO_FILE_PREFIX
         return out
 
+    def encoding_for(self, ds: xr.Dataset) -> Dict[str, Dict]:
+        """The fixed IDPS packing, one granule per chunk for every swath field."""
+        out = super().encoding_for(ds)
+        for name, (scale, offset) in packed_variables().items():
+            out[name] = {
+                **out.get(name, {}),
+                "dtype": "uint16",
+                "scale_factor": scale,
+                "add_offset": offset,
+                "_FillValue": np.uint16(PACKED_FILL),
+            }
+        for name in self.swath_variables():
+            out[name] = {**out.get(name, {}), "chunks": (1, *GRANULE_SHAPE)}
+        return out
+
+    def align_to_store(self, repo, ds: xr.Dataset) -> xr.Dataset:
+        """Leave the lazy granules as they are.
+
+        Every swath field is chunked one granule per chunk, so a granule's dask chunk
+        never straddles a stored one; merging granules into larger dask chunks would only
+        hold several 10 MB fields in memory per task.
+        """
+        return ds
+
     # ------------------------------------------------------------------ fetch
 
     def granule_sets(self, it: pd.Timestamp) -> List[Dict[str, str]]:
-        """``{product: key}`` for every complete granule this partition owns.
+        """``{product: bucket/key}`` for every complete, unstored granule the hour owns.
 
         A granule is only taken when its geolocation and all sixteen bands are listed; a
         partial one is logged and left out rather than stored with holes.
@@ -412,18 +411,21 @@ class JpssViirsMbandProvider(JpssGranuleProvider):
         days = self._days_to_list(start, end)
         fs = self._s3()
 
-        def listing(product: str) -> Tuple[str, Dict[Tuple[str, ...], str]]:
+        def listing(job: Tuple[str, str]) -> Tuple[str, Dict[Tuple[str, ...], str]]:
+            satellite, product = job
             keys: Dict[Tuple[str, ...], str] = {}
             for day in days:
-                listed = self._list_day(fs, self.bucket, product, day)
+                listed = self._list_day(fs, BUCKETS[satellite], product, day)
                 keys.update(self._index_keys(listed, window=(start, end), owned=True))
             return product, keys
 
+        jobs = [(sat, product) for sat in self.satellites for product in self.products()]
         with ThreadPoolExecutor(max_workers=8) as pool:
-            indexed = dict(pool.map(listing, self.products()))
+            indexed = list(pool.map(listing, jobs))
 
+        # The granule key carries the spacecraft, so the three never mix.
         granules: Dict[Tuple[str, ...], Dict[str, str]] = {}
-        for product, keys in indexed.items():
+        for product, keys in indexed:
             for key, path in keys.items():
                 granules.setdefault(key, {})[product] = path
 
@@ -435,12 +437,15 @@ class JpssViirsMbandProvider(JpssGranuleProvider):
                 logger.warning(f"{self.name}: granule {'_'.join(key)} lacks {missing}, skipping")
                 continue
             complete.append(files)
+
+        wanted = set(self.drop_stored([files[GEO_PRODUCT] for files in complete]))
+        complete = [files for files in complete if files[GEO_PRODUCT] in wanted]
         if self.granule_limit is not None:
             complete = complete[: self.granule_limit]
         return complete
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
-        """Download every file of every complete granule in the partition.
+        """Download every file of every complete, unstored granule in the hour.
 
         Raises:
             IncompleteDownload: when any file failed after retries, so the partition is
@@ -450,11 +455,9 @@ class JpssViirsMbandProvider(JpssGranuleProvider):
         if not granules:
             return []
         dest = pathlib.Path(temp_dir) if temp_dir is not None else self.config.data_dir / self.name
+        # ``fs.ls`` returns "bucket/key".
         urls = [
-            # ``fs.ls`` returns "bucket/key"; strip the bucket back off for the URL.
-            self._https_url(self.bucket, path.split("/", 1)[1])
-            for files in granules
-            for path in files.values()
+            self._https_url(*path.split("/", 1)) for files in granules for path in files.values()
         ]
         paths = download_many(urls, dest, workers=self.download_workers)
         if len(paths) != len(urls):
@@ -467,7 +470,7 @@ class JpssViirsMbandProvider(JpssGranuleProvider):
     # ------------------------------------------------------------------ process
 
     def granule_dataset(self, files: Mapping[str, str]) -> xr.Dataset:
-        """One granule as a lazy single-step dataset.
+        """One granule as a lazy one-granule dataset.
 
         Args:
             files: Filename prefix (``SVM01`` … ``SVM16``, ``GMTCO``) -> local path.
@@ -475,14 +478,15 @@ class JpssViirsMbandProvider(JpssGranuleProvider):
         geo = files[GEO_FILE_PREFIX]
         name = pathlib.Path(geo).name
         start, end = granule_start(name), granule_end(name)
-        shape = (1, *GRANULE_SHAPE)
-        dims = ("time", "y", "x")
+        dims = ("y", "x")
 
         data_vars: Dict[str, xr.DataArray] = {}
         for band, fields in BANDS.items():
             path = files[band_file_prefix(band)]
             for quantity, field in fields.items():
-                data = _lazy(read_band_field, path, band, quantity, shape=shape, dtype=np.float32)
+                data = _lazy(
+                    read_band_field, path, band, quantity, shape=GRANULE_SHAPE, dtype=np.float32
+                )
                 attrs = {
                     "units": field.units,
                     "long_name": f"{field.long_name}, VIIRS band {band}",
@@ -491,39 +495,26 @@ class JpssViirsMbandProvider(JpssGranuleProvider):
                 data_vars[variable_name(band, quantity)] = xr.DataArray(
                     data, dims=dims, attrs=attrs
                 )
-            flags = _lazy(read_band_flags, path, band, shape=shape, dtype=np.uint8)
+            flags = _lazy(read_band_flags, path, band, shape=GRANULE_SHAPE, dtype=np.uint8)
             data_vars[variable_name(band, "quality_flags")] = xr.DataArray(
                 flags,
                 dims=dims,
                 attrs={"long_name": f"QF1_VIIRSMBANDSDR quality flags, VIIRS band {band}"},
             )
         for var, (_, units, long_name) in GEO_FIELDS.items():
-            data = _lazy(read_geo_field, geo, var, shape=shape, dtype=np.float32)
+            data = _lazy(read_geo_field, geo, var, shape=GRANULE_SHAPE, dtype=np.float32)
             data_vars[var] = xr.DataArray(
                 data, dims=dims, attrs={"units": units, "long_name": long_name}
             )
 
         data_vars["scan_start_offset"] = xr.DataArray(
-            read_scan_offsets(geo, start)[np.newaxis],
-            dims=("time", "scan"),
+            read_scan_offsets(geo, start),
+            dims=("scan",),
             attrs={"units": "s", "long_name": "Start of each scan, seconds after start_time"},
         )
-        data_vars["start_time"] = xr.DataArray(
-            np.array([start], dtype="datetime64[ns]"), dims="time"
-        )
-        data_vars["end_time"] = xr.DataArray(np.array([end], dtype="datetime64[ns]"), dims="time")
-        data_vars["orbit_number"] = xr.DataArray(
-            np.array([int(granule_key(name)[4][1:])], dtype=np.int32), dims="time"
-        )
-        data_vars["platform_name"] = xr.DataArray(
-            np.array([PLATFORM_NAMES[self.satellite]]), dims="time"
-        )
-        ds = xr.Dataset(data_vars, coords={"time": [mid_time(start, end)]})
-        ds.attrs = {
-            "platform": PLATFORM_NAMES[self.satellite],
-            "instrument": "VIIRS",
-            "source": f"s3://{self.bucket}/VIIRS-M*-SDR, {GEO_PRODUCT}",
-        }
+        data_vars["orbit_number"] = xr.DataArray(np.int32(int(granule_key(name)[4][1:])))
+        ds = self.on_granule_axis(xr.Dataset(data_vars), idps_satellite(name), start, start, end)
+        ds.attrs = self.group_attrs("VIIRS")
         return ds
 
     def process(
@@ -533,7 +524,7 @@ class JpssViirsMbandProvider(JpssGranuleProvider):
         temp_dir: pathlib.Path | None = None,
         **kwargs,
     ) -> xr.Dataset:
-        """Group the downloaded files by granule and stack the complete ones on time."""
+        """Group the downloaded files by granule and stack the complete ones."""
         prefixes = set(self.products().values())
         granules: Dict[Tuple[str, ...], Dict[str, str]] = {}
         for path in input_files:

@@ -1,13 +1,15 @@
 """Polar-orbiting sounder and imager providers.
 
-One provider per instrument, all writing into ``bkr/polar/*.icechunk``:
+One provider per instrument, all writing into ``bkr/polar/*.icechunk``. The JPSS products
+share one store, ``bkr/polar/jpss.icechunk``, a group per product, each group holding
+NOAA-21, NOAA-20 and Suomi-NPP with the spacecraft recorded per granule:
 
 ============================  =======================================================
-:class:`JpssAtmsProvider`     ATMS microwave sounder, NOAA-21 / NOAA-20 / Suomi-NPP
-:class:`JpssAtmsSfrProvider`  ATMS snowfall rate, one store per JPSS spacecraft (rolling)
-:class:`JpssMirsImgProvider`  MiRS ATMS surface/column retrievals, per spacecraft (rolling)
-:class:`JpssMirsSndProvider`  MiRS ATMS profiles, per spacecraft (rolling)
-:class:`JpssViirsMbandProvider`  VIIRS M-band SDRs, per spacecraft (rolling)
+:class:`JpssAtmsProvider`     ATMS microwave sounder (group ``atms``)
+:class:`JpssAtmsSfrProvider`  ATMS snowfall rate (group ``atms_sfr``, rolling)
+:class:`JpssMirsImgProvider`  MiRS ATMS surface/column retrievals (``mirs_img``, rolling)
+:class:`JpssMirsSndProvider`  MiRS ATMS profiles (group ``mirs_snd``, rolling)
+:class:`JpssViirsMbandProvider`  VIIRS M-band SDRs (group ``viirs_mband``, rolling)
 :class:`MetopAmsuaProvider`   AMSU-A microwave sounder, MetOp
 :class:`MetopAscatProvider`   ASCAT scatterometer, MetOp
 :class:`MetopAvhrrProvider`   AVHRR imager, MetOp
