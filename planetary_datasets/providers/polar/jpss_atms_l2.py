@@ -32,8 +32,9 @@ a day-of-month into a duration.
 **One packing for three spacecraft.** The group's packing and static coordinates are
 fixed by its first write. A granule from any spacecraft that is packed differently, or
 carries different static coordinates, is not written (re-encoding it with the store's
-scale would quantise it silently): it is logged as an error and skipped, its hour stays
-missing for that spacecraft, and the other spacecraft are written as usual.
+scale would quantise it silently): it is logged as an error and that spacecraft's whole
+hour is withheld, so the hour stays missing for it and is retried; the other spacecraft
+are written as usual.
 
 ATMS ``ATMS_BUFR`` (the same brightness temperatures as the SDR, in BUFR) and
 ``ATMS-SCIENCE-RDR`` (raw packets) are also rolling but are not archived: the first
@@ -309,10 +310,17 @@ class JpssNdeL2Provider(JpssProductProvider):
         temp_dir: pathlib.Path | None = None,
         **kwargs,
     ) -> xr.Dataset:
-        """Read every granule, drop any the group cannot hold, and stack on ``granule``."""
+        """Read every granule, drop any the group cannot hold, and stack on ``granule``.
+
+        A granule the group cannot hold withholds its spacecraft's whole hour. Writing that
+        spacecraft's other granules would make :meth:`missing_timesteps` count the hour as
+        done, and the rejected granule would never be tried again; withheld, the hour
+        stays missing and is retried (and logged) every pass until it can be stored.
+        """
         reference, statics = self.stored_reference()
         self._granule_packing = {}
         datasets = []
+        rejected: set[str] = set()
         for path in sorted(input_files, key=self.start_of):
             try:
                 granule = self.process_granule(path)
@@ -324,6 +332,7 @@ class JpssNdeL2Provider(JpssProductProvider):
             reason = self._mismatch(granule, reference, statics)
             if reason is not None:
                 logger.error(f"{self.name}: not writing {pathlib.Path(path).name}: {reason}")
+                rejected.add(str(granule["platform_name"].values[0]))
                 continue
             # The first granule fixes the packing and statics for the rest of a new group.
             for var, found in self._granule_packing[self.id_of(path)].items():
@@ -332,6 +341,11 @@ class JpssNdeL2Provider(JpssProductProvider):
                 present = [c for c in STATIC_COORDS if c in granule.coords]
                 statics = granule[present].coords.to_dataset() if present else None
             datasets.append(granule)
+        if rejected:
+            logger.error(
+                f"{self.name}: withholding {sorted(rejected)} for {it} so the hour is retried"
+            )
+            datasets = [ds for ds in datasets if str(ds["platform_name"].values[0]) not in rejected]
         self._packing = reference
         return self.restrict_to_window(self.concat_granules(datasets), it)
 

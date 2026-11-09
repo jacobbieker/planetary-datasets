@@ -588,8 +588,14 @@ def test_l2_skips_a_granule_packed_differently_from_the_group(local_config, tmp_
     assert provider.write_to_icechunk(repo, first)
 
     repacked = write_mirs(tmp_path, mirs_for("n21"), bt_scale=0.02)
+    # A compatible NOAA-21 granule in the same hour is withheld too: written, it would
+    # make the hour look done for NOAA-21 and the repacked one would never be retried.
+    later = MIRS_NAME.replace(
+        "s202610151159550_e202610151200266", "s202610151210000_e202610151210316"
+    )
+    n21_ok = write_mirs(tmp_path, mirs_for("n21", later))
     same = write_mirs(tmp_path, mirs_for("snpp"))
-    ds = provider.process([repacked, same], hour)
+    ds = provider.process([repacked, n21_ok, same], hour)
     assert [str(p) for p in ds["platform_name"].values] == ["Suomi-NPP"]
     assert provider.write_to_icechunk(repo, ds)
     # NOAA-21 is still missing, so the hour is retried rather than counted as done.
