@@ -2,8 +2,8 @@
 
 Part of the land target (:mod:`~planetary_datasets.providers.observations.wis2_land`):
 the objects under any centre's ``data/core/hydrology/`` topic are spooled to disk as the
-window streams past and appended, after the tar is complete, to the ``hydrometric`` group
-of ``bkr/obs/wis2_land.icechunk``, one row per station and time along ``observation``.
+window streams past and appended, after the tar is complete, to the ``land/hydrometric``
+group of ``bkr/obs/wis2.icechunk``, one row per station and time along ``observation``.
 
 What is read
     Environment and Climate Change Canada's real-time hydrometric CSV (the Water Survey of
@@ -49,7 +49,8 @@ import numpy as np
 import xarray as xr
 from loguru import logger
 
-GROUP = "hydrometric"
+#: The group of the WIS2 store (``bkr/obs/wis2.icechunk``) the rows go to.
+GROUP = "land/hydrometric"
 #: Rows at the end of the group whose identities a window is checked against: 30 days of
 #: 5-minute values from ~2,200 stations is ~19 million.
 RECENT_IDENTITIES = 32_000_000
@@ -184,6 +185,7 @@ class Spool:
     """Objects written to a scratch directory as they stream past, kept in arrival order."""
 
     def __init__(self, root: pathlib.Path, name: str):
+        """A spool named ``name`` under ``root``, created on first use."""
         self.root = pathlib.Path(root) / name
         self.directory: pathlib.Path | None = None
         self.items: list[tuple[str, str, dt.datetime | None]] = []  # (path, key, arrived)
@@ -325,6 +327,7 @@ def write(repo, spool: Spool, partition: str | None) -> dict[str, Any]:
         ledger,
         mark_written,
     )
+    from planetary_datasets.providers.observations import wis2_qc
 
     counts: Counter = Counter(objects=len(spool.items))
     if partition is not None and partition in ledger(repo, group=GROUP):
@@ -361,7 +364,8 @@ def write(repo, spool: Spool, partition: str | None) -> dict[str, Any]:
         if rows:
             array, _ = _identities(repo)
             start = 0 if array is None else array.shape[0]
-            append_partition(repo, to_dataset(rows), None, label=f"wis2_land {GROUP}", group=GROUP)
+            ds = wis2_qc.flag(to_dataset(rows), GROUP)
+            append_partition(repo, ds, None, label=f"wis2_land {GROUP}", group=GROUP)
             times = np.array([r["time"] for r in rows], dtype="datetime64[s]").astype("int64")
             _record_range(repo, start, start + len(rows), int(times.min()), int(times.max()))
         written += len(rows)
@@ -390,19 +394,19 @@ def write(repo, spool: Spool, partition: str | None) -> dict[str, Any]:
             flush()
     flush()
     counts["rows_written"] = written
-    if partition is not None and (written or GROUP in _groups(repo)):
+    if partition is not None and (written or _group_exists(repo)):
         mark_written(repo, partition, label=f"wis2_land {GROUP}", group=GROUP)
     if written:
         describe_variables(repo, ARRIVAL_ATTRS, label=f"wis2_land {GROUP}", group=GROUP)
     return dict(counts)
 
 
-def _groups(repo) -> set[str]:
-    """Names of the store's top-level groups."""
+def _group_exists(repo) -> bool:
+    """Whether the store has the :data:`GROUP` group (with or without rows)."""
     import zarr
 
     try:
-        root = zarr.open_group(repo.readonly_session("main").store, mode="r")
-    except Exception:  # noqa: BLE001 - no store yet
-        return set()
-    return set(root.group_keys())
+        zarr.open_group(repo.readonly_session("main").store, path=GROUP, mode="r")
+    except Exception:  # noqa: BLE001 - no store or group yet
+        return False
+    return True

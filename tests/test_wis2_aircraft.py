@@ -72,7 +72,9 @@ def test_the_dataset_is_lossless_and_typed():
 
 def _store(local_config):
     repo = local_config.icechunk_repo(aircraft.STORE_PREFIX)
-    return xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    return xr.open_zarr(
+        repo.readonly_session("main").store, group=aircraft.GROUP, consolidated=False
+    )
 
 
 def test_windows_append_once_and_duplicates_are_dropped(local_config):
@@ -104,7 +106,8 @@ def test_a_window_with_no_new_reports_is_still_ledgered(local_config):
     assert aircraft.write(batch, "b", local_config) == 0
     from planetary_datasets.common.multidim import ledger
 
-    assert {"a", "b"} <= ledger(local_config.icechunk_repo(aircraft.STORE_PREFIX))
+    repo = local_config.icechunk_repo(aircraft.STORE_PREFIX)
+    assert {"a", "b"} <= ledger(repo, group=aircraft.GROUP)
 
 
 def test_the_target_decodes_as_the_archive_streams(local_config):
@@ -125,7 +128,9 @@ def _stored_times(local_config, name: str) -> np.ndarray:
     import zarr
 
     repo = local_config.icechunk_repo(aircraft.STORE_PREFIX)
-    array = zarr.open_group(repo.readonly_session("main").store, mode="r")[name]
+    array = zarr.open_group(repo.readonly_session("main").store, path=aircraft.GROUP, mode="r")[
+        name
+    ]
     assert array.attrs["units"] == aircraft.TIME_UNITS
     assert array.attrs["_FillValue"] == aircraft.TIME_FILL
     return array[:].astype("int64").view("datetime64[s]")
@@ -165,7 +170,7 @@ def test_first_arrival_is_added_to_a_store_written_without_it(local_config):
         row["report_id"] = aircraft.report_id(row)
     legacy = to_dataset(old.rows).drop_vars("first_arrival_time")
     repo = local_config.icechunk_repo(aircraft.STORE_PREFIX)
-    append_partition(repo, legacy, "old", label="wis2 aircraft")
+    append_partition(repo, legacy, "old", label="wis2 aircraft", group=aircraft.GROUP)
 
     new = Batch()
     new.add(KEY, bulletin(encode_amdar([report("HK0014", minute=37)])), ARRIVED)

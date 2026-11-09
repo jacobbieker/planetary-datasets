@@ -14,6 +14,7 @@ The fixtures are real WIS2 Global Cache objects (WMO core data, free and unrestr
 from __future__ import annotations
 
 import datetime as dt
+import json
 import pathlib
 
 import numpy as np
@@ -154,7 +155,7 @@ def test_windows_append_once_and_relays_and_repeats_are_dropped(local_config):
     assert first["other_category_messages"] == 1
 
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
-    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    ds = xr.open_zarr(repo.readonly_session("main").store, group=land.GROUP, consolidated=False)
     assert ds.sizes["observation"] == 19
     assert ds["time"].dtype.kind == "M"
     assert set(ds["station_id"].values) >= {"0-20000-0-47590", "0-20000-0-95122"}
@@ -168,7 +169,7 @@ def test_windows_append_once_and_relays_and_repeats_are_dropped(local_config):
     once_more = land.LandTarget(local_config, workers=1)
     once_more.feed("data/x/data/core/I/S/M/A", body("jma_single.bufr"), ARRIVED)
     assert once_more.finish(None, None, "wis2_20261028T1200Z")["rows_written"] == 0
-    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    ds = xr.open_zarr(repo.readonly_session("main").store, group=land.GROUP, consolidated=False)
     assert ds.sizes["observation"] == 19
 
 
@@ -179,12 +180,15 @@ def test_cloud_cover_is_stored_as_percent_and_reads_as_a_fraction(local_config):
     )
     assert target.finish(None, None, "w")["rows_written"] == 1
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
-    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    ds = xr.open_zarr(repo.readonly_session("main").store, group=land.GROUP, consolidated=False)
     assert ds["station_name"].values[0] == "MENDOZA AERO"
     assert float(ds["total_cloud_cover"][0]) == pytest.approx(0.25)
     assert ds["total_cloud_cover"].attrs["units"] == "(0 - 1)"
     raw = xr.open_zarr(
-        repo.readonly_session("main").store, consolidated=False, mask_and_scale=False
+        repo.readonly_session("main").store,
+        group=land.GROUP,
+        consolidated=False,
+        mask_and_scale=False,
     )
     assert int(raw["total_cloud_cover"][0]) == 25
     # A corrected bulletin (CCB): its update sequence number is kept.
@@ -272,18 +276,27 @@ def test_an_archived_tar_backfills_the_store_through_the_archiver(local_config, 
                 raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
             return {}
 
+        def put_object(self, Bucket, Key, Body):
+            records[Key] = json.loads(Body)
+
+    records: dict[str, dict] = {}
     monkeypatch.setattr(wis2_archive, "dest_client", lambda config: Dest())
     key = "bkr/obs/wis2/wis2_20261028T1200Z.tar"
     summary = wis2_archive.targets_from_tar(key, config=local_config, targets=["land"])
     assert summary["land"]["rows_written"] == 3
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
-    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    ds = xr.open_zarr(repo.readonly_session("main").store, group=land.GROUP, consolidated=False)
     assert ds.attrs["partitions_written"] == [wis2_archive.partition_name(key)]
     assert sorted(ds["station_id"].values) == [
         "0-20000-0-07005",
         "0-20000-0-07015",
         "0-20000-0-47590",
     ]
+    # The tar had no record of its targets: one is kept now, for the WIS2 store, with the
+    # target run done and the rest still due.
+    (record,) = records.values()
+    assert record["store"] == wis2_targets.STORE_PREFIX
+    assert record["done"] == ["land"] and "land" not in record["pending"]
 
 
 def test_the_target_registers_with_the_archiver():
@@ -298,7 +311,7 @@ def stored_times(repo, name: str) -> np.ndarray:
     """
     import zarr
 
-    array = zarr.open_group(repo.readonly_session("main").store, mode="r")[name]
+    array = zarr.open_group(repo.readonly_session("main").store, path=land.GROUP, mode="r")[name]
     assert str(array.attrs["units"]).startswith("nanoseconds since 1970-01-01")
     return array[:].astype("int64").view("datetime64[ns]").astype("datetime64[s]")
 
@@ -333,7 +346,7 @@ def test_first_arrival_is_added_to_a_store_written_without_it(local_config):
     (old,) = land.decode(body("ism_cloud.bufr"), "de-dwd-gts-to-wis2", ARRIVED).rows
     legacy = land.to_dataset([old]).drop_vars("first_arrival_time")
     legacy["arrived"].attrs = {"long_name": "time the copy kept reached the cache"}
-    append_partition(repo, legacy, "old", label="wis2_land")
+    append_partition(repo, legacy, "old", label="wis2_land", group=land.GROUP)
 
     target = land.LandTarget(local_config, workers=1)
     for key, arrived in [
@@ -346,6 +359,6 @@ def test_first_arrival_is_added_to_a_store_written_without_it(local_config):
     assert stored_times(repo, "arrived").tolist() == [ARRIVED.replace(tzinfo=None)] * 2
     first = stored_times(repo, "first_arrival_time")
     assert np.isnat(first[0]) and first[1] == np.datetime64("2026-10-28T07:28:00")
-    group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    group = zarr.open_group(repo.readonly_session("main").store, path=land.GROUP, mode="r")
     assert group["arrived"].attrs["long_name"] == land.ARRIVAL_ATTRS["arrived"]["long_name"]
     assert group["first_arrival_time"].attrs["comment"].endswith("have no value (NaT)")

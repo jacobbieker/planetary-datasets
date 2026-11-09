@@ -1,10 +1,11 @@
-"""Land surface station reports from the WIS2 Global Cache, as one Icechunk store.
+"""Land surface station reports from the WIS2 Global Cache, as groups of the WIS2 store.
 
 An archive target of :mod:`planetary_datasets.providers.observations.wis2_archive`: as
 each 12-hour window streams into its tar, the objects that can hold land surface reports
-are also handed here, decoded with ecCodes, and appended to::
+are also handed here, decoded with ecCodes, and appended to the WIS2 store
+(:mod:`~planetary_datasets.providers.observations.wis2_targets`)::
 
-    bkr/obs/wis2_land.icechunk
+    bkr/obs/wis2.icechunk   group land/reports
 
 one row per station report along ``observation``.
 
@@ -29,12 +30,15 @@ Values
     without filtering, and a report with two totals keeps both in one row. Extreme
     temperatures come with whatever period the station reports, so they carry it in a
     ``*_period`` variable. A value a report does not have is NaN (or -1 for codes).
-    Values are archived as reported, without quality control: some stations send
-    impossible values (a 194 K temperature, a 315 m s-1 wind), and BUFR's special values
-    are kept: precipitation -0.1 is a trace, snow depth -0.01 is snow cover that is not
-    continuous and -0.02 a depth that could not be measured. Periods come with their own
-    units (hours for SYNOP's, minutes for most automatic stations'), so a 1-hour maximum
-    from an automatic station and a 12-hour one from a SYNOP read as 1 and 12.
+    Values are archived as reported, never altered: some stations send impossible values
+    (a 194 K temperature, a 315 m s-1 wind), which are flagged, not removed
+    (``quality_flag`` and ``<variable>_quality``,
+    :mod:`~planetary_datasets.providers.observations.wis2_qc`), and BUFR's special values
+    are kept (and not flagged): precipitation -0.1 is a trace, snow depth -0.01 is snow
+    cover that is not continuous and -0.02 a depth that could not be measured. Periods
+    come with their own units (hours for SYNOP's, minutes for most automatic stations'),
+    so a 1-hour maximum from an automatic station and a 12-hour one from a SYNOP read as
+    1 and 12.
 
 Reports kept
     A report needs a station (WIGOS identifier, or WMO block and station number) and a
@@ -59,10 +63,10 @@ Arrival times
     before ``first_arrival_time`` was added read NaT there.
 
 Other groups
-    The station reports are the store's root group. The same target also writes, as
-    groups of the store with ledgers of their own, real-time river levels and discharge
-    (``hydrometric``, :mod:`.wis2_land_hydrometric`) and weather-radar polar volumes
-    (``radar/<radar>_<quantity>``, :mod:`.wis2_land_radar`; ODIM and GAMIC volumes are
+    The station reports are the store's ``land/reports`` group. The same target also
+    writes, as groups with ledgers of their own, real-time river levels and discharge
+    (``land/hydrometric``, :mod:`.wis2_land_hydrometric`) and weather-radar polar volumes
+    (``land/radar/<radar>_<quantity>``, :mod:`.wis2_land_radar`; ODIM and GAMIC volumes are
     two parts with separate ledgers). Their objects are spooled to
     disk while the window streams and appended after the reports. Re-running the target
     over an archived window writes each part only if its ledger lacks the window
@@ -90,16 +94,22 @@ from planetary_datasets.providers.observations import wis2_land_radar as radar
 from planetary_datasets.providers.observations.wis2_targets import (
     MISSING_DOUBLE,
     MISSING_LONG,
+    STORE_PREFIX,
     ArchiveTarget,
     register,
     split_bufr,
 )
 
-STORE_PREFIX = "bkr/obs/wis2_land.icechunk"
-#: The station reports at the store's root, as named in summaries and :meth:`prepare`.
+#: The group of :data:`STORE_PREFIX` the station reports go to.
+GROUP = "land/reports"
+#: The station reports, as named in summaries and :meth:`prepare`.
 ROOT = "reports"
 #: The GAMIC radar volumes (Cyprus), a part with a ledger of its own under ``radar/``.
 GAMIC = "radar_gamic"
+#: The river data (group ``land/hydrometric``) and ODIM radar volumes (groups under
+#: ``land/radar``), as named in summaries and :meth:`prepare`.
+HYDROMETRIC = "hydrometric"
+RADAR = "radar"
 #: Rows at the end of the store whose reports a new window is checked against.
 DEDUP_ROWS = 3_000_000
 #: Objects decoded per worker task.
@@ -138,6 +148,7 @@ class Column:
 
     @property
     def missing(self):
+        """The value a report without this variable has."""
         return -1 if self.dtype.startswith("int") else (None if self.dtype == "str" else np.nan)
 
 
@@ -636,6 +647,8 @@ def _subsets(eccodes, h) -> list[_Report]:
 
 @dataclass
 class Decoded:
+    """Rows decoded from a set of objects, with counts of what was skipped."""
+
     rows: list[dict]
     messages: int = 0
     other_category: int = 0
@@ -743,6 +756,7 @@ def _completeness(row: dict) -> int:
 
 
 def identity(station: str, time: np.datetime64, usn: int) -> tuple:
+    """A report's identity: station, time (seconds) and update sequence number."""
     return (station, np.datetime64(time, "s").astype("int64").item(), int(usn))
 
 
@@ -823,6 +837,7 @@ class LandTarget(ArchiveTarget):
     store_prefix = STORE_PREFIX
 
     def __init__(self, config=None, workers: int = DECODE_WORKERS):
+        """A target writing with ``config``, decoding over ``workers`` processes."""
         super().__init__(config)
         self.workers = workers
         self.pending: list[tuple[str, bytes, dt.datetime | None]] = []
@@ -848,9 +863,9 @@ class LandTarget(ArchiveTarget):
         repo = self._repo()
         written = set()
         for part, group in (
-            (ROOT, None),
-            (hydrometric.GROUP, hydrometric.GROUP),
-            (radar.PARENT, radar.PARENT),
+            (ROOT, GROUP),
+            (HYDROMETRIC, hydrometric.GROUP),
+            (RADAR, radar.PARENT),
         ):
             try:
                 if partition in ledger(repo, group=group):
@@ -875,9 +890,9 @@ class LandTarget(ArchiveTarget):
         if wants(key, size):
             return ROOT
         if hydrometric.wants(key, size):
-            return hydrometric.GROUP
+            return HYDROMETRIC
         if radar.wants(key, size):
-            return radar.PARENT
+            return RADAR
         if radar.wants_gamic(key, size):
             return GAMIC
         return None
@@ -925,14 +940,17 @@ class LandTarget(ArchiveTarget):
         return total
 
     def _repo(self):
-        return self._config().icechunk_repo(self.store_prefix)
+        """The WIS2 store, laid out."""
+        from planetary_datasets.providers.observations.wis2_targets import store_repo
+
+        return store_repo(self._config())
 
     def stored_identities(self, repo) -> set[tuple]:
         """Identities of the reports in the store's last :data:`DEDUP_ROWS` rows."""
         import zarr
 
         try:
-            group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+            group = zarr.open_group(repo.readonly_session("main").store, path=GROUP, mode="r")
             rows = group["station_id"].shape[0]
         except Exception:  # noqa: BLE001 - no store yet
             return set()
@@ -945,6 +963,7 @@ class LandTarget(ArchiveTarget):
         times = (
             xr.open_zarr(
                 repo.readonly_session("main").store,
+                group=GROUP,
                 consolidated=False,
                 chunks={},
                 drop_variables=others,
@@ -963,6 +982,7 @@ class LandTarget(ArchiveTarget):
     ) -> dict:
         """Decode, deduplicate and append the window's reports. Returns a summary."""
         from planetary_datasets.common.multidim import append_partition, describe_variables
+        from planetary_datasets.providers.observations import wis2_qc
 
         objects = len(self.pending)
         repo = self._repo()
@@ -972,8 +992,14 @@ class LandTarget(ArchiveTarget):
             rows = deduplicate(decoded.rows, self.stored_identities(repo))
             written = False
             if rows:
-                written = append_partition(repo, to_dataset(rows), partition, label="wis2_land")
-                describe_variables(repo, ARRIVAL_ATTRS, label="wis2_land")
+                written = append_partition(
+                    repo,
+                    wis2_qc.flag(to_dataset(rows), GROUP),
+                    partition,
+                    label="wis2_land",
+                    group=GROUP,
+                )
+                describe_variables(repo, ARRIVAL_ATTRS, label="wis2_land", group=GROUP)
             summary = {
                 "objects": objects,
                 "messages": decoded.messages,
@@ -1005,8 +1031,8 @@ class LandTarget(ArchiveTarget):
         """Append the spooled hydrometric and radar objects; a summary of each."""
         out = {}
         writers = {
-            hydrometric.GROUP: hydrometric.write,
-            radar.PARENT: radar.write,
+            HYDROMETRIC: hydrometric.write,
+            RADAR: radar.write,
             GAMIC: functools.partial(radar.write, ledger_attr=radar.GAMIC_LEDGER),
         }
         for part, writer in writers.items():

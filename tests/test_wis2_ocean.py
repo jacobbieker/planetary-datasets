@@ -139,7 +139,7 @@ def test_one_report_through_two_centres_is_kept_once():
     body = sample("moored_buoy_315008.msg")
     relayed = "data/jp-jma-gts-to-wis2/data/core/I/O/B/A/01/KWBC/A_IOBA01KWBC281700_C_RJTD_1"
     collector = ocean.collect([(MOORED, body), (relayed, b"IOBA01 KWBC 281700\r\r\n" + body)])
-    assert len(collector.surface) == 1 and collector.duplicates["surface"] == 1
+    assert len(collector.surface) == 1 and collector.duplicates[ocean.SURFACE] == 1
     assert len(collector.profiles) == 1
 
 
@@ -170,13 +170,13 @@ def test_the_store_opens_as_a_tree_and_skips_reports_it_holds(local_config):
 
     store = local_config.icechunk_repo(ocean.STORE_PREFIX).readonly_session("main").store
     tree = xr.open_datatree(store, engine="zarr", consolidated=False)
-    assert set(tree.children) == {"surface", "profiles"}
-    surface = xr.open_zarr(store, group="surface", consolidated=False)
+    assert {"surface", "profiles"} <= set(tree["ocean"].children)
+    surface = xr.open_zarr(store, group=ocean.SURFACE, consolidated=False)
     assert surface.sizes["observation"] == 8
     assert surface["time"].dtype.kind == "M"
     assert surface["air_temperature"].attrs["units"] == "K"
     assert (surface["time"].values[1:] >= surface["time"].values[:-1]).all()
-    profiles = xr.open_zarr(store, group="profiles", consolidated=False)
+    profiles = xr.open_zarr(store, group=ocean.PROFILES, consolidated=False)
     assert int(profiles["level_count"].sum()) == profiles.sizes["level"] == 113
     argo = int(np.flatnonzero(profiles["wmo_platform_id"].values == "6903822")[0])
     start = int(profiles["level_count"].values[:argo].sum())
@@ -187,7 +187,7 @@ def test_the_store_opens_as_a_tree_and_skips_reports_it_holds(local_config):
     later = _run_window(local_config, objects, end + dt.timedelta(hours=12))
     assert later["surface_written"] == 0 and later["surface_already_stored"] == 8
     assert later["profiles_written"] == 0
-    again = xr.open_zarr(store, group="surface", consolidated=False)
+    again = xr.open_zarr(store, group=ocean.SURFACE, consolidated=False)
     assert again.sizes["observation"] == 8
 
 
@@ -198,7 +198,7 @@ def stored_times(store, name: str, group: str) -> np.ndarray:
     """
     import zarr
 
-    array = zarr.open_group(store, mode="r")[group][name]
+    array = zarr.open_group(store, path=group, mode="r")[name]
     unit = str(array.attrs["units"]).split()[0]
     assert unit == "nanoseconds" and array.attrs["_FillValue"] == np.iinfo("int64").min
     return array[:].astype("int64").view("datetime64[ns]").astype("datetime64[s]")

@@ -22,12 +22,28 @@ multipart upload whose parts go up in parallel. Memory is bounded by the bytes a
 flight and the parts awaiting upload.
 
 Archive targets (:mod:`~planetary_datasets.providers.observations.wis2_targets`) build
-stores from the same stream: each registered target is handed the objects it wants as
-they go into the tar and appends what it decoded once the tar is complete (aircraft
-reports, ``bkr/obs/wis2_aircraft.icechunk``, for one). A target's failure never fails the
-tar. Which targets have finished a window is kept beside its tar
-(``<tar>.targets.json``: pending, done, failed), so a run killed part way through the
-targets finishes the pending ones from the archived tar when it next comes to that window.
+the WIS2 store, ``bkr/obs/wis2.icechunk``, from the same stream: each registered target is
+handed the objects it wants as they go into the tar and appends what it decoded, to groups
+of its own, once the tar is complete. A target's failure never fails the tar. Which targets
+have finished a window is kept beside its tar (``<tar>.targets.json``: pending, done,
+failed, and the store they were run for), so a run killed part way through the targets
+finishes the pending ones from the archived tar when it comes to that window again.
+
+Windows in order
+    Appends to a group go forward in time: the TAC groups drop reports the BUFR groups'
+    latest rows already hold, and readers expect a group's windows in order. So a target
+    still pending over an older archive (a backfill) is not fed a new window: the tar is
+    made as always, at once, and the target is recorded as pending over it, to be run from
+    the tar, oldest first, between the live windows (:func:`finish_pending`). Archiving the
+    cache, which keeps objects only a couple of days, never waits for a backfill.
+
+The store the record is for
+    A ``.targets.json`` written for another store (the five ``wis2_<kind>.icechunk`` stores
+    this one replaced), or none at all (windows archived before records were kept), means
+    every target is pending over that window: the targets' groups, and their ledgers, are
+    what say what the store holds, and a target re-run over a window its groups already
+    hold writes nothing. Pointing the targets at a new store therefore re-ingests every
+    archived window into it, oldest first, by itself.
 
 Run once for a given window end, or keep the 00Z/12Z schedule; run the targets over
 windows already archived::
@@ -36,7 +52,11 @@ windows already archived::
     python -m planetary_datasets.providers.observations.wis2_archive --follow
     python -m planetary_datasets.providers.observations.wis2_archive \
         --from-tar bkr/obs/wis2/wis2_20261027T1200Z.tar --targets aircraft
-    python -m planetary_datasets.providers.observations.wis2_archive --all-archived
+    python -m planetary_datasets.providers.observations.wis2_archive --mark-pending aircraft
+
+``--all-archived`` runs targets over every archive in one go, outside the live loop; with a
+``--follow`` process running it would write the same groups at once, out of order, so it is
+for a store nothing else writes.
 """
 
 from __future__ import annotations
@@ -62,8 +82,10 @@ from loguru import logger
 
 from planetary_datasets.config import Config, get_config
 from planetary_datasets.providers.observations.wis2_targets import (
+    STORE_PREFIX,
     Router,
     build_targets,
+    load_targets,
     run_targets,
 )
 
@@ -213,6 +235,7 @@ class MultipartWriter(io.RawIOBase):
     """
 
     def __init__(self, client, bucket: str, key: str, part_size: int | None = None):
+        """A multipart upload to ``bucket``/``key``, started at once."""
         super().__init__()
         self.client, self.bucket, self.key = client, bucket, key
         self.part_size = part_size or PART_SIZE
@@ -226,9 +249,11 @@ class MultipartWriter(io.RawIOBase):
         self.finished = False
 
     def writable(self) -> bool:
+        """Always: this is a write-only stream."""
         return True
 
     def write(self, data) -> int:
+        """Buffer ``data``, sending each full part as it fills."""
         self.buffer += data
         self.written += len(data)
         while len(self.buffer) >= self.part_size:
@@ -260,6 +285,7 @@ class MultipartWriter(io.RawIOBase):
                 raise future.exception()
 
     def close(self) -> None:
+        """Send the last part and complete the upload."""
         if self.closed or self.finished:
             return super().close()
         if self.buffer or not self.futures:
@@ -371,6 +397,8 @@ def fetch_all(
 
 @dataclass
 class Summary:
+    """What one archive run did: the tar, its files and the targets' summaries."""
+
     key: str
     files: int = 0
     gone: int = 0
@@ -421,6 +449,7 @@ def write_archive(
 
 
 def exists(client, bucket: str, key: str) -> bool:
+    """Whether ``key`` is in ``bucket`` (a 404 is False; other errors raise)."""
     from botocore.exceptions import ClientError
 
     try:
@@ -449,8 +478,9 @@ def archive(
     are fed every file as it streams and finished once the tar is complete; a target's
     failure is logged and never fails the tar. When the tar exists already, only the
     targets its ``.targets.json`` still lists as pending run, over the archived tar: what
-    a run killed part way through the targets left undone. A tar without that record
-    (archived before it was kept) is taken as finished; use :func:`targets_from_tar`.
+    a run killed part way through the targets left undone (a record for another store, or
+    none, lists every target). Targets still pending over an older archive are left
+    pending here too, for :func:`finish_pending` to run in time order.
     """
     config = config or get_config()
     end = end.astimezone(dt.timezone.utc) if end.tzinfo else end.replace(tzinfo=dt.timezone.utc)
@@ -459,14 +489,20 @@ def archive(
     key = archive_key(end, config)
     summary = Summary(key=key)
     if not force and exists(dest, config.bucket, key):
-        state = _load_target_state(dest, config.bucket, key) or {}
-        pending = [n for n in state.get("pending", []) if targets is None or n in targets]
-        if pending:
+        state = current_state(_load_target_state(dest, config.bucket, key))
+        pending = [n for n in state["pending"] if targets is None or n in targets]
+        behind = _older_pending(dest, config, key, pending)
+        ready = [n for n in pending if n not in behind]
+        if ready:
             logger.info(
-                f"wis2: {key} already archived, but target(s) {', '.join(pending)} did not "
+                f"wis2: {key} already archived, but target(s) {', '.join(ready)} did not "
                 "finish; running them over the archived tar"
             )
-            summary.targets = targets_from_tar(key, config, targets=pending)
+            summary.targets = targets_from_tar(key, config, targets=ready)
+        elif pending:
+            logger.info(
+                f"wis2: {key} already archived; {', '.join(pending)} wait for older archives"
+            )
         else:
             logger.info(f"wis2: {key} already archived")
         return summary
@@ -479,11 +515,20 @@ def archive(
         f"{start:%Y-%m-%dT%H:%MZ}..{end:%Y-%m-%dT%H:%MZ} (listed in {time.time() - began:.0f}s)"
     )
     built = _build_targets(config, targets)
-    _prepare(built, partition_name(key))
+    # Targets with older archives still to run over wait for them: recorded as pending
+    # here, run from the tar in time order. The tar itself is made now regardless.
+    behind = _older_pending(dest, config, key, [t.name for t in built])
+    if behind:
+        logger.info(
+            f"wis2: {', '.join(sorted(behind))} still pending over older archives; recorded "
+            f"as pending over {key}, to run after them"
+        )
+    live = [t for t in built if t.name not in behind]
+    _prepare(live, partition_name(key))
     out = MultipartWriter(dest, config.bucket, key)
     try:
         files, gone, payload, index = write_archive(
-            entries, lambda es: fetch_all(source, es), out, observe=Router(built) if built else None
+            entries, lambda es: fetch_all(source, es), out, observe=Router(live) if live else None
         )
         out.close()
     except BaseException:
@@ -492,7 +537,7 @@ def archive(
     dest.put_object(Bucket=config.bucket, Key=f"{key}.index.csv.gz", Body=index)
     state = None
     if built:
-        state = {"pending": [t.name for t in built], "done": [], "failed": []}
+        state = new_state([t.name for t in built])
         _save_target_state(dest, config.bucket, key, state)
     summary.files, summary.gone, summary.bytes = files, gone, payload
     summary.seconds = time.time() - began
@@ -501,13 +546,58 @@ def archive(
         f"({out.written / 1e9:.1f} GB tar), {gone:,} gone before fetching, "
         f"in {summary.seconds / 60:.1f} min"
     )
-    if built:
-        summary.targets = _finish_targets(dest, config.bucket, key, built, start, end, state)
+    if live:
+        summary.targets = _finish_targets(dest, config.bucket, key, live, start, end, state)
     return summary
 
 
 def _target_state_key(tar_key: str) -> str:
     return f"{tar_key}.targets.json"
+
+
+def registered_targets() -> list[str]:
+    """Names of every registered archive target."""
+    return sorted(load_targets())
+
+
+def new_state(pending: Sequence[str]) -> dict:
+    """A window's target record for :data:`STORE_PREFIX` with ``pending`` still to run."""
+    return {"store": STORE_PREFIX, "pending": list(pending), "done": [], "failed": []}
+
+
+def current_state(state: dict | None) -> dict:
+    """``state`` if it was kept for :data:`STORE_PREFIX`, else every target pending.
+
+    A record from before the store (or none, for windows archived before records were
+    kept) says nothing about what this store holds: every registered target is due over
+    the window, and the targets' own ledgers decide what is written.
+    """
+    if state is not None and state.get("store") == STORE_PREFIX:
+        return {"pending": [], "done": [], "failed": [], **state}
+    return new_state(registered_targets())
+
+
+def _older_pending(client, config: Config, tar_key: str, names: Sequence[str]) -> set[str]:
+    """Of ``names``, the targets still pending over an archive older than ``tar_key``.
+
+    A failure to look is logged and counts as none, so the live window is never held up.
+    """
+    names = set(names)
+    if not names:
+        return set()
+    found: set[str] = set()
+    try:
+        for key in archived_tars(config):
+            if _window_end(key) is None or key >= tar_key:
+                continue
+            state = current_state(_load_target_state(client, config.bucket, key))
+            found |= names & set(state["pending"])
+            if found == names:
+                break
+    except Exception as exc:  # noqa: BLE001 - the live window must go ahead
+        logger.warning(f"wis2: could not check older archives for pending targets: {exc}")
+        return set()
+    return found
 
 
 def _load_target_state(client, bucket: str, tar_key: str) -> dict | None:
@@ -519,6 +609,7 @@ def _load_target_state(client, bucket: str, tar_key: str) -> dict | None:
 
 
 def _save_target_state(client, bucket: str, tar_key: str, state: dict) -> None:
+    state["store"] = STORE_PREFIX
     body = json.dumps(state, sort_keys=True).encode()
     client.put_object(Bucket=bucket, Key=_target_state_key(tar_key), Body=body)
 
@@ -591,7 +682,7 @@ def targets_from_tar(
             route(member.name, member.size, tar.extractfile(member).read(), arrived)
     end = _window_end(tar_key)
     start = end - LOOKBACK if end else None
-    state = _load_target_state(client, config.bucket, tar_key)
+    state = current_state(_load_target_state(client, config.bucket, tar_key))
     return _finish_targets(client, config.bucket, tar_key, built, start, end, state)
 
 
@@ -640,18 +731,18 @@ def mark_pending(
     client = dest_client(config)
     marked = 0
     for key in keys if keys is not None else archived_tars(config):
-        state = _load_target_state(client, config.bucket, key) or {
-            "pending": [],
-            "done": [],
-            "failed": [],
-        }
+        loaded = _load_target_state(client, config.bucket, key)
+        state = current_state(loaded)
+        # A record for another store (or none) is rewritten for this one: every target
+        # pending, which already includes ``names``.
+        stale = (loaded or {}).get("store") != STORE_PREFIX
         before = list(state["pending"])
         for name in names:
             for other in ("done", "failed"):
                 state[other] = [n for n in state.get(other, []) if n != name]
             if name not in state["pending"]:
                 state["pending"].append(name)
-        if state["pending"] != before or not before:
+        if stale or state["pending"] != before or not before:
             _save_target_state(client, config.bucket, key, state)
             marked += 1
     logger.info(f"wis2: marked {', '.join(names)} pending over {marked} archived window(s)")
@@ -667,30 +758,53 @@ def finish_pending(
 ) -> int:
     """Run pending targets over older archives, oldest first, while time allows.
 
-    One is only started with :data:`PENDING_BUDGET` left before ``deadline`` (the next
-    live window), and at most ``limit`` are attempted, failed ones included. Returns the
-    archives worked on.
+    One is only started with :func:`pending_budget` left before ``deadline`` (the next
+    live window): :data:`PENDING_BUDGET`, or more once a run has taken longer, so a run
+    never makes the next live archive wait. At most ``limit`` are attempted, failed ones
+    included. Returns the archives worked on.
     """
     config = config or get_config()
     client = dest_client(config)
     worked = attempted = 0
     for key in archived_tars(config):
-        if now() + PENDING_BUDGET > deadline or (limit is not None and attempted >= limit):
+        if now() + pending_budget() > deadline or (limit is not None and attempted >= limit):
             break
-        state = _load_target_state(client, config.bucket, key) or {}
-        pending = [n for n in state.get("pending", []) if targets is None or n in targets]
+        state = current_state(_load_target_state(client, config.bucket, key))
+        pending = [n for n in state["pending"] if targets is None or n in targets]
         if not pending:
             continue
         logger.info(f"wis2: finishing {', '.join(pending)} over {key}")
         attempted += 1
+        started = now()
         try:
             targets_from_tar(key, config, targets=pending)
         except Exception as exc:  # noqa: BLE001 - the live schedule must carry on
             # Not counted: the caller would otherwise retry it at once, in a loop.
             logger.exception(f"wis2: pending targets over {key} failed: {exc}")
             continue
+        finally:
+            _PENDING_RUNS.append(now() - started)
+            del _PENDING_RUNS[:-RECENT_PENDING_RUNS]
         worked += 1
     return worked
+
+
+#: Durations of the latest pending runs, the longest of which sizes :func:`pending_budget`.
+_PENDING_RUNS: list[dt.timedelta] = []
+RECENT_PENDING_RUNS = 8
+
+
+def pending_budget() -> dt.timedelta:
+    """Time to leave before the next live window when starting a pending run.
+
+    :data:`PENDING_BUDGET`, or half as long again as the longest recent run: re-ingesting
+    every target over an archive takes longer than the one target a backfill usually
+    runs, and must still end before the next window is due. Capped at half the window
+    interval, so one very long run cannot leave a budget no gap between windows meets
+    (no pending run would start again, and none would record a shorter time).
+    """
+    longest = max(_PENDING_RUNS, default=dt.timedelta(0))
+    return min(max(PENDING_BUDGET, longest * 1.5), EVERY / 2)
 
 
 def follow(config: Config | None = None, targets: Sequence[str] | None = None) -> None:
@@ -741,8 +855,11 @@ def follow(config: Config | None = None, targets: Sequence[str] | None = None) -
 
 
 def _unarchived(ends: Sequence[dt.datetime], config: Config | None) -> list[dt.datetime]:
-    """The window ends among ``ends`` with no archive yet; all of them if that cannot be
-    checked, so a failed check means trying again soon rather than sleeping past them."""
+    """The window ends among ``ends`` with no archive yet.
+
+    All of them if that cannot be checked, so a failed check means trying again soon
+    rather than sleeping past them.
+    """
     try:
         config = config or get_config()
         client = dest_client(config)
@@ -753,6 +870,7 @@ def _unarchived(ends: Sequence[dt.datetime], config: Config | None) -> list[dt.d
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command line: see the module's docstring."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--end", help="window end, UTC ISO 8601 (e.g. 2026-10-29T12:00)")

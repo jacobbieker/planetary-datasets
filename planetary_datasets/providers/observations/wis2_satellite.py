@@ -1,22 +1,26 @@
-"""Satellite observations from the WIS2 Global Cache, as one grouped Icechunk store.
+"""Satellite observations from the WIS2 Global Cache, as groups of the WIS2 store.
 
 Sounder radiances, one group per instrument, as below; every other satellite product
 (GNSS radio occultation, AMVs, altimetry, scatterometer and SAR winds, AMI clear-sky
 radiances, OLCI water vapour) one group per product, see
-:mod:`~planetary_datasets.providers.observations.wis2_satellite_products`. Every row of
-every group carries ``arrival_time`` (when the copy kept reached the cache) and
-``first_arrival_time`` (the earliest arrival of the copies collapsed into it), so the live
-stream can be replayed; rows written before ``first_arrival_time`` was added read NaT.
+:mod:`~planetary_datasets.providers.observations.wis2_satellite_products`. All of them are
+under ``satellite/`` in ``bkr/obs/wis2.icechunk``
+(:mod:`~planetary_datasets.providers.observations.wis2_targets`): the group named ``atms``
+below is ``satellite/atms`` in the store. Every row of every group carries
+``arrival_time`` (when the copy kept reached the cache) and ``first_arrival_time`` (the
+earliest arrival of the copies collapsed into it), so the live stream can be replayed, and
+quality flags (``quality_flag``, ``<variable>_quality``: brightness temperatures checked
+per channel, positions and times; :mod:`~planetary_datasets.providers.observations.wis2_qc`).
 
 Radiances:
 
 An archive target of :mod:`planetary_datasets.providers.observations.wis2_archive`: as each
 12-hour window of the cache streams into its tar, the space-based observation objects of
 the instruments below are decoded with ecCodes and appended to
-``bkr/obs/wis2_satellite.icechunk``, one zarr group per instrument::
+``bkr/obs/wis2.icechunk``, one zarr group per instrument under ``satellite/``::
 
-    xr.open_datatree(store, engine="zarr", consolidated=False)    # every instrument
-    xr.open_zarr(store, group="atms", consolidated=False)          # one
+    xr.open_datatree(store, engine="zarr", consolidated=False)["satellite"]  # all
+    xr.open_zarr(store, group="satellite/atms", consolidated=False)          # one
 
 ==========  ==========================================  ==========================
 Group       Instruments (WIS2 topic directory)          Values per channel
@@ -120,12 +124,15 @@ from loguru import logger
 from planetary_datasets.config import Config, get_config
 from planetary_datasets.providers.observations import wis2_satellite_products as products
 from planetary_datasets.providers.observations.wis2_targets import (
+    STORE_PREFIX,
     ArchiveTarget,
     register,
     split_bufr,
+    store_repo,
 )
 
-STORE_PREFIX = "bkr/obs/wis2_satellite.icechunk"
+#: The group of the WIS2 store (:data:`STORE_PREFIX`) every satellite group is under.
+PARENT = "satellite"
 TOPIC = re.compile(
     r"^data/(?P<centre>[^/]+)/data/core/weather/(?:experimental/)?space-based-observations/"
     r"(?P<platform>[^/]+)/(?P<instrument>[^/]+)/(?P<name>[^/]+)$"
@@ -387,7 +394,7 @@ def _array(handle, name: str, subsets: int) -> np.ndarray:
 
 
 def _clean(values: np.ndarray) -> np.ndarray:
-    """ecCodes' missing markers as NaN (floats) or the integer missing value."""
+    """Missing markers of ecCodes as NaN (floats) or the integer missing value."""
     if values.dtype.kind == "f":
         return np.where(values <= -1e99, np.nan, values)
     return values.astype("int64")
@@ -877,13 +884,15 @@ def write_group(
         ledger,
         mark_written,
     )
+    from planetary_datasets.providers.observations import wis2_qc
 
     group = instrument.group
+    node_path = store_group(group)
     todo: list[str] = []
     catching_up = False
     if partition is not None:
         entries = window_entries(instrument, partition)
-        held = ledger(repo, group=group)
+        held = ledger(repo, group=node_path)
         todo = [entry for entry in entries if entry not in held]
         if not todo:
             counts[f"{group}_already_written"] += 1
@@ -915,9 +924,9 @@ def write_group(
         return 0
     table = pd.concat(keys, ignore_index=True)
     counts[f"{group}_decoded"] += len(table)
-    stored = _stored_identities(repo, group)
+    stored = _stored_identities(repo, node_path)
     if catching_up:
-        stored |= _stored_identities_at(repo, group, np.concatenate(observed))
+        stored |= _stored_identities_at(repo, node_path, np.concatenate(observed))
     table = table[~table["id"].isin(stored)]
     first_arrival = table.groupby("id")["arrival"].min()
     table = table.sort_values(["id", "valid"], ascending=[True, False]).drop_duplicates("id")
@@ -933,13 +942,13 @@ def write_group(
         nonlocal batch, values_in_batch, written
         if not batch:
             return
-        ds = to_dataset(batch, width, instrument)
+        ds = wis2_qc.flag(to_dataset(batch, width, instrument), node_path)
         # The append widens every channel array first; the channel table follows it.
         append_partition(
-            repo, ds, None, fixed_dims=["channel"], label=f"wis2_satellite {group}", group=group
+            repo, ds, None, fixed_dims=["channel"], label=f"wis2_satellite {group}", group=node_path
         )
         session = repo.writable_session("main")
-        node = zarr.open_group(session.store, path=group, mode="a")
+        node = zarr.open_group(session.store, path=node_path, mode="a")
         value = next(n for _, n, _ in instrument.values if n in node)
         _channel_table(node, batch, node[value].shape[1], instrument)
         node.attrs.update(
@@ -972,12 +981,12 @@ def write_group(
     flush()
     for entry in todo:
         try:
-            mark_written(repo, entry, label=f"wis2_satellite {group}", group=group)
+            mark_written(repo, entry, label=f"wis2_satellite {group}", group=node_path)
         except Exception as exc:  # noqa: BLE001 - group not created when nothing was new
             logger.debug(f"wis2_satellite {group}: ledger not updated ({exc})")
             break
     if written:
-        describe_variables(repo, ARRIVAL_ATTRS, label=f"wis2_satellite {group}", group=group)
+        describe_variables(repo, ARRIVAL_ATTRS, label=f"wis2_satellite {group}", group=node_path)
     return written
 
 
@@ -1107,14 +1116,16 @@ def write_product_group(
         ledger,
         mark_written,
     )
+    from planetary_datasets.providers.observations import wis2_qc
 
     group = product.group
+    node_path = store_group(group)
     label = f"wis2_satellite {group}"
     todo: list[str] = []
     catching_up = False
     if partition is not None:
         entries = products.window_entries(product, partition)
-        held = ledger(repo, group=group)
+        held = ledger(repo, group=node_path)
         todo = [entry for entry in entries if entry not in held]
         if not todo:
             counts[f"{group}_already_written"] += 1
@@ -1122,17 +1133,17 @@ def write_product_group(
         # Part of the window is written already (before the group took a later source):
         # its copies of these rows may be anywhere in the group, not just the latest.
         catching_up = len(todo) < len(entries)
-    stored = _stored_identities(repo, group)
+    stored = _stored_identities(repo, node_path)
     if catching_up and paths:
         observed = []
         for path in paths:
             with np.load(path, allow_pickle=True) as data:
                 observed.append(data["time"])
-        stored |= _stored_identities_at(repo, group, np.concatenate(observed))
+        stored |= _stored_identities_at(repo, node_path, np.concatenate(observed))
     keep = _earliest_copies(paths, stored, group, counts)
     if keep is None:
         return 0
-    stored_dims = _stored_dims(repo, group)
+    stored_dims = _stored_dims(repo, node_path)
 
     written = 0
     batch: list[dict] = []
@@ -1142,9 +1153,9 @@ def write_product_group(
         nonlocal batch, values_in_batch, written
         if not batch:
             return
-        ds = product_dataset(batch, stored_dims)
+        ds = wis2_qc.flag(product_dataset(batch, stored_dims), node_path)
         fixed = [d for d in ds.dims if d != "observation"]
-        append_partition(repo, ds, None, fixed_dims=fixed, label=label, group=group)
+        append_partition(repo, ds, None, fixed_dims=fixed, label=label, group=node_path)
         stored_dims.update({name: ds[name].ndim for name in ds.data_vars})
         written += ds.sizes["observation"]
         batch, values_in_batch = [], 0
@@ -1166,17 +1177,22 @@ def write_product_group(
     flush()
     for entry in todo:
         try:
-            mark_written(repo, entry, label=label, group=group)
+            mark_written(repo, entry, label=label, group=node_path)
         except Exception as exc:  # noqa: BLE001 - group not created when nothing was new
             logger.debug(f"{label}: ledger not updated ({exc})")
             break
     if written:
-        describe_variables(repo, ARRIVAL_ATTRS, label=label, group=group)
+        describe_variables(repo, ARRIVAL_ATTRS, label=label, group=node_path)
     return written
 
 
+def store_group(group: str) -> str:
+    """The store path of a satellite group: ``atms`` is ``satellite/atms``."""
+    return f"{PARENT}/{group}"
+
+
 def ensure_root(repo) -> None:
-    """The store's root attributes, written before any group and whenever they change."""
+    """The ``satellite`` group's attributes, written before its groups and when they change."""
     import icechunk
     import zarr
 
@@ -1185,17 +1201,16 @@ def ensure_root(repo) -> None:
         "source": "WMO WIS2 Global Cache (s3://wis2globalcache)",
         "layout": (
             "one group per sounder's radiances (" + ", ".join(INSTRUMENTS) + ") and per "
-            "product (" + ", ".join(products.PRODUCTS) + "); open all with "
-            "xr.open_datatree(store, engine='zarr', consolidated=False), one with "
-            "xr.open_zarr(store, group='atms', consolidated=False)"
+            "product (" + ", ".join(products.PRODUCTS) + ") under satellite/; open one with "
+            "xr.open_zarr(store, group='satellite/atms', consolidated=False)"
         ),
     }
     session = repo.writable_session("main")
-    root = zarr.open_group(session.store, mode="a")
-    if all(root.attrs.get(k) == v for k, v in attrs.items()):
+    node = zarr.open_group(session.store, path=PARENT, mode="a")
+    if all(node.attrs.get(k) == v for k, v in attrs.items()):
         return
-    root.attrs.update(attrs)
-    session.commit("wis2_satellite: root", rebase_with=icechunk.ConflictDetector())
+    node.attrs.update(attrs)
+    session.commit("wis2_satellite: describe the group", rebase_with=icechunk.ConflictDetector())
 
 
 # ----------------------------------------------------------------------------- target
@@ -1245,11 +1260,12 @@ def remove_orphan_spools(root: pathlib.Path) -> list[str]:
 
 @register("satellite")
 class SatelliteTarget(ArchiveTarget):
-    """Sounder radiances into ``bkr/obs/wis2_satellite.icechunk``, decoded off the stream."""
+    """Satellite radiances and products into ``satellite/`` groups, decoded off the stream."""
 
     store_prefix = STORE_PREFIX
 
     def __init__(self, config: Config | None = None, workers: int = WORKERS):
+        """A target writing with ``config``, decoding over ``workers`` processes."""
         super().__init__(config or get_config())
         self.workers = workers
         self._pool: concurrent.futures.ProcessPoolExecutor | None = None
@@ -1270,11 +1286,11 @@ class SatelliteTarget(ArchiveTarget):
         """
         from planetary_datasets.common.multidim import ledger
 
-        repo = self.config.icechunk_repo(self.store_prefix)
+        repo = store_repo(self.config)
         written = set()
         for group in [*INSTRUMENTS, *products.PRODUCTS]:
             try:
-                held = ledger(repo, group=group)
+                held = ledger(repo, group=store_group(group))
             except Exception:  # noqa: BLE001 - a group not created yet holds nothing
                 continue
             # "atms" for the window's topic objects, "atms:gts" for its GTS bulletins,
@@ -1384,6 +1400,7 @@ class SatelliteTarget(ArchiveTarget):
         return results
 
     def finish(self, window_start, window_end, partition: str) -> dict[str, Any]:
+        """Decode what is left and append every group; a summary back."""
         if self._spool is None:
             return {"objects": 0}
         started = time.perf_counter()
@@ -1398,7 +1415,7 @@ class SatelliteTarget(ArchiveTarget):
                 if result.get("path"):
                     paths.setdefault(result["group"], []).append(result["path"])
             decoded_at = time.perf_counter()
-            repo = self.config.icechunk_repo(self.store_prefix)
+            repo = store_repo(self.config)
             rows = {}
             if paths:
                 ensure_root(repo)

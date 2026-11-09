@@ -160,12 +160,15 @@ def run(config, objects, partition=PARTITION):
 def sizes(repo) -> dict[str, int]:
     """Rows of the root and of each new group."""
     store = repo.readonly_session("main").store
-    root = zarr.open_group(store, mode="r")
-    out = {"root": root["station_id"].shape[0] if "station_id" in root else 0}
+    try:
+        root = zarr.open_group(store, path=land.GROUP, mode="r")
+        out = {"root": root["station_id"].shape[0] if "station_id" in root else 0}
+    except zarr.errors.GroupNotFoundError:
+        out = {"root": 0}
     for group, dim_array in (
-        ("hydrometric", "station_id"),
-        ("radar/bewid_dbzh", "time"),
-        ("radar/bewid_vrad", "time"),
+        ("land/hydrometric", "station_id"),
+        ("land/radar/bewid_dbzh", "time"),
+        ("land/radar/bewid_vrad", "time"),
     ):
         try:
             out[group] = zarr.open_group(store, path=group, mode="r")[dim_array].shape[0]
@@ -234,10 +237,13 @@ def test_a_window_writes_each_group_with_copies_collapsed(local_config):
     # 24 lines of one station (sent twice) and 12 of another.
     assert summary["hydrometric"]["rows_written"] == 36
     assert summary["radar"]["duplicate_copies"] == 1
-    assert summary["radar"]["volumes_written"] == {"radar/bewid_dbzh": 2, "radar/bewid_vrad": 1}
+    assert summary["radar"]["volumes_written"] == {
+        "land/radar/bewid_dbzh": 2,
+        "land/radar/bewid_vrad": 1,
+    }
 
     hydro = xr.open_zarr(
-        repo.readonly_session("main").store, group="hydrometric", consolidated=False
+        repo.readonly_session("main").store, group="land/hydrometric", consolidated=False
     )
     assert sorted(set(hydro["station_id"].values)) == ["05AA004", "05AA008"]
     first = hydro.isel(observation=0)
@@ -247,10 +253,12 @@ def test_a_window_writes_each_group_with_copies_collapsed(local_config):
     assert hydro["arrival_time"].values.min() == np.datetime64("2026-11-01T03:00:00")
 
     dbzh = xr.open_zarr(
-        repo.readonly_session("main").store, group="radar/bewid_dbzh", consolidated=False
+        repo.readonly_session("main").store, group="land/radar/bewid_dbzh", consolidated=False
     )
     assert dict(dbzh["counts"].sizes) == {"volume": 2, "sweep": 3, "azimuth": 4, "range": 8}
-    raw = zarr.open_group(repo.readonly_session("main").store, path="radar/bewid_dbzh", mode="r")
+    raw = zarr.open_group(
+        repo.readonly_session("main").store, path="land/radar/bewid_dbzh", mode="r"
+    )
     expected = h5py.File(io.BytesIO(odim_volume("000000")), "r")["dataset2/data1/data"][()]
     np.testing.assert_array_equal(raw["counts"][0, 1, :, : expected.shape[1]], expected)
     # The smaller first volume is padded with nodata, its extent recorded.
@@ -271,10 +279,15 @@ def test_small_batches_write_each_line_and_volume_once(local_config, monkeypatch
     monkeypatch.setattr(radar, "BATCH_BYTES", 1)
     _, summary = run(local_config, window_objects())
     assert summary["hydrometric"]["rows_written"] == 36
-    assert summary["radar"]["volumes_written"] == {"radar/bewid_dbzh": 2, "radar/bewid_vrad": 1}
+    assert summary["radar"]["volumes_written"] == {
+        "land/radar/bewid_dbzh": 2,
+        "land/radar/bewid_vrad": 1,
+    }
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
-    assert sizes(repo)["hydrometric"] == 36
-    raw = zarr.open_group(repo.readonly_session("main").store, path="radar/bewid_dbzh", mode="r")
+    assert sizes(repo)["land/hydrometric"] == 36
+    raw = zarr.open_group(
+        repo.readonly_session("main").store, path="land/radar/bewid_dbzh", mode="r"
+    )
     assert raw["counts"].shape == (2, 3, 4, 8)
     assert (raw["counts"][0, 2] == 255).all() and (raw["counts"][0, 0, :, 6:] == 255).all()
 
@@ -292,12 +305,12 @@ def test_a_window_with_objects_that_could_not_be_spooled_is_not_ledgered(local_c
     with pytest.raises(land.IncompleteWindow, match="hydrometric incomplete"):
         run(local_config, window_objects())
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
-    assert PARTITION not in ledger(repo, group="hydrometric")
-    assert PARTITION in ledger(repo, group="radar")
+    assert PARTITION not in ledger(repo, group="land/hydrometric")
+    assert PARTITION in ledger(repo, group="land/radar")
     monkeypatch.setattr(hydrometric.Spool, "add", real)
     _, summary = run(local_config, window_objects())
     assert summary["hydrometric"]["rows_written"] == 12  # only the station missed before
-    assert PARTITION in ledger(repo, group="hydrometric")
+    assert PARTITION in ledger(repo, group="land/hydrometric")
 
 
 def test_a_second_run_over_the_same_window_writes_nothing(local_config):
@@ -322,18 +335,18 @@ def test_a_window_already_written_for_the_reports_still_gets_the_new_groups(loca
     run(local_config, [o for o in objects if land.LandTarget.part(o[0]) == "reports"])
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
     reports = sizes(repo)["root"]
-    assert reports > 0 and sizes(repo)["hydrometric"] == 0
-    assert PARTITION in ledger(repo)
+    assert reports > 0 and sizes(repo)["land/hydrometric"] == 0
+    assert PARTITION in ledger(repo, group=land.GROUP)
 
     target, summary = run(local_config, objects)
     assert "reports" in target._written
     assert summary["objects"] == 0  # no report object was kept, so none was decoded
     after = sizes(repo)
     assert after["root"] == reports
-    assert after["hydrometric"] == 36 and after["radar/bewid_dbzh"] == 2
-    assert PARTITION in ledger(repo, group="hydrometric")
-    assert PARTITION in ledger(repo, group="radar")
-    assert PARTITION in ledger(repo, group="radar/bewid_vrad")
+    assert after["land/hydrometric"] == 36 and after["land/radar/bewid_dbzh"] == 2
+    assert PARTITION in ledger(repo, group="land/hydrometric")
+    assert PARTITION in ledger(repo, group="land/radar")
+    assert PARTITION in ledger(repo, group="land/radar/bewid_vrad")
 
 
 def test_a_later_window_adds_only_new_and_revised_lines(local_config):
@@ -356,7 +369,7 @@ def test_a_later_window_adds_only_new_and_revised_lines(local_config):
     _, summary = run(local_config, later, "wis2_20261102T0000Z")
     assert summary["hydrometric"]["rows_written"] == 2
     hydro = xr.open_zarr(
-        repo.readonly_session("main").store, group="hydrometric", consolidated=False
+        repo.readonly_session("main").store, group="land/hydrometric", consolidated=False
     ).compute()
     at = (np.array([str(v) for v in hydro["station_id"].values]) == "05AA004") & (
         hydro["time"].values == hydrometric.utc(lines[5].split(",")[1])
@@ -371,15 +384,23 @@ def test_a_run_cut_short_before_its_ledger_is_finished_without_duplicates(local_
     # As if the process died after the appends but before the ledgers: the window is not
     # listed, so its objects come again, and the stored identities stop them.
     session = repo.writable_session("main")
-    for group in ("hydrometric", "radar", "radar/bewid_dbzh", "radar/bewid_vrad"):
+    for group in (
+        "land/hydrometric",
+        "land/radar",
+        "land/radar/bewid_dbzh",
+        "land/radar/bewid_vrad",
+    ):
         zarr.open_group(session.store, path=group, mode="a").attrs["partitions_written"] = []
     session.commit("forget the window")
     _, summary = run(local_config, window_objects())
     assert summary["hydrometric"]["rows_written"] == 0
-    assert summary["radar"]["volumes_written"] == {"radar/bewid_dbzh": 0, "radar/bewid_vrad": 0}
+    assert summary["radar"]["volumes_written"] == {
+        "land/radar/bewid_dbzh": 0,
+        "land/radar/bewid_vrad": 0,
+    }
     assert sizes(repo) == before
-    assert PARTITION in ledger(repo, group="hydrometric")
-    assert PARTITION in ledger(repo, group="radar")
+    assert PARTITION in ledger(repo, group="land/hydrometric")
+    assert PARTITION in ledger(repo, group="land/radar")
 
 
 def test_spooled_objects_are_removed_after_the_window(local_config):
@@ -408,12 +429,14 @@ def test_later_volumes_with_fewer_or_more_sweeps_and_bins_are_padded(local_confi
     volume("000500", 2, 5, "wis2_20261102T0000Z")
     volume("001000", 4, 10, "wis2_20261102T1200Z")
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
-    raw = zarr.open_group(repo.readonly_session("main").store, path="radar/bewid_dbzh", mode="r")
+    raw = zarr.open_group(
+        repo.readonly_session("main").store, path="land/radar/bewid_dbzh", mode="r"
+    )
     assert raw["counts"].shape == (3, 4, 4, 10)
     assert raw["nbins"][:].tolist() == [[8, 7, 6, -1], [5, 4, -1, -1], [10, 9, 8, 7]]
     assert (raw["counts"][1, 2:] == 255).all() and (raw["counts"][0, :, :, 8:] == 255).all()
     ds = xr.open_zarr(
-        repo.readonly_session("main").store, group="radar/bewid_dbzh", consolidated=False
+        repo.readonly_session("main").store, group="land/radar/bewid_dbzh", consolidated=False
     )
     assert np.isnat(ds["sweep_start_time"].values[1, 2])
     assert np.isnan(ds["elevation"].values[0, 3])
@@ -443,8 +466,8 @@ def test_a_volume_whose_nodata_differs_from_the_group_fill_is_refused(local_conf
             "wis2_20261102T0000Z",
         )
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
-    assert "wis2_20261102T0000Z" not in ledger(repo, group="radar")
-    assert sizes(repo)["radar/bewid_dbzh"] == 1
+    assert "wis2_20261102T0000Z" not in ledger(repo, group="land/radar")
+    assert sizes(repo)["land/radar/bewid_dbzh"] == 1
 
 
 def test_a_window_backfilled_long_after_later_ones_writes_nothing_twice(local_config, monkeypatch):
@@ -456,11 +479,11 @@ def test_a_window_backfilled_long_after_later_ones_writes_nothing_twice(local_co
     run(local_config, first, "wis2_20261101T1200Z")
     run(local_config, other, "wis2_20261102T0000Z")
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
-    before = sizes(repo)["hydrometric"]
+    before = sizes(repo)["land/hydrometric"]
     _, summary = run(local_config, first, "wis2_20261101T0000Z")
     assert summary["hydrometric"]["rows_written"] == 0
     assert summary["hydrometric"]["lines_in_older_rows"] == 24
-    assert sizes(repo)["hydrometric"] == before == 36
+    assert sizes(repo)["land/hydrometric"] == before == 36
 
 
 def gamic_volume(
@@ -535,9 +558,14 @@ def test_a_gamic_volume_is_stored_raw_under_odim_quantity_names(local_config):
     _, summary = run(
         local_config, [(CY_KEY.format("LONGRANGE_PFO_20261101000000_00.h5"), body, ARRIVED)]
     )
-    assert summary["radar_gamic"]["volumes_written"] == {"radar/cypfo_dbzh": 1, "radar/cypfo_th": 1}
+    assert summary["radar_gamic"]["volumes_written"] == {
+        "land/radar/cypfo_dbzh": 1,
+        "land/radar/cypfo_th": 1,
+    }
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
-    raw = zarr.open_group(repo.readonly_session("main").store, path="radar/cypfo_dbzh", mode="r")
+    raw = zarr.open_group(
+        repo.readonly_session("main").store, path="land/radar/cypfo_dbzh", mode="r"
+    )
     source = h5py.File(io.BytesIO(body), "r")
     np.testing.assert_array_equal(raw["counts"][0, 1], source["scan1/moment_0"][()])
     assert raw["counts"].dtype == np.uint16 and raw["counts"].attrs["gamic_moment"] == "Zh"
@@ -545,10 +573,10 @@ def test_a_gamic_volume_is_stored_raw_under_odim_quantity_names(local_config):
     # 1 is dyn_range_min, 65535 dyn_range_max.
     gain, offset = raw["gain"][0, 0], raw["offset"][0, 0]
     assert offset + gain == pytest.approx(-64.0) and offset + gain * 65535 == pytest.approx(128.0)
-    th = zarr.open_group(repo.readonly_session("main").store, path="radar/cypfo_th", mode="r")
+    th = zarr.open_group(repo.readonly_session("main").store, path="land/radar/cypfo_th", mode="r")
     assert th["offset"][0, 0] + th["gain"][0, 0] * 255 == pytest.approx(95.5)
     ds = xr.open_zarr(
-        repo.readonly_session("main").store, group="radar/cypfo_dbzh", consolidated=False
+        repo.readonly_session("main").store, group="land/radar/cypfo_dbzh", consolidated=False
     )
     # Rays stay in scan order, with their azimuths.
     assert ds["azimuth_start"].values[0, 0, :3].tolist() == [73.0, 74.0, 75.0]
@@ -565,7 +593,7 @@ def test_gamic_volumes_backfill_windows_already_written_for_odim_once(local_conf
     # The window as written before GAMIC volumes were taken: ODIM radar ledgered.
     run(local_config, window_objects())
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
-    assert PARTITION in ledger(repo, group="radar")
+    assert PARTITION in ledger(repo, group="land/radar")
     body = gamic_volume()
     cyprus = [
         (CY_KEY.format("LONGRANGE_PFO_20261101000000_00.h5"), body, ARRIVED),
@@ -574,7 +602,10 @@ def test_gamic_volumes_backfill_windows_already_written_for_odim_once(local_conf
     target, summary = run(local_config, window_objects() + cyprus)
     assert {"reports", "hydrometric", "radar"} <= target._written
     assert summary["radar_gamic"]["duplicate_copies"] == 2
-    assert summary["radar_gamic"]["volumes_written"] == {"radar/cypfo_dbzh": 1, "radar/cypfo_th": 1}
+    assert summary["radar_gamic"]["volumes_written"] == {
+        "land/radar/cypfo_dbzh": 1,
+        "land/radar/cypfo_th": 1,
+    }
     assert PARTITION in radar.parent_ledger(repo, radar.GAMIC_LEDGER)
     before = sizes(repo)
     again = land.LandTarget(local_config, workers=1)
@@ -582,7 +613,7 @@ def test_gamic_volumes_backfill_windows_already_written_for_odim_once(local_conf
     assert not any(again.wants(k, len(b)) for k, b, _ in window_objects() + cyprus)
     _, summary = run(local_config, window_objects() + cyprus)
     assert sizes(repo) == before and "radar_gamic" not in summary
-    for group in ("radar/cypfo_dbzh", "radar/cypfo_th"):
+    for group in ("land/radar/cypfo_dbzh", "land/radar/cypfo_th"):
         stored = zarr.open_group(repo.readonly_session("main").store, path=group, mode="r")
         assert stored["time"].shape[0] == 1
         assert PARTITION in radar.parent_ledger(repo, radar.GAMIC_LEDGER, group)
@@ -611,7 +642,7 @@ def cyprus_group(config, group: str) -> xr.Dataset:
 def test_lca_local_times_are_converted_to_utc(local_config, date, hours):
     _, summary = run(local_config, [cyprus("LCA", date, hours)])
     assert summary["radar_gamic"]["local_time_converted"] == 1
-    ds = cyprus_group(local_config, "radar/cylca_dbzh")
+    ds = cyprus_group(local_config, "land/radar/cylca_dbzh")
     nominal = np.datetime64(date.rstrip("Z"), "ns")
     assert ds["time"].values[0] == nominal
     assert ds["sweep_start_time"].values[0, 0] == nominal
@@ -626,8 +657,8 @@ def test_lca_local_times_are_converted_to_utc(local_config, date, hours):
 def test_pfo_utc_times_are_unchanged_and_agree_with_lca(local_config):
     date = "2026-11-01T00:00:00.000Z"
     run(local_config, [cyprus("PFO", date, 0), cyprus("LCA", date, 2)])
-    pfo = cyprus_group(local_config, "radar/cypfo_dbzh")
-    lca = cyprus_group(local_config, "radar/cylca_dbzh")
+    pfo = cyprus_group(local_config, "land/radar/cypfo_dbzh")
+    lca = cyprus_group(local_config, "land/radar/cylca_dbzh")
     assert float(pfo["time_offset_removed"][0]) == 0
     np.testing.assert_array_equal(pfo["sweep_start_time"].values, lca["sweep_start_time"].values)
     assert pfo["end_time"].values[0] == lca["end_time"].values[0]
@@ -637,7 +668,7 @@ def test_an_unrecognised_offset_is_stored_as_given_and_counted(local_config):
     date = "2026-11-01T00:00:00.000Z"
     _, summary = run(local_config, [cyprus("LCA", date, 5)])
     assert summary["radar_gamic"]["unrecognised_time_offset"] == 1
-    ds = cyprus_group(local_config, "radar/cylca_dbzh")
+    ds = cyprus_group(local_config, "land/radar/cylca_dbzh")
     assert np.isnan(float(ds["time_offset_removed"][0]))
     assert ds["sweep_start_time"].values[0, 0] == np.datetime64("2026-11-01T05:00:00", "ns")
 

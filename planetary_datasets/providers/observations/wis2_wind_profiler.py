@@ -3,8 +3,8 @@
 Part of the ``upper_air`` archive target
 (:mod:`planetary_datasets.providers.observations.wis2_upper_air`): the GTS relays' BUFR
 bulletins with T1T2A1 = ``IUP`` (wind profiles) are decoded here and written to their own
-group, ``wind_profiler``, of ``bkr/obs/wis2_upper_air.icechunk``. The soundings at the root
-of the store are untouched.
+group, ``upper_air/wind_profiler``, of ``bkr/obs/wis2.icechunk``. The soundings beside it
+(``upper_air/soundings``) are untouched.
 
 Seen in the cache (objects per 12-hour window, both relays together)::
 
@@ -23,7 +23,8 @@ Seen in the cache (objects per 12-hour window, both relays together)::
 Each bulletin is relayed by both the DWD and JMA gateways; many radar bulletins are empty
 (no levels reported) and are counted, not stored.
 
-Layout (``xr.open_zarr(store, group="wind_profiler", consolidated=False)``)::
+Layout (``xr.open_zarr(store, group="upper_air/wind_profiler", consolidated=False)``), plus
+the quality flags of :mod:`~planetary_datasets.providers.observations.wis2_qc`::
 
     profile (one row per station and observation time): profile_id, station_id,
         wmo_station_id, wigos_station_id, short_station_name, time, time_significance,
@@ -65,10 +66,10 @@ from loguru import logger
 
 from planetary_datasets.config import Config
 from planetary_datasets.providers.observations import wis2_upper_air as ua
-from planetary_datasets.providers.observations.wis2_targets import clean, split_bufr
+from planetary_datasets.providers.observations.wis2_targets import clean, split_bufr, store_repo
 
 #: The group of the upper-air store holding the profiles.
-GROUP = "wind_profiler"
+GROUP = "upper_air/wind_profiler"
 #: GTS BUFR wind-profile bulletins (T1T2A1 = IUP), any A2.
 GTS_PROFILER_PATH = re.compile(r"/data/core/I/U/P/[A-Z]/")
 #: BUFR Table A categories profiles come in: vertical soundings (2) and radar (6).
@@ -811,9 +812,10 @@ def write(profiles: Sequence[Profile], config: Config, label: str | None, counts
         describe_variables,
         mark_written,
     )
+    from planetary_datasets.providers.observations import wis2_qc
 
     counts["decoded"] += len(profiles)
-    repo = config.icechunk_repo(ua.STORE_PREFIX)
+    repo = store_repo(config)
     if label is not None and written(repo, label):
         counts["window_already_written"] += 1
         return 0
@@ -824,6 +826,7 @@ def write(profiles: Sequence[Profile], config: Config, label: str | None, counts
             mark_written(repo, label, label=f"wis2_upper_air {GROUP}", group=GROUP)
         return 0
     ds = to_dataset(keep, first_profile, first_level)
+    ds = wis2_qc.flag(ds, GROUP)
     if not append_partition(repo, ds, label, label=f"wis2_upper_air {GROUP}", group=GROUP):
         counts["window_already_written"] += 1
         return 0

@@ -108,8 +108,8 @@ def test_the_target_writes_a_group_per_product_with_first_arrivals(local_config)
     assert summary["gnss_ro_duplicates"] == 1
 
     tree = xr.open_datatree(store(local_config), engine="zarr", consolidated=False)
-    assert set(GROUPS.values()) <= set(tree.children)
-    ro = xr.open_zarr(store(local_config), group="gnss_ro", consolidated=False)
+    assert set(GROUPS.values()) <= set(tree["satellite"].children)
+    ro = xr.open_zarr(store(local_config), group="satellite/gnss_ro", consolidated=False)
     assert ro.sizes["observation"] == 3
     assert ro["bending_angle"].dims == ("observation", "bending_angle_n")
     relayed = ro["source_key"].values.tolist().index(key("ro_gts_iut").replace("jp-jma", "de-dwd"))
@@ -117,13 +117,13 @@ def test_the_target_writes_a_group_per_product_with_first_arrivals(local_config)
     assert ro["arrival_time"].values[relayed] == np.datetime64(earlier.replace(tzinfo=None))
     assert ro["first_arrival_time"].attrs["long_name"].startswith("earliest time any copy")
 
-    amv = xr.open_zarr(store(local_config), group="amv", consolidated=False)
+    amv = xr.open_zarr(store(local_config), group="satellite/amv", consolidated=False)
     expected = sum(
         sat.decode_object(key(n), body(n), ARRIVED)[1]["time"].size
         for n in ("amv_avhrr", "amv_gts_iev")
     )
     assert amv.sizes["observation"] == expected
-    altimetry = xr.open_zarr(store(local_config), group="altimetry", consolidated=False)
+    altimetry = xr.open_zarr(store(local_config), group="satellite/altimetry", consolidated=False)
     templates = set(altimetry["bufr_template"].values.tolist())
     assert len(templates) == 2, "SRAL (340017) and Jason (340010) side by side"
 
@@ -139,13 +139,13 @@ def test_a_later_window_with_a_different_template_widens_the_group(local_config)
     first = sat.SatelliteTarget(local_config, workers=1)
     first.feed(key("altimetry_sral"), body("altimetry_sral"), ARRIVED)
     first.finish(None, None, "a")
-    stored = xr.open_zarr(store(local_config), group="altimetry", consolidated=False)
+    stored = xr.open_zarr(store(local_config), group="satellite/altimetry", consolidated=False)
     before, names_before = stored.sizes["observation"], set(stored.data_vars)
 
     second = sat.SatelliteTarget(local_config, workers=1)
     second.feed(key("altimetry_gts_isz"), body("altimetry_gts_isz"), ARRIVED)
     second.finish(None, None, "b")
-    stored = xr.open_zarr(store(local_config), group="altimetry", consolidated=False)
+    stored = xr.open_zarr(store(local_config), group="satellite/altimetry", consolidated=False)
     added = sat.decode_object(key("altimetry_gts_isz"), body("altimetry_gts_isz"), ARRIVED)[1]
     assert stored.sizes["observation"] == before + added["time"].size
     assert names_before < set(stored.data_vars), "Jason's elements join SRAL's"
@@ -274,14 +274,14 @@ def test_new_groups_are_backfilled_into_a_window_the_others_hold(local_config):
     assert summary["seviri_asr_duplicates"] == expected["seviri_asr"]
 
     tree = xr.open_datatree(store(local_config), engine="zarr", consolidated=False)
-    assert {"amv", "altimetry", *expected} <= set(tree.children)
+    assert {"amv", "altimetry", *expected} <= set(tree["satellite"].children)
     for group, rows in expected.items():
-        ds = xr.open_zarr(store(local_config), group=group, consolidated=False)
+        ds = xr.open_zarr(store(local_config), group=sat.store_group(group), consolidated=False)
         assert ds.sizes["observation"] == rows
         assert ds.attrs["partitions_written"] == [window]
-    seviri = xr.open_zarr(store(local_config), group="seviri_asr", consolidated=False)
+    seviri = xr.open_zarr(store(local_config), group="satellite/seviri_asr", consolidated=False)
     assert not seviri["source_key"].isin([relayed]).any(), "the earlier copy is kept"
-    amv = xr.open_zarr(store(local_config), group="amv", consolidated=False)
+    amv = xr.open_zarr(store(local_config), group="satellite/amv", consolidated=False)
     assert amv.sizes["observation"] == first.counts["amv_observations"]
 
     again = sat.SatelliteTarget(local_config, workers=1)
@@ -378,7 +378,7 @@ def test_ami_vectors_are_backfilled_into_amv_once_without_repeats(
     summary = again.finish(None, None, "w")
     assert summary["rows"] == {"amv": 0 if relayed_before else 40}, summary
 
-    amv = xr.open_zarr(store(local_config), group="amv", consolidated=False)
+    amv = xr.open_zarr(store(local_config), group="satellite/amv", consolidated=False)
     ids = amv["observation_identity"].values
     assert ids.size == stored + (0 if relayed_before else 40)
     assert ids.size == np.unique(ids).size, "a relayed copy is found, not repeated"

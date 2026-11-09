@@ -1,9 +1,33 @@
-"""Archive targets: stores built from the WIS2 objects as each archive window streams.
+"""Archive targets: the WIS2 store, built from the objects as each archive window streams.
 
 :mod:`~planetary_datasets.providers.observations.wis2_archive` streams every object of a
 12-hour window into a tar. Each registered target sees those objects too and turns the
-ones it wants into an Icechunk store (aircraft reports, ocean, upper-air, land
-observations, ...):
+ones it wants into groups of one Icechunk store, :data:`STORE_PREFIX`
+(``bkr/obs/wis2.icechunk``). Every target writes groups of its own; nothing is stored at
+the root but the store's description (its attributes)::
+
+    aircraft                      aircraft reports (AMDAR)            wis2_aircraft
+    land/reports                  land station reports (BUFR)         wis2_land
+    land/hydrometric              river level and discharge           wis2_land_hydrometric
+    land/radar/<node>_<quantity>  weather-radar polar volumes         wis2_land_radar
+    land/synop_tac                land SYNOP text reports             wis2_tac
+    ocean/surface                 buoys, ships, wave buoys            wis2_ocean
+    ocean/profiles                Argo and buoy profiles (ragged)     wis2_ocean
+    ocean/ship_tac                SHIP text reports                   wis2_tac
+    upper_air/soundings           radiosondes, dropsondes (ragged)    wis2_upper_air
+    upper_air/wind_profiler       wind profiles (ragged)              wis2_wind_profiler
+    satellite/<instrument>        sounder radiances (atms, iasi, ...) wis2_satellite
+    satellite/<product>           other satellite products            wis2_satellite_products
+
+The parent groups (``land``, ``land/radar``, ``ocean``, ``upper_air``, ``satellite``) hold
+no arrays; ``land/radar`` keeps the radar ledgers. Each group keeps its own ledger of the
+windows written (``partitions_written``): that ledger, not the archive's per-window target
+record, says what the store holds. Every observation group carries per-observation quality
+flags (:mod:`~planetary_datasets.providers.observations.wis2_qc`). Open the whole store
+with ``xr.open_datatree(store, engine="zarr", consolidated=False)``, one group with
+``xr.open_zarr(store, group="land/reports", consolidated=False)``.
+
+Each target:
 
 * :meth:`ArchiveTarget.wants` is called for every object (keep it cheap: a key match);
 * :meth:`ArchiveTarget.feed` gets each wanted object's bytes as it streams past; it must
@@ -20,7 +44,7 @@ and registers a factory::
 
     @register("aircraft")
     class AircraftTarget(QueuedTarget):
-        store_prefix = "bkr/obs/wis2_aircraft.icechunk"
+        store_prefix = STORE_PREFIX   # every target writes groups of the one store
 
         def wants(self, key, size):
             return AIRCRAFT_KEY.match(key) is not None
@@ -53,12 +77,95 @@ from loguru import logger
 from planetary_datasets.config import Config
 
 #: Modules of this package that are not targets.
-NOT_TARGETS = {"wis2_archive", "wis2_targets"}
+NOT_TARGETS = {"wis2_archive", "wis2_targets", "wis2_qc"}
 #: Objects waiting to be decoded per target; a full queue makes the archive wait.
 QUEUE_SIZE = 20_000
 
 #: name -> factory taking the configuration.
 TARGETS: dict[str, Callable[[Config], "ArchiveTarget"]] = {}
+
+#: The one store every WIS2 archive target writes, each into groups of its own.
+STORE_PREFIX = "bkr/obs/wis2.icechunk"
+#: Groups that only hold other groups, created (in this order) before any is written, so
+#: writers of sibling groups never race to create their parent.
+PARENT_GROUPS = ("land", "land/radar", "ocean", "upper_air", "satellite")
+#: The store's own attributes: what it is and where everything is.
+ROOT_ATTRS = {
+    "title": "Observations from the WMO WIS2 Global Cache",
+    "source": "WMO WIS2 Global Cache (s3://wis2globalcache), as archived in bkr/obs/wis2",
+    "layout": (
+        "one group per kind of observation: aircraft; land/reports, land/hydrometric, "
+        "land/radar/<node>_<quantity>, land/synop_tac; ocean/surface, ocean/profiles, "
+        "ocean/ship_tac; upper_air/soundings, upper_air/wind_profiler; "
+        "satellite/<instrument or product>. Open one with "
+        "xr.open_zarr(store, group='land/reports', consolidated=False), all with "
+        "xr.open_datatree(store, engine='zarr', consolidated=False)"
+    ),
+    "ledger": "each group lists the archive windows it holds in partitions_written",
+    "quality_control": (
+        "values are as reported, never altered or masked; observation groups carry "
+        "quality_flag (level_quality_flag on the levels of profiles) and <variable>_quality "
+        "flags, described by their flag_masks and flag_meanings"
+    ),
+    "Conventions": "CF-1.11",
+}
+
+
+def _layout_missing(store) -> tuple[bool, list[str]]:
+    """Whether the root's attributes differ from :data:`ROOT_ATTRS`, and parents absent."""
+    import zarr
+
+    try:
+        root = zarr.open_group(store, mode="r")
+    except (FileNotFoundError, KeyError, zarr.errors.GroupNotFoundError):
+        return True, list(PARENT_GROUPS)
+    attrs_differ = any(root.attrs.get(k) != v for k, v in ROOT_ATTRS.items())
+    absent = []
+    for path in PARENT_GROUPS:
+        try:
+            zarr.open_group(store, path=path, mode="r")
+        except (FileNotFoundError, KeyError, zarr.errors.GroupNotFoundError):
+            absent.append(path)
+    return attrs_differ, absent
+
+
+def ensure_layout(repo) -> None:
+    """Create the parent groups and the root's attributes, if not there yet.
+
+    Cheap once the store is laid out: one read-only look, no commit. The parents are made
+    before any group is written, so writers of sibling groups (the satellite groups, four
+    at a time) never both create ``satellite`` and conflict.
+    """
+    import icechunk
+    import zarr
+
+    from planetary_datasets.common.multidim import COMMIT_ATTEMPTS
+
+    if _layout_missing(repo.readonly_session("main").store) == (False, []):
+        return
+    for attempt in range(1, COMMIT_ATTEMPTS + 1):
+        session = repo.writable_session("main")
+        attrs_differ, absent = _layout_missing(session.store)
+        if not attrs_differ and not absent:
+            return
+        root = zarr.open_group(session.store, mode="a")
+        if attrs_differ:
+            root.attrs.update(ROOT_ATTRS)
+        for path in absent:
+            zarr.open_group(session.store, path=path, mode="a")
+        try:
+            session.commit("wis2: lay out the store", rebase_with=icechunk.ConflictDetector())
+            return
+        except (icechunk.ConflictError, icechunk.RebaseFailedError):
+            if attempt == COMMIT_ATTEMPTS:
+                raise
+
+
+def store_repo(config: Config):
+    """The WIS2 store's repository, laid out (:func:`ensure_layout`) and ready to write."""
+    repo = config.icechunk_repo(STORE_PREFIX)
+    ensure_layout(repo)
+    return repo
 
 
 def register(name: str):
@@ -107,10 +214,11 @@ class ArchiveTarget(abc.ABC):
     #: Registered name, set by :func:`register`.
     name: str = ""
     registered: bool = False
-    #: The store this target writes, e.g. ``bkr/obs/wis2_aircraft.icechunk``.
-    store_prefix: str = ""
+    #: The store this target writes: every target writes groups of :data:`STORE_PREFIX`.
+    store_prefix: str = STORE_PREFIX
 
     def __init__(self, config: Config):
+        """A target writing with ``config``."""
         self.config = config
 
     def prepare(self, partition: str) -> None:
@@ -143,6 +251,7 @@ class QueuedTarget(ArchiveTarget):
     """
 
     def __init__(self, config: Config):
+        """A target writing with ``config``; its worker starts on the first object."""
         super().__init__(config)
         self.decoded = 0
         self.failed = 0
@@ -160,6 +269,7 @@ class QueuedTarget(ArchiveTarget):
         """Append what was decoded to the store."""
 
     def feed(self, key: str, body: bytes, arrived: dt.datetime | None) -> None:
+        """Queue an object for the worker thread (waits while the queue is full)."""
         if self._thread is None:
             self._thread = threading.Thread(
                 target=self._work, name=f"wis2-{self.name}", daemon=True
@@ -180,6 +290,7 @@ class QueuedTarget(ArchiveTarget):
     def finish(
         self, window_start: dt.datetime | None, window_end: dt.datetime | None, partition: str
     ) -> dict[str, Any]:
+        """Let the worker finish the queue, then write; a summary back."""
         if self._thread is not None:
             self._queue.put(None)
             self._thread.join()
@@ -210,9 +321,11 @@ class Router:
     """Hands each archived object to the targets that want it."""
 
     def __init__(self, targets: list[ArchiveTarget]):
+        """A router over ``targets``."""
         self.targets = targets
 
     def __call__(self, key: str, size: int, body: bytes, arrived: dt.datetime | None) -> None:
+        """Hand one object to every target that wants it; never raises."""
         data = None
         for target in self.targets:
             try:

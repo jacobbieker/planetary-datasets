@@ -1,4 +1,4 @@
-"""Satellite products other than sounder radiances, for ``bkr/obs/wis2_satellite.icechunk``.
+"""Satellite products other than sounder radiances: ``satellite/<product>`` groups.
 
 The satellite archive target (:mod:`.wis2_satellite`) writes these beside its radiance
 groups, one group per product family, from both the WIS2 ``space-based-observations``

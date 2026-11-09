@@ -69,8 +69,8 @@ def decode(key: str, counts: Counter | None = None) -> list[wp.Profile]:
     return wp.decode_object(key, body(key), ARRIVED, counts if counts is not None else Counter())
 
 
-def stored(local_config, group: str | None = None) -> xr.Dataset:
-    """The local store's root, or ``group``, as a dataset."""
+def stored(local_config, group: str = ua.GROUP) -> xr.Dataset:
+    """A group of the local store (the soundings by default), as a dataset."""
     repo = local_config.icechunk_repo(ua.STORE_PREFIX)
     return xr.open_zarr(repo.readonly_session("main").store, group=group, consolidated=False)
 
@@ -249,7 +249,7 @@ def test_the_group_is_ragged_lossless_and_written_once_per_window(local_config):
 
     from planetary_datasets.common.multidim import ledger
 
-    assert PARTITION in ledger(repo)
+    assert PARTITION in ledger(repo, group=ua.GROUP)
     assert PARTITION in ledger(repo, group=wp.GROUP)
 
     # The same window again: both groups decline their objects and nothing is written.

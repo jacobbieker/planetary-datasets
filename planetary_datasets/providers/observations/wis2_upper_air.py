@@ -1,8 +1,9 @@
-"""Upper-air soundings from the WIS2 Global Cache, as one ragged Icechunk store.
+"""Upper-air soundings from the WIS2 Global Cache, as a ragged group of the WIS2 store.
 
 An archive target of :mod:`planetary_datasets.providers.observations.wis2_archive`: as each
 12-hour window of the cache is streamed into its tar, the objects that can hold soundings
-are handed here, decoded with ecCodes, and appended to ``bkr/obs/wis2_upper_air.icechunk``.
+are handed here, decoded with ecCodes, and appended to the ``upper_air/soundings`` group of
+``bkr/obs/wis2.icechunk`` (:mod:`~planetary_datasets.providers.observations.wis2_targets`).
 
 What counts as a sounding is decided by each BUFR message's own header, BUFR Table A data
 category 2 ("vertical soundings, other than satellite"), whatever the object is called:
@@ -21,10 +22,12 @@ Objects are picked out cheaply by key first (:func:`wanted`): the GTS relays' BU
 bulletins (``.../I/U/<A1>/...`` with A1 in ``D J K S W X``; ``IUA`` is aircraft, ``IUE``/
 ``IUF``/``IUT``/``IUV`` satellite, ``IUP``/``IUC`` radar and other) and the WIS2 topics for
 soundings and profilers. TAC text (``U*`` bulletins, ``.txt``) is not parsed. Wind-profile
-bulletins (``IUP*``) go to the store's ``wind_profiler`` group instead
+bulletins (``IUP*``) go to the store's ``upper_air/wind_profiler`` group instead
 (:mod:`~planetary_datasets.providers.observations.wis2_wind_profiler`).
 
-Layout (``xr.open_zarr`` opens it directly)::
+Layout (``xr.open_zarr(store, group="upper_air/soundings", consolidated=False)``), plus
+the quality flags of :mod:`~planetary_datasets.providers.observations.wis2_qc`
+(``quality_flag`` per sounding, ``level_quality_flag`` per level, ``<variable>_quality``)::
 
     sounding (one row per launch):  sounding_id, station_id, wmo_station_id,
         wigos_station_id, ship_or_mobile_station_id, flight_number, launch_time,
@@ -73,12 +76,15 @@ from loguru import logger
 
 from planetary_datasets.config import Config, get_config
 from planetary_datasets.providers.observations.wis2_targets import (
+    STORE_PREFIX,
     QueuedTarget,
     register,
     split_bufr,
+    store_repo,
 )
 
-STORE_PREFIX = "bkr/obs/wis2_upper_air.icechunk"
+#: The group of the WIS2 store (:data:`STORE_PREFIX`) the soundings go to.
+GROUP = "upper_air/soundings"
 
 #: BUFR Table A: vertical soundings (other than satellite).
 SOUNDING_CATEGORY = 2
@@ -224,9 +230,11 @@ class Sounding:
 
     @property
     def level_count(self) -> int:
+        """The number of levels."""
         return len(self.levels["pressure"])
 
     def fingerprint(self) -> str:
+        """A hash of the levels' values, telling parts and re-issues apart."""
         digest = hashlib.sha1()
         for name in ("pressure", "geopotential_height", "temperature", "wind_speed"):
             digest.update(np.nan_to_num(self.levels[name], nan=-1e9).astype("<f8").tobytes())
@@ -234,6 +242,7 @@ class Sounding:
 
     @property
     def identity(self) -> str:
+        """Station, launch time, sub-category and fingerprint."""
         launch = self.header["launch_time"]
         stamp = "NaT" if launch is None else pd.Timestamp(launch).strftime("%Y%m%dT%H%M%S")
         return (
@@ -581,11 +590,12 @@ def deduplicate(soundings: Iterable[Sounding], stored: set[str], counts: Counter
 class UpperAirTarget(QueuedTarget):
     """The archive target: soundings and wind profiles decoded as objects stream past.
 
-    Soundings go to the root of the store and wind profiles (GTS ``IUP*``, see
-    :mod:`~planetary_datasets.providers.observations.wis2_wind_profiler`) to its
-    ``wind_profiler`` group. Each keeps its own ledger of windows, so re-running the target
-    over an archived window writes only the group that lacks it: :meth:`prepare` notes the
-    groups already holding the window and :meth:`wants` declines their objects.
+    Soundings go to the store's ``upper_air/soundings`` group and wind profiles (GTS
+    ``IUP*``, see :mod:`~planetary_datasets.providers.observations.wis2_wind_profiler`) to
+    its ``upper_air/wind_profiler`` group. Each keeps its own ledger of windows, so
+    re-running the target over an archived window writes only the group that lacks it:
+    :meth:`prepare` notes the groups already holding the window and :meth:`wants` declines
+    their objects.
     """
 
     store_prefix = STORE_PREFIX
@@ -605,9 +615,9 @@ class UpperAirTarget(QueuedTarget):
         from planetary_datasets.common.multidim import ledger
         from planetary_datasets.providers.observations import wis2_wind_profiler as profiler
 
-        repo = self.config.icechunk_repo(self.store_prefix)
+        repo = store_repo(self.config)
         held = set()
-        for name, group in (("soundings", None), ("wind_profiler", profiler.GROUP)):
+        for name, group in (("soundings", GROUP), ("wind_profiler", profiler.GROUP)):
             if partition in ledger(repo, group=group):
                 held.add(name)
         self._written = held
@@ -676,7 +686,7 @@ def _stored_ids(repo) -> tuple[set[str], int, int]:
     from planetary_datasets.common.store import STORE_READ_ERRORS
 
     try:
-        group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+        group = zarr.open_group(repo.readonly_session("main").store, path=GROUP, mode="r")
         ids = group["sounding_id"]
     except (*STORE_READ_ERRORS, KeyError, zarr.errors.GroupNotFoundError):
         return set(), 0, 0
@@ -694,24 +704,26 @@ def write(soundings: Sequence[Sounding], config: Config, label: str | None, coun
         ledger,
         mark_written,
     )
+    from planetary_datasets.providers.observations import wis2_qc
 
     counts["decoded"] += len(soundings)
-    repo = config.icechunk_repo(STORE_PREFIX)
-    if label is not None and label in ledger(repo):
+    repo = store_repo(config)
+    if label is not None and label in ledger(repo, group=GROUP):
         counts["window_already_written"] += 1
         return 0
     stored, first_sounding, first_level = _stored_ids(repo)
     keep = deduplicate(soundings, stored, counts)
     if not keep:
         if label is not None and first_sounding:
-            mark_written(repo, label, label="wis2_upper_air")
+            mark_written(repo, label, label="wis2_upper_air", group=GROUP)
         return 0
     ds = to_dataset(keep, first_sounding, first_level)
-    append_partition(repo, ds, label, label="wis2_upper_air")
+    append_partition(repo, wis2_qc.flag(ds, GROUP), label, label="wis2_upper_air", group=GROUP)
     describe_variables(
         repo,
         {name: SOUNDING_ATTRS[name] for name in ("arrival_time", "first_arrival_time")},
         label="wis2_upper_air",
+        group=GROUP,
     )
     counts["levels_written"] += int(ds.sizes["level"])
     return len(keep)
