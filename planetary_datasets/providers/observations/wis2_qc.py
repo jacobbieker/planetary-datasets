@@ -1118,13 +1118,13 @@ def spec_for(group: str) -> Spec:
     Raises:
         KeyError: The group is not one this module knows.
     """
-    from planetary_datasets.providers.observations import wis2_satellite as sat
-
     if group in SPECS:
         return SPECS[group]
     if group.startswith("land/radar/"):
         return SPECS["land/radar"]
     if group.startswith("satellite/"):
+        from planetary_datasets.providers.observations import wis2_satellite as sat
+
         name = group.removeprefix("satellite/")
         if name in sat.INSTRUMENTS:
             return SPECS["satellite/radiances"]

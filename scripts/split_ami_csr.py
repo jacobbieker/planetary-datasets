@@ -177,6 +177,9 @@ def split(repo, apply: bool = False) -> dict[str, Any]:
         if array.shape[0] != keep.size:
             continue
         used = compact(array, keep)
+        # A quality flag of all zeros ("no check found a problem") is data, not fill.
+        if "flag_masks" in array.attrs:
+            used[:] = True
         if not used.any():
             del node[name]
             removed.append(name)

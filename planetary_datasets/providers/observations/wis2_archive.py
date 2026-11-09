@@ -799,10 +799,12 @@ def pending_budget() -> dt.timedelta:
 
     :data:`PENDING_BUDGET`, or half as long again as the longest recent run: re-ingesting
     every target over an archive takes longer than the one target a backfill usually
-    runs, and must still end before the next window is due.
+    runs, and must still end before the next window is due. Capped at half the window
+    interval, so one very long run cannot leave a budget no gap between windows meets
+    (no pending run would start again, and none would record a shorter time).
     """
     longest = max(_PENDING_RUNS, default=dt.timedelta(0))
-    return max(PENDING_BUDGET, longest * 1.5)
+    return min(max(PENDING_BUDGET, longest * 1.5), EVERY / 2)
 
 
 def follow(config: Config | None = None, targets: Sequence[str] | None = None) -> None:

@@ -659,6 +659,12 @@ def test_targets_are_told_the_window_before_it_streams(monkeypatch):
     assert seen == ["wis2_20261027T1200Z"] and target.keys == []
 
 
+def test_one_very_long_pending_run_cannot_stall_the_backfill(monkeypatch):
+    """The budget stays below the window interval, so a later gap can still meet it."""
+    monkeypatch.setattr(wis2, "_PENDING_RUNS", [dt.timedelta(hours=10)])
+    assert wis2.pending_budget() == wis2.EVERY / 2
+
+
 def test_a_long_pending_run_leaves_more_time_before_the_next_window(monkeypatch):
     """Re-ingesting every target over an archive must still end before the next window."""
     dest = FakeDest()
