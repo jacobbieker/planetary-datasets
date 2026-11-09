@@ -229,11 +229,13 @@ def test_time_budget_stops_between_commits_and_a_rerun_resumes(old_mirs, tmp_pat
 
 
 def test_an_empty_group_needs_an_end(old_mirs):
+    """With nothing in the group and no tag, there is no end to default to."""
     with pytest.raises(tool.MigrationError, match="give --end"):
         tool.Copier("mirs_img")
 
 
 def test_the_boundary_is_recorded_once_and_not_by_a_dry_run(old_mirs, tmp_path):
+    """The lane-start tag is written by the first writing run only."""
     lane = JpssMirsImgProvider()
     later = HOUR + pd.Timedelta(3, "h")
     files = [write_mirs(tmp_path, mirs_name("n20", later + pd.Timedelta(10, "min")))]
@@ -398,3 +400,22 @@ def test_command_line_dry_run_and_budget(old_mirs):
     assert not (pathlib.Path(old_mirs.store_path("bkr/polar/jpss.icechunk")) / "mirs_img").exists()
     assert tool.main(["--product", "mirs_img", "--end", end]) == 0
     assert stored(JpssMirsImgProvider()).sizes["granule"] == 6
+
+
+def test_an_explicit_end_still_records_the_lane_start(old_mirs, tmp_path):
+    """A first run given --end must not leave a later default-end run with nothing to do."""
+    lane = JpssMirsImgProvider()
+    later = HOUR + pd.Timedelta(3, "h")
+    files = [write_mirs(tmp_path, mirs_name("n20", later + pd.Timedelta(10, "min")))]
+    assert lane.write_to_icechunk(lane.get_icechunk_repo(), lane.process(files, later))
+    assert tool.Copier("mirs_img", end=HOUR + pd.Timedelta(1, "h")).run().copied == 3
+    resumed = tool.Copier("mirs_img")
+    assert resumed.end == pd.Timestamp("2026-07-20T15:10:15.8")
+    assert resumed.run().copied == 3
+
+
+def test_a_group_the_copy_creates_records_the_given_end(old_mirs):
+    """With no lane start known, a later default-end run stops where the first one did."""
+    first_end = HOUR + pd.Timedelta(1, "h")
+    assert tool.Copier("mirs_img", end=first_end).run().copied == 3
+    assert tool.Copier("mirs_img").end == first_end

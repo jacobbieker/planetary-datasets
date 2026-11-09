@@ -484,17 +484,22 @@ class Copier:
             MigrationError: There is no end to default to.
         """
         self._unrecorded: Optional[pd.Timestamp] = None
+        if self.spec.end is not None:
+            return pd.Timestamp(end if end is not None else self.spec.end)
+        boundary = self.recorded_boundary()
+        if boundary is None and self.group is not None and "time" in self.group:
+            # Recorded even when this run is given an explicit end: whatever it copies
+            # makes the group's earliest time a copied row from then on.
+            boundary = self._unrecorded = pd.Timestamp(np.nanmin(self.group["time"].values))
+        elif boundary is None and end is not None:
+            # The copy creates the group, so no lane start is known; the given end is the
+            # only boundary a later default-end run can safely stop at.
+            self._unrecorded = pd.Timestamp(end)
         if end is not None:
             return pd.Timestamp(end)
-        if self.spec.end is not None:
-            return pd.Timestamp(self.spec.end)
-        recorded = self.recorded_boundary()
-        if recorded is not None:
-            return recorded
-        if self.group is None or "time" not in self.group:
+        if boundary is None:
             raise MigrationError(f"{self.product}: the group is empty; give --end")
-        self._unrecorded = pd.Timestamp(np.nanmin(self.group["time"].values))
-        return self._unrecorded
+        return boundary
 
     def slices(self) -> Iterator[Tuple[pd.Timestamp, pd.Timestamp]]:
         """``[start, end)`` of every slice, oldest first."""
