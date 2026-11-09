@@ -1,22 +1,25 @@
-"""In-situ ocean observations from the WIS2 Global Cache, as one Icechunk store.
+"""In-situ ocean observations from the WIS2 Global Cache, as groups of the WIS2 store.
 
 An archive target of :mod:`planetary_datasets.providers.observations.wis2_archive`: while
 a 12-hour window of the cache streams into its tar, the objects carrying ocean
-observations are also decoded (BUFR, with ecCodes) and appended to
-``bkr/obs/wis2_ocean.icechunk``. The store has two groups, opened together with
-``xr.open_datatree(store, engine="zarr", consolidated=False)`` or one at a time with
-``xr.open_zarr(store, group=..., consolidated=False)``:
+observations are also decoded (BUFR, with ecCodes) and appended to two groups of
+``bkr/obs/wis2.icechunk`` (:mod:`~planetary_datasets.providers.observations.wis2_targets`),
+opened together with ``xr.open_datatree(store, engine="zarr", consolidated=False)`` or one
+at a time with ``xr.open_zarr(store, group="ocean/surface", consolidated=False)``. Every
+report and profile (and every profile level) carries quality flags (``quality_flag``,
+``level_quality_flag``, ``<variable>_quality``;
+:mod:`~planetary_datasets.providers.observations.wis2_qc`); values are never altered.
 
-``/surface``
+``ocean/surface``
     One row per report (dimension ``observation``): moored and drifting buoys, ships,
     uncrewed surface vehicles and wave buoys. Position, time, platform identifiers, sea
     surface temperature and salinity, air pressure, temperature, humidity, wind, the bulk
     wave parameters (ERA5's names) and surface currents, as reported, and the arrival
     times (below).
-``/profiles``
+``ocean/profiles``
     CF contiguous ragged arrays: one row per profile (dimension ``profile``: platform,
-    time, position, cycle, arrival times) and one per level (dimension ``level``: pressure or depth,
-    water temperature, salinity, dissolved oxygen, current). ``level_count`` gives each
+    time, position, cycle, arrival times) and one per level (dimension ``level``: pressure
+    or depth, water temperature, salinity, dissolved oxygen, current). ``level_count`` gives each
     profile's levels, in order (CF ``sample_dimension``). Argo floats, and the subsurface
     temperature and salinity some buoys report.
 
@@ -59,14 +62,15 @@ from loguru import logger
 
 from planetary_datasets.config import Config, get_config
 from planetary_datasets.providers.observations.wis2_targets import (
+    STORE_PREFIX,
     QueuedTarget,
     register,
     split_bufr,
 )
 
-STORE_PREFIX = "bkr/obs/wis2_ocean.icechunk"
-SURFACE = "surface"
-PROFILES = "profiles"
+#: Groups of the WIS2 store (:data:`STORE_PREFIX`) the reports and profiles go to.
+SURFACE = "ocean/surface"
+PROFILES = "ocean/profiles"
 
 #: ecCodes' missing values.
 MISSING_DOUBLE = -1e100
@@ -661,8 +665,7 @@ def stored_identities(repo, group: str) -> set[tuple]:
     import zarr
 
     try:
-        root = zarr.open_group(repo.readonly_session("main").store, mode="r")
-        node = root[group]
+        node = zarr.open_group(repo.readonly_session("main").store, path=group, mode="r")
     except (KeyError, FileNotFoundError, zarr.errors.GroupNotFoundError, ValueError):
         return set()
     if "time" not in node:
@@ -689,9 +692,11 @@ def stored_identities(repo, group: str) -> set[tuple]:
 def write(collector: Collector, partition: str, config: Config | None = None) -> dict:
     """Append a window's reports to the store, skipping any it already holds."""
     from planetary_datasets.common.multidim import append_partition, describe_variables
+    from planetary_datasets.providers.observations import wis2_qc
+    from planetary_datasets.providers.observations.wis2_targets import store_repo
 
     config = config or get_config()
-    repo = config.icechunk_repo(STORE_PREFIX)
+    repo = store_repo(config)
     summary = {"partition": partition, **dataclasses.asdict(collector.counts)}
     summary["duplicates_in_window"] = dict(collector.duplicates)
 
@@ -700,7 +705,11 @@ def write(collector: Collector, partition: str, config: Config | None = None) ->
     summary["surface_written"] = 0
     if rows:
         append_partition(
-            repo, surface_dataset(rows), partition, label="wis2 ocean surface", group=SURFACE
+            repo,
+            wis2_qc.flag(surface_dataset(rows), SURFACE),
+            partition,
+            label="wis2 ocean surface",
+            group=SURFACE,
         )
         describe_variables(repo, ARRIVAL_ATTRS, label="wis2 ocean surface", group=SURFACE)
         summary["surface_written"] = len(rows)
@@ -710,35 +719,43 @@ def write(collector: Collector, partition: str, config: Config | None = None) ->
     summary["profiles_written"] = 0
     if profiles:
         append_partition(
-            repo, profiles_dataset(profiles), partition, label="wis2 ocean profiles", group=PROFILES
+            repo,
+            wis2_qc.flag(profiles_dataset(profiles), PROFILES),
+            partition,
+            label="wis2 ocean profiles",
+            group=PROFILES,
         )
         describe_variables(repo, ARRIVAL_ATTRS, label="wis2 ocean profiles", group=PROFILES)
         summary["profiles_written"] = len(profiles)
         summary["levels_written"] = sum(len(lv) for _, lv in profiles)
-    _describe_root(repo)
+    _describe_parent(repo)
     return summary
 
 
-ROOT_ATTRS = {
+#: The ``ocean`` group (parent of the ocean groups): attributes only.
+PARENT = "ocean"
+PARENT_ATTRS = {
     "title": "In-situ ocean observations from the WMO WIS2 Global Cache",
     "source": "s3://wis2globalcache (WIS2 topics and DWD/JMA GTS relays), decoded with ecCodes",
     "groups": "surface: one row per report along observation; profiles: CF contiguous ragged "
-    "arrays, profile metadata along profile and levels along level (level_count)",
+    "arrays, profile metadata along profile and levels along level (level_count); "
+    "ship_tac: SHIP text reports (wis2_tac)",
     "featureType": "point (surface), profile (profiles)",
     "Conventions": "CF-1.11",
 }
 
 
-def _describe_root(repo) -> None:
+def _describe_parent(repo) -> None:
+    """Set :data:`PARENT_ATTRS` on the ``ocean`` group, when they differ."""
     import icechunk
     import zarr
 
     session = repo.writable_session("main")
-    root = zarr.open_group(session.store, mode="a")
-    if all(root.attrs.get(k) == v for k, v in ROOT_ATTRS.items()):
+    node = zarr.open_group(session.store, path=PARENT, mode="a")
+    if all(node.attrs.get(k) == v for k, v in PARENT_ATTRS.items()):
         return
-    root.attrs.update(ROOT_ATTRS)
-    session.commit("wis2 ocean: describe the store", rebase_with=icechunk.ConflictDetector())
+    node.attrs.update(PARENT_ATTRS)
+    session.commit("wis2 ocean: describe the group", rebase_with=icechunk.ConflictDetector())
 
 
 # ----------------------------------------------------------------------------- the target
@@ -751,18 +768,22 @@ class OceanTarget(QueuedTarget):
     store_prefix = STORE_PREFIX
 
     def __init__(self, config: Config):
+        """A target writing with ``config``."""
         super().__init__(config)
         self.collector = Collector()
 
     def wants(self, key: str, size: int) -> bool:
+        """Ocean objects (by key)."""
         return kind_of(key) is not None
 
     def decode(self, key: str, body: bytes, arrived: dt.datetime | None) -> None:
+        """Keep an object's reports and profiles (on the worker thread)."""
         self.collector.add(key, body, arrived)
 
     def write(
         self, window_start: dt.datetime | None, window_end: dt.datetime | None, partition: str
     ) -> dict:
+        """Append the window's new reports and profiles; a summary back."""
         collector, self.collector = self.collector, Collector()
         return write(collector, partition, self.config)
 

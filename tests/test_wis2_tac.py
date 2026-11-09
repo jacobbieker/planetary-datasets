@@ -165,14 +165,14 @@ def test_a_day_after_the_arrival_is_last_month():
 def test_reports_held_as_bufr_are_dropped_and_the_rest_written(local_config):
     write_bufr(local_config)
     _, summary = run(local_config, objects())
-    assert summary["synop_tac"] == {
+    assert summary[tac.LAND_GROUP] == {
         "reports": 4,  # 71421, 71472, 07005, 07999 (07998 is NIL)
         "already_stored_as_tac": 0,
         "held_as_bufr": 1,  # 07005 at 06Z
         "rows_written": 3,
     }
     assert summary["copies"] == 2  # the DWD copy of the Canadian bulletin
-    synop = open_group(local_config, tac.LAND_STORE, "synop_tac").compute()
+    synop = open_group(local_config, tac.STORE_PREFIX, tac.LAND_GROUP).compute()
     assert sorted(synop["station_id"].values) == [
         "0-20000-0-07999",
         "0-20000-0-71421",
@@ -182,29 +182,32 @@ def test_reports_held_as_bufr_are_dropped_and_the_rest_written(local_config):
     assert str(canada["report"].values[0]).startswith("AAXX 28064 71421 16///")
     assert str(canada["bulletin"].values[0]) == "SMCN03 CWAO 280600 RRA"
     assert canada["arrival_time"].values[0] == np.datetime64("2026-10-28T07:30:00", "ns")
-    ships = open_group(local_config, tac.OCEAN_STORE, "ship_tac").compute()
+    ships = open_group(local_config, tac.STORE_PREFIX, tac.SHIP_GROUP).compute()
     assert sorted(ships["call_sign"].values) == ["SXZPW9C", "ZKF2BNJ"]
     sxz = rows_of(ships, "call_sign", "SXZPW9C")
     assert float(sxz["latitude"][0]) == 82.0 and float(sxz["longitude"][0]) == 163.7
     assert float(sxz["sea_surface_temperature"][0]) == pytest.approx(273.15 - 0.5)
     # The BUFR root and its ledger are untouched.
     repo = local_config.icechunk_repo(land.STORE_PREFIX)
-    root = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    root = xr.open_zarr(repo.readonly_session("main").store, group=land.GROUP, consolidated=False)
     assert root.sizes["observation"] == 2
 
 
 def test_a_second_run_over_the_window_writes_nothing(local_config):
     run(local_config, objects())
-    land_repo = local_config.icechunk_repo(tac.LAND_STORE)
-    ocean_repo = local_config.icechunk_repo(tac.OCEAN_STORE)
-    assert PARTITION in ledger(land_repo, group="synop_tac")
-    assert PARTITION in ledger(ocean_repo, group="ship_tac")
+    land_repo = local_config.icechunk_repo(tac.STORE_PREFIX)
+    ocean_repo = local_config.icechunk_repo(tac.STORE_PREFIX)
+    assert PARTITION in ledger(land_repo, group=tac.LAND_GROUP)
+    assert PARTITION in ledger(ocean_repo, group=tac.SHIP_GROUP)
     tips = [next(iter(r.ancestry(branch="main"))).id for r in (land_repo, ocean_repo)]
     again = tac.TacTarget(local_config)
     again.prepare(PARTITION)
     assert not any(again.wants(key, len(body)) for key, body, _ in objects())
     target, summary = run(local_config, objects())
-    assert summary["synop_tac"] == "already written" and summary["ship_tac"] == "already written"
+    assert (
+        summary[tac.LAND_GROUP] == "already written"
+        and summary[tac.SHIP_GROUP] == "already written"
+    )
     assert [next(iter(r.ancestry(branch="main"))).id for r in (land_repo, ocean_repo)] == tips
 
 
@@ -216,9 +219,9 @@ def test_a_later_window_repeating_reports_adds_only_corrections(local_config):
         [(CANADA_KEY.replace("RRA", "CCA"), corrected, ARRIVED + dt.timedelta(hours=12))],
         "wis2_20261029T0000Z",
     )
-    assert summary["synop_tac"]["already_stored_as_tac"] == 1  # 71472 unchanged
-    assert summary["synop_tac"]["rows_written"] == 1  # 71421, corrected
-    synop = open_group(local_config, tac.LAND_STORE, "synop_tac").compute()
+    assert summary[tac.LAND_GROUP]["already_stored_as_tac"] == 1  # 71472 unchanged
+    assert summary[tac.LAND_GROUP]["rows_written"] == 1  # 71421, corrected
+    synop = open_group(local_config, tac.STORE_PREFIX, tac.LAND_GROUP).compute()
     station = rows_of(synop, "station_id", "0-20000-0-71421")
     assert sorted(station["2m_temperature"].values.round(2).tolist()) == [264.15, 264.35]
 
@@ -227,7 +230,7 @@ def test_land_reports_take_their_position_from_the_bufr_reports(local_config):
     write_bufr(local_config)
     later = FRANCE.replace(b"280600", b"280900").replace(b"28061", b"28091")
     run(local_config, [(FRANCE_KEY, later, ARRIVED + dt.timedelta(hours=3))])
-    synop = open_group(local_config, tac.LAND_STORE, "synop_tac").compute()
+    synop = open_group(local_config, tac.STORE_PREFIX, tac.LAND_GROUP).compute()
     held = rows_of(synop, "station_id", "0-20000-0-07005")
     assert float(held["latitude"][0]) == pytest.approx(50.136)
     unknown = rows_of(synop, "station_id", "0-20000-0-07999")
@@ -247,7 +250,9 @@ def test_a_failure_in_one_store_does_not_stop_the_other(local_config, monkeypatc
     monkeypatch.setattr(tac, "land_positions", broken)
     with pytest.raises(tac.IncompleteWindow, match="synop_tac not written"):
         run(local_config, objects())
-    assert PARTITION in ledger(local_config.icechunk_repo(tac.OCEAN_STORE), group="ship_tac")
-    assert PARTITION not in ledger(local_config.icechunk_repo(tac.LAND_STORE), group="synop_tac")
-    ships = open_group(local_config, tac.OCEAN_STORE, "ship_tac")
+    assert PARTITION in ledger(local_config.icechunk_repo(tac.STORE_PREFIX), group=tac.SHIP_GROUP)
+    assert PARTITION not in ledger(
+        local_config.icechunk_repo(tac.STORE_PREFIX), group=tac.LAND_GROUP
+    )
+    ships = open_group(local_config, tac.STORE_PREFIX, tac.SHIP_GROUP)
     assert ships.sizes["observation"] == 2

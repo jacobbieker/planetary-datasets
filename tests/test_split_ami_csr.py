@@ -63,7 +63,9 @@ def mixed(local_config, tmp_path):
 
 def open_group(repo, group: str) -> xr.Dataset:
     """A group of the store as xarray reads it."""
-    return xr.open_zarr(repo.readonly_session("main").store, group=group, consolidated=False)
+    return xr.open_zarr(
+        repo.readonly_session("main").store, group=sat.store_group(group), consolidated=False
+    )
 
 
 def test_it_refuses_while_amv_lacks_a_vector(mixed):

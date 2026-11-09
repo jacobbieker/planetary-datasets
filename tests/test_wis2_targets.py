@@ -21,6 +21,13 @@ from planetary_datasets.providers.observations.wis2_targets import (
 )
 
 UTC = dt.timezone.utc
+STORE = targets.STORE_PREFIX
+
+
+@pytest.fixture(autouse=True)
+def _registered(monkeypatch):
+    """The registered targets, as a record from another store (or none) makes pending."""
+    monkeypatch.setattr(wis2, "registered_targets", lambda: ["recorder"])
 
 
 class Recorder(QueuedTarget):
@@ -230,6 +237,7 @@ def test_an_archive_records_which_targets_finished(monkeypatch):
     monkeypatch.setattr(wis2, "build_targets", lambda config, names: [Recorder(), Broken()])
     summary = wis2.archive(dt.datetime.now(UTC) + dt.timedelta(minutes=1), config=_config())
     assert _state(dest, summary.key) == {
+        "store": STORE,
         "pending": [],
         "done": ["recorder"],
         "failed": ["broken"],
@@ -240,7 +248,7 @@ def test_targets_an_interrupted_run_left_pending_are_finished_from_the_tar(monke
     dest = FakeDest()
     key = _archived_tar(dest)
     dest.objects[f"{key}.targets.json"] = json.dumps(
-        {"pending": ["recorder"], "done": ["broken"], "failed": []}
+        {"store": STORE, "pending": ["recorder"], "done": ["broken"], "failed": []}
     ).encode()
     built_for = []
 
@@ -254,20 +262,106 @@ def test_targets_an_interrupted_run_left_pending_are_finished_from_the_tar(monke
     summary = wis2.archive(end, config=_config())
     assert built_for == [["recorder"]], "only the pending target, not the finished one"
     assert summary.files == 0 and summary.targets["recorder"]["rows"] == 1
-    assert _state(dest, key) == {"pending": [], "done": ["broken", "recorder"], "failed": []}
+    assert _state(dest, key) == {
+        "store": STORE,
+        "pending": [],
+        "done": ["broken", "recorder"],
+        "failed": [],
+    }
     built_for.clear()
     wis2.archive(end, config=_config())
     assert built_for == [], "nothing left to finish"
 
 
-def test_an_archived_tar_without_a_target_record_is_left_alone(monkeypatch):
+@pytest.mark.parametrize(
+    "record",
+    [None, {"pending": [], "done": ["recorder"], "failed": []}],
+    ids=["no record", "a record for the old stores"],
+)
+def test_an_archived_tar_not_recorded_for_this_store_runs_every_target(monkeypatch, record):
+    """Re-ingesting history into a new store: the old record says nothing about it."""
     dest = FakeDest()
-    _archived_tar(dest)
+    key = _archived_tar(dest)
+    if record is not None:
+        dest.objects[f"{key}.targets.json"] = json.dumps(record).encode()
+    built_for = []
+
+    def build(config, names):
+        built_for.append(names)
+        return [Recorder()]
+
     monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
-    monkeypatch.setattr(
-        wis2, "build_targets", lambda config, names: pytest.fail("no targets should run")
-    )
-    wis2.archive(dt.datetime(2026, 10, 27, 12, tzinfo=UTC), config=_config())
+    monkeypatch.setattr(wis2, "archived_tars", lambda config=None: [key])
+    monkeypatch.setattr(wis2, "build_targets", build)
+    summary = wis2.archive(dt.datetime(2026, 10, 27, 12, tzinfo=UTC), config=_config())
+    assert built_for == [["recorder"]] and summary.targets["recorder"]["rows"] == 1
+    assert _state(dest, key) == {
+        "store": STORE,
+        "pending": [],
+        "done": ["recorder"],
+        "failed": [],
+    }
+
+
+def test_a_record_for_this_store_is_taken_as_it_is():
+    kept = {"store": STORE, "pending": [], "done": ["recorder"], "failed": []}
+    assert wis2.current_state(kept) == kept
+    assert wis2.current_state({"pending": [], "done": ["recorder"]})["pending"] == ["recorder"]
+    assert wis2.current_state(None)["pending"] == ["recorder"]
+
+
+def test_a_new_window_waits_for_targets_pending_over_older_archives(monkeypatch):
+    """The tar is made at once; the backlogged target runs over it later, in time order."""
+    store, _ = _cache()
+    dest = FakeDest()
+    old = _archived_tar(dest)
+    dest.objects[f"{old}.targets.json"] = json.dumps(
+        {"store": STORE, "pending": ["recorder"], "done": [], "failed": []}
+    ).encode()
+    built: list[Recorder] = []
+    monkeypatch.setattr(wis2, "source_store", lambda: store)
+    monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
+    monkeypatch.setattr(wis2, "build_targets", lambda config, names: [*built, Recorder()][-1:])
+    archived: list[str] = [old]
+    monkeypatch.setattr(wis2, "archived_tars", lambda config=None: list(archived))
+
+    summary = wis2.archive(dt.datetime.now(UTC) + dt.timedelta(minutes=1), config=_config())
+    assert summary.files == 3 and summary.key in dest.objects, "the live tar is made"
+    assert summary.targets == {}, "but the target is not fed the newer window"
+    assert _state(dest, summary.key)["pending"] == ["recorder"]
+    archived.append(summary.key)
+
+    order = []
+
+    def record(key, config=None, targets=None):
+        order.append(wis2.partition_name(key))
+        state = wis2.current_state(wis2._load_target_state(dest, "bucket", key))
+        state["done"], state["pending"] = state["pending"], []
+        wis2._save_target_state(dest, "bucket", key, state)
+        return {}
+
+    monkeypatch.setattr(wis2, "targets_from_tar", record)
+    now = dt.datetime(2026, 11, 1, 15, tzinfo=UTC)
+    later = now + dt.timedelta(hours=9)
+    while wis2.finish_pending(later, _config(), now=lambda: now, limit=1):
+        pass
+    assert order == ["wis2_20261027T1200Z", wis2.partition_name(summary.key)], "oldest first"
+
+
+def test_a_failed_look_at_older_archives_never_holds_up_the_live_window(monkeypatch):
+    store, _ = _cache()
+    dest = FakeDest()
+    built = [Recorder()]
+    monkeypatch.setattr(wis2, "source_store", lambda: store)
+    monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
+    monkeypatch.setattr(wis2, "build_targets", lambda config, names: built)
+
+    def unlistable(config=None):
+        raise ConnectionError("listing failed")
+
+    monkeypatch.setattr(wis2, "archived_tars", unlistable)
+    summary = wis2.archive(dt.datetime.now(UTC) + dt.timedelta(minutes=1), config=_config())
+    assert built[0].keys == ["data/x/one"] and summary.targets["recorder"]["rows"] == 1
 
 
 def test_no_targets_when_asked_for_none(monkeypatch):
@@ -328,7 +422,7 @@ def test_marked_targets_are_finished_between_windows_while_time_allows(monkeypat
     for key in (old, new):
         _archived_tar(dest, key)
     dest.objects[f"{new}.targets.json"] = json.dumps(
-        {"pending": [], "done": ["recorder", "broken"], "failed": []}
+        {"store": STORE, "pending": [], "done": ["recorder", "broken"], "failed": []}
     ).encode()
     built: list[Recorder] = []
     monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
@@ -337,7 +431,12 @@ def test_marked_targets_are_finished_between_windows_while_time_allows(monkeypat
         wis2, "build_targets", lambda config, names: built.append(Recorder()) or [built[-1]]
     )
     assert wis2.mark_pending(["recorder"], config=_config()) == 2
-    assert _state(dest, new) == {"pending": ["recorder"], "done": ["broken"], "failed": []}
+    assert _state(dest, new) == {
+        "store": STORE,
+        "pending": ["recorder"],
+        "done": ["broken"],
+        "failed": [],
+    }
 
     now = dt.datetime(2026, 11, 1, 15, tzinfo=UTC)
     soon = now + wis2.PENDING_BUDGET - dt.timedelta(minutes=1)
@@ -558,3 +657,38 @@ def test_targets_are_told_the_window_before_it_streams(monkeypatch):
     monkeypatch.setattr(wis2, "build_targets", lambda config, names: [target])
     wis2.targets_from_tar(key, config=_config())
     assert seen == ["wis2_20261027T1200Z"] and target.keys == []
+
+
+def test_a_long_pending_run_leaves_more_time_before_the_next_window(monkeypatch):
+    """Re-ingesting every target over an archive must still end before the next window."""
+    dest = FakeDest()
+    keys = [
+        "bkr/obs/wis2/wis2_20261027T1200Z.tar",
+        "bkr/obs/wis2/wis2_20261028T0000Z.tar",
+        "bkr/obs/wis2/wis2_20261028T1200Z.tar",
+    ]
+    for key in keys:
+        _archived_tar(dest, key)
+    monkeypatch.setattr(wis2, "_PENDING_RUNS", [])
+    monkeypatch.setattr(wis2, "dest_client", lambda config: dest)
+    monkeypatch.setattr(wis2, "archived_tars", lambda config=None: keys)
+    clock = [dt.datetime(2026, 11, 1, 13, tzinfo=UTC)]
+
+    def slow(key, config=None, targets=None):
+        clock[0] += dt.timedelta(hours=4)
+        state = wis2.current_state(wis2._load_target_state(dest, "bucket", key))
+        state["done"], state["pending"] = state["pending"], []
+        wis2._save_target_state(dest, "bucket", key, state)
+        return {}
+
+    monkeypatch.setattr(wis2, "targets_from_tar", slow)
+    deadline = dt.datetime(2026, 11, 2, 0, 10, tzinfo=UTC)
+    # 11 h before the window: the first run starts (3 h budget) and takes 4 h.
+    assert wis2.finish_pending(deadline, _config(), now=lambda: clock[0], limit=1) == 1
+    assert wis2.pending_budget() == dt.timedelta(hours=6)
+    # 7 h left: room for another run like it.
+    assert wis2.finish_pending(deadline, _config(), now=lambda: clock[0], limit=1) == 1
+    assert clock[0] == dt.datetime(2026, 11, 1, 21, tzinfo=UTC)
+    # 3 h left would do for PENDING_BUDGET, not for a run that takes 4 h.
+    assert wis2.finish_pending(deadline, _config(), now=lambda: clock[0], limit=1) == 0
+    assert f"{keys[2]}.targets.json" not in dest.objects, "left for after the window"

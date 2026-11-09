@@ -2,14 +2,16 @@
 
 Part of the land target (:mod:`~planetary_datasets.providers.observations.wis2_land`):
 ODIM_H5 polar volumes are spooled to disk as the window streams past and appended, after
-the tar is complete, to ``bkr/obs/wis2_land.icechunk`` under ``radar/``, one group per
+the tar is complete, to ``bkr/obs/wis2.icechunk`` under ``land/radar/``, one group per
 radar and quantity::
 
-    radar/bewid_dbzh    radar/bewid_th    radar/bewid_vrad    radar/behel_vradh  ...
+    land/radar/bewid_dbzh    land/radar/bewid_th    land/radar/bewid_vrad    ...
 
 named for the ODIM node (``NOD:`` of ``what/source``) and quantity, one volume per row
 along ``volume``. Open one with
-``xr.open_zarr(store, group="radar/bewid_dbzh", consolidated=False)``.
+``xr.open_zarr(store, group="land/radar/bewid_dbzh", consolidated=False)``. Each volume
+carries ``quality_flag`` and its sweeps ``<variable>_quality`` flags
+(:mod:`~planetary_datasets.providers.observations.wis2_qc`).
 
 What is read
     The polar volumes RMI publishes on ``be-rmib/.../experimental/bel-radar`` (three
@@ -40,7 +42,7 @@ Layout
 
 GAMIC
     A GAMIC volume's group is named for the centre's country and the site
-    (``radar/cypfo_dbzh``, ``radar/cylca_vradh``, ...), its moments by their ODIM names
+    (``land/radar/cypfo_dbzh``, ``land/radar/cylca_vradh``, ...), its moments by their ODIM names
     (:data:`GAMIC_QUANTITIES`; the GAMIC name is kept in the ``counts`` attribute
     ``gamic_moment``). ``counts`` are the raw ``UV8``/``UV16`` values, unchanged: 0 is no
     data (``nodata``, the fill), and ``value = offset + gain * counts`` with
@@ -77,7 +79,7 @@ from loguru import logger
 from planetary_datasets.providers.observations.wis2_land_hydrometric import Spool
 
 #: Parent group of the radar groups; its ledger lists the windows written to all of them.
-PARENT = "radar"
+PARENT = "land/radar"
 #: Attribute of :data:`PARENT` listing the windows whose GAMIC volumes are written: a ledger
 #: of its own, so archived windows already written for the ODIM volumes still get them.
 GAMIC_LEDGER = "gamic_partitions_written"
@@ -194,7 +196,7 @@ def node_name(source: str) -> str | None:
 
 
 def group_name(node: str, quantity: str) -> str:
-    """The group of a radar's quantity, e.g. ``radar/bewid_dbzh``."""
+    """The group of a radar's quantity, e.g. ``land/radar/bewid_dbzh``."""
     return f"{PARENT}/{node}_{re.sub(r'[^a-z0-9]+', '_', quantity.lower()).strip('_')}"
 
 
@@ -867,6 +869,7 @@ def write(
         append_partition,
         describe_variables,
     )
+    from planetary_datasets.providers.observations import wis2_qc
 
     ledger_attr = ledger_attr or LEDGER_ATTR
     counts: Counter = Counter(objects=len(spool.items))
@@ -919,6 +922,7 @@ def write(
                 if stored is not None and stored != fill:
                     raise ValueError(f"nodata {fill} differs from the group's fill {stored}")
                 grow_fixed_dims(repo, group, ds, f"wis2_land {group}")
+                ds = wis2_qc.flag(ds, group)
                 append_partition(
                     repo,
                     ds,

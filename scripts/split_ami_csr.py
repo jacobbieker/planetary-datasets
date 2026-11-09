@@ -15,8 +15,14 @@ compacts every array in place to the rows kept, removes arrays that hold no valu
 them and trims a 2-D array's trailing columns that hold none, keeping the group's
 attributes and ledger. The arrays removed are the vectors' own elements and the
 radiance elements KMA always sends missing (``pressure``, ``radiance``, ``cloud_type``,
-...); a later window's append adds those back, filled for the rows before it. It is one commit: a failure, or an append to
-``ami_csr`` meanwhile (a conflict), leaves the group as it was. Run it between windows.
+...); a later window's append adds those back, filled for the rows before it. It is one
+commit: a failure, or an append to ``ami_csr`` meanwhile (a conflict), leaves the group as
+it was. Run it between windows.
+
+It works on ``satellite/ami_csr`` and ``satellite/amv`` of the WIS2 store
+(``bkr/obs/wis2.icechunk``). That store is filled by the filtering target, so its
+``ami_csr`` should hold no vectors and the script only verifies; the old
+``bkr/obs/wis2_satellite.icechunk`` is no longer written.
 """
 
 from __future__ import annotations
@@ -31,8 +37,9 @@ from loguru import logger
 from planetary_datasets.config import get_config
 from planetary_datasets.providers.observations import wis2_satellite as sat
 
-SOURCE = "ami_csr"
-DESTINATION = "amv"
+#: The groups, in the WIS2 store (``bkr/obs/wis2.icechunk``).
+SOURCE = sat.store_group("ami_csr")
+DESTINATION = sat.store_group("amv")
 #: ``bufr_template`` of the rows that leave ``ami_csr``.
 AMV_TEMPLATES = ("310077",)
 #: Rows read at once, in multiples of an array's chunk.

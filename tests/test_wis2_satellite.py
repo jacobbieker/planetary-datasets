@@ -182,8 +182,8 @@ def test_the_target_writes_one_group_per_instrument_and_drops_relayed_copies(loc
 
     store = local_config.icechunk_repo(sat.STORE_PREFIX).readonly_session("main").store
     tree = xr.open_datatree(store, engine="zarr", consolidated=False)
-    assert set(tree.children) == set(NAMES)
-    atms = xr.open_zarr(store, group="atms", consolidated=False)
+    assert set(tree["satellite"].children) == set(NAMES)
+    atms = xr.open_zarr(store, group="satellite/atms", consolidated=False)
     assert atms.sizes == {"observation": 207, "channel": 22}
     assert atms["brightness_temperature"].dtype == np.float32
     expected = np.round(decoded("atms")["brightness_temperature"], 2)
@@ -195,9 +195,9 @@ def test_the_target_writes_one_group_per_instrument_and_drops_relayed_copies(loc
     first = np.datetime64(earlier.replace(tzinfo=None))
     assert (atms["first_arrival_time"].values == first).all()
     assert atms["first_arrival_time"].attrs["long_name"].startswith("earliest time any copy")
-    amsua = xr.open_zarr(store, group="amsua", consolidated=False)
+    amsua = xr.open_zarr(store, group="satellite/amsua", consolidated=False)
     assert amsua["channel_atovs_number"].values.tolist() == list(range(28, 43))
-    iasi = xr.open_zarr(store, group="iasi", consolidated=False, mask_and_scale=False)
+    iasi = xr.open_zarr(store, group="satellite/iasi", consolidated=False, mask_and_scale=False)
     assert iasi["scaled_radiance"].dtype == np.int16
     assert iasi["radiance_scale_factor"].dtype == np.int8
     assert iasi.sizes["observation"] == 120
@@ -209,7 +209,9 @@ def test_the_target_writes_one_group_per_instrument_and_drops_relayed_copies(loc
     later = sat.SatelliteTarget(local_config, workers=1)
     later.feed(key("atms"), body("atms"), ARRIVED)
     assert later.finish(None, None, "wis2_20261030T0000Z")["rows"] == {"atms": 0}
-    assert xr.open_zarr(store, group="atms", consolidated=False).sizes["observation"] == 207
+    assert (
+        xr.open_zarr(store, group="satellite/atms", consolidated=False).sizes["observation"] == 207
+    )
 
 
 def test_a_wider_channel_set_later_widens_the_group(local_config):
@@ -240,7 +242,9 @@ def test_a_wider_channel_set_later_widens_the_group(local_config):
     from collections import Counter
 
     assert sat.write_group(repo, sat.INSTRUMENTS[store_group], paths, "b", Counter()) == 120
-    iasi = xr.open_zarr(repo.readonly_session("main").store, group="iasi", consolidated=False)
+    iasi = xr.open_zarr(
+        repo.readonly_session("main").store, group="satellite/iasi", consolidated=False
+    )
     assert iasi.sizes == {"observation": 240, "channel": 8700}
     assert iasi["channel_number"].values[-1] == 8700
     assert iasi["channel_central_wavenumber"].values[0] == 64500.0
@@ -305,13 +309,15 @@ def test_first_arrival_joins_a_group_written_before_it_existed(local_config):
         [sat._compact(old)], old["brightness_temperature"].shape[1], sat.INSTRUMENTS["mhs"]
     )
     assert "first_arrival_time" not in ds
-    append_partition(repo, ds, "before", fixed_dims=["channel"], label="old", group="mhs")
+    append_partition(repo, ds, "before", fixed_dims=["channel"], label="old", group="satellite/mhs")
 
     target = sat.SatelliteTarget(local_config, workers=1)
     later = ARRIVED + dt.timedelta(hours=12)
     target.feed(key("mhs"), body("mhs"), later)
     target.finish(None, None, "after")
-    mhs = xr.open_zarr(repo.readonly_session("main").store, group="mhs", consolidated=False)
+    mhs = xr.open_zarr(
+        repo.readonly_session("main").store, group="satellite/mhs", consolidated=False
+    )
     assert mhs.sizes["observation"] == full["time"].size
     first = mhs["first_arrival_time"].values
     assert np.isnat(first[:half]).all(), "rows written before the variable existed"
@@ -423,11 +429,13 @@ def test_a_rerun_adds_only_the_gts_rows_missing_from_a_window_written_before(
     assert summary["mhs_duplicates"] == new["mhs"]
     store = repo.readonly_session("main").store
     for group in GTS:
-        rows = xr.open_zarr(store, group=group, consolidated=False)["observation_identity"]
+        rows = xr.open_zarr(store, group=sat.store_group(group), consolidated=False)[
+            "observation_identity"
+        ]
         assert len(np.unique(rows.values)) == rows.size, f"{group} holds a row twice"
     from planetary_datasets.common.multidim import ledger
 
-    assert {window, f"{window}:gts"} <= ledger(repo, group="atms")
+    assert {window, f"{window}:gts"} <= ledger(repo, group="satellite/atms")
 
     again = sat.SatelliteTarget(local_config, workers=1)
     again.prepare(window)

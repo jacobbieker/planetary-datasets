@@ -153,7 +153,7 @@ def test_the_store_is_ragged_lossless_and_written_once_per_window(local_config):
     assert summary["duplicate"] == 1 and summary["other_category"] == 1
 
     repo = local_config.icechunk_repo(ua.STORE_PREFIX)
-    ds = xr.open_zarr(repo.readonly_session("main").store, consolidated=False)
+    ds = xr.open_zarr(repo.readonly_session("main").store, group=ua.GROUP, consolidated=False)
     assert ds.sizes["sounding"] == summary["soundings"]
     assert ds.sizes["level"] == int(ds["level_count"].sum())
     # Each sounding's levels are where first_level/level_count say, and point back to it.
@@ -184,7 +184,7 @@ def test_the_store_is_ragged_lossless_and_written_once_per_window(local_config):
     # ...and that window is ledgered all the same, so a re-run skips it outright.
     from planetary_datasets.common.multidim import ledger
 
-    assert {"wis2_20261029T0000Z", "wis2_20261029T1200Z"} <= ledger(repo)
+    assert {"wis2_20261029T0000Z", "wis2_20261029T1200Z"} <= ledger(repo, group=ua.GROUP)
 
 
 def test_the_target_registers_with_the_archive():
@@ -200,7 +200,7 @@ def stored_times(repo, name: str) -> np.ndarray:
     """
     import zarr
 
-    array = zarr.open_group(repo.readonly_session("main").store, mode="r")[name]
+    array = zarr.open_group(repo.readonly_session("main").store, path=ua.GROUP, mode="r")[name]
     assert str(array.attrs["units"]).startswith("nanoseconds since 1970-01-01")
     return array[:].astype("int64").view("datetime64[ns]").astype("datetime64[s]")
 
@@ -225,7 +225,7 @@ def test_first_arrival_is_added_to_a_store_written_without_it(local_config):
 
     repo = local_config.icechunk_repo(ua.STORE_PREFIX)
     legacy = ua.to_dataset(decode(TEMP), 0, 0).drop_vars("first_arrival_time")
-    append_partition(repo, legacy, "old", label="wis2_upper_air")
+    append_partition(repo, legacy, "old", label="wis2_upper_air", group=ua.GROUP)
 
     copies = decode(VHHH_DWD) + ua.decode_object(
         VHHH_JMA, body(VHHH_JMA), ARRIVED - dt.timedelta(minutes=1), Counter()
@@ -248,3 +248,45 @@ def test_arrival_times_are_described_alike_in_every_store():
     assert {"arrival_time": land["arrived"], "first_arrival_time": land["first_arrival_time"]} == (
         upper_air
     )
+
+
+def test_every_target_writes_groups_of_the_one_wis2_store(local_config):
+    """Soundings and aircraft reports land in groups of one store, flagged."""
+    import zarr
+    from wis2_bufr import bulletin, encode_amdar, report
+
+    from planetary_datasets.providers.observations import wis2_aircraft as aircraft
+    from planetary_datasets.providers.observations import wis2_targets as targets
+
+    target = ua.UpperAirTarget(local_config)
+    for key in (TEMP, PILOT_12, PROFILER):
+        target.feed(key, body(key), ARRIVED)
+    target.finish(None, None, "wis2_20261029T0000Z")
+    batch = aircraft.Batch()
+    key = "data/jp-jma-gts-to-wis2/data/core/I/U/A/G/04/VHHH/A_IUAG04VHHH270642_C_RJTD_1.bufr"
+    batch.add(key, bulletin(encode_amdar([report()])), ARRIVED)
+    assert aircraft.write(batch, "wis2_20261029T0000Z", local_config) == 1
+
+    assert ua.STORE_PREFIX == aircraft.STORE_PREFIX == targets.STORE_PREFIX
+    assert targets.STORE_PREFIX == "bkr/obs/wis2.icechunk"
+    repo = local_config.icechunk_repo(targets.STORE_PREFIX)
+    store = repo.readonly_session("main").store
+    root = zarr.open_group(store, mode="r")
+    assert list(root.array_keys()) == [], "nothing at the root but attributes"
+    assert dict(root.attrs) == targets.ROOT_ATTRS
+    assert {"aircraft", "upper_air", "land", "ocean", "satellite"} <= set(root.group_keys())
+    for group, dims in (
+        (ua.GROUP, ("sounding", "level")),
+        (aircraft.GROUP, ("observation",)),
+    ):
+        ds = xr.open_zarr(store, group=group, consolidated=False)
+        assert ds["quality_flag"].dims == dims[:1] and ds["quality_flag"].dtype == np.uint16
+        if len(dims) > 1:
+            assert ds["level_quality_flag"].dims == dims[1:]
+        ledger = zarr.open_group(store, path=group, mode="r").attrs["partitions_written"]
+        assert "wis2_20261029T0000Z" in ledger
+
+    # Laid out once: another look commits nothing.
+    before = next(iter(repo.ancestry(branch="main"))).id
+    targets.ensure_layout(repo)
+    assert next(iter(repo.ancestry(branch="main"))).id == before

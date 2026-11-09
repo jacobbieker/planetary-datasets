@@ -3,20 +3,22 @@
 An archive target of :mod:`planetary_datasets.providers.observations.wis2_archive`: the
 text SYNOP bulletins the DWD and JMA relays put on WIS2 (``data/<relay>-gts-to-wis2/
 data/core/S/{M,I,N}/...``: main, intermediate and non-standard hours) are decoded with
-`pymetdecoder <https://github.com/antarctica/pymetdecoder>`_ and appended, as groups
-of the existing stores, to::
+`pymetdecoder <https://github.com/antarctica/pymetdecoder>`_ and appended, as groups of
+the WIS2 store ``bkr/obs/wis2.icechunk``
+(:mod:`~planetary_datasets.providers.observations.wis2_targets`), to::
 
-    bkr/obs/wis2_land.icechunk   group synop_tac   land stations (FM-12 AAXX, FM-14 OOXX)
-    bkr/obs/wis2_ocean.icechunk  group ship_tac    ships (FM-13 BBXX)
+    land/synop_tac    land stations (FM-12 AAXX, FM-14 OOXX)
+    ocean/ship_tac    ships (FM-13 BBXX)
 
-one row per report along ``observation``. Open one with
-``xr.open_zarr(store, group="synop_tac", consolidated=False)``.
+one row per report along ``observation``, each with quality flags
+(:mod:`~planetary_datasets.providers.observations.wis2_qc`). Open one with
+``xr.open_zarr(store, group="land/synop_tac", consolidated=False)``.
 
 What is kept
     Only reports the store does not already have as BUFR: a land report whose station
-    and time the land store's BUFR reports (its root group, recent rows) already hold is
-    counted and dropped, and likewise a ship report whose call sign and time the ocean
-    store's ``surface`` group holds. Many stations send both; the TAC groups hold the
+    and time the ``land/reports`` group (recent rows) already holds is counted and
+    dropped, and likewise a ship report whose call sign and time ``ocean/surface`` holds.
+    Many stations send both; the TAC groups hold the
     stations and times that reach WIS2 only as text. A BUFR copy arriving in a later
     window than its TAC twin can still leave both.
 
@@ -64,16 +66,22 @@ import xarray as xr
 from loguru import logger
 
 from planetary_datasets.config import Config, get_config
-from planetary_datasets.providers.observations.wis2_targets import QueuedTarget, register
+from planetary_datasets.providers.observations.wis2_targets import (
+    STORE_PREFIX,
+    QueuedTarget,
+    register,
+    store_repo,
+)
 
-LAND_STORE = "bkr/obs/wis2_land.icechunk"
-OCEAN_STORE = "bkr/obs/wis2_ocean.icechunk"
-LAND_GROUP = "synop_tac"
-SHIP_GROUP = "ship_tac"
+#: Groups of the WIS2 store (:data:`STORE_PREFIX`) the reports go to.
+LAND_GROUP = "land/synop_tac"
+SHIP_GROUP = "ocean/ship_tac"
 #: Rows at the end of a TAC group whose identities a window is checked against.
 RECENT_IDENTITIES = 2_000_000
 #: Rows of the BUFR groups read back to find reports they already hold (a few days).
-BUFR_TAIL_ROWS = {LAND_STORE: 3_000_000, OCEAN_STORE: 400_000}
+BUFR_TAIL_ROWS = {LAND_GROUP: 3_000_000, SHIP_GROUP: 400_000}
+#: The BUFR group each TAC group is checked against.
+BUFR_GROUPS = {LAND_GROUP: "land/reports", SHIP_GROUP: "ocean/surface"}
 KNOT = 1852 / 3600
 
 #: GTS text bulletins of surface synoptic reports: main, intermediate, non-standard hours.
@@ -553,7 +561,12 @@ def stored_identities(repo, group: str) -> np.ndarray:
 
 def land_positions(repo, rows: int) -> dict[str, tuple[float, float, float]]:
     """Station positions from the land store's BUFR reports: id -> (lat, lon, elevation)."""
-    tail = _tail(repo, None, ("station_id", "latitude", "longitude", "station_elevation"), rows)
+    tail = _tail(
+        repo,
+        BUFR_GROUPS[LAND_GROUP],
+        ("station_id", "latitude", "longitude", "station_elevation"),
+        rows,
+    )
     out = {}
     if not tail:
         return out
@@ -573,13 +586,15 @@ def write_group(repo, rows: list[dict], group: str, partition: str | None, label
         describe_variables,
         ledger,
     )
+    from planetary_datasets.providers.observations import wis2_qc
 
     if partition is not None and partition in ledger(repo, group=group):
         return 0
     if not rows:
         return 0
     rows = sorted(rows, key=lambda r: (r["time"], r["station_id"]))
-    if not append_partition(repo, to_dataset(rows, group), partition, label=label, group=group):
+    ds = wis2_qc.flag(to_dataset(rows, group), group)
+    if not append_partition(repo, ds, partition, label=label, group=group):
         return 0
     describe_variables(repo, ARRIVAL_ATTRS, label=label, group=group)
     return len(rows)
@@ -594,11 +609,12 @@ class IncompleteWindow(RuntimeError):
 
 @register("tac")
 class TacTarget(QueuedTarget):
-    """Archive target: relayed SYNOP and SHIP text into the land and ocean stores."""
+    """Archive target: relayed SYNOP and SHIP text into the land and ocean groups."""
 
-    store_prefix = LAND_STORE
+    store_prefix = STORE_PREFIX
 
     def __init__(self, config: Config | None = None):
+        """A target writing with ``config`` (the process-wide one by default)."""
         super().__init__(config or get_config())
         self.counts: Counter = Counter()
         #: identity -> row, the earliest copy of each report.
@@ -611,9 +627,10 @@ class TacTarget(QueuedTarget):
         from planetary_datasets.common.multidim import ledger
 
         written = set()
-        for prefix, group in ((LAND_STORE, LAND_GROUP), (OCEAN_STORE, SHIP_GROUP)):
+        repo = store_repo(self.config)
+        for group in (LAND_GROUP, SHIP_GROUP):
             try:
-                if partition in ledger(self.config.icechunk_repo(prefix), group=group):
+                if partition in ledger(repo, group=group):
                     written.add(group)
             except Exception:  # noqa: BLE001 - a group not created yet holds nothing
                 continue
@@ -660,17 +677,17 @@ class TacTarget(QueuedTarget):
             self.rows[ident] = row
 
     def _write_part(
-        self, prefix: str, group: str, part: list[dict], station: str, partition: str
+        self, group: str, part: list[dict], station: str, partition: str
     ) -> dict[str, int]:
         """Drop one group's reports held already (as TAC or as BUFR); append the rest."""
-        repo = self.config.icechunk_repo(prefix)
+        repo = store_repo(self.config)
         ids = stored_identities(repo, group)
         fresh = [r for r in part if not _contains(ids, r["observation_identity"])]
-        bufr_group = None if group == LAND_GROUP else "surface"
-        held = bufr_reports(repo, bufr_group, station, BUFR_TAIL_ROWS[prefix])
+        bufr_group = BUFR_GROUPS[group]
+        held = bufr_reports(repo, bufr_group, station, BUFR_TAIL_ROWS[group])
         kept = [r for r in fresh if (r["station_id"], int(r["time"].astype("int64"))) not in held]
         if group == LAND_GROUP and kept:
-            positions = land_positions(repo, BUFR_TAIL_ROWS[prefix])
+            positions = land_positions(repo, BUFR_TAIL_ROWS[group])
             for row in kept:
                 known = positions.get(row["station_id"])
                 if known and not np.isfinite(row["latitude"]):
@@ -690,16 +707,16 @@ class TacTarget(QueuedTarget):
         ships = [r for r in rows if r["kind"] == "BBXX"]
         summary: dict[str, Any] = {**dict(self.counts)}
         self.counts = Counter()
-        for prefix, group, part, station in (
-            (LAND_STORE, LAND_GROUP, land, "station_id"),
-            (OCEAN_STORE, SHIP_GROUP, ships, "call_sign"),
+        for group, part, station in (
+            (LAND_GROUP, land, "station_id"),
+            (SHIP_GROUP, ships, "call_sign"),
         ):
             if group in self._written:
                 summary[group] = "already written"
                 continue
             try:
-                summary[group] = self._write_part(prefix, group, part, station, partition)
-            except Exception as exc:  # noqa: BLE001 - one store must not lose the other
+                summary[group] = self._write_part(group, part, station, partition)
+            except Exception as exc:  # noqa: BLE001 - one group must not lose the other
                 logger.exception(f"wis2 tac {group}: write failed: {exc}")
                 summary[group] = {"error": f"{type(exc).__name__}: {exc}"}
         failed = [

@@ -1,7 +1,7 @@
-"""Aircraft observations (AMDAR) from the WIS2 Global Cache, as one Icechunk store.
+r"""Aircraft observations (AMDAR) from the WIS2 Global Cache, a group of the WIS2 store.
 
 WIS2 has no aircraft topic of its own yet: aircraft reports reach the Global Cache as GTS
-bulletins relayed into WIS2, ``IUA``\\ *A2ii* BUFR bulletins under
+bulletins relayed into WIS2, ``IUA``\ *A2ii* BUFR bulletins under
 ``data/<relay>/data/core/I/U/A/<A2>/<ii>/<CCCC>/`` (in October 2026 only the JMA relay
 carries them: ~5,000 bulletins and ~4 MB per 12 hours, about 50,000 reports, 5% of them
 repeats; E-AMDAR via EGRR, then JMA, Hong Kong, Korea and New Zealand). Each bulletin holds
@@ -16,12 +16,14 @@ Both decode into the same rows; a field a layout lacks is missing. TAC aircraft 
 (``UA``/``UD`` AIREP and AMDAR bulletins) are not in the cache, and no other IU bulletin
 type carries aircraft data (data category 4), so neither is parsed.
 
-Rows go to ``bkr/obs/wis2_aircraft.icechunk`` along one ``observation`` dimension,
-appended window by window (each WIS2 archive window is a ledger entry, so a window is
-never written twice). A report relayed more than once (several bulletins, relays or
-windows) is stored once: ``report_id`` hashes the aircraft, time, position and flight
-level, and a report whose id is in the batch already or among the store's most recent
-rows is dropped.
+Rows go to the ``aircraft`` group of ``bkr/obs/wis2.icechunk`` (the WIS2 store, see
+:mod:`~planetary_datasets.providers.observations.wis2_targets`) along one ``observation``
+dimension, appended window by window (each WIS2 archive window is a ledger entry, so a
+window is never written twice). Each row carries quality flags (``quality_flag``,
+``<variable>_quality``; :mod:`~planetary_datasets.providers.observations.wis2_qc`). A
+report relayed more than once (several bulletins, relays or windows) is stored once:
+``report_id`` hashes the aircraft, time, position and flight level, and a report whose id
+is in the batch already or among the store's most recent rows is dropped.
 
 Each row records when its report reached the cache, so the live stream can be replayed:
 ``arrival_time``, when the bulletin kept (the window's first copy) arrived, and
@@ -38,9 +40,10 @@ Registered as the ``aircraft`` archive target (see
 :mod:`~planetary_datasets.providers.observations.wis2_archive` as each window streams, or
 over an archived window::
 
-    python -m planetary_datasets.providers.observations.wis2_archive \\
+    python -m planetary_datasets.providers.observations.wis2_archive \
         --from-tar bkr/obs/wis2/wis2_20261027T1200Z.tar --targets aircraft
-    python -m planetary_datasets.providers.observations.wis2_archive --all-archived --targets aircraft
+    python -m planetary_datasets.providers.observations.wis2_archive \
+        --mark-pending aircraft
 """
 
 from __future__ import annotations
@@ -57,13 +60,15 @@ from loguru import logger
 
 from planetary_datasets.config import Config, get_config
 from planetary_datasets.providers.observations.wis2_targets import (
+    STORE_PREFIX,
     QueuedTarget,
     register,
     rows_from_bufr,
     split_bufr,
 )
 
-STORE_PREFIX = "bkr/obs/wis2_aircraft.icechunk"
+#: The group of :data:`STORE_PREFIX` the reports go to.
+GROUP = "aircraft"
 #: GTS-relayed IUA bulletins: aircraft reports in BUFR.
 AIRCRAFT_KEY = re.compile(
     r"^data/(?P<relay>[^/]+)/data/core/I/U/A/(?P<a2>.)/(?P<ii>\d\d)/(?P<cccc>\w{4})/"
@@ -473,7 +478,7 @@ def stored_ids(repo, tail: int = DEDUP_TAIL) -> set[int]:
     import zarr
 
     try:
-        group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+        group = zarr.open_group(repo.readonly_session("main").store, path=GROUP, mode="r")
     except Exception:  # noqa: BLE001 - no store yet
         return set()
     if "report_id" not in group:
@@ -490,10 +495,12 @@ def write(batch: Batch, partition: str, config: Config | None = None) -> int:
         ledger,
         mark_written,
     )
+    from planetary_datasets.providers.observations import wis2_qc
+    from planetary_datasets.providers.observations.wis2_targets import store_repo
 
     config = config or get_config()
-    repo = config.icechunk_repo(STORE_PREFIX)
-    if partition in ledger(repo):
+    repo = store_repo(config)
+    if partition in ledger(repo, group=GROUP):
         logger.info(f"wis2 aircraft: {partition} already written")
         return 0
     seen = stored_ids(repo)
@@ -518,12 +525,13 @@ def write(batch: Batch, partition: str, config: Config | None = None) -> int:
         f"{duplicates:,} duplicate(s), {batch.dropped} without time or position"
     )
     if not rows:
-        if ledger(repo) or stored_ids(repo):
-            mark_written(repo, partition, label="wis2 aircraft")
+        if ledger(repo, group=GROUP) or stored_ids(repo):
+            mark_written(repo, partition, label="wis2 aircraft", group=GROUP)
         return 0
     rows.sort(key=lambda r: (r["time"], r["report_id"]))
-    append_partition(repo, to_dataset(rows), partition, label="wis2 aircraft")
-    describe_variables(repo, ARRIVAL_ATTRS, label="wis2 aircraft")
+    ds = wis2_qc.flag(to_dataset(rows), GROUP)
+    append_partition(repo, ds, partition, label="wis2 aircraft", group=GROUP)
+    describe_variables(repo, ARRIVAL_ATTRS, label="wis2 aircraft", group=GROUP)
     return len(rows)
 
 
@@ -534,18 +542,22 @@ class AircraftTarget(QueuedTarget):
     store_prefix = STORE_PREFIX
 
     def __init__(self, config: Config | None):
+        """A target writing with ``config``."""
         super().__init__(config)
         self.batch = Batch()
 
     def wants(self, key: str, size: int) -> bool:
+        """IUA bulletins (by key)."""
         return is_aircraft(key)
 
     def decode(self, key: str, body: bytes, arrived: dt.datetime | None) -> None:
+        """Keep a bulletin's reports (on the worker thread)."""
         self.batch.add(key, body, arrived)
 
     def write(
         self, window_start: dt.datetime | None, window_end: dt.datetime | None, partition: str
     ) -> dict[str, Any]:
+        """Append the window's new reports; counts back."""
         batch, self.batch = self.batch, Batch()
         written = write(batch, partition, self.config)
         return {
