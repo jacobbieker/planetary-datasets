@@ -1859,6 +1859,11 @@
  "bkr/obs/igra_v2_16_levels.icechunk": {
   "level": "pressure_level"
  },
+ "bkr/polar/jpss.icechunk": {
+  "Channel": "channel",
+  "P_Layer": "pressure_layer",
+  "P_Level": "pressure_level"
+ },
  "bkr/polar/jpss_atms_sfr_n20.icechunk": {
   "Channel": "channel"
  },

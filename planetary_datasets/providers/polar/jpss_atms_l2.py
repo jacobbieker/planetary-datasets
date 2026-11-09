@@ -4,25 +4,23 @@ The ATMS SDR, TDR and geolocation are kept on AWS indefinitely and are already a
 by :class:`~planetary_datasets.providers.polar.jpss_atms.JpssAtmsProvider`. The NDE level
 2 products retrieved from them are not: since 2026-09-14 they are kept for a rolling 90
 days (see :mod:`planetary_datasets.providers.polar._jpss`), so they are copied into
-Icechunk here, one store per product and spacecraft:
+Icechunk here, one group of ``bkr/polar/jpss.icechunk`` per product, each holding all
+three spacecraft:
 
-=========================  ====================  ====================================
-Store (``bkr/polar/…``)    Bucket prefix         Contents
-=========================  ====================  ====================================
-``jpss_atms_sfr_<sat>``    ``ATMS-SFR``          Snowfall rate, ice water path, ...
-``jpss_mirs_img_<sat>``    ``NPR_MIRS_IMG``      MiRS surface/column retrievals, BTs
-``jpss_mirs_snd_<sat>``    ``NPR_MIRS_SND``      MiRS temperature/moisture profiles
-=========================  ====================  ====================================
+=============  ====================  ====================================
+Group          Bucket prefix         Contents
+=============  ====================  ====================================
+``atms_sfr``   ``ATMS-SFR``          Snowfall rate, ice water path, ...
+``mirs_img``   ``NPR_MIRS_IMG``      MiRS surface/column retrievals, BTs
+``mirs_snd``   ``NPR_MIRS_SND``      MiRS temperature/moisture profiles
+=============  ====================  ====================================
 
 Each granule is one ATMS granule — 12 scans of 96 fields of view, ~32 s — and becomes one
-step along ``time`` (the middle of its sensing interval), with the scan on ``y`` and the
-field of view on ``x``.
-
-**Why one store per spacecraft.** NOAA-20 and NOAA-21 granules share their boundaries to
-within 0.1 s, so interleaving the constellation on one ``time`` axis — at the whole-second
-resolution the granule stores use — gives two steps with the same timestamp for most
-granules. Separate stores keep ``time`` unique, and let each spacecraft backfill in
-parallel against the retention deadline.
+row along ``granule``, with the scan on ``y`` and the field of view on ``x``, its sensing
+time on ``time(granule)`` and its spacecraft on ``platform_name(granule)``; see
+:class:`~planetary_datasets.providers.polar._jpss.JpssProductProvider`. NOAA-20 and NOAA-21
+granules share their boundaries to within 0.1 s, which is why the rows are keyed by
+spacecraft and start rather than by a whole-second time.
 
 **Precision.** Variables are stored with the packing the source netCDF uses: MiRS keeps
 most fields as ``int16`` with a scale factor, and so does the store; float32 fields stay
@@ -30,6 +28,13 @@ float32. Static per-channel or per-level variables (``Freq``, ``Polo``, ``Plevel
 ``Player``) become coordinates. The integer ``ScanTime_*`` components carry units such as
 ``days``; that attribute is renamed ``time_component_units`` so a reader does not decode
 a day-of-month into a duration.
+
+**One packing for three spacecraft.** The group's packing and static coordinates are
+fixed by its first write. A granule from any spacecraft that is packed differently, or
+carries different static coordinates, is not written (re-encoding it with the store's
+scale would quantise it silently): it is logged as an error and that spacecraft's whole
+hour is withheld, so the hour stays missing for it and is retried; the other spacecraft
+are written as usual.
 
 ATMS ``ATMS_BUFR`` (the same brightness temperatures as the SDR, in BUFR) and
 ``ATMS-SCIENCE-RDR`` (raw packets) are also rolling but are not archived: the first
@@ -39,25 +44,25 @@ duplicates the permanent SDR, the second needs the IDPS processing chain to be o
 from __future__ import annotations
 
 import pathlib
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 from loguru import logger
 
-from planetary_datasets.common import download_many
-from planetary_datasets.common.store import ALIGNMENT_COORDS
-from planetary_datasets.providers.polar._granule import mid_time, serialize_dataset_attrs
+from planetary_datasets.common import download_many, naming
+from planetary_datasets.common.dataset import coords_match
+from planetary_datasets.common.store import ALIGNMENT_COORDS, STORE_READ_ERRORS, holds_data
+from planetary_datasets.providers.polar._granule import serialize_dataset_attrs
 from planetary_datasets.providers.polar._jpss import (
     BUCKETS,
-    GRANULE_TIME_ENCODING,
-    PLATFORM_NAMES,
     IncompleteDownload,
-    JpssGranuleProvider,
+    JpssProductProvider,
     nde_granule_end,
     nde_granule_key,
     nde_granule_start,
+    nde_satellite,
 )
 
 #: Nominal ATMS granule shape. Short granules are padded up to this so they concatenate.
@@ -97,75 +102,95 @@ def source_packing(var: xr.Variable) -> Dict[str, Any] | None:
     return packing
 
 
-class JpssNdeL2Provider(JpssGranuleProvider):
-    """An NDE level 2 product on the ATMS granule grid, for one spacecraft.
+def same_packing(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    """True when two :func:`source_packing` results decode a count to the same value."""
+    if a.get("dtype") != b.get("dtype"):
+        return False
+    for key, default in (("scale_factor", 1.0), ("add_offset", 0.0)):
+        if not np.isclose(float(a.get(key, default)), float(b.get(key, default)), rtol=1e-6):
+            return False
+    fills = (a.get("_FillValue"), b.get("_FillValue"))
+    if None in fills:
+        return fills[0] is fills[1]
+    return bool(fills[0] == fills[1])
 
-    Subclasses set :attr:`product`, :attr:`base_name` and :attr:`time_chunk`.
+
+class JpssNdeL2Provider(JpssProductProvider):
+    """An NDE level 2 product on the ATMS granule grid, for the whole constellation.
+
+    Subclasses set :attr:`product`, :attr:`group`, :attr:`name` and
+    :attr:`granule_chunk`.
 
     Attributes:
         product: Bucket prefix, e.g. ``ATMS-SFR``.
-        base_name: Provider name without the spacecraft, e.g. ``jpss_atms_sfr``.
-        time_chunk: Granules per chunk along ``time``. One granule is a few KB per field,
-            so chunks span several — but well under the ~112 granules of an hourly
-            partition, because every append rewrites the partly filled last chunk and the
-            superseded copy stays in the repository until it is garbage collected.
+        granule_chunk: Granules per chunk along ``granule``. One granule is a few KB per
+            field, so chunks span several — but well under the ~340 granules of an hourly
+            partition of three spacecraft, because every append rewrites the partly
+            filled last chunk and the superseded copy stays in the repository until it is
+            garbage collected.
     """
 
     product: str
-    base_name: str
-    time_chunk: int = 32
-    append_dim = "time"
-    window = pd.Timedelta(1, "h")
-    alignment_coords = (*ALIGNMENT_COORDS, *STATIC_COORDS)
+    granule_chunk = 32
 
     key_of = staticmethod(nde_granule_key)
     start_of = staticmethod(nde_granule_start)
     end_of = staticmethod(nde_granule_end)
+    satellite_of = staticmethod(nde_satellite)
 
     def __init__(
         self,
-        satellite: str,
         config=None,
+        satellites: Tuple[str, ...] = ("n21", "n20", "snpp"),
         granule_limit: int | None = None,
         download_workers: int = 16,
     ):
-        """Build a provider for one spacecraft.
+        """Build a provider for some or all of the constellation.
 
         Args:
-            satellite: One of :data:`~planetary_datasets.providers.polar._jpss.BUCKETS`.
             config: Override the process-wide configuration.
+            satellites: Subset of :data:`~planetary_datasets.providers.polar._jpss.BUCKETS`.
             granule_limit: Stop after this many granules per partition. For smoke tests
                 against the live archive, not for production backfills.
             download_workers: Concurrent downloads.
         """
-        super().__init__(config=config)
-        if satellite not in BUCKETS:
-            raise ValueError(f"unknown JPSS satellite {satellite!r}; expected {sorted(BUCKETS)}")
-        self.satellite = satellite
-        self.bucket = BUCKETS[satellite]
-        self.name = f"{self.base_name}_{satellite}"
-        self.store_prefix = f"bkr/polar/{self.name}.icechunk"
-        self.granule_limit = granule_limit
-        self.download_workers = download_workers
+        super().__init__(
+            config=config,
+            satellites=satellites,
+            granule_limit=granule_limit,
+            download_workers=download_workers,
+        )
+        self.source_product = self.product
+        renamed = naming.store_names(self.store_prefix, self.group)
+        # Checked under both names: the store keeps them renamed when the tables apply.
+        self.alignment_coords = (
+            *ALIGNMENT_COORDS,
+            *STATIC_COORDS,
+            *(renamed[c] for c in STATIC_COORDS if c in renamed),
+        )
         self._packing: Dict[str, Dict[str, Any]] = {}
+        self._granule_packing: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
     # ------------------------------------------------------------------ fetch
 
     def granule_keys(self, it: pd.Timestamp) -> List[str]:
-        """``bucket/key`` of every granule this partition owns, oldest first."""
+        """``bucket/key`` of every unstored granule this partition owns, oldest first."""
         fs = self._s3()
         start, end = self.partition_window(it)
-        indexed: Dict[tuple, str] = {}
-        for day in self._days_to_list(start, end):
-            listed = self._list_day(fs, self.bucket, self.product, day)
-            indexed.update(self._index_keys(listed, window=(start, end), owned=True))
-        found = sorted(indexed.values(), key=self.start_of)
+        found: List[str] = []
+        for satellite in self.satellites:
+            indexed: Dict[tuple, str] = {}
+            for day in self._days_to_list(start, end):
+                listed = self._list_day(fs, BUCKETS[satellite], self.product, day)
+                indexed.update(self._index_keys(listed, window=(start, end), owned=True))
+            found.extend(indexed.values())
+        found = sorted(self.drop_stored(found), key=self.start_of)
         if self.granule_limit is not None:
             found = found[: self.granule_limit]
         return found
 
     def fetch(self, it: pd.Timestamp, temp_dir: pathlib.Path | None = None, **kwargs) -> List[str]:
-        """Download every granule the partition owns.
+        """Download every unstored granule the partition owns, from every spacecraft.
 
         Raises:
             IncompleteDownload: when any file failed after retries.
@@ -174,8 +199,8 @@ class JpssNdeL2Provider(JpssGranuleProvider):
         if not keys:
             return []
         dest = pathlib.Path(temp_dir) if temp_dir is not None else self.config.data_dir / self.name
-        # ``fs.ls`` returns "bucket/key"; strip the bucket back off for the URL.
-        urls = [self._https_url(self.bucket, path.split("/", 1)[1]) for path in keys]
+        # ``fs.ls`` returns "bucket/key".
+        urls = [self._https_url(*path.split("/", 1)) for path in keys]
         paths = download_many(urls, dest, workers=self.download_workers)
         if len(paths) != len(urls):
             raise IncompleteDownload(
@@ -187,7 +212,11 @@ class JpssNdeL2Provider(JpssGranuleProvider):
     # ------------------------------------------------------------------ process
 
     def process_granule(self, path: str) -> xr.Dataset | None:
-        """Read one granule into a single-step dataset, or None if it is oversized."""
+        """Read one granule into a one-granule dataset, or None if it is oversized.
+
+        The source packing of its variables is kept in ``_granule_packing`` under the
+        granule's id, for :meth:`process` to check against the group's.
+        """
         name = pathlib.Path(path).name
         with xr.open_dataset(path, decode_times=False, decode_timedelta=False) as src:
             ds = src.load()
@@ -201,10 +230,11 @@ class JpssNdeL2Provider(JpssGranuleProvider):
         )
         ds = ds.rename_dims({k: v for k, v in DIM_RENAMES.items() if k in ds.dims})
 
+        packing: Dict[str, Dict[str, Any]] = {}
         for var in ds.data_vars:
-            packing = source_packing(ds[var].variable)
-            if packing is not None:
-                self._packing.setdefault(str(var), packing)
+            found = source_packing(ds[var].variable)
+            if found is not None:
+                packing[str(var)] = found
             if ds[var].attrs.get("units") in DURATION_UNITS:
                 ds[var].attrs["time_component_units"] = ds[var].attrs.pop("units")
 
@@ -212,20 +242,66 @@ class JpssNdeL2Provider(JpssGranuleProvider):
         if ds is None:
             return None
 
+        satellite = self.satellite_of(name)
         start, end = self.start_of(name), self.end_of(name)
-        # expand_dims only touches data variables, so the static coordinates stay static.
-        ds = ds.expand_dims("time").assign_coords(time=[mid_time(start, end)])
-        ds["start_time"] = xr.DataArray(np.array([start], dtype="datetime64[ns]"), dims="time")
-        ds["end_time"] = xr.DataArray(np.array([end], dtype="datetime64[ns]"), dims="time")
-        ds["platform_name"] = xr.DataArray(np.array([PLATFORM_NAMES[self.satellite]]), dims="time")
+        ds = self.on_granule_axis(ds, satellite, start, start, end)
+        self._granule_packing[self.id_of(name)] = packing
 
         attrs = {key: ds.attrs[key] for key in KEPT_ATTRS if key in ds.attrs}
-        attrs["platform"] = PLATFORM_NAMES[self.satellite]
-        attrs["source"] = f"s3://{self.bucket}/{self.product}"
-        ds.attrs = attrs
+        ds.attrs = {**attrs, **self.group_attrs("ATMS")}
         for var in ds.variables:
             ds[var].encoding = {}
         return serialize_dataset_attrs(ds)
+
+    def stored_reference(self) -> Tuple[Dict[str, Dict[str, Any]], xr.Dataset | None]:
+        """The group's packing by source variable name, and its static coordinates.
+
+        Empty when the group does not exist yet; its first write sets both.
+        """
+        repo = self.get_icechunk_repo()
+        try:
+            stored = xr.open_zarr(
+                repo.readonly_session("main").store,
+                group=self.group,
+                consolidated=False,
+                decode_timedelta=False,
+            )
+        except STORE_READ_ERRORS:
+            # Only a group that does not exist yet has no reference; an unreadable one
+            # must not be mistaken for it, or the first granule would set a new packing.
+            if holds_data(repo, self.group):
+                raise
+            return {}, None
+        source = {
+            new: old for old, new in naming.store_names(self.store_prefix, self.group).items()
+        }
+        packing = {}
+        for name, var in stored.data_vars.items():
+            found = source_packing(var.variable)
+            if found is not None:
+                packing[source.get(str(name), str(name))] = found
+        static = [c for c in stored.coords if source.get(str(c), str(c)) in STATIC_COORDS]
+        statics = stored[static].coords.to_dataset() if static else None
+        if statics is not None:
+            statics = statics.rename({c: source.get(str(c), str(c)) for c in static})
+        return packing, statics
+
+    def _mismatch(
+        self,
+        granule: xr.Dataset,
+        reference: Dict[str, Dict[str, Any]],
+        statics: xr.Dataset | None,
+    ) -> str | None:
+        """Why ``granule`` cannot share the group's arrays, or None when it can."""
+        packing = self._granule_packing.get(str(granule[self.append_dim].values[0]), {})
+        for var, found in packing.items():
+            if var in reference and not same_packing(reference[var], found):
+                return f"{var} is packed as {found}, the group as {reference[var]}"
+        if statics is not None:
+            ok, bad = coords_match(statics, granule, STATIC_COORDS)
+            if not ok:
+                return f"static coordinate {bad} differs from the group's"
+        return None
 
     def process(
         self,
@@ -234,64 +310,75 @@ class JpssNdeL2Provider(JpssGranuleProvider):
         temp_dir: pathlib.Path | None = None,
         **kwargs,
     ) -> xr.Dataset:
-        """Read every granule and concatenate them on time."""
+        """Read every granule, drop any the group cannot hold, and stack on ``granule``.
+
+        A granule the group cannot hold withholds its spacecraft's whole hour. Writing that
+        spacecraft's other granules would make :meth:`missing_timesteps` count the hour as
+        done, and the rejected granule would never be tried again; withheld, the hour
+        stays missing and is retried (and logged) every pass until it can be stored.
+        """
+        reference, statics = self.stored_reference()
+        self._granule_packing = {}
         datasets = []
+        rejected: set[str] = set()
         for path in sorted(input_files, key=self.start_of):
             try:
                 granule = self.process_granule(path)
             except (OSError, KeyError, ValueError) as exc:
                 logger.warning(f"{self.name}: granule {path} failed: {exc}")
                 continue
-            if granule is not None:
-                datasets.append(granule)
+            if granule is None:
+                continue
+            reason = self._mismatch(granule, reference, statics)
+            if reason is not None:
+                logger.error(f"{self.name}: not writing {pathlib.Path(path).name}: {reason}")
+                rejected.add(str(granule["platform_name"].values[0]))
+                continue
+            # The first granule fixes the packing and statics for the rest of a new group.
+            for var, found in self._granule_packing[self.id_of(path)].items():
+                reference.setdefault(var, found)
+            if statics is None:
+                present = [c for c in STATIC_COORDS if c in granule.coords]
+                statics = granule[present].coords.to_dataset() if present else None
+            datasets.append(granule)
+        if rejected:
+            logger.error(
+                f"{self.name}: withholding {sorted(rejected)} for {it} so the hour is retried"
+            )
+            datasets = [ds for ds in datasets if str(ds["platform_name"].values[0]) not in rejected]
+        self._packing = reference
         return self.restrict_to_window(self.concat_granules(datasets), it)
 
-    def chunking(self, ds: xr.Dataset) -> Dict[str, Dict[str, Any]]:
-        """Chunks of :attr:`time_chunk` granules for every time-dependent variable."""
-        out = {}
-        for name, var in ds.data_vars.items():
-            if self.append_dim in var.dims:
-                chunks = tuple(
-                    self.time_chunk if dim == self.append_dim else var.sizes[dim]
-                    for dim in var.dims
-                )
-                out[str(name)] = {"chunks": chunks}
-        return out
-
-    def write_to_icechunk(self, repo, processed: xr.Dataset) -> bool:
-        """Write with the source's packing and :meth:`chunking` when creating the store.
-
-        Both only take effect on the first write; appends reuse the stored encoding.
-        """
-        overrides = self.chunking(processed)
+    def encoding_for(self, ds: xr.Dataset) -> Dict[str, Dict[str, Any]]:
+        """Chunks and granule times from the base class, plus the source packing."""
+        out = super().encoding_for(ds)
         for name, packing in self._packing.items():
-            if name in processed.data_vars:
-                overrides[name] = {**overrides.get(name, {}), **packing}
-        for name in ("start_time", "end_time"):
-            overrides[name] = {**overrides.get(name, {}), **GRANULE_TIME_ENCODING}
-        self.encoding_overrides = overrides
-        return super().write_to_icechunk(repo, processed)
+            out[name] = {**out.get(name, {}), **packing}
+        return out
 
 
 class JpssAtmsSfrProvider(JpssNdeL2Provider):
-    """ATMS snowfall rate (SFR v2) for one JPSS spacecraft."""
+    """ATMS snowfall rate (SFR v2) for the JPSS constellation."""
 
-    base_name = "jpss_atms_sfr"
+    name = "jpss_atms_sfr"
+    group = "atms_sfr"
     product = "ATMS-SFR"
-    time_chunk = 64
+    granule_chunk = 64
 
 
 class JpssMirsImgProvider(JpssNdeL2Provider):
-    """MiRS ATMS surface and column retrievals (``NPR_MIRS_IMG``) for one spacecraft."""
+    """MiRS ATMS surface and column retrievals (``NPR_MIRS_IMG``) for the constellation."""
 
-    base_name = "jpss_mirs_img"
+    name = "jpss_mirs_img"
+    group = "mirs_img"
     product = "NPR_MIRS_IMG"
-    time_chunk = 32
+    granule_chunk = 32
 
 
 class JpssMirsSndProvider(JpssNdeL2Provider):
     """MiRS ATMS temperature, moisture and hydrometeor profiles (``NPR_MIRS_SND``)."""
 
-    base_name = "jpss_mirs_snd"
+    name = "jpss_mirs_snd"
+    group = "mirs_snd"
     product = "NPR_MIRS_SND"
-    time_chunk = 8
+    granule_chunk = 8

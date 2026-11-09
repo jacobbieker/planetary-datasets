@@ -57,6 +57,10 @@ class BaseProvider(ABC):
     append_dim: str = "time"
     store_prefix: str
 
+    #: Zarr group inside the store this provider writes, for a repository that holds
+    #: several datasets side by side (one per group). None writes the root.
+    group: str | None = None
+
     #: Guard the process step with a memory ceiling. Set False for providers that manage
     #: their own memory, such as the virtualized ingests.
     #: True for a provider whose own writer names the variables (it writes several stores,
@@ -71,6 +75,7 @@ class BaseProvider(ABC):
     alignment_coords: tuple[str, ...] = ALIGNMENT_COORDS
 
     def __init__(self, config: Config | None = None):
+        """Build a provider, using ``config`` or else the process-wide configuration."""
         self._config = config
         self._repo: icechunk.Repository | None = None
 
@@ -115,8 +120,10 @@ class BaseProvider(ABC):
         return self._repo
 
     def repository_config(self) -> icechunk.RepositoryConfig | None:
-        """Repository settings for the handle :meth:`get_icechunk_repo` opens; None for the
-        repository's own. Override for, e.g., manifest splitting."""
+        """Repository settings for the handle :meth:`get_icechunk_repo` opens.
+
+        None keeps the repository's own. Override for, e.g., manifest splitting.
+        """
         return None
 
     def missing_timesteps(self, desired: pd.DatetimeIndex) -> List[pd.Timestamp]:
@@ -216,6 +223,7 @@ class BaseProvider(ABC):
             message=f"{self.name}: {np.atleast_1d(processed[self.append_dim].values)[0]}",
             alignment_coords=self.alignment_coords,
             encoding_overrides=self.encoding_overrides,
+            group=self.group,
         )
 
     @staticmethod
@@ -276,7 +284,12 @@ class BaseProvider(ABC):
         self.source_processed = processed
         if self.names_in_writer:
             return processed
-        return naming.prepare_for_store(processed, self.store_prefix, naming.stored_arrays(repo))
+        return naming.prepare_for_store(
+            processed,
+            self.store_prefix,
+            naming.stored_arrays(repo, self.group),
+            group=self.group,
+        )
 
     def describe_store(self) -> str:
         """Where this provider's data lives, for a log line.

@@ -144,19 +144,13 @@ declare -A LANES=(
   [amps_d6]="_backfill_lanes.py amps_d6 --threads 4 --pause 21600"
   [amps_drake]="_backfill_lanes.py amps_drake --threads 4 --pause 21600"
   [amps_nz]="_backfill_lanes.py amps_nz --threads 4 --pause 21600"
-  # JPSS products NOAA keeps ~90 days: VIIRS M-band SDR and the ATMS-derived L2 stores.
-  [jpss_viirs_mband_n20]="_backfill_lanes.py jpss_viirs_mband_n20 --threads 8"
-  [jpss_viirs_mband_n21]="_backfill_lanes.py jpss_viirs_mband_n21 --threads 8"
-  [jpss_viirs_mband_snpp]="_backfill_lanes.py jpss_viirs_mband_snpp --threads 8"
-  [jpss_atms_sfr_n20]="_backfill_lanes.py jpss_atms_sfr_n20 --threads 2"
-  [jpss_atms_sfr_n21]="_backfill_lanes.py jpss_atms_sfr_n21 --threads 2"
-  [jpss_atms_sfr_snpp]="_backfill_lanes.py jpss_atms_sfr_snpp --threads 2"
-  [jpss_mirs_img_n20]="_backfill_lanes.py jpss_mirs_img_n20 --threads 2"
-  [jpss_mirs_img_n21]="_backfill_lanes.py jpss_mirs_img_n21 --threads 2"
-  [jpss_mirs_img_snpp]="_backfill_lanes.py jpss_mirs_img_snpp --threads 2"
-  [jpss_mirs_snd_n20]="_backfill_lanes.py jpss_mirs_snd_n20 --threads 2"
-  [jpss_mirs_snd_n21]="_backfill_lanes.py jpss_mirs_snd_n21 --threads 2"
-  [jpss_mirs_snd_snpp]="_backfill_lanes.py jpss_mirs_snd_snpp --threads 2"
+  # JPSS products NOAA keeps ~90 days: VIIRS M-band SDR and the ATMS-derived L2 products.
+  # One lane per group of bkr/polar/jpss.icechunk, each writing all three spacecraft, so
+  # the threads are those of the three per-spacecraft lanes each replaces.
+  [jpss_viirs_mband]="_backfill_lanes.py jpss_viirs_mband --threads 24"
+  [jpss_atms_sfr]="_backfill_lanes.py jpss_atms_sfr --threads 4"
+  [jpss_mirs_img]="_backfill_lanes.py jpss_mirs_img --threads 4"
+  [jpss_mirs_snd]="_backfill_lanes.py jpss_mirs_snd --threads 4"
   # 8 downloads, not 16: EUMETSAT's Data Store throttles a user's concurrent connections, and
   # the MetOp-SG lanes share that allowance.
   [mtg_irs_l1]="_backfill_mtg_irs.py mtg_irs_l1 --follow --threads 32 --downloads 8"

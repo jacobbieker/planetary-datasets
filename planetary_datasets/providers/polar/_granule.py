@@ -27,7 +27,7 @@ from loguru import logger
 
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common import existing_times
-from planetary_datasets.common.store import STORE_READ_ERRORS, has_committed_data
+from planetary_datasets.common.store import STORE_READ_ERRORS, holds_data
 
 #: Platform name written into rows that only exist because a granule was padded. A real
 #: MetOp platform is never called Z, so padded rows stay identifiable after the fact.
@@ -212,7 +212,9 @@ class GranuleProvider(BaseProvider):
         than being reported as empty; that must not be caught here, or a re-run would
         overwrite the archive.
         """
-        times = existing_times(self.get_icechunk_repo(), append_dim=self.append_dim)
+        times = existing_times(
+            self.get_icechunk_repo(), append_dim=self.append_dim, group=self.group
+        )
         if times.size == 0:
             return list(desired)
 
@@ -233,10 +235,13 @@ class GranuleProvider(BaseProvider):
         repo = self.get_icechunk_repo()
         try:
             ds = xr.open_zarr(
-                repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+                repo.readonly_session("main").store,
+                group=self.group,
+                consolidated=False,
+                decode_timedelta=True,
             )
         except STORE_READ_ERRORS as exc:
-            if has_committed_data(repo):
+            if holds_data(repo, self.group):
                 raise
             logger.debug(f"{self.name}: store is empty ({type(exc).__name__})")
             return {}
@@ -306,7 +311,10 @@ class GranuleProvider(BaseProvider):
             return ds
         try:
             stored = xr.open_zarr(
-                repo.readonly_session("main").store, consolidated=False, decode_timedelta=True
+                repo.readonly_session("main").store,
+                group=self.group,
+                consolidated=False,
+                decode_timedelta=True,
             )
         except STORE_READ_ERRORS:
             return ds  # the first write sets the layout

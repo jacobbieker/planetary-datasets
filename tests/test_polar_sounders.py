@@ -16,6 +16,9 @@ import xarray as xr
 from planetary_datasets.config import MissingCredential
 from planetary_datasets.providers.polar import (
     JpssAtmsProvider,
+    JpssAtmsSfrProvider,
+    JpssMirsImgProvider,
+    JpssMirsSndProvider,
     JpssNdeL2Provider,
     JpssViirsMbandProvider,
     MetopAmsuaProvider,
@@ -39,8 +42,16 @@ from planetary_datasets.providers.polar.jpss_atms import (
 )
 from planetary_datasets.providers.polar.metop_iasi import platform_from_filename
 
-ALL_PROVIDERS = [
+JPSS_PROVIDERS = [
     JpssAtmsProvider,
+    JpssAtmsSfrProvider,
+    JpssMirsImgProvider,
+    JpssMirsSndProvider,
+    JpssViirsMbandProvider,
+]
+
+ALL_PROVIDERS = [
+    *JPSS_PROVIDERS,
     MetopAmsuaProvider,
     MetopAscatProvider,
     MetopAvhrrProvider,
@@ -147,7 +158,21 @@ def test_store_prefix_resolves_locally(provider_cls, local_config, tmp_path):
 
 
 def test_store_prefixes_are_unique():
-    assert len({cls.store_prefix for cls in ALL_PROVIDERS}) == len(ALL_PROVIDERS)
+    """Every provider has its own store, or its own group of a shared one."""
+    targets = {(cls.store_prefix, cls.group) for cls in ALL_PROVIDERS}
+    assert len(targets) == len(ALL_PROVIDERS)
+
+
+def test_jpss_products_are_groups_of_one_store():
+    assert {cls.store_prefix for cls in JPSS_PROVIDERS} == {"bkr/polar/jpss.icechunk"}
+    assert {cls.group for cls in JPSS_PROVIDERS} == {
+        "atms",
+        "atms_sfr",
+        "mirs_img",
+        "mirs_snd",
+        "viirs_mband",
+    }
+    assert {cls.name for cls in JPSS_PROVIDERS} == {f"jpss_{cls.group}" for cls in JPSS_PROVIDERS}
 
 
 @pytest.mark.parametrize("provider_cls", EUMDAC_PROVIDERS)
@@ -175,14 +200,38 @@ def test_partition_window_drops_timezone(jpss):
     assert start.tzinfo is None
 
 
-def test_missing_timesteps_uses_the_window_not_the_exact_stamp(jpss, sample_dataset):
-    """A granule at 04:17 must mark the 04:00 partition as done."""
+def atms_granule(provider, satellite: str, start: str, value: float = 1.0) -> xr.Dataset:
+    """A one-granule ATMS-shaped dataset on the granule axis."""
+    start = pd.Timestamp(start)
+    ds = xr.Dataset({"1": (("y", "x"), np.full((2, 3), value, dtype=np.float16))})
+    return provider.on_granule_axis(ds, satellite, start, start, start + pd.Timedelta(32, "s"))
+
+
+def test_missing_timesteps_uses_the_window_not_the_exact_stamp(jpss):
+    """Granules at 04:17 from every spacecraft must mark the 04:00 partition as done."""
     partitions = pd.DatetimeIndex(["2025-01-01T04:00", "2025-01-01T05:00"])
     assert jpss.missing_timesteps(partitions) == list(partitions)
 
-    stored = sample_dataset.assign_coords(time=pd.DatetimeIndex(["2025-01-01T04:17:33"]))
-    jpss.write_to_icechunk(jpss.get_icechunk_repo(), stored)
+    stored = jpss.concat_granules(
+        [atms_granule(jpss, sat, "2025-01-01T04:17:33") for sat in ("n21", "n20", "snpp")]
+    )
+    assert jpss.write_to_icechunk(jpss.get_icechunk_repo(), stored)
     assert jpss.missing_timesteps(partitions) == [pd.Timestamp("2025-01-01T05:00")]
+
+
+def test_atms_hours_before_noaa21_do_not_wait_for_it(jpss):
+    """NOAA-21's ATMS archive starts 2023-02-27; earlier hours are done without it."""
+    before = pd.Timestamp("2023-01-01T04:00")
+    after = pd.Timestamp("2024-01-01T04:00")
+    stored = jpss.concat_granules(
+        [
+            atms_granule(jpss, sat, str(hour + pd.Timedelta(10, "min")))
+            for hour in (before, after)
+            for sat in ("n20", "snpp")
+        ]
+    )
+    assert jpss.write_to_icechunk(jpss.get_icechunk_repo(), stored)
+    assert jpss.missing_timesteps(pd.DatetimeIndex([before, after])) == [after]
 
 
 def test_restrict_to_window_drops_rows_owned_by_the_neighbour(avhrr):
@@ -309,10 +358,7 @@ def test_jpss_process_pairs_files_and_skips_unmatched(jpss, monkeypatch):
 
     def fake_granule(sdr, geo):
         seen.append((sdr.split("/")[-1], geo.split("/")[-1]))
-        return xr.Dataset(
-            {"brightness": ("time", [1.0])},
-            coords={"time": pd.DatetimeIndex([granule_start(sdr)])},
-        )
+        return atms_granule(jpss, "n21", str(granule_start(sdr)))
 
     monkeypatch.setattr(jpss, "process_granule", fake_granule)
     lonely = SDR_NAME.replace("b13247", "b13248")
@@ -321,7 +367,27 @@ def test_jpss_process_pairs_files_and_skips_unmatched(jpss, monkeypatch):
     )
 
     assert seen == [(SDR_NAME, GEO_NAME)]
-    assert ds.sizes["time"] == 1
+    assert ds.sizes["granule"] == 1
+    assert list(ds["granule"].values) == ["2025-06-01T00:00:24.4_n21"]
+    assert list(ds["platform_name"].values) == ["NOAA-21"]
+
+
+def test_jpss_atms_does_not_refetch_stored_granules(jpss, monkeypatch):
+    """Re-running an hour lists the bucket but downloads nothing already in the group."""
+    names = {"ATMS-SDR": SDR_NAME, "ATMS-SDR-GEO": GEO_NAME}
+    monkeypatch.setattr(jpss, "_s3", lambda: None)
+    monkeypatch.setattr(
+        jpss,
+        "_list_day",
+        lambda fs, bucket, product, day: (
+            [f"{bucket}/{product}/{names[product]}"] if "n21" in bucket else []
+        ),
+    )
+    hour = pd.Timestamp("2025-06-01T00:00")
+    assert len(jpss.granule_pairs(hour)) == 1
+    stored = atms_granule(jpss, "n21", str(granule_start(SDR_NAME)))
+    assert jpss.write_to_icechunk(jpss.get_icechunk_repo(), stored)
+    assert jpss.granule_pairs(hour) == []
 
 
 def test_jpss_https_url_is_anonymous_and_public():
@@ -646,10 +712,10 @@ def test_epct_download_skips_a_staged_partition(tmp_path):
     assert epct_download.main(argv) == 0
 
 
-def test_concat_granules_sorts_by_time(jpss):
+def test_concat_granules_sorts_by_time(avhrr):
     late = one_row_per_time("2025-01-01T01:00")
     early = one_row_per_time("2025-01-01T00:00").assign(a=("time", [0.0]))
-    assert list(jpss.concat_granules([late, early])["a"].values) == [0.0, 1.0]
+    assert list(avhrr.concat_granules([late, early])["a"].values) == [0.0, 1.0]
 
 
 def test_an_empty_partition_concatenates_to_nothing_and_is_not_written(jpss):
@@ -671,11 +737,8 @@ def test_dagster_assets_load():
         resources={"pipes_docker_client": PipesDockerClient()},
     )
     keys = {spec.key.to_user_string() for spec in defs.resolve_all_asset_specs()}
-    rolling = {
-        f"{product}-{sat}"
-        for product in ("jpss-viirs-mband", "jpss-atms-sfr", "jpss-mirs-img", "jpss-mirs-snd")
-        for sat in ("n20", "n21", "snpp")
-    }
+    # One asset per product: each writes all three spacecraft into its group.
+    rolling = {"jpss-viirs-mband", "jpss-atms-sfr", "jpss-mirs-img", "jpss-mirs-snd"}
     assert keys == rolling | {
         "jpss-atms",
         "metop-amsua",
