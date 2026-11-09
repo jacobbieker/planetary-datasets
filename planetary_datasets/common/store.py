@@ -20,6 +20,7 @@ import pandas as pd
 import xarray as xr
 import zarr
 import zarr.codecs
+import zarr.errors
 from icechunk.xarray import to_icechunk
 from loguru import logger
 
@@ -91,13 +92,16 @@ def holds_data(repo: icechunk.Repository, group: str | None = None, session=None
     several groups, each written by its own lane, has commits while one of its groups is
     still absent; that group is empty rather than unreadable, so the check is whether its
     node exists in the snapshot being read.
+
+    Only a node that is confirmed absent counts as no data. Any other failure to read it
+    propagates: reporting an unreadable group as empty would let a writer recreate it.
     """
     if group is None:
         return has_committed_data(repo)
     store = (session or repo.readonly_session("main")).store
     try:
         zarr.open_group(store, path=group.strip("/"), mode="r", zarr_format=3)
-    except STORE_READ_ERRORS:
+    except zarr.errors.NodeNotFoundError:
         return False
     return True
 

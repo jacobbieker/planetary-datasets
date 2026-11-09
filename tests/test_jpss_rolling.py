@@ -688,3 +688,22 @@ def test_readable_names_keep_the_packing(local_config, small_granules, tmp_path,
     assert root["viirs_mband/solar_zenith_angle"].attrs["bitround_keepbits"] == 16
     assert root["mirs_img/channel_temperature"].dtype == np.int16
     assert root["mirs_img/channel_temperature"].chunks[0] == mirs.granule_chunk
+
+
+def test_holds_data_distinguishes_absent_from_unreadable(local_config, tmp_path, monkeypatch):
+    """An absent group is empty; a failure to read an existing one is not."""
+    from planetary_datasets.common import store as store_module
+
+    provider = JpssMirsImgProvider(config=local_config)
+    repo = provider.get_icechunk_repo()
+    ds = provider.process([write_mirs(tmp_path)], pd.Timestamp("2026-10-15T12:00"))
+    assert provider.write_to_icechunk(repo, ds)
+    assert store_module.holds_data(repo, "mirs_img")
+    assert not store_module.holds_data(repo, "mirs_snd")
+
+    def broken(*args, **kwargs):
+        raise ValueError("unreadable metadata")
+
+    monkeypatch.setattr(store_module.zarr, "open_group", broken)
+    with pytest.raises(ValueError):
+        store_module.holds_data(repo, "mirs_snd")

@@ -74,6 +74,9 @@ ROLLING_RETENTION = pd.Timedelta(90, "D")
 #: Encoding for the per-granule ``start_time``/``end_time``. Left to xarray, the units are
 #: chosen from the first values written (``hours since <first granule>`` when that happens
 #: to fall on the hour), and every later append is truncated to them.
+#: Dtype every granule time is built in before encoding.
+NS_DATETIME = "datetime64[ns]"
+
 GRANULE_TIME_ENCODING = {"units": "microseconds since 1970-01-01", "dtype": "int64"}
 
 
@@ -517,10 +520,10 @@ class JpssProductProvider(JpssGranuleProvider):
             {dim: np.array([granule_id(satellite, id_start)], dtype=object)}
         )
         ds["time"] = xr.DataArray(
-            np.array([mid_time(start, end, round_to=None)], dtype="datetime64[ns]"), dims=dim
+            np.array([mid_time(start, end, round_to=None)], dtype=NS_DATETIME), dims=dim
         )
-        ds["start_time"] = xr.DataArray(np.array([start], dtype="datetime64[ns]"), dims=dim)
-        ds["end_time"] = xr.DataArray(np.array([end], dtype="datetime64[ns]"), dims=dim)
+        ds["start_time"] = xr.DataArray(np.array([start], dtype=NS_DATETIME), dims=dim)
+        ds["end_time"] = xr.DataArray(np.array([end], dtype=NS_DATETIME), dims=dim)
         # object, not fixed-width: a first write of only NOAA-20 would otherwise fix the
         # width at seven characters and refuse "Suomi-NPP" ever after.
         ds["platform_name"] = xr.DataArray(

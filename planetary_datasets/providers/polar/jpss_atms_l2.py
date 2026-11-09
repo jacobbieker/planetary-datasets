@@ -52,7 +52,7 @@ from loguru import logger
 
 from planetary_datasets.common import download_many, naming
 from planetary_datasets.common.dataset import coords_match
-from planetary_datasets.common.store import ALIGNMENT_COORDS, STORE_READ_ERRORS
+from planetary_datasets.common.store import ALIGNMENT_COORDS, STORE_READ_ERRORS, holds_data
 from planetary_datasets.providers.polar._granule import serialize_dataset_attrs
 from planetary_datasets.providers.polar._jpss import (
     BUCKETS,
@@ -266,6 +266,10 @@ class JpssNdeL2Provider(JpssProductProvider):
                 decode_timedelta=False,
             )
         except STORE_READ_ERRORS:
+            # Only a group that does not exist yet has no reference; an unreadable one
+            # must not be mistaken for it, or the first granule would set a new packing.
+            if holds_data(repo, self.group):
+                raise
             return {}, None
         source = {
             new: old for old, new in naming.store_names(self.store_prefix, self.group).items()
