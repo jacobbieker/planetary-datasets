@@ -14,8 +14,11 @@ Group           Old stores (read only)                           Default window
 ``viirs_mband`` ``bkr/polar/jpss_viirs_mband_{n20,n21,snpp}``    2026-07-17 - group start
 ==============  ===============================================  =========================
 
-"Group start" is the earliest ``time`` the group already holds; NOAA deleted the rolling
-products before then, so the old stores are their only copy. From 2025-08-01 the ATMS
+"Group start" is the earliest ``time`` the group held before the copy first wrote to it;
+NOAA deleted the rolling products before then, so the old stores are their only copy.
+The first run records it as a repository tag, ``copy-jpss-history.<group>.end.<time>``,
+which later runs read back: after a partial copy the group's earliest ``time`` is a
+copied row, not the lane's start. The tag touches nothing the lanes write. From 2025-08-01 the ATMS
 lane re-downloads the SDRs itself.
 
 **What a row becomes.** Each old row (one granule along ``time``) becomes one row along
@@ -149,6 +152,11 @@ def _per_satellite(base: str) -> Tuple[Tuple[str, Optional[str]], ...]:
 
 #: First partition of the rolling Dagster assets; nothing older was ever stored.
 ROLLING_START = "2026-07-17"
+
+#: Tag (with the group and a time appended) recording where a group's lane rows begin.
+BOUNDARY_TAG = "copy-jpss-history"
+#: How the time is spelled in that tag.
+BOUNDARY_FORMAT = "%Y%m%dT%H%M%S.%f"
 
 PRODUCTS: Dict[str, Product] = {
     "atms": Product(
@@ -433,14 +441,60 @@ class Copier:
             return set()
         return {str(v) for v in self.group["granule"].values}
 
+    @property
+    def boundary_tag_prefix(self) -> str:
+        """Prefix of the repository tag recording where the group's lane rows begin."""
+        return f"{BOUNDARY_TAG}.{self.provider.group}.end."
+
+    def recorded_boundary(self) -> Optional[pd.Timestamp]:
+        """The boundary an earlier run recorded for this group, if any."""
+        for tag in self.repo.list_tags():
+            if tag.startswith(self.boundary_tag_prefix):
+                stamp = tag[len(self.boundary_tag_prefix) :]
+                return pd.Timestamp(pd.to_datetime(stamp, format=BOUNDARY_FORMAT))
+        return None
+
+    def record_boundary(self) -> None:
+        """Tag the repository with the default end, once, before the first write.
+
+        A tag rather than anything in the group: it touches no array or attribute the
+        lane writes, so it cannot conflict with or be overwritten by the lane's commits.
+        """
+        if self._unrecorded is None:
+            return
+        name = f"{self.boundary_tag_prefix}{self._unrecorded.strftime(BOUNDARY_FORMAT)}"
+        try:
+            self.repo.create_tag(name, self.repo.lookup_branch("main"))
+        except icechunk.IcechunkError as exc:
+            if self.recorded_boundary() is None:
+                raise
+            logger.debug(f"{self.product}: boundary already recorded ({exc})")
+        logger.info(f"{self.product}: recorded the group's lane start as tag {name}")
+        self._unrecorded = None
+
     def _end(self, end: Optional[pd.Timestamp]) -> pd.Timestamp:
+        """The end given, the product's, or where the lane's rows in the group begin.
+
+        That is the group's earliest ``time`` *before the copy wrote anything*. Read
+        afresh after a partial copy it would be the earliest copied row, and a resumed run
+        would find nothing to do; so the first run records it as a repository tag
+        (:meth:`record_boundary`) and later runs read it back.
+
+        Raises:
+            MigrationError: There is no end to default to.
+        """
+        self._unrecorded: Optional[pd.Timestamp] = None
         if end is not None:
             return pd.Timestamp(end)
         if self.spec.end is not None:
             return pd.Timestamp(self.spec.end)
+        recorded = self.recorded_boundary()
+        if recorded is not None:
+            return recorded
         if self.group is None or "time" not in self.group:
             raise MigrationError(f"{self.product}: the group is empty; give --end")
-        return pd.Timestamp(np.nanmin(self.group["time"].values))
+        self._unrecorded = pd.Timestamp(np.nanmin(self.group["time"].values))
+        return self._unrecorded
 
     def slices(self) -> Iterator[Tuple[pd.Timestamp, pd.Timestamp]]:
         """``[start, end)`` of every slice, oldest first."""
@@ -590,6 +644,8 @@ class Copier:
     def run(self, dry_run: bool = False) -> Totals:
         """Copy (or, with ``dry_run``, count) every slice; stop early on the deadline."""
         totals = Totals()
+        if not dry_run:
+            self.record_boundary()
         began = self.clock()
         last = 0.0
         logger.info(
@@ -657,8 +713,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     import dask
 
-    dask.config.set(scheduler="threads", num_workers=args.threads)
-
     deadline = None
     if args.max_hours is not None:
         deadline = time.monotonic() + args.max_hours * 3600
@@ -669,14 +723,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         at = time.monotonic() + left
         deadline = at if deadline is None else min(deadline, at)
 
-    copier = Copier(
-        args.product,
-        start=pd.Timestamp(args.start) if args.start else None,
-        end=pd.Timestamp(args.end) if args.end else None,
-        slice_hours=args.slice_hours,
-        deadline=deadline,
-    )
-    copier.run(dry_run=args.dry_run)
+    # Scoped, so a caller of main() (a test) does not inherit the thread count.
+    with dask.config.set(scheduler="threads", num_workers=args.threads):
+        copier = Copier(
+            args.product,
+            start=pd.Timestamp(args.start) if args.start else None,
+            end=pd.Timestamp(args.end) if args.end else None,
+            slice_hours=args.slice_hours,
+            deadline=deadline,
+        )
+        copier.run(dry_run=args.dry_run)
     return 0
 
 

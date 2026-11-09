@@ -192,7 +192,13 @@ def test_default_end_is_where_the_group_starts(old_mirs, tmp_path):
     assert copier.run().copied == 3
 
 
-def test_time_budget_stops_between_commits(old_mirs):
+def test_time_budget_stops_between_commits_and_a_rerun_resumes(old_mirs, tmp_path):
+    """Stopped by its budget and re-run with the default end, the copy finishes."""
+    lane = JpssMirsImgProvider()
+    later = HOUR + pd.Timedelta(3, "h")
+    files = [write_mirs(tmp_path, mirs_name("n20", later + pd.Timedelta(10, "min")))]
+    assert lane.write_to_icechunk(lane.get_icechunk_repo(), lane.process(files, later))
+
     class Clock:
         now = 0.0
 
@@ -200,9 +206,7 @@ def test_time_budget_stops_between_commits(old_mirs):
             return self.now
 
     clock = Clock()
-    copier = tool.Copier(
-        "mirs_img", end=HOUR + pd.Timedelta(3, "h"), slice_hours=1, deadline=150, clock=clock
-    )
+    copier = tool.Copier("mirs_img", slice_hours=1, deadline=150, clock=clock)
     write = copier.write_slice
 
     def slow_write(ds):
@@ -215,8 +219,32 @@ def test_time_budget_stops_between_commits(old_mirs):
     # The 12:00 slice took 100 s; another would end past the 150 s budget.
     assert totals.slices == 1 and totals.copied == 3
     assert snapshots(JpssMirsImgProvider()) == before + 1
-    # The next run carries on where this one stopped.
-    assert tool.Copier("mirs_img", end=HOUR + pd.Timedelta(3, "h")).run().copied == 3
+    # The next run, with the default end again, carries on where this one stopped: the
+    # end is where the lane's rows start, not the earliest row the copy wrote.
+    resumed = tool.Copier("mirs_img")
+    assert resumed.end == pd.Timestamp("2026-07-20T15:10:15.8")
+    assert resumed.run().copied == 3
+    assert tool.Copier("mirs_img").run().copied == 0
+    assert stored(lane).sizes["granule"] == 7
+
+
+def test_an_empty_group_needs_an_end(old_mirs):
+    with pytest.raises(tool.MigrationError, match="give --end"):
+        tool.Copier("mirs_img")
+
+
+def test_the_boundary_is_recorded_once_and_not_by_a_dry_run(old_mirs, tmp_path):
+    lane = JpssMirsImgProvider()
+    later = HOUR + pd.Timedelta(3, "h")
+    files = [write_mirs(tmp_path, mirs_name("n20", later + pd.Timedelta(10, "min")))]
+    assert lane.write_to_icechunk(lane.get_icechunk_repo(), lane.process(files, later))
+    tool.Copier("mirs_img").run(dry_run=True)
+    assert lane.get_icechunk_repo().list_tags() == set()
+    tool.Copier("mirs_img").run()
+    tags = lane.get_icechunk_repo().list_tags()
+    assert tags == {"copy-jpss-history.mirs_img.end.20260720T151015.800000"}
+    tool.Copier("mirs_img").run()
+    assert lane.get_icechunk_repo().list_tags() == tags
 
 
 def test_dry_run_counts_and_writes_nothing(old_mirs):
