@@ -419,3 +419,10 @@ def test_a_group_the_copy_creates_records_the_given_end(old_mirs):
     first_end = HOUR + pd.Timedelta(1, "h")
     assert tool.Copier("mirs_img", end=first_end).run().copied == 3
     assert tool.Copier("mirs_img").end == first_end
+
+
+def test_a_run_that_writes_nothing_records_nothing(old_mirs):
+    """A run stopped before its first slice leaves the group, and its tags, alone."""
+    end = HOUR + pd.Timedelta(1, "h")
+    assert tool.Copier("mirs_img", end=end, deadline=-1.0).run().copied == 0
+    assert JpssMirsImgProvider().get_icechunk_repo().list_tags() == set()

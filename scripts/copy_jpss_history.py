@@ -649,8 +649,6 @@ class Copier:
     def run(self, dry_run: bool = False) -> Totals:
         """Copy (or, with ``dry_run``, count) every slice; stop early on the deadline."""
         totals = Totals()
-        if not dry_run:
-            self.record_boundary()
         began = self.clock()
         last = 0.0
         logger.info(
@@ -677,6 +675,9 @@ class Copier:
             if not count:
                 continue
             ds = self.build_slice(planned)
+            # Only once something is about to be written: until then the group is as the
+            # lane left it, and a later run computes the same boundary afresh.
+            self.record_boundary()
             nbytes = float(ds.nbytes)
             self.write_slice(ds)
             self.existing.update(str(v) for v in ds["granule"].values)
