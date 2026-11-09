@@ -414,11 +414,29 @@ def test_an_explicit_end_still_records_the_lane_start(old_mirs, tmp_path):
     assert resumed.run().copied == 3
 
 
-def test_a_group_the_copy_creates_records_the_given_end(old_mirs):
-    """With no lane start known, a later default-end run stops where the first one did."""
+def test_a_group_the_copy_creates_needs_an_end_ever_after(old_mirs):
+    """With no lane start known, a later run refuses to guess one from copied rows."""
     first_end = HOUR + pd.Timedelta(1, "h")
     assert tool.Copier("mirs_img", end=first_end).run().copied == 3
-    assert tool.Copier("mirs_img").end == first_end
+    with pytest.raises(tool.MigrationError, match="created this group"):
+        tool.Copier("mirs_img")
+    assert tool.Copier("mirs_img", end=HOUR + pd.Timedelta(3, "h")).run().copied == 3
+
+
+def test_a_missing_old_store_is_skipped_but_a_broken_one_raises(old_mirs, monkeypatch):
+    """Only a store confirmed absent is skipped."""
+    import shutil
+
+    shutil.rmtree(old_mirs.store_path("bkr/polar/jpss_mirs_img_snpp.icechunk"))
+    copier = tool.Copier("mirs_img", end=HOUR + pd.Timedelta(3, "h"))
+    assert [o.satellite for o in copier.olds] == ["n20", "n21"]
+
+    def broken(storage):
+        raise tool.icechunk.IcechunkError("storage unavailable")
+
+    monkeypatch.setattr(tool.icechunk.Repository, "open", broken)
+    with pytest.raises(tool.icechunk.IcechunkError):
+        tool.Copier("mirs_img", end=HOUR + pd.Timedelta(3, "h"))
 
 
 def test_a_run_that_writes_nothing_records_nothing(old_mirs):

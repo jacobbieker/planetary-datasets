@@ -18,7 +18,9 @@ Group           Old stores (read only)                           Default window
 NOAA deleted the rolling products before then, so the old stores are their only copy.
 The first run records it as a repository tag, ``copy-jpss-history.<group>.end.<time>``,
 which later runs read back: after a partial copy the group's earliest ``time`` is a
-copied row, not the lane's start. The tag touches nothing the lanes write. From 2025-08-01 the ATMS
+copied row, not the lane's start. The tag touches nothing the lanes write. A group the
+copy itself creates (its lane never ran) is tagged ``copy-jpss-history.<group>.created``
+instead, and every later run on it needs ``--end``. From 2025-08-01 the ATMS
 lane re-downloads the SDRs itself.
 
 **What a row becomes.** Each old row (one granule along ``time``) becomes one row along
@@ -265,10 +267,12 @@ class OldStore:
             FileNotFoundError: The store does not exist.
         """
         config = get_config()
-        try:
-            repo = icechunk.Repository.open(config.icechunk_storage(prefix))
-        except icechunk.IcechunkError as exc:
-            raise FileNotFoundError(f"no store at {config.store_path(prefix)}: {exc}") from exc
+        storage = config.icechunk_storage(prefix)
+        # Only a store confirmed absent is skipped; any other failure to open it raises,
+        # rather than letting the run succeed without that store's history.
+        if not icechunk.Repository.exists(storage):
+            raise FileNotFoundError(f"no store at {config.store_path(prefix)}")
+        repo = icechunk.Repository.open(storage)
         self.prefix = prefix
         self.satellite = satellite
         raw = xr.open_zarr(
@@ -459,7 +463,16 @@ class Copier:
 
         A tag rather than anything in the group: it touches no array or attribute the
         lane writes, so it cannot conflict with or be overwritten by the lane's commits.
+        Its value is the group's earliest ``time`` before any copy, so it is right whether
+        or not the slice written after it commits. For a group the copy creates, a
+        ``created`` tag is written instead, which makes later runs require ``--end``.
         """
+        if self._mark_created:
+            name = f"{BOUNDARY_TAG}.{self.provider.group}.created"
+            if not self.group_created_by_copy():
+                self.repo.create_tag(name, self.repo.lookup_branch("main"))
+                logger.info(f"{self.product}: the copy creates the group; tagged {name}")
+            self._mark_created = False
         if self._unrecorded is None:
             return
         name = f"{self.boundary_tag_prefix}{self._unrecorded.strftime(BOUNDARY_FORMAT)}"
@@ -484,22 +497,35 @@ class Copier:
             MigrationError: There is no end to default to.
         """
         self._unrecorded: Optional[pd.Timestamp] = None
+        self._mark_created = False
         if self.spec.end is not None:
             return pd.Timestamp(end if end is not None else self.spec.end)
         boundary = self.recorded_boundary()
+        if boundary is None and self.group_created_by_copy():
+            # Its earliest rows are copied ones, so they say nothing about the lane.
+            if end is None:
+                raise MigrationError(
+                    f"{self.product}: the copy created this group, so the lane's start is "
+                    "not known; give --end"
+                )
+            return pd.Timestamp(end)
         if boundary is None and self.group is not None and "time" in self.group:
             # Recorded even when this run is given an explicit end: whatever it copies
             # makes the group's earliest time a copied row from then on.
             boundary = self._unrecorded = pd.Timestamp(np.nanmin(self.group["time"].values))
         elif boundary is None and end is not None:
-            # The copy creates the group, so no lane start is known; the given end is the
-            # only boundary a later default-end run can safely stop at.
-            self._unrecorded = pd.Timestamp(end)
+            # The copy creates the group, so no lane start is known. That is recorded, so
+            # a later run without --end refuses instead of taking a copied row for it.
+            self._mark_created = True
         if end is not None:
             return pd.Timestamp(end)
         if boundary is None:
             raise MigrationError(f"{self.product}: the group is empty; give --end")
         return boundary
+
+    def group_created_by_copy(self) -> bool:
+        """True when an earlier run of this script created the group."""
+        return f"{BOUNDARY_TAG}.{self.provider.group}.created" in self.repo.list_tags()
 
     def slices(self) -> Iterator[Tuple[pd.Timestamp, pd.Timestamp]]:
         """``[start, end)`` of every slice, oldest first."""
