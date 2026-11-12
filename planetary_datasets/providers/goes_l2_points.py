@@ -401,23 +401,73 @@ def _discard_parser(pool) -> None:
     pool.shutdown(wait=False, cancel_futures=True)
 
 
+#: The result of a file that killed the process parsing it, even read alone.
+CRASHED = "the parser process crashed reading it"
+
+#: Files a worker parses per job (the pool's pickling cost is paid per job).
+PARSE_CHUNK = 8
+
+
+def _read_chunk(read, items: Sequence[tuple[str, bytes]]) -> list:
+    return [read(item) for item in items]
+
+
+def _collect(futures: dict, results: dict) -> list:
+    """Store the finished jobs' results; the jobs a dead worker took with it, back."""
+    lost = []
+    for future, job in futures.items():
+        try:
+            for index, result in zip(job, future.result()):
+                results[index] = result
+        except BrokenProcessPool:
+            lost.append(job)
+    return lost
+
+
 def _parse(bodies: Sequence[tuple[str, bytes]]) -> list:
     """:func:`_read_safely` over ``bodies``, in worker processes for more than a few.
 
-    A pool that breaks part way is replaced and the partition parsed again, once.
+    When a worker dies the pool breaks and the jobs it held are lost. They are parsed
+    again on a fresh pool while each round loses fewer, then one file per process, so a
+    file that crashes the reader is isolated and comes back as :data:`CRASHED` instead
+    of failing the partition.
     """
-    if len(bodies) <= 8:
+    if len(bodies) <= PARSE_CHUNK:
         return [_read_safely(item) for item in bodies]
-    for attempt in (1, 2):
+    read = _read_safely
+    results: dict[int, object] = {}
+    pending = [
+        list(range(i, min(i + PARSE_CHUNK, len(bodies))))
+        for i in range(0, len(bodies), PARSE_CHUNK)
+    ]
+    first = True
+    while pending:
         pool = _parser()
         try:
-            return list(pool.map(_read_safely, bodies, chunksize=8))
-        except BrokenProcessPool:
+            futures = {
+                pool.submit(_read_chunk, read, [bodies[i] for i in job]): job for job in pending
+            }
+        except BrokenProcessPool:  # shared with a thread whose worker just died
             _discard_parser(pool)
-            if attempt == 2:
-                raise
-            logger.warning("goes points: a parser process died; parsing again on a new pool")
-    raise AssertionError("unreachable")
+            continue
+        lost = _collect(futures, results)
+        if not lost:
+            return [results[i] for i in range(len(bodies))]
+        _discard_parser(pool)
+        logger.warning("goes points: a parser process died; parsing again on a new pool")
+        stalled = len(lost) == len(pending) and not first
+        pending, first = lost, False
+        if stalled:
+            break
+    from concurrent.futures import ProcessPoolExecutor
+
+    for index in (i for job in pending for i in job):
+        with ProcessPoolExecutor(1) as alone:
+            try:
+                results[index] = alone.submit(_read_chunk, read, [bodies[index]]).result()[0]
+            except BrokenProcessPool:
+                results[index] = CRASHED
+    return [results[i] for i in range(len(bodies))]
 
 
 def _read_safely(item: tuple[str, bytes]) -> dict | str:
@@ -515,8 +565,12 @@ def write_partition(
     """Copy one partition's files into ``group``, or the generation of it they are packed
     like; one commit. Returns files written."""
     parsed = []
+    crashed = []
     for key, result in zip((k for k, _ in bodies), _parse(bodies)):
-        if isinstance(result, str):
+        if result == CRASHED:
+            crashed.append(key)
+            logger.warning(f"{group}: {key}: {result}; left out")
+        elif isinstance(result, str):
             logger.warning(f"{group}: {key}: {result}")
         elif _stripped(result):
             logger.warning(
@@ -525,6 +579,12 @@ def write_partition(
             )
         else:
             parsed.append(result)
+    if crashed:
+        # Such a file can never be stored, so the partition is still ledgered as written.
+        logger.warning(
+            f"{group}: {partition}: crashed_files={len(crashed)} of {len(bodies)} left out: "
+            + ", ".join(crashed)
+        )
     if not parsed:
         multidim.mark_written(repo, partition, label=group, group=group)
         return 0
