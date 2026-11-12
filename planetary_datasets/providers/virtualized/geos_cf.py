@@ -812,7 +812,7 @@ def group_for(
             signature,
         ):
             return group
-    for disambiguator in range(10):
+    for disambiguator in range(10 + len(taken)):
         group = generation_name(collection, when, disambiguator)
         if group not in taken and group_attrs(repo, group).get(SIGNATURE_ATTR) in (
             None,

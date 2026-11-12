@@ -787,3 +787,35 @@ def test_a_split_day_found_after_later_days_joins_the_group_of_its_layout(portal
     assert base.sizes["time"] == 3 and later.sizes["time"] == 3
     assert g.written(repo, c) == {"2019-03-07", "2019-03-08", "2019-03-09"}
     assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 0
+
+
+def test_a_forecast_run_with_mixed_layouts_keeps_the_largest_and_leaves_out_the_rest(
+    portal, local_config
+):
+    """A run's step axis cannot be split, so the minority layout is left out and recorded."""
+    root, p = portal
+    stream = g.STREAMS["v2_fcst"]
+    collection = "ghg_inst_3hr_glo_L1440x721_v72"
+    c = g.Collection(stream, collection)
+    init = pd.Timestamp("2026-11-05T09")
+    odd = 7
+    for i, step in enumerate(c.steps):
+        valid = init + step
+        name = f"GEOS.cf.fcst.{collection}.{init:%Y%m%d_%H}z+{valid:%Y%m%d_%H%M}z.R0.nc4"
+        write_file(
+            root / "v2/fcst/Y2026/M11/D05" / name,
+            valid,
+            levels=2,
+            seed=i,
+            lon_chunk=LON.size // 2 if i == odd else LON.size,
+        )
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 40
+    ds, repo = read(c, local_config, p.container)
+    assert ds.sizes["step"] == 40
+    means = ds["nitrogen_dioxide_mole_fraction"].isel(init_time=0, model_level=0)
+    means = means.mean(["latitude", "longitude"]).values
+    assert np.isnan(means[odd])
+    np.testing.assert_array_equal(means[[0, 1, 39]], [0, 1, 39])
+    left_out = g.group_attrs(repo, c.group)[g.LEFT_OUT_ATTR]
+    assert len(left_out["2026-11-05T09:00:00"]) == 1
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 0
