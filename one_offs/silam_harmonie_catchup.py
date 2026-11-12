@@ -77,6 +77,9 @@ from planetary_datasets.providers.polar.metop_sg import (
 )
 from planetary_datasets.providers.silam import SILAMDustProvider
 
+#: An OPERA hour younger than this the archive lacks is retried, not ledgered as missing.
+OPERA_RECENT = pd.Timedelta(days=7)
+
 SILAM_DAYS = 4
 HARMONIE_DAYS = 3
 #: Two days is sixteen cycles of full-domain model-level fields pulled over OPeNDAP, which
@@ -217,6 +220,11 @@ class OperaCatchUp(CatchUp):
             )
             return False
         if result.returncode == OPERA_EXIT_UNAVAILABLE:
+            if pd.Timestamp.now("UTC").tz_localize(None) - pd.Timestamp(it) < OPERA_RECENT:
+                # A recent hour may only be late: OPERA's publishing lags by hours at times
+                # (2026-11-11 21Z onward), and a ledgered hour is never asked for again.
+                logger.info(f"{provider.name}: {it} not published yet; asked again next pass")
+                return False
             self.mark_unavailable(it, root)
             logger.info(f"{provider.name}: the archive has nothing for {it}; not asked again")
             return False

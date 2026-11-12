@@ -49,3 +49,16 @@ def test_an_hour_the_archive_lacks_is_ledgered_and_skipped(monkeypatch, tmp_path
     assert stager.stage(gone, tmp_path) is False
     assert stager.unavailable(tmp_path) == {gone}
     assert stager.ledger(tmp_path) == tmp_path / "rainfall" / "unavailable.txt"
+
+
+def test_a_recent_hour_the_archive_lacks_is_retried_not_ledgered(monkeypatch, tmp_path):
+    """An hour OPERA has not published yet may only be late, so it is asked for again."""
+
+    def run(command, **kwargs):
+        return subprocess.CompletedProcess(command, catchup.OPERA_EXIT_UNAVAILABLE, "", "")
+
+    monkeypatch.setattr(catchup.subprocess, "run", run)
+    stager = catchup.OperaCatchUp(Provider(), days=0, freq="1h")
+    late = pd.Timestamp.now("UTC").tz_localize(None).floor("h") - pd.Timedelta(hours=3)
+    assert stager.stage(late, tmp_path) is False
+    assert stager.unavailable(tmp_path) == set()
