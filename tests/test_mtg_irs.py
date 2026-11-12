@@ -60,6 +60,7 @@ def write_dwell(
     scale: dict[str, float] | None = None,
     cycle_start: float | None = None,
     repeat_wavenumber: str | None = None,
+    centre_seconds: float | None = None,
 ) -> str:
     """Write a dwell file shaped like the real product."""
     shape = ("dwell_row", "dwell_column")
@@ -67,7 +68,11 @@ def write_dwell(
     flag = {"_FillValue": np.uint8(0), "coordinates": "latitude longitude"}
     data = xr.Dataset(
         {
-            "time": ((), _seconds(centre), {"units": "seconds since 01:01:2000 00:00:00"}),
+            "time": (
+                (),
+                _seconds(centre) if centre_seconds is None else centre_seconds,
+                {"units": "seconds since 01:01:2000 00:00:00"},
+            ),
             "dwell_type": ((), np.uint8(0), {"_FillValue": np.uint8(0)}),
             "stroke_direction": ((), np.uint8(1), {"_FillValue": np.uint8(0)}),
             "dwell_number": ((), np.uint16(dwell_number)),
@@ -244,14 +249,15 @@ def test_the_partition_keeps_only_its_own_hour(provider, dwells):
     assert ds["dwell_number"].values.tolist() == [225, 263]
 
 
+FILL = 9.96920997e36  # netCDF's default float fill, as in the 2026-10-15 04-05Z products
+
+
 @pytest.mark.parametrize(
     "damage",
     [
-        {"cycle_start": 1.8e308},
-        {"cycle_start": float("nan")},
-        # Finite, but past datetime64[ns]: would wrap to an unrelated date if accepted.
-        {"cycle_start": 9e9},
         {"repeat_wavenumber": "lwir"},
+        {"centre_seconds": FILL},
+        {"centre_seconds": float("nan")},
     ],
 )
 def test_a_damaged_dwell_is_left_out_and_the_hour_written(provider, dwells, tmp_path, damage):
@@ -260,6 +266,48 @@ def test_a_damaged_dwell_is_left_out_and_the_hour_written(provider, dwells, tmp_
         mtg_irs.read_dwell(bad)
     ds = provider.process([dwells[0], bad, dwells[1]], pd.Timestamp("2026-10-13T00:00"))
     assert ds["dwell_number"].values.tolist() == [225, 263]
+
+
+@pytest.mark.parametrize("cycle_start", [FILL, 1.8e308, float("nan"), 9e9])
+def test_a_fill_cycle_start_keeps_the_dwell_with_nat(provider, dwells, tmp_path, cycle_start):
+    odd = write_dwell(
+        tmp_path / "odd.nc",
+        "2026-10-13T00:50:00",
+        dwell_number=250,
+        seed=7,
+        cycle_start=cycle_start,
+    )
+    assert np.isnat(mtg_irs.read_dwell(odd)["repeat_cycle_start_time"].values[0])
+    ds = provider.process([dwells[0], odd, dwells[1]], pd.Timestamp("2026-10-13T00:00"))
+    assert ds["dwell_number"].values.tolist() == [225, 250, 263]
+    assert ds["time"].values[1] == np.datetime64("2026-10-13T00:50:00")
+    cycle = ds["repeat_cycle_start_time"].values
+    assert np.isnat(cycle).tolist() == [False, True, False]
+    np.testing.assert_array_equal(
+        ds["lwir_effective_radiance"].isel(time=1).values,
+        mtg_irs.read_dwell(odd)["lwir_effective_radiance"].isel(time=0).values,
+    )
+
+
+def test_a_nat_cycle_start_round_trips_through_the_store(provider, dwells, tmp_path):
+    odd = write_dwell(
+        tmp_path / "odd.nc", "2026-10-13T00:50:00", dwell_number=250, cycle_start=FILL
+    )
+    it = pd.Timestamp("2026-10-13T00:00")
+    assert provider.write_to_icechunk(
+        provider.get_icechunk_repo(), provider.process([dwells[0], odd, dwells[1]], it)
+    )
+    stored = xr.open_zarr(
+        provider.get_icechunk_repo().readonly_session("main").store, consolidated=False
+    )["repeat_cycle_start_time"].load()
+    assert np.isnat(stored.values).tolist() == [False, True, False]
+    assert stored.values[0] == np.datetime64("2026-10-13T00:45:03")
+
+
+def test_an_hour_of_only_nat_cycle_dwells_is_written(provider, tmp_path):
+    odd = write_dwell(tmp_path / "odd.nc", "2026-10-13T00:50:00", cycle_start=FILL)
+    ds = provider.process([odd], pd.Timestamp("2026-10-13T00:00"))
+    assert ds.sizes["time"] == 1
 
 
 def test_an_hour_of_only_damaged_dwells_fails(provider, tmp_path):
