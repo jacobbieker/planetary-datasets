@@ -236,6 +236,22 @@ def test_a_rank_change_beyond_size_one_dimensions_raises(provider):
         earthcare.match_stored_rank(ds, group)
 
 
+def test_equal_sized_dimensions_with_other_names_are_not_relabelled(provider):
+    """Matching sizes is not enough: a non-singleton dimension must keep its name."""
+    ds = xr.Dataset(
+        {"cpr_cld_2a_v": (("cpr_cld_2a_along_track", "cpr_cld_2a_y"), np.zeros((4, 3), "int8"))}
+    )
+    group = zarr.group()
+    group.create_array(
+        "cpr_cld_2a_v",
+        shape=(4, 3),
+        dtype="int8",
+        dimension_names=("cpr_cld_2a_along_track", "cpr_cld_2a_x"),
+    )
+    with pytest.raises(ValueError, match="cpr_cld_2a_v"):
+        earthcare.match_stored_rank(ds, group)
+
+
 def test_the_store_decodes_like_the_source(provider):
     """Fill values and types read back as they do from the source files."""
     provider.run_partition(pd.Timestamp("2026-10-20"))

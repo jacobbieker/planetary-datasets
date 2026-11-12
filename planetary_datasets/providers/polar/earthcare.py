@@ -321,8 +321,12 @@ def match_stored_rank(ds: xr.Dataset, group: zarr.Group | None) -> xr.Dataset:
         stored_dims = tuple(array.metadata.dimension_names or ())
         if not stored_dims or tuple(variable.dims) == stored_dims:
             continue
-        core = [n for n in variable.shape[1:] if n != 1]
-        stored_core = [n for n in array.shape[1:] if n != 1]
+        core = [
+            (d, n) for d, n in zip(variable.dims[1:], variable.shape[1:], strict=True) if n != 1
+        ]
+        stored_core = [
+            (d, n) for d, n in zip(stored_dims[1:], array.shape[1:], strict=True) if n != 1
+        ]
         if variable.ndim == 0 or variable.dims[0] != stored_dims[0] or core != stored_core:
             raise ValueError(
                 f"{name}: arrives as {variable.dims} {variable.shape} but is stored as "
