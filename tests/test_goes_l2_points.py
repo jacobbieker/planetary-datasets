@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import pathlib
 
 import numpy as np
@@ -270,37 +271,87 @@ def test_a_large_partition_is_parsed_in_worker_processes(archive, local_config):
     assert ds["event_file_index"].values.tolist() == [i for i in range(12) for _ in range(3)]
 
 
-def test_a_broken_parser_pool_is_replaced(monkeypatch):
-    class Dead:
-        def map(self, *args, **kwargs):
-            raise gp.BrokenProcessPool("a worker was killed")
+def _dies_on_bad(item):
+    """A reader whose worker is killed by the file ``bad`` (as a segfault in HDF5 would)."""
+    if item[0] == "bad":
+        os._exit(1)
+    return item[0]
 
-        def shutdown(self, **kwargs):
-            pass
 
-    class Alive:
-        def map(self, fn, items, chunksize=1):
-            return map(fn, items)
+def _always_dies(item):
+    os._exit(1)
 
-    pools = iter([Dead(), Alive()])
+
+@pytest.fixture
+def real_pool(monkeypatch):
+    monkeypatch.setattr(gp, "PARSE_WORKERS", 2)
     monkeypatch.setattr(gp, "_PARSER", None)
-    monkeypatch.setattr(gp, "_parser", lambda: next(pools))
-    monkeypatch.setattr(gp, "_read_safely", lambda item: item[0])
-    bodies = [(f"k{i}", b"") for i in range(12)]
-    assert gp._parse(bodies) == [k for k, _ in bodies]
+    yield
+    if gp._PARSER is not None:
+        gp._PARSER.shutdown(wait=False, cancel_futures=True)
 
 
-def test_a_pool_that_breaks_twice_fails_the_partition(monkeypatch):
-    class Dead:
-        def map(self, *args, **kwargs):
-            raise gp.BrokenProcessPool("a worker was killed")
+def test_a_file_that_always_kills_its_worker_is_left_out(monkeypatch, real_pool):
+    monkeypatch.setattr(gp, "_read_safely", _dies_on_bad)
+    keys = [f"k{i}" for i in range(40)]
+    keys[17] = "bad"
+    results = gp._parse([(k, b"") for k in keys])
+    assert results == [gp.CRASHED if k == "bad" else k for k in keys]
+    # The broken pool was replaced, so later partitions parse as before.
+    fine = [(k, b"") for k in keys if k != "bad"]
+    assert gp._parse(fine) == [k for k, _ in fine]
 
-        def shutdown(self, **kwargs):
-            pass
 
-    monkeypatch.setattr(gp, "_parser", Dead)
-    with pytest.raises(gp.BrokenProcessPool):
-        gp._parse([(f"k{i}", b"") for i in range(12)])
+def test_a_pool_that_always_breaks_fails_no_partition(monkeypatch, real_pool):
+    monkeypatch.setattr(gp, "_read_safely", _always_dies)
+    keys = [f"k{i}" for i in range(12)]
+    assert gp._parse([(k, b"") for k in keys]) == [gp.CRASHED] * 12
+
+
+def _first_item(item):
+    return item[0]
+
+
+def test_a_pool_that_breaks_during_submission_cannot_loop(monkeypatch, real_pool):
+    """Jobs never submitted count as lost, so recovery reaches one file per process."""
+    from concurrent.futures.process import BrokenProcessPool
+
+    class BreaksOnSubmit:
+        def submit(self, *args, **kwargs):
+            raise BrokenProcessPool("a worker died while jobs were being submitted")
+
+    monkeypatch.setattr(gp, "_parser", lambda: BreaksOnSubmit())
+    monkeypatch.setattr(gp, "_discard_parser", lambda pool: None)
+    monkeypatch.setattr(gp, "_read_safely", _first_item)
+    keys = [f"k{i}" for i in range(20)]
+    assert gp._parse([(k, b"") for k in keys]) == keys
+
+
+def _dies_on_marked(item):
+    if item[1] == b"BAD":
+        os._exit(1)
+    return gp.read_file(item[1], item[0])
+
+
+def test_a_partition_writes_without_the_file_that_crashes(
+    archive, local_config, monkeypatch, real_pool
+):
+    root, _ = archive
+    start = dt.datetime(2026, 10, 27, 0)
+    files = [
+        glm_file(root, start + dt.timedelta(seconds=20 * i), events=2, groups=1, flashes=1)
+        for i in range(12)
+    ]
+    bodies = [(f.name, f.read_bytes()) for f in files]
+    bodies[5] = (bodies[5][0], b"BAD")
+    monkeypatch.setattr(gp, "_read_safely", _dies_on_marked)
+    repo = local_config.icechunk_repo(gp.store_prefix(19))
+    gp.ensure_root(repo, 19)
+    assert gp.write_partition(repo, "glm_lcfa", f"{DAY}T00", bodies) == 11
+    assert f"{DAY}T00" in gp.written_partitions(repo, "glm_lcfa")
+    ds = xr.open_zarr(store(local_config), group="glm_lcfa", consolidated=False)
+    assert ds.sizes["file"] == 11
+    assert bodies[5][0] not in ds["file_name"].values
 
 
 def _wind_file(units):
