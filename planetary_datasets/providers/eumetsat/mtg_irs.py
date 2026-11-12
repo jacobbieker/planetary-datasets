@@ -117,6 +117,10 @@ class DamagedDwell(ValueError):
 MAX_PRODUCT_SECONDS = 2e9
 
 
+#: A per-dwell metadata time that is fill in the product.
+NAT = np.datetime64("NaT", "ns")
+
+
 class PackingChanged(RuntimeError):
     """A file's radiance packing differs from the one the store is created with."""
 
@@ -202,7 +206,8 @@ def read_dwell(path: str) -> xr.Dataset:
 
     Raises:
         PackingChanged: when a band's radiance is not packed as :data:`RADIANCE_PACKING`.
-        DamagedDwell: when the dwell's times or a band's wavenumbers are invalid.
+        DamagedDwell: when the dwell's observation time or a band's wavenumbers are invalid.
+            An invalid ``repeat_cycle_start_time`` alone does not raise: it is NaT.
     """
     with xr.open_dataset(path, engine="h5netcdf", group="data", decode_times=False) as data:
         # latitude/longitude arrive as coordinates; they vary per dwell, so are data here.
@@ -216,7 +221,12 @@ def read_dwell(path: str) -> xr.Dataset:
         path, engine="h5netcdf", group="state/instrument", decode_times=False
     ) as instrument:
         lac = int(instrument["repeat_cycle_lac_id"].values)
-        cycle_start = seconds_since_2000(instrument["repeat_cycle_start_time"].values)
+        try:
+            cycle_start = seconds_since_2000(instrument["repeat_cycle_start_time"].values)
+        except DamagedDwell as exc:
+            # Only descriptive metadata: the dwell's own time and spectra are sound.
+            logger.debug(f"{pathlib.Path(path).name}: repeat_cycle_start_time left as NaT: {exc}")
+            cycle_start = NAT
 
     parts = [pixels, flags[["dust_warning"]]]
     for band in BANDS:
@@ -370,11 +380,26 @@ class MtgIrsProvider(EumdacProvider):
     ) -> xr.Dataset:
         """Stack the partition's dwells along ``time``, lazily, chunked for the store."""
         dwells = []
+        left_out = 0
+        without_cycle_start = 0
         for path in input_files:
             try:
-                dwells.append(read_dwell(path))
+                dwell = read_dwell(path)
             except DamagedDwell as exc:
+                left_out += 1
                 logger.warning(f"{self.name} {it}: leaving out a damaged dwell: {exc}")
+                continue
+            if np.isnat(dwell["repeat_cycle_start_time"].values).any():
+                without_cycle_start += 1
+                logger.warning(
+                    f"{self.name} {it}: keeping {pathlib.Path(path).name} with "
+                    "repeat_cycle_start_time NaT (invalid in the product)"
+                )
+            dwells.append(dwell)
+        logger.info(
+            f"{self.name} {it}: {len(dwells)} dwell(s) kept, {left_out} left out as damaged, "
+            f"{without_cycle_start} kept with repeat_cycle_start_time NaT"
+        )
         if not dwells:
             raise DamagedDwell(f"{self.name} {it}: every dwell of the hour is damaged")
         ds = self.restrict_to_window(self.concat_granules(dwells), it)
