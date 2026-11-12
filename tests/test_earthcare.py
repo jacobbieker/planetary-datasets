@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+import zarr
 
 from planetary_datasets.providers.polar import earthcare
 from planetary_datasets.providers.polar.earthcare import (
@@ -32,7 +33,11 @@ def frame_name(code: str, start: str, key: str, cls: str = "EXBC") -> str:
 
 
 def write_frame(
-    directory: pathlib.Path, name: str, n: int = 4, offset: float = 0.0
+    directory: pathlib.Path,
+    name: str,
+    n: int = 4,
+    offset: float = 0.0,
+    status: str | None = None,
 ) -> pathlib.Path:
     """A CPR_CLD_2A-shaped frame: a track, a height grid, a fill value and a header."""
     path = directory / f"{name}.h5"
@@ -48,6 +53,10 @@ def write_frame(
             "class_name": ("class", np.array([b"ice", b"rain"])),
         }
     )
+    if status == "2d":
+        science["status"] = (("one", "along_track"), np.ones((1, n), dtype="int8"))
+    elif status == "1d":
+        science["status"] = ("along_track", np.full(n, 2, dtype="int8"))
     science["time"].attrs["units"] = "seconds since 2000-1-1 00:00:00.0 0:00"
     science["water_content"].encoding["_FillValue"] = FILL
     science["quality"].encoding["_FillValue"] = np.int32(-2147483647)
@@ -192,6 +201,55 @@ def test_a_day_is_written_once_with_the_newest_baseline(provider):
     assert ds.sizes["cpr_cld_2a_along_track"] == 8
     assert not provider.run_partition(day)
     assert stored(provider).sizes["cpr_cld_2a_along_track"] == 8
+
+
+def test_a_variable_that_loses_a_size_one_dimension_is_written_in_the_stored_layout(provider):
+    """Baseline BD's 1-D ``quality_status`` appends to the (n, 1) array baseline BC made."""
+    directory = next(iter(provider.test_maap.files.values())).parent / "status"
+    directory.mkdir()
+    old = frame_name("CPR_CLD_2A", "20261020T015847", "13601E")
+    new = frame_name("CPR_CLD_2A", "20261021T015847", "13602E", "EXBD")
+    provider.test_maap.files = {
+        old: write_frame(directory, old, status="2d"),
+        new: write_frame(directory, new, offset=50.0, status="1d"),
+    }
+    assert provider.run_partition(pd.Timestamp("2026-10-20"))
+    assert provider.run_partition(pd.Timestamp("2026-10-21"))
+    group = zarr.open_group(provider.get_icechunk_repo().readonly_session("main").store, mode="r")
+    status = group["cpr_cld_2a_status"]
+    assert status.shape == (8, 1)
+    assert tuple(status.metadata.dimension_names) == ("cpr_cld_2a_along_track", "cpr_cld_2a_one")
+    assert status[:].ravel().tolist() == [1, 1, 1, 1, 2, 2, 2, 2]
+
+
+def test_a_rank_change_beyond_size_one_dimensions_raises(provider):
+    """Only size-1 dimensions are reconciled; any other mismatch is refused, not reshaped."""
+    ds = xr.Dataset({"cpr_cld_2a_status": (("cpr_cld_2a_along_track",), np.zeros(4, "int8"))})
+    group = zarr.group()
+    group.create_array(
+        "cpr_cld_2a_status",
+        shape=(4, 3),
+        dtype="int8",
+        dimension_names=("cpr_cld_2a_along_track", "cpr_cld_2a_one"),
+    )
+    with pytest.raises(ValueError, match="cpr_cld_2a_status"):
+        earthcare.match_stored_rank(ds, group)
+
+
+def test_equal_sized_dimensions_with_other_names_are_not_relabelled(provider):
+    """Matching sizes is not enough: a non-singleton dimension must keep its name."""
+    ds = xr.Dataset(
+        {"cpr_cld_2a_v": (("cpr_cld_2a_along_track", "cpr_cld_2a_y"), np.zeros((4, 3), "int8"))}
+    )
+    group = zarr.group()
+    group.create_array(
+        "cpr_cld_2a_v",
+        shape=(4, 3),
+        dtype="int8",
+        dimension_names=("cpr_cld_2a_along_track", "cpr_cld_2a_x"),
+    )
+    with pytest.raises(ValueError, match="cpr_cld_2a_v"):
+        earthcare.match_stored_rank(ds, group)
 
 
 def test_the_store_decodes_like_the_source(provider):

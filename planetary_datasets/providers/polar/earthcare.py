@@ -28,6 +28,12 @@ just as it decodes the source file. Each variable is stored in the narrowest dty
 holds every value exactly (:mod:`planetary_datasets.common.lossless`) and compressed with
 zstd. Times are seconds since 2000-01-01, decoded by xarray from their ``units``.
 
+A source that changes a variable's rank between baselines is written in the stored
+layout, not the new one: ``ALL_DF__2B``'s ``quality_status`` is ``(1, n)`` in baseline BC
+and ``(n,)`` in BD, and BD frames are written with the size-1 dimension the store already
+has (:func:`match_stored_rank`). Stored arrays are never reshaped. A change that is not a
+size-1 dimension raises, and the day waits for a decision.
+
 A frame is identified by its orbit and frame letter, so it is written once whichever
 baseline is processed later; when MAAP holds two baselines of a frame the newest is
 taken. A day is recorded as complete once all of its frames are written and it is
@@ -296,6 +302,44 @@ def concat_frames(frames: list[xr.Dataset], product: Product, first_index: int) 
     return multidim.concat_frames(frames, product.prefix, first_index)
 
 
+def match_stored_rank(ds: xr.Dataset, group: zarr.Group | None) -> xr.Dataset:
+    """``ds`` with each variable in the rank and dimensions of the stored array of its name.
+
+    Only size-1 dimensions are added or dropped, which holds every value exactly. The
+    stored arrays are left as they are.
+
+    Raises:
+        ValueError: A variable differs from its stored array by more than size-1 dimensions.
+    """
+    if group is None:
+        return ds
+    fixed: dict[str, xr.Variable] = {}
+    for name, variable in ds.variables.items():
+        if name not in group:
+            continue
+        array = group[name]
+        stored_dims = tuple(array.metadata.dimension_names or ())
+        if not stored_dims or tuple(variable.dims) == stored_dims:
+            continue
+        core = [
+            (d, n) for d, n in zip(variable.dims[1:], variable.shape[1:], strict=True) if n != 1
+        ]
+        stored_core = [
+            (d, n) for d, n in zip(stored_dims[1:], array.shape[1:], strict=True) if n != 1
+        ]
+        if variable.ndim == 0 or variable.dims[0] != stored_dims[0] or core != stored_core:
+            raise ValueError(
+                f"{name}: arrives as {variable.dims} {variable.shape} but is stored as "
+                f"{stored_dims} {array.shape}"
+            )
+        shape = (variable.shape[0], *array.shape[1:])
+        fixed[name] = xr.Variable(stored_dims, variable.values.reshape(shape), variable.attrs)
+        logger.info(
+            f"earthcare: {name} arrives as {variable.dims}; written as stored {stored_dims}"
+        )
+    return ds.drop_vars(list(fixed)).assign(fixed) if fixed else ds
+
+
 class EarthCAREProvider(BaseProvider):
     """Every validated EarthCARE product, one day of frames per partition."""
 
@@ -440,6 +484,7 @@ class EarthCAREProvider(BaseProvider):
         ds = concat_frames(frames, product, first_index)
         repo = self.get_icechunk_repo()
         ds = naming.prepare_for_store(ds, self.store_prefix, naming.stored_arrays(repo), raw=True)
+        ds = match_stored_rank(ds, self._group())
         append_partition(
             repo,
             ds,
@@ -554,5 +599,6 @@ __all__ = [
     "baseline",
     "concat_frames",
     "frame_key",
+    "match_stored_rank",
     "read_frame",
 ]
