@@ -443,14 +443,17 @@ def _parse(bodies: Sequence[tuple[str, bytes]]) -> list:
     first = True
     while pending:
         pool = _parser()
-        try:
-            futures = {
-                pool.submit(_read_chunk, read, [bodies[i] for i in job]): job for job in pending
-            }
-        except BrokenProcessPool:  # shared with a thread whose worker just died
-            _discard_parser(pool)
-            continue
-        lost = _collect(futures, results)
+        futures: dict = {}
+        unsent: list = []
+        for position, job in enumerate(pending):
+            try:
+                futures[pool.submit(_read_chunk, read, [bodies[i] for i in job])] = job
+            except BrokenProcessPool:  # shared with a thread whose worker just died
+                # Jobs not yet submitted count as lost, so they go through the same
+                # stall-checked recovery and a pool that keeps breaking cannot loop.
+                unsent = pending[position:]
+                break
+        lost = _collect(futures, results) + unsent
         if not lost:
             return [results[i] for i in range(len(bodies))]
         _discard_parser(pool)

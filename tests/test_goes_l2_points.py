@@ -308,6 +308,25 @@ def test_a_pool_that_always_breaks_fails_no_partition(monkeypatch, real_pool):
     assert gp._parse([(k, b"") for k in keys]) == [gp.CRASHED] * 12
 
 
+def _first_item(item):
+    return item[0]
+
+
+def test_a_pool_that_breaks_during_submission_cannot_loop(monkeypatch, real_pool):
+    """Jobs never submitted count as lost, so recovery reaches one file per process."""
+    from concurrent.futures.process import BrokenProcessPool
+
+    class BreaksOnSubmit:
+        def submit(self, *args, **kwargs):
+            raise BrokenProcessPool("a worker died while jobs were being submitted")
+
+    monkeypatch.setattr(gp, "_parser", lambda: BreaksOnSubmit())
+    monkeypatch.setattr(gp, "_discard_parser", lambda pool: None)
+    monkeypatch.setattr(gp, "_read_safely", _first_item)
+    keys = [f"k{i}" for i in range(20)]
+    assert gp._parse([(k, b"") for k in keys]) == keys
+
+
 def _dies_on_marked(item):
     if item[1] == b"BAD":
         os._exit(1)
