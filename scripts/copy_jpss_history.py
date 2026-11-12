@@ -229,6 +229,23 @@ def satellite_of(platform: str, hint: Optional[str] = None) -> str:
 # ------------------------------------------------------------------ old stores
 
 
+def _to_group_resolution(values: np.ndarray) -> np.ndarray:
+    """``values`` as ``datetime64[ns]`` truncated to whole microseconds; NaT stays NaT.
+
+    The groups store their times as ``microseconds since 1970-01-01`` and appends keep that
+    encoding, which cannot hold anything finer (xarray 2026.9 refuses to write it; earlier
+    versions floored it). Truncating is what the live lanes' appends have always stored for
+    a midpoint that falls between two microseconds, and it leaves every time the old stores
+    hold at microsecond or coarser resolution unchanged.
+    """
+    return (
+        np.asarray(values)
+        .astype("datetime64[ns]")
+        .astype("datetime64[us]")
+        .astype("datetime64[ns]")
+    )
+
+
 def _to_source_names(ds: xr.Dataset, prefix: str) -> xr.Dataset:
     """``ds`` with the names its old store's renames gave it mapped back to source names.
 
@@ -291,13 +308,13 @@ class OldStore:
 
     def granule_info(self, rows: np.ndarray, nominal_seconds: float) -> pd.DataFrame:
         """Per-row id, spacecraft and rebuilt times for ``rows``, without the swath data."""
-        old_time = self.times[rows]
-        missing = np.full(len(rows), np.datetime64("NaT"), dtype="datetime64[ns]")
+        old_time = _to_group_resolution(self.times[rows])
+        missing = np.full(len(rows), np.datetime64("NaT", "ns"), dtype="datetime64[ns]")
 
         def column(name: str) -> np.ndarray:
             if name not in self.ds:
                 return missing
-            return self.ds[name].isel(time=rows).values.astype("datetime64[ns]")
+            return _to_group_resolution(self.ds[name].isel(time=rows).values)
 
         if "platform_name" in self.ds:
             platforms = [str(p) for p in self.ds["platform_name"].isel(time=rows).values]
@@ -306,7 +323,8 @@ class OldStore:
         start = column("start_time")
         end = column("end_time")
         both = ~(np.isnat(start) | np.isnat(end))
-        mid = np.where(both, start + (end - start) / 2, old_time)
+        # Half the span between two whole microseconds can end in .5 us.
+        mid = np.where(both, _to_group_resolution(start + (end - start) / 2), old_time)
         half = np.timedelta64(int(nominal_seconds * 5e8), "ns")
         id_start = np.where(np.isnat(start), old_time - half, start)
         if (~both).any():

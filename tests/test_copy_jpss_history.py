@@ -344,10 +344,10 @@ def test_viirs_rows_keep_their_packing(local_config, small_granules, tmp_path): 
 # --------------------------------------------------------------------- ATMS
 
 
-def write_old_atms(config, rows) -> None:
+def write_old_atms(config, rows, length: pd.Timedelta = pd.Timedelta(31.6, "s")) -> None:
     """The combined ATMS store as the pre-provider script wrote it."""
     starts = [pd.Timestamp(s) for s, _ in rows]
-    ends = [s + pd.Timedelta(31.6, "s") for s in starts]
+    ends = [s + length for s in starts]
     mids = [s + (e - s) / 2 for s, e in zip(starts, ends)]
     n = len(rows)
     ds = xr.Dataset(
@@ -444,3 +444,20 @@ def test_a_run_that_writes_nothing_records_nothing(old_mirs):
     end = HOUR + pd.Timedelta(1, "h")
     assert tool.Copier("mirs_img", end=end, deadline=-1.0).run().copied == 0
     assert JpssMirsImgProvider().get_icechunk_repo().list_tags() == set()
+
+
+def test_atms_midpoint_between_two_microseconds_is_truncated_to_the_group_units(local_config):
+    """A whole-microsecond start and end can have a midpoint half a microsecond off."""
+    write_old_atms(
+        local_config,
+        [("2023-03-01T00:00:24.4", "NOAA-20"), ("2023-03-01T00:30:00.0", "NOAA-21")],
+        length=pd.Timedelta(31_600_001, "us"),
+    )
+    assert tool.Copier("atms").run().copied == 2
+    out = stored(JpssAtmsProvider())
+    # 24.4 + 15.8000005 s = 40.2000005, truncated to the group's whole microseconds.
+    assert out["time"].values[0] == np.datetime64("2023-03-01T00:00:40.200000", "ns")
+    assert out["time"].encoding["units"] == GRANULE_TIME_ENCODING["units"]
+    assert out["start_time"].values[0] == np.datetime64("2023-03-01T00:00:24.4", "ns")
+    assert out["end_time"].values[0] == np.datetime64("2023-03-01T00:00:56.000001", "ns")
+    assert tool.Copier("atms").run().copied == 0
