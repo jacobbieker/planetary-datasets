@@ -573,11 +573,12 @@ def open_unit(
     """The files of one day (analysis) or run (forecast) combined in the store's layout.
 
     Files are opened in ``pool`` (see :func:`open_pool`), or by ``opener`` in this process
-    without one. Returns ``(dataset, URLs left out)``; dataset is None if nothing could be
-    opened. A file that will not open fails the unit while it is recent (the next pass
-    retries it) and is left out once the unit has settled. A settled unit none of whose
-    files opens is taken for a portal outage, not damage: :func:`run_stream` holds its
-    collection back behind it until a later pass opens it, keeping the times in order.
+    without one. Returns ``(datasets, URLs left out)``: one dataset per layout the unit's
+    files come in (usually one; empty if nothing could be opened). A file that will not
+    open fails the unit while it is recent (the next pass retries it) and is left out once
+    the unit has settled. A settled unit none of whose files opens is taken for a portal
+    outage, not damage: :func:`run_stream` holds its collection back behind it until a
+    later pass opens it, keeping the times in order.
     """
 
     def attempt(urls: list[str]):
@@ -609,15 +610,44 @@ def open_unit(
     for url, error in errors.items():
         logger.warning(f"{collection.label}: {url}: {error}; left out")
     if not opened:
-        return None, sorted(errors)
+        return [], sorted(errors)
     codes: dict[str, dict] = {}
     for _, ds in opened:
         for n, v in ds.data_vars.items():
             codes.setdefault(n, dict(v.attrs))
     names = variable_names(codes)
     shaped = [(f, shape(ds, collection, f, names)) for f, ds in opened]
+    # Virtual references cannot mix chunk shapes within one array, so the files of a unit
+    # that are laid out differently (re-chunked on a day mid-archive) cannot be combined.
+    by_layout: dict[str, list] = {}
+    for f, ds in sorted(shaped, key=lambda item: item[0].valid):
+        by_layout.setdefault(layout_signature(ds, collection), []).append((f, ds))
+    batches = list(by_layout.values())
+    if len(batches) > 1:
+        sizes = [len(b) for b in batches]
+        logger.warning(
+            f"{collection.label}: {len(shaped)} file(s) in {len(batches)} layouts {sizes}; "
+            + (
+                "each layout is written to its own group"
+                if not collection.stream.forecast
+                else "keeping the largest, leaving the others out"
+            )
+        )
+        if collection.stream.forecast:
+            keep = max(range(len(batches)), key=lambda i: (sizes[i], -i))
+            for i, batch in enumerate(batches):
+                if i != keep:
+                    errors.update(
+                        {f.url: "layout differs from the run's other files" for f, _ in batch}
+                    )
+            batches = [batches[keep]]
+    attrs = json.dumps({n: c for c, n in names.items()})
+    return [_combine(collection, batch, attrs) for batch in batches], sorted(errors)
+
+
+def _combine(collection: Collection, shaped: list, source_names: str):
+    """One layout's files as a single dataset: a day's ``time`` axis, or a run's ``step`` one."""
     if not collection.stream.forecast:
-        shaped.sort(key=lambda item: item[0].valid)
         vds = _concat([ds for _, ds in shaped], "time")
         vds["time"].encoding.update(TIME_ENCODING)
     else:
@@ -642,8 +672,8 @@ def open_unit(
         vds["step"].encoding.update(STEP_ENCODING)
         if missing:
             logger.info(f"{collection.label} {init}: {missing} step(s) not published; left missing")
-    vds.attrs["geos_cf_variable_source_names"] = json.dumps({n: c for c, n in names.items()})
-    return vds, sorted(errors)
+    vds.attrs["geos_cf_variable_source_names"] = source_names
+    return vds
 
 
 # ----------------------------------------------------------------------------- stores
@@ -765,14 +795,29 @@ def live_since(repo, collection: Collection) -> dt.date | None:
     return min(days, default=None)
 
 
-def group_for(repo, collection: Collection, signature: str, when: dt.date) -> str:
-    """The generation group whose layout is ``signature``: the first empty or matching, else new."""
+def group_for(
+    repo,
+    collection: Collection,
+    signature: str,
+    when: dt.date,
+    taken: Sequence[str] = (),
+) -> str:
+    """The generation group whose layout is ``signature``: the first empty or matching, else new.
+
+    Groups in ``taken`` (already chosen for another layout, not yet committed) are skipped.
+    """
     for group in generations(repo, collection):
-        if group_attrs(repo, group).get(SIGNATURE_ATTR) in (None, signature):
+        if group not in taken and group_attrs(repo, group).get(SIGNATURE_ATTR) in (
+            None,
+            signature,
+        ):
             return group
-    for disambiguator in range(10):
+    for disambiguator in range(10 + len(taken)):
         group = generation_name(collection, when, disambiguator)
-        if group_attrs(repo, group).get(SIGNATURE_ATTR) in (None, signature):
+        if group not in taken and group_attrs(repo, group).get(SIGNATURE_ATTR) in (
+            None,
+            signature,
+        ):
             logger.info(f"{collection.label}: layout changed on {when}; new group {group}")
             return group
     raise RuntimeError(f"{collection.label}: no generation free for {when}")
@@ -782,59 +827,66 @@ def write_unit(
     collection: Collection,
     key: str,
     when: dt.date,
-    vds,
+    parts: Sequence,
     left_out: Sequence[str],
     repo,
     live: bool = False,
 ) -> int:
-    """Append one day or run to the collection's matching group, in one commit.
+    """Append one day or run to the collection's matching group(s), in one commit.
 
-    Only that group is written, its attributes included, so the commits of a stream's
-    collections, made at once, rebase over each other. ``live`` marks a unit read from the
-    live analysis of a stream with a hindcast; the first such day is recorded on the group
-    (:data:`LIVE_FROM_ATTR`). Returns the files written.
+    ``parts`` holds one dataset per layout of the unit's files (see :func:`open_unit`); each
+    goes to the generation group of its layout, and all of them in the same commit, so the
+    unit is written whole or not at all. Only those groups are written, their attributes
+    included, so the commits of a stream's collections, made at once, rebase over each
+    other. ``live`` marks a unit read from the live analysis of a stream with a hindcast;
+    the first such day is recorded on the group (:data:`LIVE_FROM_ATTR`). Returns the files
+    written.
     """
     import icechunk
     import zarr
 
-    signature = layout_signature(vds, collection)
-    group = group_for(repo, collection, signature, when)
-    attrs = group_attrs(repo, group)
-    session = repo.writable_session("main")
-    if attrs.get(SIGNATURE_ATTR):
-        vds.vz.to_icechunk(session.store, group=group, append_dim=collection.append_dim)
-    else:
-        vds.vz.to_icechunk(session.store, group=group)
-    node = zarr.open_group(session.store, path=group, mode="a")
-    ledger = set(node.attrs.get(LEDGER_ATTR, [])) | {key}
-    left_out_by_unit = dict(node.attrs.get(LEFT_OUT_ATTR, {}))
-    if left_out:
-        left_out_by_unit[key] = list(left_out)
     stream = collection.stream
-    update = {
-        SIGNATURE_ATTR: signature,
-        LEDGER_ATTR: sorted(ledger),
-        LEFT_OUT_ATTR: left_out_by_unit,
-        "source": f"{PORTAL}/{stream.path}/",
-        "collection": collection.name,
-        "model": "NASA GMAO GEOS-CF",
-    }
-    if stream.hindcast:
-        update["hindcast_source"] = f"{PORTAL}/{stream.hindcast}/"
-        if live and LIVE_FROM_ATTR not in node.attrs:
-            update[LIVE_FROM_ATTR] = when.isoformat()
-    node.attrs.update(update)
-    n = int(vds.sizes["step" if stream.forecast else "time"])
+    session = repo.writable_session("main")
+    taken: list[str] = []
+    total = 0
+    for i, vds in enumerate(parts):
+        signature = layout_signature(vds, collection)
+        group = group_for(repo, collection, signature, when, taken)
+        taken.append(group)
+        attrs = group_attrs(repo, group)
+        if attrs.get(SIGNATURE_ATTR):
+            vds.vz.to_icechunk(session.store, group=group, append_dim=collection.append_dim)
+        else:
+            vds.vz.to_icechunk(session.store, group=group)
+        node = zarr.open_group(session.store, path=group, mode="a")
+        ledger = set(node.attrs.get(LEDGER_ATTR, [])) | {key}
+        left_out_by_unit = dict(node.attrs.get(LEFT_OUT_ATTR, {}))
+        if left_out and i == 0:
+            left_out_by_unit[key] = list(left_out)
+        update = {
+            SIGNATURE_ATTR: signature,
+            LEDGER_ATTR: sorted(ledger),
+            LEFT_OUT_ATTR: left_out_by_unit,
+            "source": f"{PORTAL}/{stream.path}/",
+            "collection": collection.name,
+            "model": "NASA GMAO GEOS-CF",
+        }
+        if stream.hindcast:
+            update["hindcast_source"] = f"{PORTAL}/{stream.hindcast}/"
+            if live and LIVE_FROM_ATTR not in node.attrs:
+                update[LIVE_FROM_ATTR] = when.isoformat()
+        node.attrs.update(update)
+        total += int(vds.sizes["step" if stream.forecast else "time"])
     with _COMMIT_LOCK:
         session.commit(
-            f"{collection.label}: {key} ({n} file(s), {len(left_out)} left out)",
+            f"{collection.label}: {key} ({total} file(s), {len(left_out)} left out)",
             rebase_with=icechunk.ConflictDetector(),
         )
     logger.info(
-        f"{collection.label} {key}: {n} file(s) -> {stream.store_prefix}/{group} "
+        f"{collection.label} {key}: {total} file(s) -> {stream.store_prefix}/{', '.join(taken)} "
         f"({len(left_out)} left out)"
     )
-    return n
+    return total
 
 
 # ----------------------------------------------------------------------------- passes
@@ -982,15 +1034,15 @@ def run_stream(
                         deferred.add(c.name)
                         break
                     try:
-                        vds, left_out = open_unit(opener, c, unit_files, settled, pool)
-                        if vds is None:
+                        parts, left_out = open_unit(opener, c, unit_files, settled, pool)
+                        if not parts:
                             # Nothing opened, even after retries: an outage. Later units
                             # wait behind it rather than be appended ahead of it.
                             logger.warning(f"{c.label} {key}: no file opened; retrying next pass")
                             deferred.add(c.name)
                             break
                         count += write_unit(
-                            c, key, when.date(), vds, left_out, repo, c.name in read_live
+                            c, key, when.date(), parts, left_out, repo, c.name in read_live
                         )
                         ledgers[c.name].add(key)
                     except Exception as exc:  # noqa: BLE001 - one bad unit must not stop the rest

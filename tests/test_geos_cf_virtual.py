@@ -20,9 +20,17 @@ LATER = dt.datetime(2030, 1, 1)
 
 
 def write_file(
-    path: pathlib.Path, when: pd.Timestamp, levels: int, seed: float, extra: bool = False
+    path: pathlib.Path,
+    when: pd.Timestamp,
+    levels: int,
+    seed: float,
+    extra: bool = False,
+    lon_chunk: int = LON.size,
 ):
-    """A small GEOS-CF-like file: one time, ``levels`` levels, one chunk per level field."""
+    """A small GEOS-CF-like file: one time, ``levels`` levels, one chunk per level field.
+
+    ``lon_chunk`` splits each chunk along longitude.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     shape = (1, levels, LAT.size, LON.size)
     data = {
@@ -52,9 +60,9 @@ def write_file(
         name: {
             "zlib": True,
             "shuffle": True,
-            "chunksizes": (1, 1, LAT.size, LON.size)
+            "chunksizes": (1, 1, LAT.size, lon_chunk)
             if ds[name].ndim == 4
-            else (1, LAT.size, LON.size),
+            else (1, LAT.size, lon_chunk),
             "_FillValue": np.float32(1e15),
         }
         for name in ds.data_vars
@@ -706,3 +714,108 @@ def test_the_hindcast_is_no_longer_a_stream_of_its_own():
     """``--streams v2_hindcast`` is refused: the hindcast is the start of ``v2_ana``."""
     with pytest.raises(SystemExit):
         g.main(["--streams", "v2_hindcast"])
+
+
+def test_a_day_whose_files_are_chunked_differently_is_split_by_layout(portal, local_config):
+    """Files re-chunked part way through a day go to their own group; later days follow them."""
+    root, p = portal
+    stream = g.STREAMS["v1_ana"]
+    collection = "chm_tavg_1hr_v1"
+
+    def hour(day, h, **kwargs):
+        when = pd.Timestamp(f"2019-03-{day:02d}T{h:02d}:30")
+        ana_file(root, "v1/ana", "GEOS-CF.v01.rpl", collection, when, levels=1, seed=h, **kwargs)
+
+    for h in range(4):
+        hour(7, h)
+    for h in range(4):
+        hour(8, h, lon_chunk=LON.size if h < 2 else LON.size // 2)
+    for h in range(4):
+        hour(9, h, lon_chunk=LON.size // 2)
+    stream = g.dataclasses.replace(stream, download=False)
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 12
+    c = g.Collection(stream, collection)
+    _, repo = read(c, local_config, p.container)
+    groups = g.generations(repo, c)
+    assert groups == ["chm_tavg_1hr_v1", "chm_tavg_1hr_v1_08032019"]
+    base, later = (read(c, local_config, p.container, group=name)[0] for name in groups)
+    # March 7 and the first two hours of March 8 keep the full-width chunks; the rest of
+    # March 8 starts the group of the narrower ones, and March 9 continues it.
+    assert base["time"].dt.strftime("%d %H").values.tolist() == [
+        f"{d:02d} {h:02d}" for d, h in [(7, 0), (7, 1), (7, 2), (7, 3), (8, 0), (8, 1)]
+    ]
+    assert later["time"].dt.strftime("%d %H").values.tolist() == [
+        f"{d:02d} {h:02d}" for d, h in [(8, 2), (8, 3), (9, 0), (9, 1), (9, 2), (9, 3)]
+    ]
+    assert g.written(repo, c) == {"2019-03-07", "2019-03-08", "2019-03-09"}
+    # Referenced as before, each hour still reads its own values.
+    nitrogen = "nitrogen_dioxide_mole_fraction"
+    assert base[nitrogen].isel(latitude=0, longitude=0).values.tolist() == [0, 1, 2, 3, 0, 1]
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 0
+
+
+def test_a_split_day_found_after_later_days_joins_the_group_of_its_layout(portal, local_config):
+    """The lane's case: later days already sit in a generation when the mixed day is written."""
+    root, p = portal
+    stream = g.dataclasses.replace(g.STREAMS["v1_ana"], download=False)
+    collection = "chm_tavg_1hr_v1"
+
+    def hour(day, h, narrow):
+        when = pd.Timestamp(f"2019-03-{day:02d}T{h:02d}:30")
+        lon_chunk = LON.size // 2 if narrow else LON.size
+        ana_file(
+            root,
+            "v1/ana",
+            "GEOS-CF.v01.rpl",
+            collection,
+            when,
+            levels=1,
+            seed=h,
+            lon_chunk=lon_chunk,
+        )
+
+    for h in range(2):
+        hour(7, h, narrow=False)
+        hour(9, h, narrow=True)
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 4
+    for h in range(2):
+        hour(8, h, narrow=h == 1)
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 2
+    c = g.Collection(stream, collection)
+    _, repo = read(c, local_config, p.container)
+    base, later = (read(c, local_config, p.container, group=n)[0] for n in g.generations(repo, c))
+    assert base.sizes["time"] == 3 and later.sizes["time"] == 3
+    assert g.written(repo, c) == {"2019-03-07", "2019-03-08", "2019-03-09"}
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 0
+
+
+def test_a_forecast_run_with_mixed_layouts_keeps_the_largest_and_leaves_out_the_rest(
+    portal, local_config
+):
+    """A run's step axis cannot be split, so the minority layout is left out and recorded."""
+    root, p = portal
+    stream = g.STREAMS["v2_fcst"]
+    collection = "ghg_inst_3hr_glo_L1440x721_v72"
+    c = g.Collection(stream, collection)
+    init = pd.Timestamp("2026-11-05T09")
+    odd = 7
+    for i, step in enumerate(c.steps):
+        valid = init + step
+        name = f"GEOS.cf.fcst.{collection}.{init:%Y%m%d_%H}z+{valid:%Y%m%d_%H%M}z.R0.nc4"
+        write_file(
+            root / "v2/fcst/Y2026/M11/D05" / name,
+            valid,
+            levels=2,
+            seed=i,
+            lon_chunk=LON.size // 2 if i == odd else LON.size,
+        )
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 40
+    ds, repo = read(c, local_config, p.container)
+    assert ds.sizes["step"] == 40
+    means = ds["nitrogen_dioxide_mole_fraction"].isel(init_time=0, model_level=0)
+    means = means.mean(["latitude", "longitude"]).values
+    assert np.isnan(means[odd])
+    np.testing.assert_array_equal(means[[0, 1, 39]], [0, 1, 39])
+    left_out = g.group_attrs(repo, c.group)[g.LEFT_OUT_ATTR]
+    assert len(left_out["2026-11-05T09:00:00"]) == 1
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 0
