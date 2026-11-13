@@ -114,7 +114,8 @@ def open_virtual_repo(
         virtual_buckets: Source bucket URIs the references point into, e.g.
             ``s3://noaa-gk2a-pds``. Each gets an anonymous virtual chunk
             container. ``https://`` (and ``http://``) prefixes get an HTTP
-            container and ``file://`` a local one, both without credentials.
+            container and ``file://`` a local one, both without credentials;
+            ``gs://`` gets an anonymous Google Cloud Storage container.
         split_size: Manifest rows per split along ``split_dim``. Default 144 is
             one day of ten-minute full-disk slots.
         split_dim: Dimension the manifest is split along.
@@ -208,6 +209,8 @@ def _container_store(url_prefix: str, source_region: str):
         return icechunk.http_store()
     if url_prefix.startswith("file://"):
         return icechunk.local_filesystem_store(url_prefix.removeprefix("file://"))
+    if url_prefix.startswith("gs://"):
+        return icechunk.gcs_store()
     return icechunk.s3_store(region=source_region, anonymous=True)
 
 
@@ -219,6 +222,8 @@ def _container_credentials(url_prefix: str):
         return icechunk.Credentials.HttpAccess()
     if url_prefix.startswith("file://"):
         return icechunk.Credentials.LocalFileSystemAccess()
+    if url_prefix.startswith("gs://"):
+        return icechunk.gcs_credentials(anonymous=True)
     return icechunk.s3_anonymous_credentials()
 
 
