@@ -26,10 +26,13 @@ def write_file(
     seed: float,
     extra: bool = False,
     lon_chunk: int = LON.size,
+    complevel: int = 4,
+    pm_code: str | None = None,
 ):
     """A small GEOS-CF-like file: one time, ``levels`` levels, one chunk per level field.
 
-    ``lon_chunk`` splits each chunk along longitude.
+    ``lon_chunk`` splits each chunk along longitude, ``complevel`` is the deflate level, and
+    ``pm_code`` adds a nitrate PM2.5 field of that name.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     shape = (1, levels, LAT.size, LON.size)
@@ -42,6 +45,8 @@ def write_file(
             ("time", "lat", "lon"),
             np.full(shape[:1] + shape[2:], seed, np.float32),
         )
+    if pm_code:
+        data[pm_code] = (("time", "lev", "lat", "lon"), np.full(shape, seed, np.float32))
     ds = xr.Dataset(
         data,
         coords={
@@ -55,10 +60,15 @@ def write_file(
         long_name="Nitrogen dioxide (NO2) mole fraction in dry air", units="mol mol-1"
     )
     ds["T"].attrs.update(long_name="air_temperature", units="K")
+    if pm_code:
+        ds[pm_code].attrs.update(
+            long_name="Particulate matter with radii < 2.5 um, nitrates", units="ug m-3"
+        )
     ds["lev"].attrs.update(standard_name="model_level_number", units="layer")
     encoding = {
         name: {
             "zlib": True,
+            "complevel": complevel,
             "shuffle": True,
             "chunksizes": (1, 1, LAT.size, lon_chunk)
             if ds[name].ndim == 4
@@ -176,12 +186,35 @@ def test_collections_know_their_levels_steps_and_store():
         ("AOD550_DUST", {}, "dust_aerosol_optical_depth_550nm"),
         ("PM25_RH35_GCC", {}, "particulate_matter_2_5um_rh35_geos_chem"),
         ("PM25su_RH35", {}, "sulphate_particulate_matter_2_5um_rh35"),
+        (
+            "PM25ni_RH35",
+            {"long_name": "Particulate matter with radii < 2.5 um, nitrates"},
+            "particulate_matter_with_radii_2_5_um_nitrates",
+        ),
+        (
+            "PM25ni_RH35_GCC",
+            {"long_name": "Particulate matter with radii < 2.5 um, nitrates"},
+            "nitrate_particulate_matter_2_5um_rh35_geos_chem",
+        ),
         ("Bry", {"units": "mol mol-1"}, "total_inorganic_bromine_mole_fraction"),
     ],
 )
 def test_variables_get_explicit_era5_style_names(code, attrs, expected):
     """Variables get explicit era5 style names."""
     assert variable_name(code, attrs)[0] == expected
+
+
+def test_a_geos_chem_pm_field_and_its_total_sibling_get_distinct_names():
+    """Every ``PM25<aerosol>_RH35`` has a ``_GCC`` sibling with a name of its own."""
+    attrs = {"long_name": "Particulate matter with radii < 2.5 um, nitrates", "units": "ug m-3"}
+    codes = {
+        f"PM25{a}_RH35{s}": attrs
+        for a in ("", "bc", "du", "ni", "oc", "soa", "ss", "su")
+        for s in ("", "_GCC")
+    }
+    names = variable_names(codes)
+    assert len(set(names.values())) == len(codes)
+    assert names["PM25ni_RH35"] == "particulate_matter_with_radii_2_5_um_nitrates"
 
 
 def test_two_codes_naming_one_variable_is_refused():
@@ -819,3 +852,57 @@ def test_a_forecast_run_with_mixed_layouts_keeps_the_largest_and_leaves_out_the_
     left_out = g.group_attrs(repo, c.group)[g.LEFT_OUT_ATTR]
     assert len(left_out["2026-11-05T09:00:00"]) == 1
     assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 0
+
+
+def _hours(root, day, codes, complevels):
+    """One file per hour of ``day``, with the PM code and deflate level given for each."""
+    for h, (code, complevel) in enumerate(zip(codes, complevels)):
+        when = pd.Timestamp(f"2019-03-{day:02d}T{h:02d}:30")
+        ana_file(
+            root,
+            "v1/ana",
+            "GEOS-CF.v01.rpl",
+            "chm_tavg_1hr_v1",
+            when,
+            levels=1,
+            seed=h,
+            complevel=complevel,
+            pm_code=code,
+        )
+
+
+def test_a_day_whose_files_are_compressed_differently_is_split_by_codec(portal, local_config):
+    """A file re-deflated at another level goes to its own group, as other chunks do."""
+    root, p = portal
+    stream = g.dataclasses.replace(g.STREAMS["v1_ana"], download=False)
+    pm = "PM25ni_RH35"
+    _hours(root, 7, [pm] * 4, [4] * 4)
+    # One file of March 8 was written at deflate level 1; the rest, and March 9, at level 4.
+    _hours(root, 8, [pm] * 4, [1, 4, 4, 4])
+    _hours(root, 9, [pm] * 4, [4] * 4)
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 12
+    c = g.Collection(stream, "chm_tavg_1hr_v1")
+    _, repo = read(c, local_config, p.container)
+    groups = g.generations(repo, c)
+    assert groups == ["chm_tavg_1hr_v1", "chm_tavg_1hr_v1_08032019"]
+    base, odd = (read(c, local_config, p.container, group=name)[0] for name in groups)
+    assert base.sizes["time"] == 11 and odd.sizes["time"] == 1
+    assert odd["time"].dt.strftime("%d %H").values.tolist() == ["08 00"]
+    assert g.written(repo, c) == {"2019-03-07", "2019-03-08", "2019-03-09"}
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 0
+
+
+def test_a_day_with_a_geos_chem_pm_field_beside_the_total_one_is_written(portal, local_config):
+    """The 2024-10-03 case: one file carries ``PM25ni_RH35_GCC``, the others ``PM25ni_RH35``."""
+    root, p = portal
+    stream = g.dataclasses.replace(g.STREAMS["v1_ana"], download=False)
+    _hours(root, 7, ["PM25ni_RH35"] * 4, [4] * 4)
+    _hours(root, 8, ["PM25ni_RH35_GCC", *["PM25ni_RH35"] * 3], [1, 4, 4, 4])
+    assert g.run_stream(stream, local_config, p, open_workers=0, now=LATER) == 8
+    c = g.Collection(stream, "chm_tavg_1hr_v1")
+    _, repo = read(c, local_config, p.container)
+    base, odd = (read(c, local_config, p.container, group=n)[0] for n in g.generations(repo, c))
+    assert "particulate_matter_with_radii_2_5_um_nitrates" in base
+    assert "nitrate_particulate_matter_2_5um_rh35_geos_chem" in odd
+    assert "nitrate_particulate_matter_2_5um_rh35_geos_chem" not in base
+    assert g.written(repo, c) == {"2019-03-07", "2019-03-08"}
