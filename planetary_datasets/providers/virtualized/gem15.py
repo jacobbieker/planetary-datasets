@@ -638,6 +638,7 @@ def write_batch(
     entries: dict[str, dict[str, dict[str, Any]]] = {}
     written: set[str] = set()
     failed: set[str] = set()
+    moved: list[tuple[str, str, str]] = []
     for cell, kinds in batch:
         for kind in kinds:
             path = cell.path(kind)
@@ -657,6 +658,8 @@ def write_batch(
             old = (previous or {}).get(cell.cell, {}).get(kind)
             if old and "tiles" in old and old["zone"] in root:
                 _clear_footprint(session, old, kind)
+                if old["zone"] != grid.name:
+                    moved.append((old["zone"], cell.cell, kind))
             _set_refs(
                 session,
                 f"/{grid.name}/{STACK if kind == 'dsm' else 'dtm'}",
@@ -678,6 +681,16 @@ def write_batch(
                 "tiles": list(layout.offsets.shape),
             }
             written.add(cell.cell)
+    for zone, cell_id, kind in moved:
+        group = root[zone]
+        ledger = dict(group.attrs.get(LEDGER, {}))
+        entry = dict(ledger.get(cell_id, {}))
+        entry.pop(kind, None)
+        if any(k in entry for k in ("dsm", "dtm")):
+            ledger[cell_id] = entry
+        else:
+            ledger.pop(cell_id, None)
+        group.attrs[LEDGER] = ledger
     for name, new in entries.items():
         group = root[name]
         ledger = dict(group.attrs.get(LEDGER, {}))
@@ -866,13 +879,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"gem15: pass done, {stats.written:,} cell(s) written, {stats.failed:,} skipped, "
                 f"{stats.commits} commit(s)"
             )
+            failed_pass = stats.failed > 0
         except Exception as exc:  # noqa: BLE001 - following: retry at the next pass
             if not args.follow:
                 raise
             logger.exception(f"gem15: pass failed: {type(exc).__name__}: {exc}")
             failed_pass = True
-        else:
-            failed_pass = False
         if not args.follow:
             return 0
         pause = min(args.pause, args.retry_pause) if failed_pass else args.pause

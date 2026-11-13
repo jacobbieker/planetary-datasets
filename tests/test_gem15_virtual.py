@@ -348,3 +348,20 @@ def test_a_replacement_that_shrank_leaves_none_of_the_old_footprint(bucket, repo
     assert np.isnan(cell.dsm_std.values[512:]).all()
     # The DTM, not replaced, is as it was.
     assert not np.isnan(cell.dtm.values[512:]).all()
+
+
+def test_a_replacement_that_moved_to_another_grid_leaves_the_old_group(bucket, repo):
+    """A replacement that moved to another grid leaves the old group."""
+    source, root, _ = bucket
+    g.run_pass(repo, source)
+    path = root / "m10_p0" / "cella" / "dsm" / "zall" / "mosaic.tif"
+    moved = make_data(5, 55)
+    write_tif(path, moved, 32631, X_A + 15, Y_N)
+    os.utime(path, (path.stat().st_atime, path.stat().st_mtime + 9))
+    assert g.run_pass(repo, source).written == 1
+    assert g.read_ledgers(repo)["cella"]["dsm"]["zone"] == "epsg_32631_dx15_dy0"
+    assert g.run_pass(repo, source).pending == 0
+    old = window(g.open_zone(repo, "epsg_32631"), X_A, Y_N, None)
+    assert np.isnan(old.dsm.values).all()
+    new = window(g.open_zone(repo, "epsg_32631_dx15_dy0"), X_A + 15, Y_N, None)
+    np.testing.assert_array_equal(new.dsm.values, moved[0])
