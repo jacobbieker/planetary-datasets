@@ -93,7 +93,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Sequence
 import numpy as np
 from loguru import logger
 
-from planetary_datasets.config import get_config
+from planetary_datasets.config import DEFAULT_BUCKET, DEFAULT_REGION, get_config
 from planetary_datasets.providers.virtualized.virtual_repo import open_virtual_repo
 
 if TYPE_CHECKING:
@@ -156,19 +156,22 @@ class Source:
 
     Attributes:
         store: An ``obstore`` store rooted at the dataset's ``gem-15`` directory.
+        checksums: Bind references to each object's etag and modification time. Google's
+            bucket reports both as Icechunk reads them; a local directory does not.
         url: URL prefix of that directory as the store's virtual chunk container knows it
             (``gs://climate-and-sustainability/gem-15/``; a ``file://`` directory in tests).
     """
 
     store: Any
     url: str
+    checksums: bool = False
 
     @classmethod
     def google(cls) -> "Source":
         """Google's public bucket, anonymously."""
         from obstore.store import GCSStore
 
-        return cls(GCSStore(BUCKET, prefix=ROOT, skip_signature=True), SOURCE_URL)
+        return cls(GCSStore(BUCKET, prefix=ROOT, skip_signature=True), SOURCE_URL, True)
 
     @classmethod
     def local(cls, directory: str) -> "Source":
@@ -189,6 +192,9 @@ class CellFiles:
     block: str
     dsm: str | None = None
     dtm: str | None = None
+    #: ``{kind: (etag, last modified)}`` of the listing entries, which references carry as
+    #: checksums so Icechunk refuses to read a source object that has been replaced.
+    checks: dict[str, tuple[str | None, Any]] = dataclasses.field(default_factory=dict)
 
     def path(self, kind: str) -> str:
         """Path of one of the cell's files under the dataset root."""
@@ -213,8 +219,12 @@ def list_cells(source: Source) -> dict[str, CellFiles]:
             sig = f"{meta.get('e_tag')}|{meta['size']}|{meta['last_modified'].isoformat()}"
             entry = found.setdefault(match["cell"], {"block": match["block"]})
             entry[match["kind"]] = sig
+            entry.setdefault("checks", {})[match["kind"]] = (
+                meta.get("e_tag"),
+                meta["last_modified"],
+            )
     return {
-        cell: CellFiles(cell, e["block"], e.get("dsm"), e.get("dtm"))
+        cell: CellFiles(cell, e["block"], e.get("dsm"), e.get("dtm"), e["checks"])
         for cell, e in sorted(found.items())
         if e.get("dsm")
     }
@@ -499,7 +509,15 @@ def ensure_zone(root: Any, grid: Grid) -> Any:
     return group
 
 
-def _specs(source: Source, path: str, layout: TileLayout, row: int, col: int, third: bool) -> list:
+def _specs(
+    source: Source,
+    path: str,
+    layout: TileLayout,
+    row: int,
+    col: int,
+    third: bool,
+    check: tuple[str | None, Any] = (None, None),
+) -> list:
     import icechunk
 
     location = f"{source.url}{path}"
@@ -514,6 +532,8 @@ def _specs(source: Source, path: str, layout: TileLayout, row: int, col: int, th
                 location=location,
                 offset=int(layout.offsets[ty, tx]),
                 length=int(length),
+                etag_checksum=check[0],
+                last_updated_at_checksum=check[1],
             )
         )
     return specs
@@ -526,6 +546,18 @@ def _set_refs(session: Any, array_path: str, specs: list) -> None:
             f"{len(failed)} reference(s) of {array_path} are outside every virtual chunk "
             f"container, e.g. {failed[:3]}"
         )
+
+
+def _clear_footprint(session: Any, old: dict[str, Any], kind: str) -> None:
+    """Delete the chunk references a file was written with, before it is written again."""
+    from zarr.core.sync import sync
+
+    array = STACK if kind == "dsm" else "dtm"
+    ny, nx = old["tiles"]
+    for ty in range(ny):
+        for tx in range(nx):
+            key = f"{old['zone']}/{array}/c/{old['row'] + ty}/{old['col'] + tx}"
+            sync(session.store.delete(key + ("/0" if array == STACK else "")))
 
 
 def read_ledgers(repo: "icechunk.Repository", branch: str = "main") -> dict[str, dict[str, Any]]:
@@ -588,12 +620,15 @@ def write_batch(
     batch: Sequence[tuple[CellFiles, tuple[str, ...]]],
     layouts: dict[tuple[str, str], TileLayout | Exception],
     branch: str = "main",
+    previous: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[int, int]:
     """Write the references of a batch of cells, and their ledger entries, in one commit.
 
     Returns ``(cells written, cells failed)``. A file whose header could not be read or whose
     grid does not fit is logged and left out of the ledger, so the next pass tries it again.
-    A cell counts as written when any of its files was.
+    A cell counts as written when any of its files was. A file written before has its old
+    references removed first (``previous`` is :func:`read_ledgers`), so a replacement that
+    shrank, moved or went sparse leaves nothing of the old footprint behind.
     """
     import icechunk
     import zarr
@@ -619,13 +654,29 @@ def write_batch(
                 failed.add(cell.cell)
                 continue
             ensure_zone(root, grid)
+            old = (previous or {}).get(cell.cell, {}).get(kind)
+            if old and "tiles" in old and old["zone"] in root:
+                _clear_footprint(session, old, kind)
             _set_refs(
                 session,
                 f"/{grid.name}/{STACK if kind == 'dsm' else 'dtm'}",
-                _specs(source, path, layout, row, col, kind == "dsm"),
+                _specs(
+                    source,
+                    path,
+                    layout,
+                    row,
+                    col,
+                    kind == "dsm",
+                    cell.checks.get(kind, (None, None)) if source.checksums else (None, None),
+                ),
             )
             entry = entries.setdefault(grid.name, {}).setdefault(cell.cell, {"block": cell.block})
-            entry[kind] = {"sig": getattr(cell, kind), "row": row, "col": col}
+            entry[kind] = {
+                "sig": getattr(cell, kind),
+                "row": row,
+                "col": col,
+                "tiles": list(layout.offsets.shape),
+            }
             written.add(cell.cell)
     for name, new in entries.items():
         group = root[name]
@@ -669,7 +720,8 @@ def run_pass(
     cells = list_cells(source)
     if only:
         cells = {k: v for k, v in cells.items() if k in set(only)}
-    todo = _pending(cells, read_ledgers(repo, branch))
+    ledger = read_ledgers(repo, branch)
+    todo = _pending(cells, ledger)
     if limit is not None:
         todo = todo[:limit]
     stats = PassStats(listed=len(cells), pending=len(todo))
@@ -679,7 +731,7 @@ def run_pass(
         jobs = [(cell.cell, cell.path(kind)) for cell, kinds in batch for kind in kinds]
         layouts = asyncio.run(_read_layouts(source, jobs, header_workers))
         layouts = {(cell, path): layout for (cell, path), layout in layouts.items()}
-        written, failed = write_batch(repo, source, batch, layouts, branch)
+        written, failed = write_batch(repo, source, batch, layouts, branch, ledger)
         stats.written += written
         stats.failed += failed
         stats.commits += bool(written)
@@ -703,9 +755,9 @@ def open_writer(prefix: str = STORE_PREFIX, source: Source | None = None) -> "ic
 
 
 def open_reader(
-    bucket: str = "us-west-2.opendata.source.coop",
+    bucket: str = DEFAULT_BUCKET,
     prefix: str = STORE_PREFIX,
-    region: str = "us-west-2",
+    region: str = DEFAULT_REGION,
 ) -> "icechunk.Repository":
     """Open the published store read-only and anonymously, authorising Google's bucket."""
     import icechunk
@@ -788,6 +840,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--pause", type=int, default=604800, help="seconds between passes when following"
     )
+    parser.add_argument(
+        "--retry-pause",
+        type=int,
+        default=3600,
+        help="seconds before retrying a pass that failed, when following",
+    )
     args = parser.parse_args(argv)
     source = Source.local(args.source_dir) if args.source_dir else Source.google()
     only = args.cells.split(",") if args.cells else None
@@ -812,11 +870,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not args.follow:
                 raise
             logger.exception(f"gem15: pass failed: {type(exc).__name__}: {exc}")
+            failed_pass = True
+        else:
+            failed_pass = False
         if not args.follow:
             return 0
+        pause = min(args.pause, args.retry_pause) if failed_pass else args.pause
         waited = 0
-        while waited < args.pause:  # saying so every ten minutes, for the box's stall guard
-            time.sleep(min(600, args.pause - waited))
+        while waited < pause:  # saying so every ten minutes, for the box's stall guard
+            time.sleep(min(600, pause - waited))
             waited += 600
             logger.info("gem15: waiting for the next pass")
 

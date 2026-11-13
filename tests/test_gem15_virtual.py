@@ -331,3 +331,20 @@ def test_hemisphere_of_a_crs():
     assert g.hemisphere(32731) == "S"
     with pytest.raises(g.UnsupportedTiff):
         g.hemisphere(3857)
+
+
+def test_a_replacement_that_shrank_leaves_none_of_the_old_footprint(bucket, repo):
+    """A replacement that shrank leaves none of the old footprint."""
+    source, root, _ = bucket
+    g.run_pass(repo, source)
+    path = root / "m10_p0" / "cella" / "dsm" / "zall" / "mosaic.tif"
+    small = make_data(5, 77, rows=512, cols=SIZE)
+    write_tif(path, small, 32631, X_A, Y_N)
+    os.utime(path, (path.stat().st_atime, path.stat().st_mtime + 9))
+    assert g.run_pass(repo, source).written == 1
+    cell = window(g.open_zone(repo, "epsg_32631"), X_A, Y_N, None)
+    np.testing.assert_array_equal(cell.dsm.values[:512], small[0])
+    assert np.isnan(cell.dsm.values[512:]).all()
+    assert np.isnan(cell.dsm_std.values[512:]).all()
+    # The DTM, not replaced, is as it was.
+    assert not np.isnan(cell.dtm.values[512:]).all()
