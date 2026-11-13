@@ -166,6 +166,10 @@ declare -A LANES=(
   [geos_cf_v2_ana]="-m planetary_datasets.providers.virtualized.geos_cf --streams v2_ana --follow --pause 3600 --workers 4"
   [geos_cf_v2_fcst]="-m planetary_datasets.providers.virtualized.geos_cf --streams v2_fcst --follow --pause 3600 --workers 4"
   [geos_cf_v1]="-m planetary_datasets.providers.virtualized.geos_cf --streams v1_ana,v1_fcst --follow --pause 86400 --workers 4"
+  # GEM-15 (Google's 15 m DSM/DTM): a virtual store of references into gs://climate-and-sustainability
+  # (bkr/terrain/gem15.icechunk, a group per UTM zone). A static dataset: one pass builds it
+  # (~27k GeoTIFF headers), then a weekly recheck picks up new or replaced cells.
+  [gem15]="-m planetary_datasets.providers.virtualized.gem15 --follow --pause 604800"
   # Virtual references (gribberish) to NOAA's HRRR Alaska and NAM Hawaii nests, from each
   # archive's first run, then a pass every two hours.
   [hrrr_alaska_sfc]="_backfill_lanes.py hrrr_alaska_sfc --threads 2 --pause 7200"
