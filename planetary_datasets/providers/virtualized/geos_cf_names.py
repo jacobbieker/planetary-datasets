@@ -172,6 +172,7 @@ AEROSOLS: dict[str, str] = {
     "SNA": "sulphate_nitrate_ammonium",
     "nh4": "ammonium",
     "nit": "nitrate",
+    "ni": "nitrate",
     "SS": "sea_salt",
     "ss": "sea_salt",
     "SU": "sulphate",
@@ -249,6 +250,15 @@ METEOROLOGY: dict[str, str] = {
     "XCO2": "column_averaged_carbon_dioxide_mole_fraction",
 }
 
+#: Codes whose name was fixed by a store written before the table covered them. ``PM25ni_RH35``
+#: was named from its long name (the table had no ``ni``), and the v2 analysis's
+#: ``chm_inst_1hr_p23_02102024`` group holds it under that name, so it is kept as stored. Its
+#: ``_GCC`` sibling (GEOS-Chem's own PM2.5, as in the file of 2024-10-03T00) is named by the
+#: table like every other ``_GCC`` field, ending in ``_geos_chem``.
+STORED_NAMES: dict[str, str] = {
+    "PM25ni_RH35": "particulate_matter_with_radii_2_5_um_nitrates",
+}
+
 _EMISSION = re.compile(r"^EMIS_(?P<species>[A-Za-z0-9]+?)(?:_(?P<sector>[A-Z]+))?$")
 _COLUMN = re.compile(r"^(?P<kind>TotCol|TropCol|PBLCol)_(?P<species>[A-Za-z0-9]+)$")
 _AOD = re.compile(r"^AOD550(?:_(?P<aerosol>[A-Za-z]+))?$")
@@ -269,8 +279,8 @@ def _species(code: str) -> str | None:
 def variable_name(code: str, attrs: Mapping | None = None) -> tuple[str, str]:
     """The store name of a GEOS-CF variable, and the rule that named it.
 
-    The rule is ``meteorology``, ``species``, ``emission``, ``column``, ``aod``, ``pm`` or,
-    for a code nothing here covers, ``long_name``/``kept``.
+    The rule is ``meteorology``, ``stored``, ``species``, ``emission``, ``column``, ``aod``,
+    ``pm`` or, for a code nothing here covers, ``long_name``/``kept``.
 
     Args:
         code: The variable's name in the GEOS-CF file.
@@ -281,6 +291,8 @@ def variable_name(code: str, attrs: Mapping | None = None) -> tuple[str, str]:
     units = str(attrs.get("units", "")).strip()
     if code in METEOROLOGY:
         return METEOROLOGY[code], "meteorology"
+    if code in STORED_NAMES:
+        return STORED_NAMES[code], "stored"
     if m := _EMISSION.match(code):
         species, sector = m["species"], m["sector"] or ""
         if sector not in EMISSION_SECTORS:
