@@ -821,12 +821,21 @@ def follow(config: Config | None = None, targets: Sequence[str] | None = None) -
         # backfill reaching the last two days) is finished inside archive() and can take
         # twenty minutes, which a window waiting to be archived should not.
         new = set(_unarchived(ends, config))
+        overdue = False
         for end in sorted(ends, key=lambda e: (e not in new, e)):
+            if end not in new and _came_due(ends, config):
+                # Each archived window can run its pending targets for hours: a window
+                # that came due meanwhile goes first, before any more pending work
+                # (11-16 00Z waited six hours behind three re-ingested windows).
+                overdue = True
+                break
             try:
                 archive(end, config, targets=targets)
             except Exception as exc:  # noqa: BLE001 - the next window must still be tried
                 failed.add(end)
                 logger.exception(f"wis2: archive ending {end:%Y-%m-%dT%H:%MZ} failed: {exc}")
+        if overdue:
+            continue
         now = dt.datetime.now(dt.timezone.utc)
         upcoming = last_boundary(now - SETTLE) + EVERY + SETTLE
         try:
@@ -852,6 +861,12 @@ def follow(config: Config | None = None, targets: Sequence[str] | None = None) -
             f"wis2: next archive at {upcoming:%Y-%m-%dT%H:%MZ}; sleeping {pause / 3600:.1f} h"
         )
         wait(upcoming, pause)
+
+
+def _came_due(seen: Sequence[dt.datetime], config: Config | None) -> bool:
+    """Whether a window not in ``seen`` has come due and has no archive yet."""
+    fresh = [end for end in window_ends(dt.datetime.now(dt.timezone.utc)) if end not in seen]
+    return bool(fresh) and bool(_unarchived(fresh, config))
 
 
 def _unarchived(ends: Sequence[dt.datetime], config: Config | None) -> list[dt.datetime]:
