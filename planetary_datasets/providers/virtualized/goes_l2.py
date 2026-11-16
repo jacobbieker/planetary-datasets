@@ -387,7 +387,8 @@ def open_day(keys: Sequence[str], product: Product):
 
     The grid variables stay references; everything small (times, bounds, projection,
     per-file statistics) is loaded and stored inline. Files whose grid variables differ
-    or chunking from the others are combined separately; unreadable files are left out.
+    or chunking, or whose other variables differ, from the others are combined separately;
+    unreadable files are left out.
     """
     import virtualizarr as vz
     from obspec_utils.registry import ObjectStoreRegistry
@@ -529,8 +530,12 @@ def open_day(keys: Sequence[str], product: Product):
     for (url, layout, names, grid), found in zip(readable, variables):
         if found != majority:
             continue
-        groups.setdefault((layout, grid), []).append(url)
-        names_of.setdefault((layout, grid), names)
+        # The small variables too: GOES-16 ACHA M1 files from 2023-12-04 18:51 lack
+        # netCDF's _Netcdf4Dimid, so their ``number_of_time_bounds`` dimension reads as a
+        # variable the earlier files lack, and the two sets will not concatenate.
+        key = (layout, grid, frozenset(names))
+        groups.setdefault(key, []).append(url)
+        names_of.setdefault(key, names)
     datasets = [
         combine(keep, [n for n in names_of[key] if n not in majority])
         for key, keep in sorted(groups.items(), key=lambda item: -len(item[1]))
