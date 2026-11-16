@@ -698,3 +698,31 @@ def test_a_long_pending_run_leaves_more_time_before_the_next_window(monkeypatch)
     # 3 h left would do for PENDING_BUDGET, not for a run that takes 4 h.
     assert wis2.finish_pending(deadline, _config(), now=lambda: clock[0], limit=1) == 0
     assert f"{keys[2]}.targets.json" not in dest.objects, "left for after the window"
+
+
+def test_a_window_due_while_archived_windows_run_their_targets_goes_first(monkeypatch):
+    """follow() stops working through archived windows once a new window comes due."""
+    old, newer, due = (
+        dt.datetime(2026, 11, d, h, tzinfo=UTC) for d, h in ((14, 12), (15, 0), (16, 0))
+    )
+    order = []
+    # Due appears after ``old`` has run: at the check before ``newer``.
+    ends = [[old, newer], [old, newer]]
+    waits = []
+
+    def stop(*args, **kwargs):
+        waits.append(args)
+        if len(waits) == 2:
+            raise StopIteration
+
+    monkeypatch.setattr(wis2, "window_ends", lambda now: ends.pop(0) if ends else [old, newer, due])
+    monkeypatch.setattr(
+        wis2, "_unarchived", lambda ends, config: [e for e in ends if e == due and due not in order]
+    )
+    monkeypatch.setattr(wis2, "archive", lambda end, config, targets=None: order.append(end))
+    monkeypatch.setattr(wis2, "finish_pending", lambda *a, **k: 0)
+    monkeypatch.setattr(wis2, "wait", stop)
+    with pytest.raises(StopIteration):
+        wis2.follow(_config())
+    # ``due`` came due while ``old`` ran, so it is archived before ``newer``.
+    assert order == [old, due, old, newer]
