@@ -465,3 +465,33 @@ def test_a_day_whose_small_variables_change_midway_writes_every_file(archive, lo
         group = zarr.open_group(repo.readonly_session("main").store, mode="r")
         sizes.append(group["TPW"].shape[0])
     assert sorted(sizes) == [1, 2]
+
+
+def test_a_day_whose_second_group_fails_is_retried_without_repeating_the_first(
+    archive, local_config, monkeypatch
+):
+    """The day enters the ledger with its last group; a retry skips the groups already in."""
+    product = g.Product(19, "TPW", "F")
+    start = dt.datetime.combine(DAY, dt.time())
+    granule(archive, "TPWF", start)
+    granule(archive, "TPWF", start + dt.timedelta(minutes=10))
+    granule(archive, "TPWF", start + dt.timedelta(minutes=20), chunk_rows=4)
+    now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
+    original = g._write_layout
+    failures = [1]
+
+    def flaky(*args, final=True, **kwargs):
+        if final and failures:
+            failures.pop()
+            raise ConnectionError("commit failed")
+        return original(*args, final=final, **kwargs)
+
+    monkeypatch.setattr(g, "_write_layout", flaky)
+    # The first group commits; the failure of the last fails the day, counted as none.
+    assert g.run_product(product, local_config, now=now) == 0
+    assert DAY.isoformat() not in g.written_days(product, local_config)
+    assert g.run_product(product, local_config, now=now) == 1, "only the group that failed"
+    assert DAY.isoformat() in g.written_days(product, local_config)
+    stores = g.generations(local_config, product.store_prefix)
+    assert sorted(read(product, local_config, p).sizes["t"] for p in stores) == [1, 2]
+    assert g.run_product(product, local_config, now=now) == 0, "the day is recorded done"
