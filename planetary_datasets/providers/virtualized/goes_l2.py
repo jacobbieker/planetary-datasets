@@ -97,6 +97,9 @@ DEFERRED = (
 )
 #: Root attributes.
 LEDGER_ATTR = "days_written"
+#: Days one of whose groups is committed here while the day's last group is not yet:
+#: a retry skips this group rather than appending its files again.
+PARTIAL_ATTR = "days_partly_written"
 SIGNATURE_ATTR = "layout_signature"
 #: Grid coordinates loaded when probing a file, so files on different grids are told apart.
 GRID_AXES = ("x", "y")
@@ -387,7 +390,8 @@ def open_day(keys: Sequence[str], product: Product):
 
     The grid variables stay references; everything small (times, bounds, projection,
     per-file statistics) is loaded and stored inline. Files whose grid variables differ
-    or chunking from the others are combined separately; unreadable files are left out.
+    or chunking, or whose other variables differ, from the others are combined separately;
+    unreadable files are left out.
     """
     import virtualizarr as vz
     from obspec_utils.registry import ObjectStoreRegistry
@@ -529,8 +533,12 @@ def open_day(keys: Sequence[str], product: Product):
     for (url, layout, names, grid), found in zip(readable, variables):
         if found != majority:
             continue
-        groups.setdefault((layout, grid), []).append(url)
-        names_of.setdefault((layout, grid), names)
+        # The small variables too: GOES-16 ACHA M1 files from 2023-12-04 18:51 lack
+        # netCDF's _Netcdf4Dimid, so their ``number_of_time_bounds`` dimension reads as a
+        # variable the earlier files lack, and the two sets will not concatenate.
+        key = (layout, grid, frozenset(names))
+        groups.setdefault(key, []).append(url)
+        names_of.setdefault(key, names)
     datasets = [
         combine(keep, [n for n in names_of[key] if n not in majority])
         for key, keep in sorted(groups.items(), key=lambda item: -len(item[1]))
@@ -661,7 +669,7 @@ def written_days(product: Product, config: Config) -> set[str]:
 
 
 def write_day(product: Product, day: dt.date, keys: Sequence[str], config: Config) -> int:
-    """Reference one day's files in the right generation; one commit. Returns files written."""
+    """Reference one day's files in the generations matching them. Returns files written."""
     import icechunk
     import zarr
 
@@ -671,29 +679,66 @@ def write_day(product: Product, day: dt.date, keys: Sequence[str], config: Confi
         return 0
     if len(datasets) > 1:
         logger.info(f"{product.name} {day}: {len(datasets)} layouts in one day; one store each")
-    return sum(_write_layout(product, day, vds, dropped, config) for vds in datasets)
+    # Each group commits on its own, so the day enters the ledger only with the last: if
+    # a later group fails, the day is tried again, and groups already in skip themselves.
+    wrote: set[str] = set()
+    return sum(
+        _write_layout(product, day, vds, dropped, config, final=i == len(datasets) - 1, wrote=wrote)
+        for i, vds in enumerate(datasets)
+    )
 
 
-def _write_layout(product: Product, day: dt.date, vds, dropped: int, config: Config) -> int:
-    """Reference one layout's files of a day in the generation matching it; one commit."""
+def _write_layout(
+    product: Product,
+    day: dt.date,
+    vds,
+    dropped: int,
+    config: Config,
+    final: bool = True,
+    wrote: set[str] | None = None,
+) -> int:
+    """Reference one layout's files of a day in the generation matching it; one commit.
+
+    The day goes in the generation's ledger when ``final``, otherwise in its partial
+    list. A group whose generation already lists the day from an earlier try (and was
+    not written in this one, per ``wrote``) is skipped.
+    """
     import icechunk
     import zarr
 
+    wrote = set() if wrote is None else wrote
     signature = layout_signature(vds)
     prefix = store_for(product, signature, day, config)
     attrs = stored_attrs(prefix, product, config)
+    listed = set(attrs.get(LEDGER_ATTR, [])) | set(attrs.get(PARTIAL_ATTR, []))
+    already = prefix not in wrote and day.isoformat() in listed
+    if already and not final:
+        logger.info(f"{product.name} {day}: {prefix} has this group from an earlier try")
+        return 0
+    wrote.add(prefix)
     repo = open_store(prefix, product, config)
     session = repo.writable_session("main")
-    if attrs.get(SIGNATURE_ATTR):
+    if already:
+        # The last group, committed by an earlier try that failed before its ledger
+        # entry could count: only the ledger is brought up to date.
+        logger.info(f"{product.name} {day}: {prefix} has this group from an earlier try")
+    elif attrs.get(SIGNATURE_ATTR):
         vds.vz.to_icechunk(session.store, append_dim="t")
     else:
         vds.vz.to_icechunk(session.store)
     root = zarr.open_group(session.store, mode="a")
-    days = set(root.attrs.get(LEDGER_ATTR, [])) | {day.isoformat()}
+    days = set(root.attrs.get(LEDGER_ATTR, []))
+    partial = set(root.attrs.get(PARTIAL_ATTR, []))
+    if final:
+        days.add(day.isoformat())
+        partial.discard(day.isoformat())
+    else:
+        partial.add(day.isoformat())
     root.attrs.update(
         {
             SIGNATURE_ATTR: signature,
             LEDGER_ATTR: sorted(days),
+            PARTIAL_ATTR: sorted(partial),
             "source": f"s3://{product.bucket}/{product.source_prefix}/ (mirror: gs://gcp-public-data-goes-{product.satellite}/)",
             "product": product.source_prefix
             + (f" sector {product.sector}" if product.meso else "")
@@ -701,9 +746,11 @@ def _write_layout(product: Product, day: dt.date, vds, dropped: int, config: Con
         }
     )
     session.commit(
-        f"{product.name}: {day} ({vds.sizes['t']} file(s), {dropped} left out)",
+        f"{product.name}: {day} ({0 if already else vds.sizes['t']} file(s), {dropped} left out)",
         rebase_with=icechunk.ConflictDetector(),
     )
+    if already:
+        return 0
     logger.info(f"{product.name} {day}: {vds.sizes['t']} file(s) -> {prefix} ({dropped} left out)")
     return int(vds.sizes["t"])
 

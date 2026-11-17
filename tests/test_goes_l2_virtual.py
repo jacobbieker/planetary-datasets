@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+import zarr
 
 from planetary_datasets.providers.virtualized import goes_l2 as g
 
@@ -27,6 +28,7 @@ def granule(
     name: str = "TPW",
     channel: int | None = None,
     x0: float = -0.1,
+    bounds_coordinate: bool = False,
 ) -> pathlib.Path:
     """One file laid out like NOAA's: a scalar t, a chunked zlib grid, small metadata.
 
@@ -64,6 +66,12 @@ def granule(
         "t": {"units": "seconds since 2000-01-01 12:00:00"},
     }
     ds.to_netcdf(path, engine="netcdf4", encoding=encoding)
+    if bounds_coordinate:
+        import h5py
+
+        # As NOAA's later files: the dimension scale lacks netCDF's ``_Netcdf4Dimid``.
+        with h5py.File(path, "a") as h:
+            del h["number_of_time_bounds"].attrs["_Netcdf4Dimid"]
     return path
 
 
@@ -439,3 +447,51 @@ def test_a_day_whose_grid_shifts_midway_writes_every_file(archive, local_config)
     assert sorted(read(product, local_config, p).sizes["t"] for p in stores) == [1, 2]
     xs = sorted(float(read(product, local_config, p)["x"][0]) for p in stores)
     assert xs == pytest.approx([-0.1, -0.05])
+
+
+def test_a_day_whose_small_variables_change_midway_writes_every_file(archive, local_config):
+    """GOES-16 ACHA M1 from 2023-12-04 18:51 reads ``number_of_time_bounds`` as a variable."""
+    product = g.Product(19, "TPW", "M1", year=DAY.year)
+    start = dt.datetime.combine(DAY, dt.time())
+    granule(archive, "TPWM1", start)
+    granule(archive, "TPWM1", start + dt.timedelta(minutes=10))
+    granule(archive, "TPWM1", start + dt.timedelta(minutes=20), bounds_coordinate=True)
+    now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
+    assert g.run_product(product, local_config, now=now) == 3
+    stores = g.generations(local_config, product.store_prefix)
+    sizes = []
+    for prefix in stores:
+        repo = g.open_store(prefix, product, local_config, create=False)
+        group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+        sizes.append(group["TPW"].shape[0])
+    assert sorted(sizes) == [1, 2]
+
+
+def test_a_day_whose_second_group_fails_is_retried_without_repeating_the_first(
+    archive, local_config, monkeypatch
+):
+    """The day enters the ledger with its last group; a retry skips the groups already in."""
+    product = g.Product(19, "TPW", "F")
+    start = dt.datetime.combine(DAY, dt.time())
+    granule(archive, "TPWF", start)
+    granule(archive, "TPWF", start + dt.timedelta(minutes=10))
+    granule(archive, "TPWF", start + dt.timedelta(minutes=20), chunk_rows=4)
+    now = dt.datetime.combine(DAY + dt.timedelta(days=2), dt.time())
+    original = g._write_layout
+    failures = [1]
+
+    def flaky(*args, final=True, **kwargs):
+        if final and failures:
+            failures.pop()
+            raise ConnectionError("commit failed")
+        return original(*args, final=final, **kwargs)
+
+    monkeypatch.setattr(g, "_write_layout", flaky)
+    # The first group commits; the failure of the last fails the day, counted as none.
+    assert g.run_product(product, local_config, now=now) == 0
+    assert DAY.isoformat() not in g.written_days(product, local_config)
+    assert g.run_product(product, local_config, now=now) == 1, "only the group that failed"
+    assert DAY.isoformat() in g.written_days(product, local_config)
+    stores = g.generations(local_config, product.store_prefix)
+    assert sorted(read(product, local_config, p).sizes["t"] for p in stores) == [1, 2]
+    assert g.run_product(product, local_config, now=now) == 0, "the day is recorded done"
