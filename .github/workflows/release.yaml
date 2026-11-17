@@ -45,6 +45,13 @@ jobs:
 
       - run: python -m pip install --upgrade bump2version build twine
 
+      - name: Start from the current main
+        # The triggering commit may already be behind main when merges land close
+        # together; bumping on top of it made the push non-fast-forward (2026-09-29).
+        run: |
+          git fetch origin main --tags
+          git checkout -B main origin/main
+
       - name: Bump the version
         id: bump
         run: |
@@ -64,7 +71,9 @@ jobs:
       - name: Push the bump commit and tag
         # Before publishing: if this fails nothing has been released, and a rerun starts
         # from a consistent state. The reverse order would leave PyPI ahead of the repo.
-        run: git push --follow-tags
+        # Atomic, so a rejected branch push cannot leave its tag behind: on 2026-09-29 the
+        # tag v0.0.3 landed without its commit, and every later bump to 0.0.3 failed.
+        run: git push --atomic origin main "v${{ steps.bump.outputs.version }}"
 
       - name: Publish to PyPI via trusted publishing
         if: env.HAS_PYPI_TOKEN != 'true'
