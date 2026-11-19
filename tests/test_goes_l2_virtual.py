@@ -350,6 +350,59 @@ def test_checking_each_file_screens_its_bytes_before_the_parser_opens_it(
     }
 
 
+def test_the_day_being_combined_is_marked_until_the_combine_returns(
+    archive, local_config, monkeypatch
+):
+    """A crash inside the combine leaves the marker behind; a clean day leaves none."""
+    import virtualizarr
+
+    start = dt.datetime.combine(DAY, dt.time())
+    for i in range(2):
+        granule(archive, "TPWF", start + dt.timedelta(minutes=10 * i), seed=i)
+    product = g.Product(19, "TPW", "F")
+    marker = g._combining_marker(product)
+    real_mf = virtualizarr.open_virtual_mfdataset
+    seen = []
+
+    def spy(urls, **kw):
+        seen.append(marker.read_text() if marker.is_file() else None)
+        return real_mf(urls, **kw)
+
+    monkeypatch.setattr(virtualizarr, "open_virtual_mfdataset", spy)
+    keys = [str(p.relative_to(archive)) for p in sorted(archive.rglob("*.nc"))]
+    datasets, _ = g.open_day(keys, product)
+    assert sum(ds.sizes["t"] for ds in datasets) == 2
+    assert seen == [f"file://{archive}/{keys[0]}"]
+    assert not marker.exists()
+
+
+def test_a_day_that_crashed_the_process_is_checked_file_by_file(archive, local_config, monkeypatch):
+    """After a crash mid-combine, the day's files are screened before the parser opens any."""
+    import virtualizarr
+
+    start = dt.datetime.combine(DAY, dt.time())
+    granule(archive, "TPWF", start)
+    bad = granule(archive, "TPWF", start + dt.timedelta(minutes=10))
+    bad.write_bytes(b"not an HDF5 file" * 64)
+    granule(archive, "TPWF", start + dt.timedelta(minutes=20), seed=2)
+    product = g.Product(19, "TPW", "F")
+    keys = [str(p.relative_to(archive)) for p in sorted(archive.rglob("*.nc"))]
+    marker = g._combining_marker(product)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(f"file://{archive}/{keys[0]}")  # as the process that died left it
+    real_open = virtualizarr.open_virtual_dataset
+
+    def open_refusing_the_damaged_file(url, **kw):
+        assert not url.endswith(bad.name), "the parser opened a damaged file"
+        return real_open(url, **kw)
+
+    monkeypatch.setattr(virtualizarr, "open_virtual_dataset", open_refusing_the_damaged_file)
+    datasets, dropped = g.open_day(keys, product)
+    assert sum(ds.sizes["t"] for ds in datasets) == 2 and dropped == 1
+    assert {u.rsplit("/", 1)[-1] for u in g.known_unreadable(product)} == {bad.name}
+    assert not marker.exists()
+
+
 @pytest.mark.parametrize("problem", ["missing", "dimensioned"])
 def test_a_file_without_a_scalar_time_is_left_out_not_the_whole_day(archive, local_config, problem):
     start = dt.datetime.combine(DAY, dt.time())

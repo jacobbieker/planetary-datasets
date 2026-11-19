@@ -323,6 +323,11 @@ def _unreadable_ledger(product: Product) -> pathlib.Path:
     return root / f"{product.name}.txt"
 
 
+def _combining_marker(product: Product) -> pathlib.Path:
+    """Names the day ``product`` is combining unchecked; left behind if the process dies."""
+    return _unreadable_ledger(product).with_suffix(".combining")
+
+
 def known_unreadable(product: Product) -> set[str]:
     """URLs of ``product`` recorded as unreadable by an earlier pass."""
     path = _unreadable_ledger(product)
@@ -494,21 +499,37 @@ def open_day(keys: Sequence[str], product: Product):
 
     # Usually every file of a day has the same layout: learn it from the first readable
     # file and combine them all in one pass. Only if that fails is each file checked.
-    for url in urls:
-        _, layout, names, _ = probe(url)
-        if layout is not None:
-            break
+    # A damaged file can crash the process here, past any except (GOES-18 ACHP2KMF
+    # 2025-04-10 aborted the lane on every pass for two days): the marker outlives such a
+    # crash, and the next try of the day checks each file instead.
+    marker = _combining_marker(product)
+    crashed = bool(urls) and marker.is_file() and marker.read_text() == urls[0]
+    if crashed:
+        logger.warning(f"{product.name}: the process died combining this day; checking each file")
+    elif urls:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(urls[0])
+        try:
+            for url in urls:
+                _, layout, names, _ = probe(url)
+                if layout is not None:
+                    break
+            else:
+                return [], skipped
+            grid = {n for n, *_ in layout}
+            try:
+                vds = combine(urls, [n for n in names if n not in grid])
+                if set(_virtual_names(vds)) == grid:
+                    return [vds], skipped
+            except Exception as exc:  # noqa: BLE001 - fall back to checking each file
+                logger.info(
+                    f"{product.name}: day does not combine as is ({type(exc).__name__}); "
+                    "checking each file"
+                )
+        finally:
+            marker.unlink(missing_ok=True)
     else:
         return [], skipped
-    grid = {n for n, *_ in layout}
-    try:
-        vds = combine(urls, [n for n in names if n not in grid])
-        if set(_virtual_names(vds)) == grid:
-            return [vds], skipped
-    except Exception as exc:  # noqa: BLE001 - fall back to checking each file
-        logger.info(
-            f"{product.name}: day does not combine as is ({type(exc).__name__}); checking each file"
-        )
     with ThreadPoolExecutor(OPEN_WORKERS) as pool:
         probed = list(pool.map(screened_probe, urls))
     # A file whose grid variables differ from the day's majority (an occasional file
@@ -543,6 +564,8 @@ def open_day(keys: Sequence[str], product: Product):
         combine(keep, [n for n in names_of[key] if n not in majority])
         for key, keep in sorted(groups.items(), key=lambda item: -len(item[1]))
     ]
+    if crashed:
+        marker.unlink(missing_ok=True)
     return datasets, len(listed) - sum(len(keep) for keep in groups.values())
 
 
