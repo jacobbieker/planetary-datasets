@@ -543,9 +543,13 @@ def window(lane: Lane):
 
 
 #: Replaces the lane during its pause: sleeps (saying so hourly, for the box's stall
-#: guard), then starts the lane again.
+#: guard), then starts the lane again. It first closes every descriptor but stdio: those
+#: the C libraries opened (HDF5, netCDF, eccodes) survive exec, and with nothing left to
+#: close them each pass added more. On 2026-11-20 seven lanes held 1 TB of deleted
+#: temporary files open this way, the Met Office NWS wave lane 640 GB of it.
 _SLEEPER = """
 import os, sys, time
+os.closerange(3, os.sysconf("SC_OPEN_MAX"))
 left = float(sys.argv[1])
 while left > 0:
     step = min(left, 3600)
