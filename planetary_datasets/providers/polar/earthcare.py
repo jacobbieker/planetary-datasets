@@ -31,8 +31,12 @@ zstd. Times are seconds since 2000-01-01, decoded by xarray from their ``units``
 A source that changes a variable's rank between baselines is written in the stored
 layout, not the new one: ``ALL_DF__2B``'s ``quality_status`` is ``(1, n)`` in baseline BC
 and ``(n,)`` in BD, and BD frames are written with the size-1 dimension the store already
-has (:func:`match_stored_rank`). Stored arrays are never reshaped. A change that is not a
-size-1 dimension raises, and the day waits for a decision.
+has (:func:`match_stored_rank`). Stored arrays are never reshaped. A variable a baseline
+moves onto another dimension the store already holds is written beside its stored array
+under a new name (:func:`write_beside`): ``ATL_FM__2A``'s ``mie_free_time`` is 2 values per
+row before baseline BA and 4 from it, so BA rows go to ``mie_free_time_nvals4``, and rows of
+either baseline read as fill in the other's array. Any other change raises, and the day
+waits for a decision.
 
 A frame is identified by its orbit and frame letter, so it is written once whichever
 baseline is processed later; when MAAP holds two baselines of a frame the newest is
@@ -134,12 +138,10 @@ SETTLE_DAYS = 3
 #: product's own array, not the store's root, so writers of different products running
 #: side by side never change the same metadata.
 DAYS_ATTR = "days_complete"
-#: Days left out of a product for good, treated as complete. ATL_FM__2A on these days
-#: mixes in baseline-BA frames whose ``mie_free_time`` has 4 values per row where the
-#: store holds 2 (``nvals2``), so their batches can never append. Skipped on 2026-11-08.
-SKIPPED_DAYS: dict[str, frozenset[str]] = {
-    "ATL_FM__2A": frozenset({"2025-03-13", "2025-03-15", "2025-03-26"}),
-}
+#: Days left out of a product for good, treated as complete. ATL_FM__2A's 2025-03-13,
+#: 2025-03-15 and 2025-03-26 were here from 2026-11-08 until :func:`write_beside` let
+#: their baseline-BA frames append.
+SKIPPED_DAYS: dict[str, frozenset[str]] = {}
 #: Uncompressed bytes of frames read into memory before they are written.
 BATCH_BYTES = 3 * 2**30
 #: Names the track dimension goes by across the products.
@@ -300,6 +302,54 @@ def read_frame(path: pathlib.Path, product: Product) -> xr.Dataset:
 def concat_frames(frames: list[xr.Dataset], product: Product, first_index: int) -> xr.Dataset:
     """Frames of one product, end to end, with each track row's frame index."""
     return multidim.concat_frames(frames, product.prefix, first_index)
+
+
+def stored_layout(group: zarr.Group | None) -> tuple[dict[str, tuple[str, ...]], dict[str, int]]:
+    """Each stored array's dimension names, and each dimension's size past the first axis."""
+    dims: dict[str, tuple[str, ...]] = {}
+    sizes: dict[str, int] = {}
+    if group is None:
+        return dims, sizes
+    for name, array in group.arrays():
+        names = tuple(array.metadata.dimension_names or ())
+        dims[name] = names
+        for dim, size in zip(names[1:], array.shape[1:], strict=True):
+            sizes[dim] = max(size, sizes.get(dim, 0))
+    return dims, sizes
+
+
+def write_beside(
+    ds: xr.Dataset, layout: tuple[dict[str, tuple[str, ...]], dict[str, int]]
+) -> xr.Dataset:
+    """``ds`` with each variable a baseline moved onto other stored dimensions renamed.
+
+    A variable is renamed when it shares its stored array's first axis but some other
+    dimension is not one the stored array has, and the store already holds that dimension
+    at the size it arrives with. The new name is the old one with each such dimension and
+    its size appended, e.g. ``atl_fm_2a_mie_free_time`` on ``atl_fm_2a_nvals`` (4) becomes
+    ``atl_fm_2a_mie_free_time_nvals4``. Applied to each frame before frames are joined, so a
+    day mixing baselines joins. Size-1 differences are left to :func:`match_stored_rank`,
+    and anything else is left for it to refuse.
+    """
+    dims, sizes = layout
+    renames = {}
+    for name, variable in ds.variables.items():
+        stored = dims.get(name)
+        if not stored or variable.dims == stored or variable.dims[:1] != stored[:1]:
+            continue
+        moved = [
+            (d, n)
+            for d, n in zip(variable.dims[1:], variable.shape[1:], strict=True)
+            if d not in stored
+        ]
+        if not moved or any(n == 1 or sizes.get(d) != n for d, n in moved):
+            continue
+        prefix = os.path.commonprefix([name, *(d for d, _ in moved)])
+        prefix = prefix[: prefix.rfind("_") + 1]
+        renames[name] = name + "".join(f"_{d.removeprefix(prefix)}{n}" for d, n in moved)
+    for old, new in renames.items():
+        logger.info(f"earthcare: {old} arrives as {ds[old].dims}; written as {new}")
+    return ds.rename_vars(renames) if renames else ds
 
 
 def match_stored_rank(ds: xr.Dataset, group: zarr.Group | None) -> xr.Dataset:
@@ -481,6 +531,8 @@ class EarthCAREProvider(BaseProvider):
                 logger.warning(f"{self.name}: {exc}; left out")
         if not frames:
             return 0
+        layout = stored_layout(self._group())
+        frames = [write_beside(frame, layout) for frame in frames]
         ds = concat_frames(frames, product, first_index)
         repo = self.get_icechunk_repo()
         ds = naming.prepare_for_store(ds, self.store_prefix, naming.stored_arrays(repo), raw=True)
@@ -600,5 +652,7 @@ __all__ = [
     "concat_frames",
     "frame_key",
     "match_stored_rank",
+    "stored_layout",
+    "write_beside",
     "read_frame",
 ]
