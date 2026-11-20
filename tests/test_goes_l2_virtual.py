@@ -360,46 +360,111 @@ def test_the_day_being_combined_is_marked_until_the_combine_returns(
     for i in range(2):
         granule(archive, "TPWF", start + dt.timedelta(minutes=10 * i), seed=i)
     product = g.Product(19, "TPW", "F")
-    marker = g._combining_marker(product)
+    keys = day_keys(archive, DAY)
+    marker = g._combining_marker(product, keys[0])
     real_mf = virtualizarr.open_virtual_mfdataset
     seen = []
 
     def spy(urls, **kw):
-        seen.append(marker.read_text() if marker.is_file() else None)
+        seen.append(marker.is_file())
         return real_mf(urls, **kw)
 
     monkeypatch.setattr(virtualizarr, "open_virtual_mfdataset", spy)
-    keys = [str(p.relative_to(archive)) for p in sorted(archive.rglob("*.nc"))]
     datasets, _ = g.open_day(keys, product)
     assert sum(ds.sizes["t"] for ds in datasets) == 2
-    assert seen == [f"file://{archive}/{keys[0]}"]
+    assert seen == [True]
     assert not marker.exists()
+
+
+def day_keys(archive: pathlib.Path, day: dt.date) -> list[str]:
+    """The archive's keys for one day, as ``day_files`` lists them."""
+    folder = f"/{day:%Y}/{day.timetuple().tm_yday:03d}/"
+    keys = (str(p.relative_to(archive)) for p in sorted(archive.rglob("*.nc")))
+    return [k for k in keys if folder in f"/{k}"]
+
+
+def crashed_on(product, keys):
+    """Leave the day's marker as a process that died combining it would."""
+    marker = g._combining_marker(product, keys[0])
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+    return marker
+
+
+def refuse_to_parse(monkeypatch, *names):
+    """Fail the test if the parser opens a file named in ``names``."""
+    import virtualizarr
+
+    real_open = virtualizarr.open_virtual_dataset
+
+    def open_refusing(url, **kw):
+        assert not url.endswith(names), "the parser opened a damaged file"
+        return real_open(url, **kw)
+
+    monkeypatch.setattr(virtualizarr, "open_virtual_dataset", open_refusing)
 
 
 def test_a_day_that_crashed_the_process_is_checked_file_by_file(archive, local_config, monkeypatch):
     """After a crash mid-combine, the day's files are screened before the parser opens any."""
-    import virtualizarr
-
     start = dt.datetime.combine(DAY, dt.time())
     granule(archive, "TPWF", start)
     bad = granule(archive, "TPWF", start + dt.timedelta(minutes=10))
     bad.write_bytes(b"not an HDF5 file" * 64)
     granule(archive, "TPWF", start + dt.timedelta(minutes=20), seed=2)
     product = g.Product(19, "TPW", "F")
-    keys = [str(p.relative_to(archive)) for p in sorted(archive.rglob("*.nc"))]
-    marker = g._combining_marker(product)
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(f"file://{archive}/{keys[0]}")  # as the process that died left it
-    real_open = virtualizarr.open_virtual_dataset
-
-    def open_refusing_the_damaged_file(url, **kw):
-        assert not url.endswith(bad.name), "the parser opened a damaged file"
-        return real_open(url, **kw)
-
-    monkeypatch.setattr(virtualizarr, "open_virtual_dataset", open_refusing_the_damaged_file)
+    keys = day_keys(archive, DAY)
+    marker = crashed_on(product, keys)
+    refuse_to_parse(monkeypatch, bad.name)
     datasets, dropped = g.open_day(keys, product)
     assert sum(ds.sizes["t"] for ds in datasets) == 2 and dropped == 1
     assert {u.rsplit("/", 1)[-1] for u in g.known_unreadable(product)} == {bad.name}
+    assert not marker.exists()
+
+
+def test_a_crashed_day_is_known_after_its_first_file_enters_the_ledger(
+    archive, local_config, monkeypatch
+):
+    """The marker names the day, not a file that the ledger may later leave out."""
+    start = dt.datetime.combine(DAY, dt.time())
+    first = granule(archive, "TPWF", start)
+    bad = granule(archive, "TPWF", start + dt.timedelta(minutes=10))
+    bad.write_bytes(b"not an HDF5 file" * 64)
+    granule(archive, "TPWF", start + dt.timedelta(minutes=20), seed=2)
+    product = g.Product(19, "TPW", "F")
+    keys = day_keys(archive, DAY)
+    marker = crashed_on(product, keys)
+    g._record_unreadable(product, f"file://{archive}/{keys[0]}", "recorded before the crash")
+    refuse_to_parse(monkeypatch, bad.name, first.name)
+    datasets, dropped = g.open_day(keys, product)
+    assert sum(ds.sizes["t"] for ds in datasets) == 1 and dropped == 2
+    assert not marker.exists()
+
+
+def test_combining_another_day_keeps_a_crashed_days_marker(archive, local_config, monkeypatch):
+    """Each day has its own marker: another day's unchecked combine leaves it alone."""
+    product = g.Product(19, "TPW", "F")
+    other = DAY - dt.timedelta(days=1)
+    for day in (DAY, other):
+        start = dt.datetime.combine(day, dt.time())
+        granule(archive, "TPWF", start)
+        granule(archive, "TPWF", start + dt.timedelta(minutes=10), seed=1)
+    marker = crashed_on(product, day_keys(archive, DAY))
+    datasets, _ = g.open_day(day_keys(archive, other), product)
+    assert sum(ds.sizes["t"] for ds in datasets) == 2
+    assert marker.exists()
+
+
+def test_a_crashed_day_with_every_file_damaged_has_nothing_to_write(
+    archive, local_config, monkeypatch
+):
+    """Screening leaves nothing readable: an empty day, and the marker is cleared."""
+    start = dt.datetime.combine(DAY, dt.time())
+    for i in range(2):
+        granule(archive, "TPWF", start + dt.timedelta(minutes=10 * i)).write_bytes(b"x" * 512)
+    product = g.Product(19, "TPW", "F")
+    keys = day_keys(archive, DAY)
+    marker = crashed_on(product, keys)
+    assert g.open_day(keys, product) == ([], 2)
     assert not marker.exists()
 
 
