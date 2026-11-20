@@ -24,6 +24,31 @@ def test_the_sleeper_waits_then_runs_the_lane_again(tmp_path):
     assert marker.read_text() == "again"
 
 
+def test_the_sleeper_closes_descriptors_the_lane_left_open(tmp_path):
+    """A file the lane's C libraries kept open is not carried into the next pass."""
+    import os
+
+    lanes = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lanes)
+    held = tmp_path / "held"
+    held.write_text("x")
+    fd = os.open(held, os.O_RDONLY)
+    os.set_inheritable(fd, True)
+    report = tmp_path / "report"
+    check = f"import os; open({str(report)!r}, 'w').write(str(os.path.exists('/dev/fd/{fd}')))"
+    try:
+        done = subprocess.run(
+            [sys.executable, "-c", lanes._SLEEPER, "0", sys.executable, "-c", check],
+            pass_fds=(fd,),
+            capture_output=True,
+            timeout=30,
+        )
+    finally:
+        os.close(fd)
+    assert done.returncode == 0
+    assert report.read_text() == "False"
+
+
 def test_pause_lightly_execs_the_sleeper_with_the_lane_command(monkeypatch):
     lanes = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(lanes)
