@@ -217,6 +217,11 @@ declare -A LANES=(
   [goes17_l2_meso]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 17 --sectors M1,M2 --follow --workers 2"
   [goes18_l2_meso]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 18 --sectors M1,M2 --follow --workers 2"
   [goes19_l2_meso]="-m planetary_datasets.providers.virtualized.goes_l2 --satellite 19 --sectors M1,M2 --follow --workers 2"
+  # Full-disk L1b radiance, all 16 channels: each pass appends every scan since the
+  # live store's last commit, one commit per channel. The three-day lookback only
+  # matters when the lane has been down; a current store lists from its last scan.
+  [goes18_radf]="-m planetary_datasets.providers.virtualized.ingest_goes_radf --satellite goes18 --channels all --append-latest --lookback-minutes 4320"
+  [goes19_radf]="-m planetary_datasets.providers.virtualized.ingest_goes_radf --satellite goes19 --channels all --append-latest --lookback-minutes 4320"
   # Derived motion winds and GLM lightning, materialised (bkr/geo/goes{NN}_l2_points.icechunk).
   [goes16_l2_points]="-m planetary_datasets.providers.goes_l2_points --satellite 16 --follow --workers 2"
   [goes17_l2_points]="-m planetary_datasets.providers.goes_l2_points --satellite 17 --follow --workers 2"

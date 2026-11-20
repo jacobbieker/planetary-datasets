@@ -14,6 +14,7 @@ import dataclasses
 import functools
 import datetime
 import gc
+import json
 import os
 import pathlib
 import time
@@ -2597,6 +2598,12 @@ def _last_logged_error(
     return None
 
 
+#: Suffix of the journal a store rename leaves beside the store it is moving, so a
+#: rename cut short (the process killed partway through moving objects) can be
+#: finished by the next run instead of leaving neither store readable.
+ROLLOVER_JOURNAL_SUFFIX = ".rollover"
+
+
 def make_config_store_renamer(
     prefix_for: Callable[[str], str],
     *,
@@ -2614,6 +2621,14 @@ def make_config_store_renamer(
     objects would corrupt both. A destination that is an Icechunk store with
     nothing written to it — the fresh live store a failed rollover leaves
     behind — is discarded first, which is what lets a rollover be undone.
+
+    On S3 a rename is one copy and delete per object and takes hours for a
+    large store, so before moving anything it writes a journal beside the source
+    (``<store>.icechunk.rollover``) naming the destination suffix, and removes
+    it once every object has moved. ``rename.pending(old_suffix)`` returns the
+    suffix an unfinished rename was taking that store to, or None, and
+    ``rename(old, new, resume=True)`` finishes it, merging into the partly
+    filled destination it would otherwise refuse.
     """
     import icechunk
 
@@ -2626,24 +2641,7 @@ def make_config_store_renamer(
             return False
         return not _schema_exists(repo, "main")
 
-    def rename(old_suffix: str, new_suffix: str) -> None:
-        src, dst = prefix_for(old_suffix), prefix_for(new_suffix)
-        if cfg.use_local_store:
-            import shutil
-
-            src_path, dst_path = cfg.local_store_path(src), cfg.local_store_path(dst)
-            if dst_path.exists() and any(dst_path.iterdir()):
-                if not holds_nothing(dst):
-                    raise FileExistsError(
-                        f"cannot rename {src_path}: {dst_path} already holds a store"
-                    )
-                shutil.rmtree(dst_path)
-            if dst_path.exists():
-                dst_path.rmdir()
-            with timer(f"Freezing store {src_path} -> {dst_path}"):
-                shutil.move(str(src_path), str(dst_path))
-            return
-
+    def s3_store():
         creds = cfg.credentials
         kwargs: dict[str, Any] = {"region": cfg.region}
         if cfg.endpoint_url:
@@ -2655,23 +2653,88 @@ def make_config_store_renamer(
         if creds.aws_access_key_id and creds.aws_secret_access_key:
             kwargs["access_key_id"] = creds.aws_access_key_id
             kwargs["secret_access_key"] = creds.aws_secret_access_key
-        store = obs.store.S3Store(cfg.bucket, **kwargs)
+        return obs.store.S3Store(cfg.bucket, **kwargs)
+
+    def journal_key(prefix: str) -> str:
+        return cfg.full_prefix(prefix).rstrip("/") + ROLLOVER_JOURNAL_SUFFIX
+
+    def journal_path(prefix: str) -> pathlib.Path:
+        path = cfg.local_store_path(prefix)
+        return path.with_name(path.name + ROLLOVER_JOURNAL_SUFFIX)
+
+    def write_journal(prefix: str, new_suffix: str) -> None:
+        body = json.dumps({"to": new_suffix})
+        if cfg.use_local_store:
+            journal_path(prefix).write_text(body)
+        else:
+            obs.put(s3_store(), journal_key(prefix), body.encode())
+
+    def clear_journal(prefix: str) -> None:
+        if cfg.use_local_store:
+            journal_path(prefix).unlink(missing_ok=True)
+        else:
+            obs.delete(s3_store(), journal_key(prefix))
+
+    def pending(old_suffix: str) -> str | None:
+        src = prefix_for(old_suffix)
+        try:
+            if cfg.use_local_store:
+                body = journal_path(src).read_text()
+            else:
+                body = bytes(obs.get(s3_store(), journal_key(src)).bytes()).decode()
+        except FileNotFoundError:
+            return None
+        return json.loads(body)["to"]
+
+    def rename(old_suffix: str, new_suffix: str, *, resume: bool = False) -> None:
+        src, dst = prefix_for(old_suffix), prefix_for(new_suffix)
+        if cfg.use_local_store:
+            import shutil
+
+            src_path, dst_path = cfg.local_store_path(src), cfg.local_store_path(dst)
+            if not resume and dst_path.exists() and any(dst_path.iterdir()):
+                if not holds_nothing(dst):
+                    raise FileExistsError(
+                        f"cannot rename {src_path}: {dst_path} already holds a store"
+                    )
+                shutil.rmtree(dst_path)
+            write_journal(src, new_suffix)
+            with timer(f"Freezing store {src_path} -> {dst_path}"):
+                if dst_path.exists() and any(dst_path.iterdir()):
+                    # Resuming: merge what is left into the partly filled store.
+                    for path in sorted(p for p in src_path.rglob("*") if p.is_file()):
+                        target = dst_path / path.relative_to(src_path)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(path, target)
+                    shutil.rmtree(src_path)
+                else:
+                    if dst_path.exists():
+                        dst_path.rmdir()
+                    shutil.move(str(src_path), str(dst_path))
+            clear_journal(src)
+            return
+
+        store = s3_store()
         full_src, full_dst = cfg.full_prefix(src), cfg.full_prefix(dst)
-        dst_keys = [
-            o["path"]
-            for page in obs.list(store, prefix=full_dst.rstrip("/") + "/")
-            for o in page
-        ]
-        if dst_keys:
-            if not holds_nothing(dst):
-                raise FileExistsError(
-                    f"cannot rename {full_src!r}: {full_dst!r} already holds a store"
-                )
-            obs.delete(store, dst_keys)
+        if not resume:
+            dst_keys = [
+                o["path"]
+                for page in obs.list(store, prefix=full_dst.rstrip("/") + "/")
+                for o in page
+            ]
+            if dst_keys:
+                if not holds_nothing(dst):
+                    raise FileExistsError(
+                        f"cannot rename {full_src!r}: {full_dst!r} already holds a store"
+                    )
+                obs.delete(store, dst_keys)
+        write_journal(src, new_suffix)
         with timer(f"Freezing store {full_src!r} -> {full_dst!r}"):
             moved = rename_store_objects(store, full_src, full_dst, max_workers=max_workers)
         print(f"    moved {moved} object(s)", flush=True)
+        clear_journal(src)
 
+    rename.pending = pending  # type: ignore[attr-defined]
     return rename
 
 
@@ -2836,7 +2899,10 @@ def append_latest_scans(
     New scans are first checked against the scan the store ends with. If they
     have moved to a new codec era the live store is frozen under the date of the
     last day it holds and a fresh live store started, as the backwards walk
-    does; without ``rename_store_fn`` that raises :class:`CodecEraChange`.
+    does; without ``rename_store_fn`` that raises :class:`CodecEraChange`. A
+    freeze a previous run left unfinished (see :func:`make_config_store_renamer`)
+    is finished first, and the scans after the frozen store's last one start the
+    new live store.
 
     A commit that loses a race with another writer is not reported by
     ingest_all_days, which logs and moves on, so the outcome is read back from
@@ -2862,8 +2928,29 @@ def append_latest_scans(
     since_dt = now_dt - datetime.timedelta(minutes=lookback_minutes)
     since = np.datetime64(since_dt, "ns")
 
+    # A freeze cut short leaves the live store's objects split between it and
+    # the frozen store, so neither opens. Finish it, then carry on from the
+    # frozen store's last scan: everything after it is the new era.
+    pending = getattr(rename_store_fn, "pending", None)
+    resumed = pending("") if pending is not None else None
+    if resumed is not None:
+        print(
+            f"{satellite_name} {channel_label}: finishing the interrupted freeze of "
+            f"the live store as '{resumed}'.",
+            flush=True,
+        )
+        rename_store_fn("", resumed, resume=True)  # type: ignore[misc]
+        if log_dir is not None:
+            log_event(
+                log_dir, satellite, channel_label, now_dt.isoformat(), "CODEC_CHANGE",
+                f"finished freezing the live store as {resumed}",
+            )
+
     repo = repo_factory("")
-    last_t = last_committed_time(repo, branch, group)
+    if resumed is None:
+        last_t = last_committed_time(repo, branch, group)
+    else:
+        last_t = last_committed_time(repo_factory(resumed), branch, group)
     list_from = since_dt if last_t is None else max(since_dt, _to_datetime(last_t))
     prefixes = hour_prefixes(product, list_from, now_dt)
     print(
@@ -2886,7 +2973,9 @@ def append_latest_scans(
     print(f"  {channel_label}: {len(candidates)} new scan(s).", flush=True)
 
     split = _EraSplit(candidates, [], [], [])
-    if last_t is not None:
+    if resumed is not None:
+        split = _EraSplit([], candidates, [], [])
+    elif last_t is not None:
         reference = _reference_scan(
             last_t, product=product, list_files_fn=list_files_fn,
             scan_start_fn=scan_start_fn,
@@ -2976,20 +3065,26 @@ def append_latest_scans(
                 "has no rename hook to freeze it. Run the backwards walk to split "
                 "the era, or rename the live store by hand."
             )
-        last_t = last_committed_time(repo_factory(""), branch, group)
-        if last_t is None:
-            raise CodecEraChange(
-                f"{satellite_name} {channel_label}: the live store is empty yet the "
-                "new scans failed the era check against it"
+        if resumed is not None:
+            frozen_as = resumed
+        else:
+            last_t = last_committed_time(repo_factory(""), branch, group)
+            if last_t is None:
+                raise CodecEraChange(
+                    f"{satellite_name} {channel_label}: the live store is empty yet the "
+                    "new scans failed the era check against it"
+                )
+            frozen_as = _to_datetime(last_t).date().isoformat()
+            print(
+                f"\nCodec change detected for {channel_label} at {names[0]}. Freezing "
+                f"the live store as '{frozen_as}' and starting a new live store.",
+                flush=True,
             )
-        frozen_as = _to_datetime(last_t).date().isoformat()
-        print(
-            f"\nCodec change detected for {channel_label} at {names[0]}. Freezing "
-            f"the live store as '{frozen_as}' and starting a new live store.",
-            flush=True,
-        )
-        note("CODEC_CHANGE", f"Froze live store as {frozen_as}; new live store from {names[0]}")
-        rename_store_fn("", frozen_as)
+            note(
+                "CODEC_CHANGE",
+                f"Froze live store as {frozen_as}; new live store from {names[0]}",
+            )
+            rename_store_fn("", frozen_as)
         try:
             era_appended, last_t = append(split.new_era)
         except BaseException:

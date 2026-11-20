@@ -431,6 +431,64 @@ def test_the_renamer_refuses_to_move_onto_a_store_that_holds_data(local_config):
     assert len(_times(local_config, "2026-10-06")) == 3
 
 
+def _live_dir(cfg, suffix: str = ""):
+    prefix = common.suffixed_prefix(
+        common.default_store_prefix("goes19"), channel=13, era=suffix or None
+    )
+    return cfg.local_store_path(prefix)
+
+
+def test_a_rename_cut_short_leaves_a_journal_naming_its_destination(
+    local_config, monkeypatch
+):
+    import shutil
+
+    scans = _every_ten_minutes(
+        datetime.datetime(2026, 10, 6, 11, 0), datetime.datetime(2026, 10, 6, 11, 20)
+    )
+    _append(local_config, _bucket(scans), datetime.datetime(2026, 10, 6, 11, 30))
+    rename = _renamer()
+    assert rename.pending("") is None
+
+    def killed(*_args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(shutil, "move", killed)
+    with pytest.raises(KeyboardInterrupt):
+        rename("", "2026-10-06")
+    assert rename.pending("") == "2026-10-06"
+
+    monkeypatch.undo()
+    rename("", "2026-10-06", resume=True)
+    assert rename.pending("") is None
+    assert len(_times(local_config, "2026-10-06")) == 3
+
+
+def test_an_interrupted_freeze_is_finished_and_the_new_era_appended(local_config):
+    store, opener, new = _seeded_with_a_new_era(local_config, n_new=3)
+    # A freeze killed partway: half the live store's objects already moved, as
+    # rename_store_objects leaves it on S3, and the journal still in place.
+    live, frozen = _live_dir(local_config), _live_dir(local_config, "2026-10-06")
+    files = sorted(p for p in live.rglob("*") if p.is_file())
+    for path in files[: len(files) // 2]:
+        target = frozen / path.relative_to(live)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        path.rename(target)
+    live.with_name(live.name + common.ROLLOVER_JOURNAL_SUFFIX).write_text(
+        json.dumps({"to": "2026-10-06"})
+    )
+
+    result = _append(
+        local_config, store, datetime.datetime(2026, 10, 6, 11, 30),
+        opener=opener, rename=_renamer(),
+    )
+    assert result["appended"] == 3
+    assert result["new_era"] == "2026-10-06"
+    assert len(_times(local_config, "2026-10-06")) == 6
+    assert list(_times(local_config)) == [_mid(s) for s in new]
+    assert _renamer().pending("") is None
+
+
 def test_append_mode_rolls_over_only_on_the_config_storage():
     args = ingest_goes_radf.build_args("goes19")
     assert ingest_goes_radf._append_renamer(args, 13) is not None
