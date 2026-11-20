@@ -516,6 +516,7 @@ def open_day(keys: Sequence[str], product: Product):
     else:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
+        combined = False
         try:
             for url in urls:
                 _, layout, names, _ = probe(url)
@@ -527,6 +528,7 @@ def open_day(keys: Sequence[str], product: Product):
             try:
                 vds = combine(urls, [n for n in names if n not in grid])
                 if set(_virtual_names(vds)) == grid:
+                    combined = True
                     return [vds], skipped
             except Exception as exc:  # noqa: BLE001 - fall back to checking each file
                 logger.info(
@@ -534,7 +536,10 @@ def open_day(keys: Sequence[str], product: Product):
                     "checking each file"
                 )
         finally:
-            marker.unlink(missing_ok=True)
+            # Kept unless the day combined: the screened pass below clears it once
+            # it completes, so a day it could not finish is screened again next time.
+            if combined:
+                marker.unlink(missing_ok=True)
     with ThreadPoolExecutor(OPEN_WORKERS) as pool:
         probed = list(pool.map(screened_probe, urls))
     # A file whose grid variables differ from the day's majority (an occasional file

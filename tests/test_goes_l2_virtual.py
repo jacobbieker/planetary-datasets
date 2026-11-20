@@ -391,17 +391,30 @@ def crashed_on(product, keys):
     return marker
 
 
-def refuse_to_parse(monkeypatch, *names):
-    """Fail the test if the parser opens a file named in ``names``."""
+def refuse_to_parse(monkeypatch, *names) -> list[str]:
+    """Record the parser opening a file named in ``names``, for the test to assert on.
+
+    Recorded rather than raised: ``open_day`` catches a parser's errors, so an assertion
+    raised here could pass unnoticed.
+    """
     import virtualizarr
 
-    real_open = virtualizarr.open_virtual_dataset
+    real_open, real_mf = virtualizarr.open_virtual_dataset, virtualizarr.open_virtual_mfdataset
+    opened: list[str] = []
 
     def open_refusing(url, **kw):
-        assert not url.endswith(names), "the parser opened a damaged file"
+        if url.endswith(names):
+            opened.append(url)
+            raise OSError("the parser opened a damaged file")
         return real_open(url, **kw)
 
+    def mf_refusing(urls, **kw):
+        opened.extend(u for u in urls if u.endswith(names))
+        return real_mf(urls, **kw)
+
     monkeypatch.setattr(virtualizarr, "open_virtual_dataset", open_refusing)
+    monkeypatch.setattr(virtualizarr, "open_virtual_mfdataset", mf_refusing)
+    return opened
 
 
 def test_a_day_that_crashed_the_process_is_checked_file_by_file(archive, local_config, monkeypatch):
@@ -414,8 +427,9 @@ def test_a_day_that_crashed_the_process_is_checked_file_by_file(archive, local_c
     product = g.Product(19, "TPW", "F")
     keys = day_keys(archive, DAY)
     marker = crashed_on(product, keys)
-    refuse_to_parse(monkeypatch, bad.name)
+    opened = refuse_to_parse(monkeypatch, bad.name)
     datasets, dropped = g.open_day(keys, product)
+    assert opened == []
     assert sum(ds.sizes["t"] for ds in datasets) == 2 and dropped == 1
     assert {u.rsplit("/", 1)[-1] for u in g.known_unreadable(product)} == {bad.name}
     assert not marker.exists()
@@ -434,10 +448,34 @@ def test_a_crashed_day_is_known_after_its_first_file_enters_the_ledger(
     keys = day_keys(archive, DAY)
     marker = crashed_on(product, keys)
     g._record_unreadable(product, f"file://{archive}/{keys[0]}", "recorded before the crash")
-    refuse_to_parse(monkeypatch, bad.name, first.name)
+    opened = refuse_to_parse(monkeypatch, bad.name, first.name)
     datasets, dropped = g.open_day(keys, product)
+    assert opened == []
     assert sum(ds.sizes["t"] for ds in datasets) == 1 and dropped == 2
     assert not marker.exists()
+
+
+def test_a_day_whose_screened_pass_fails_stays_marked(archive, local_config, monkeypatch):
+    """A combine that raises falls back to screening; if that fails, the day stays marked."""
+    import virtualizarr
+
+    start = dt.datetime.combine(DAY, dt.time())
+    for i in range(2):
+        granule(archive, "TPWF", start + dt.timedelta(minutes=10 * i), seed=i)
+    product = g.Product(19, "TPW", "F")
+    keys = day_keys(archive, DAY)
+
+    def mf_fails(urls, **kw):
+        raise ValueError("does not combine")
+
+    def cannot_check(url):
+        raise RuntimeError("could not download")
+
+    monkeypatch.setattr(virtualizarr, "open_virtual_mfdataset", mf_fails)
+    monkeypatch.setattr(g, "_damage", cannot_check)
+    with pytest.raises(RuntimeError, match="could not check"):
+        g.open_day(keys, product)
+    assert g._combining_marker(product, keys[0]).exists()
 
 
 def test_combining_another_day_keeps_a_crashed_days_marker(archive, local_config, monkeypatch):
