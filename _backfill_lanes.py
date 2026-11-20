@@ -233,9 +233,13 @@ EARTHCARE_LANES = {
 
 
 #: The L1 lanes move ~57 GB a day between them and are download-bound at ~0.5 MB/s per
-#: MAAP stream, so they run three times the streams of the L2 lanes.
+#: MAAP stream, so they run three times the streams of the L2 lanes. MAAP rate-limits the
+#: box's address: at 48 and 16 (272 streams over nine lanes) it answered more 429s than
+#: there were downloads (2026-11-19), and gave up on about half the frames after every
+#: retry, so the lanes stay under about the 136 streams it was actually serving.
 EARTHCARE_L1 = ("atl_nom", "msi_nom", "msi_rgr", "cpr_aux")
-EARTHCARE_L1_WORKERS = 48
+EARTHCARE_L1_WORKERS = 24
+EARTHCARE_L2_WORKERS = 8
 
 
 def _ncep_upper_air():
@@ -372,7 +376,9 @@ LANES: dict[str, Lane] = {
                 "polar.earthcare",
                 "EarthCAREProvider",
                 products=codes,
-                download_workers=EARTHCARE_L1_WORKERS if group in EARTHCARE_L1 else 16,
+                download_workers=(
+                    EARTHCARE_L1_WORKERS if group in EARTHCARE_L1 else EARTHCARE_L2_WORKERS
+                ),
             ),
             "2024-08-11",
             "1D",
