@@ -38,6 +38,7 @@ def write_frame(
     n: int = 4,
     offset: float = 0.0,
     status: str | None = None,
+    free_time: int | None = None,
 ) -> pathlib.Path:
     """A CPR_CLD_2A-shaped frame: a track, a height grid, a fill value and a header."""
     path = directory / f"{name}.h5"
@@ -57,6 +58,15 @@ def write_frame(
         science["status"] = (("one", "along_track"), np.ones((1, n), dtype="int8"))
     elif status == "1d":
         science["status"] = ("along_track", np.full(n, 2, dtype="int8"))
+    if free_time is not None:
+        # ATL_FM__2A's mie_free_time: 2 values a row (nvals2) before baseline BA, 4 (nvals)
+        # from it. crosspolar_free_time is on nvals (4) in both, so the store has nvals.
+        dim = "nvals2" if free_time == 2 else "nvals"
+        science["free_time"] = (
+            ("along_track", dim),
+            np.full((n, free_time), float(free_time), dtype="float32"),
+        )
+        science["crosspolar"] = (("along_track", "nvals"), np.ones((n, 4), dtype="float32"))
     science["time"].attrs["units"] = "seconds since 2000-1-1 00:00:00.0 0:00"
     science["water_content"].encoding["_FillValue"] = FILL
     science["quality"].encoding["_FillValue"] = np.int32(-2147483647)
@@ -294,19 +304,53 @@ def test_a_skipped_day_is_never_fetched_and_counts_as_done(provider, monkeypatch
     assert "2026-10-20" in provider.days_complete(CLD)
 
 
-def test_the_skipped_atl_days_count_as_done_for_that_product_only(local_config):
-    """The real SKIPPED_DAYS: the three ATL_FM__2A days are done, other products still run."""
-    atl, cld = PRODUCTS["ATL_FM__2A"], CLD
-    days = {"2025-03-13", "2025-03-15", "2025-03-26"}
+def test_the_atl_days_skipped_for_baseline_ba_are_fetched_again(local_config):
+    """The three ATL_FM__2A days skipped on 2026-11-08 append now, so they are listed again."""
     assert set(earthcare.SKIPPED_DAYS) <= set(PRODUCTS)
-    assert earthcare.SKIPPED_DAYS["ATL_FM__2A"] == days
-    assert days <= EarthCAREProvider._days(None, atl)
-    assert not days & EarthCAREProvider._days(None, cld)
-    made = EarthCAREProvider(config=local_config, products=["ATL_FM__2A", "CPR_CLD_2A"])
-    wanted = pd.DatetimeIndex(sorted(days))
-    assert made.missing_timesteps(wanted) == list(wanted)
+    days = {"2025-03-13", "2025-03-15", "2025-03-26"}
+    assert not days & EarthCAREProvider._days(None, PRODUCTS["ATL_FM__2A"])
     only_atl = EarthCAREProvider(config=local_config, products=["ATL_FM__2A"])
-    assert only_atl.missing_timesteps(wanted) == []
+    wanted = pd.DatetimeIndex(sorted(days))
+    assert only_atl.missing_timesteps(wanted) == list(wanted)
+
+
+def test_a_variable_moved_onto_another_stored_dimension_is_written_beside_it(provider):
+    """Baseline BA's 4-wide mie_free_time goes beside the 2-wide array, on a mixed day too."""
+    directory = next(iter(provider.test_maap.files.values())).parent / "free_time"
+    directory.mkdir()
+    old = frame_name("CPR_CLD_2A", "20261020T015847", "13601E")
+    mixed_old = frame_name("CPR_CLD_2A", "20261021T015847", "13602E")
+    mixed_new = frame_name("CPR_CLD_2A", "20261021T055847", "13602H", "EXBA")
+    provider.test_maap.files = {
+        old: write_frame(directory, old, free_time=2),
+        mixed_old: write_frame(directory, mixed_old, offset=50.0, free_time=2),
+        mixed_new: write_frame(directory, mixed_new, offset=60.0, free_time=4),
+    }
+    assert provider.run_partition(pd.Timestamp("2026-10-20"))
+    assert provider.run_partition(pd.Timestamp("2026-10-21"))
+    group = zarr.open_group(provider.get_icechunk_repo().readonly_session("main").store, mode="r")
+    two, four = group["cpr_cld_2a_free_time"], group["cpr_cld_2a_free_time_nvals4"]
+    assert tuple(two.metadata.dimension_names) == ("cpr_cld_2a_along_track", "cpr_cld_2a_nvals2")
+    assert tuple(four.metadata.dimension_names) == ("cpr_cld_2a_along_track", "cpr_cld_2a_nvals")
+    assert two.shape == (12, 2) and four.shape == (12, 4)
+    ds = stored(provider)
+    frame = ds["cpr_cld_2a_frame_index"].values
+    names = ds["cpr_cld_2a_product_name"].values
+    ba = np.isin(frame, [i for i, n in enumerate(names) if "EXBA" in n])
+    assert ba.sum() == 4
+    assert np.all(ds["cpr_cld_2a_free_time"].values[~ba] == 2)
+    assert np.all(np.isnan(ds["cpr_cld_2a_free_time"].values[ba]))
+    assert np.all(ds["cpr_cld_2a_free_time_nvals4"].values[ba] == 4)
+    assert np.all(np.isnan(ds["cpr_cld_2a_free_time_nvals4"].values[~ba]))
+
+
+def test_a_moved_variable_is_left_alone_when_the_store_lacks_its_dimension():
+    """Only a dimension the store holds at the arriving size counts; others are refused later."""
+    ds = xr.Dataset({"p_v": (("p_along_track", "p_nvals"), np.zeros((3, 4), "f4"))})
+    layout = ({"p_v": ("p_along_track", "p_nvals2")}, {"p_nvals2": 2, "p_nvals": 5})
+    assert "p_v" in earthcare.write_beside(ds, layout)
+    layout = ({"p_v": ("p_along_track", "p_nvals2")}, {"p_nvals2": 2, "p_nvals": 4})
+    assert "p_v_nvals4" in earthcare.write_beside(ds, layout)
 
 
 def refusing(fake: FakeMaap, refusals: int):
