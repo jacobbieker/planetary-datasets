@@ -52,12 +52,14 @@ def test_every_live_lane_is_a_lane():
 
 @pytest.mark.parametrize("role", [None, "all"])
 def test_without_a_role_every_lane_runs(tmp_path, role):
+    """With no role file (or "all") the one box runs every lane, as before."""
     proc = status(tmp_path, role)
     assert proc.returncode == 0, proc.stderr
     assert _listed(proc) == _names("LANES") | _names("SCRIPTS")
 
 
 def test_live_and_bulk_split_the_lanes_between_them(tmp_path):
+    """Each lane runs on exactly one of the two hosts."""
     live = _listed(status(tmp_path / "live", "live"))
     bulk = _listed(status(tmp_path / "bulk", "bulk"))
     assert live == _live()
@@ -66,6 +68,7 @@ def test_live_and_bulk_split_the_lanes_between_them(tmp_path):
 
 
 def test_an_unknown_role_runs_nothing(tmp_path):
+    """A mistyped role must not fall back to running every lane."""
     proc = status(tmp_path, "both")
     assert proc.returncode == 2
     assert "unknown box role" in proc.stderr
@@ -73,6 +76,7 @@ def test_an_unknown_role_runs_nothing(tmp_path):
 
 
 def test_the_bulk_box_does_not_run_the_noon_catch_up(tmp_path):
+    """The noon stores have one writer, the live box."""
     config = tmp_path / ".config" / "planetary-box"
     config.mkdir(parents=True)
     (config / "role").write_text("bulk\n")
