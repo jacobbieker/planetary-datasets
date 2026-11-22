@@ -318,14 +318,16 @@ NOON_PARALLEL=${NOON_PARALLEL:-0}
 
 # The lanes are split over two machines (2026-11-22): a smaller "live" box runs the stores
 # whose sources keep only days (WIS2, KENDA, the ICON mirrors and stores, the UK marine and
-# radar feeds, the Nordic radar) and the noon catch-up; the large "bulk" box runs the rest.
+# radar feeds, the Nordic radar), the noon catch-up and the MARS archive (its ECMWF
+# requests queue for hours and are abandoned whenever it stops, so it stays off the spot
+# instance); the large "bulk" box runs the rest.
 # The noon peaks then no longer share memory with Himawari, and the bulk box can go
 # cheaper. Each host reads its role from ~/.config/planetary-box/role; with no file it runs
 # everything ("all"), as one box did before. A lane runs on one host only: stop it on the
 # host losing it before setting the role on the host gaining it.
 LIVE_LANES="wis2_archive kenda icon_v1_global icon_v1_global_art icon_v1_eu_art
   icon_v1_mirror icon_d2_ruc_mirror icon_d2_ruc_60min icon_d2_ruc_15min icon_d2_ruc_5min
-  uk_marine uk_radar nordic_radar"
+  uk_marine uk_radar nordic_radar mars_pipeline"
 #
 # pb, aero and the Mac stand in when the boxes are down, with role "backup": they run only
 # the lanes and noon stores (as noon_<store>) listed in BACKUP_LANES, and nothing at all
