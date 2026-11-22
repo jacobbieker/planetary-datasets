@@ -28,8 +28,13 @@
 set -u
 cd "$(dirname "$0")"
 
+CONFIG=~/.config/planetary-box
+# Per-host settings, sourced if present: PIXI on pb and aero, NOON_PARALLEL and GUARD_*
+# where memory is short.
+[[ -f $CONFIG/host.env ]] && . "$CONFIG/host.env"
+
 LOGS=~/backfill-logs
-PIXI=~/.pixi/bin/pixi
+PIXI=${PIXI:-~/.pixi/bin/pixi}
 RETRY_PAUSE=${RETRY_PAUSE:-600}
 UNAVAILABLE_PAUSE=${UNAVAILABLE_PAUSE:-86400}
 #: guard: pause a Himawari lane when less than this much memory is available (GB), or
@@ -308,6 +313,8 @@ NOON_MAKE_ROOM="himawari_500m_3 himawari_500m_2 himawari_500m_1 himawari_1000m_3
   mtg_1000m"
 #: A store's catch-up is killed after this, so a hang is retried at the next noon.
 NOON_TIMEOUT=23h
+#: How many noon stores catch up at once; 0 runs them all together.
+NOON_PARALLEL=${NOON_PARALLEL:-0}
 
 # The lanes are split over two machines (2026-11-22): a smaller "live" box runs the stores
 # whose sources keep only days (WIS2, KENDA, the ICON mirrors and stores, the UK marine and
@@ -321,9 +328,28 @@ NOON_TIMEOUT=23h
 LIVE_LANES="wis2_archive kenda icon_v1_global icon_v1_global_art icon_v1_eu_art
   icon_v1_mirror icon_d2_ruc_mirror icon_d2_ruc_60min icon_d2_ruc_15min icon_d2_ruc_5min
   uk_marine uk_radar nordic_radar mars_pipeline"
-BOX_ROLE=${BOX_ROLE:-$(cat ~/.config/planetary-box/role 2>/dev/null || echo all)}
+#
+# pb, aero and the Mac stand in when the boxes are down, with role "backup": they run only
+# the lanes and noon stores (as noon_<store>) listed in BACKUP_LANES, and nothing at all
+# unless BACKUP_ON exists. _backfill_backup.sh switches both; never while a box still runs
+# the same lane.
+BACKUP_LANES=$CONFIG/backup-lanes
+BACKUP_ON=$CONFIG/backup-on
+ALL_NAMES=$(printf '%s\n' "${!LANES[@]}" "${!SCRIPTS[@]}" $(printf 'noon_%s ' $NOON_STORES) | sort)
+BOX_ROLE=${BOX_ROLE:-$(cat "$CONFIG/role" 2>/dev/null || echo all)}
 case $BOX_ROLE in
 all) ;;
+backup)
+  enabled=" $(grep -v '^[[:space:]]*#' "$BACKUP_LANES" 2>/dev/null | tr '\n' ' ') "
+  for name in "${!LANES[@]}" "${!SCRIPTS[@]}"; do
+    [[ $enabled == *" $name "* ]] || unset "LANES[$name]" "SCRIPTS[$name]"
+  done
+  stores=""
+  for store in $NOON_STORES; do
+    [[ $enabled == *" noon_$store "* ]] && stores+=" $store"
+  done
+  NOON_STORES=$stores
+  ;;
 live | bulk)
   for name in "${!LANES[@]}" "${!SCRIPTS[@]}"; do
     live=""
@@ -334,7 +360,7 @@ live | bulk)
   done
   ;;
 *)
-  echo "unknown box role '$BOX_ROLE' (all, live or bulk)" >&2
+  echo "unknown box role '$BOX_ROLE' (all, live, bulk or backup)" >&2
   exit 2
   ;;
 esac
@@ -411,7 +437,15 @@ noon_running() {
 }
 
 case "${1:-status}" in
+names)
+  # Every lane and noon store any host can run, whatever this one's role.
+  echo "$ALL_NAMES"
+  ;;
 start)
+  if [[ $BOX_ROLE == backup && ! -f $BACKUP_ON ]]; then
+    echo "start: the backup is off (./_backfill_backup.sh on)" >&2
+    exit 0
+  fi
   # cron and guard both run start: one at a time, so a lane is never checked and launched
   # twice at once. Lanes are started with fd 9 closed, so they do not hold the lock.
   exec 9> "$LOGS/.start.lock"
@@ -627,6 +661,10 @@ noon)
     echo "noon: the catch-up runs on the live box" >&2
     exit 0
   fi
+  if [[ $BOX_ROLE == backup && ! -f $BACKUP_ON ]]; then
+    echo "noon: the backup is off (./_backfill_backup.sh on)" >&2
+    exit 0
+  fi
   # The eleven catch-ups start together and peak at ~200 GB (DMI model levels alone budget
   # ~130 GB), which drove the OOM killer every noon. Make room first: pause the extra
   # Himawari lanes and mtg_1000m now; guard resumes them one by one once memory recovers.
@@ -641,6 +679,9 @@ noon)
   done
   # One flock per store: a store still catching up at the next noon is left to finish.
   for store in $NOON_STORES; do
+    if (( NOON_PARALLEL > 0 )); then
+      while (( $(jobs -rp | wc -l) >= NOON_PARALLEL )); do wait -n; done
+    fi
     flock -n "$LOGS/noon_$store.lock" timeout "$NOON_TIMEOUT" \
       $PIXI run python one_offs/silam_harmonie_catchup.py "=$store" \
       >> "$LOGS/noon_$store.log" 2>&1 &
@@ -648,7 +689,7 @@ noon)
   wait
   ;;
 *)
-  echo "usage: $0 start|stop|status|noon|guard" >&2
+  echo "usage: $0 start|stop|status|noon|guard|names" >&2
   exit 2
   ;;
 esac
