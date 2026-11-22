@@ -48,6 +48,8 @@ def test_every_live_lane_is_a_lane():
     """A typo in LIVE_LANES would leave that store on neither host."""
     assert _live() <= _names("LANES") | _names("SCRIPTS")
     assert {"wis2_archive", "kenda", "icon_v1_global", "icon_d2_ruc_mirror"} <= _live()
+    # MARS requests queue at ECMWF for hours; a spot interruption would abandon them.
+    assert "mars_pipeline" in _live()
 
 
 @pytest.mark.parametrize("role", [None, "all"])
