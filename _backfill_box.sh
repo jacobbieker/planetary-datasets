@@ -309,6 +309,34 @@ NOON_MAKE_ROOM="himawari_500m_3 himawari_500m_2 himawari_500m_1 himawari_1000m_3
 #: A store's catch-up is killed after this, so a hang is retried at the next noon.
 NOON_TIMEOUT=23h
 
+# The lanes are split over two machines (2026-11-22): a smaller "live" box runs the stores
+# whose sources keep only days (WIS2, KENDA, the ICON mirrors and stores, the UK marine and
+# radar feeds, the Nordic radar) and the noon catch-up; the large "bulk" box runs the rest.
+# The noon peaks then no longer share memory with Himawari, and the bulk box can go
+# cheaper. Each host reads its role from ~/.config/planetary-box/role; with no file it runs
+# everything ("all"), as one box did before. A lane runs on one host only: stop it on the
+# host losing it before setting the role on the host gaining it.
+LIVE_LANES="wis2_archive kenda icon_v1_global icon_v1_global_art icon_v1_eu_art
+  icon_v1_mirror icon_d2_ruc_mirror icon_d2_ruc_60min icon_d2_ruc_15min icon_d2_ruc_5min
+  uk_marine uk_radar nordic_radar"
+BOX_ROLE=${BOX_ROLE:-$(cat ~/.config/planetary-box/role 2>/dev/null || echo all)}
+case $BOX_ROLE in
+all) ;;
+live | bulk)
+  for name in "${!LANES[@]}" "${!SCRIPTS[@]}"; do
+    live=""
+    [[ " $(echo $LIVE_LANES) " == *" $name "* ]] && live=1
+    if [[ $BOX_ROLE == live && -z $live || $BOX_ROLE == bulk && -n $live ]]; then
+      unset "LANES[$name]" "SCRIPTS[$name]"
+    fi
+  done
+  ;;
+*)
+  echo "unknown box role '$BOX_ROLE' (all, live or bulk)" >&2
+  exit 2
+  ;;
+esac
+
 lane_loop() {
   local name=$1 cmd=$2 rc
   # A virtual-reference commit touches hundreds of arrays at once; 1024 descriptors is not
@@ -593,6 +621,10 @@ guard)
   done
   ;;
 noon)
+  if [[ $BOX_ROLE == bulk ]]; then
+    echo "noon: the catch-up runs on the live box" >&2
+    exit 0
+  fi
   # The eleven catch-ups start together and peak at ~200 GB (DMI model levels alone budget
   # ~130 GB), which drove the OOM killer every noon. Make room first: pause the extra
   # Himawari lanes and mtg_1000m now; guard resumes them one by one once memory recovers.
