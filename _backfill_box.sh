@@ -8,12 +8,15 @@
 #     ./_backfill_box.sh stop LANE...   # stop only these lanes (start brings them back)
 #     ./_backfill_box.sh noon           # the daily short-retention catch-up (cron, 12:00 UTC)
 #     ./_backfill_box.sh guard          # pause/resume Himawari lanes by memory (cron, */10)
+#     ./_backfill_box.sh rotate         # take turns among the big backfills (cron, */10;
+#                                       # only with ROTATE_SLOTS set, on a small box)
 #
 # Crontab on the box:
 #     CRON_TZ=UTC
 #     0 12 * * * <repo>/_backfill_box.sh noon
 #     */10 * * * * <repo>/_backfill_box.sh guard >> ~/backfill-logs/guard.log 2>&1
 #     */15 * * * * <repo>/_backfill_box.sh start >> ~/backfill-logs/box.log 2>&1
+#     5-55/10 * * * * <repo>/_backfill_box.sh rotate >> ~/backfill-logs/rotate.log 2>&1
 #     @reboot sleep 60 && <repo>/_backfill_box.sh start >> ~/backfill-logs/box.log 2>&1
 #
 # One lane is one store and one writer. Lanes never share a store, and nothing else may
@@ -315,6 +318,24 @@ NOON_MAKE_ROOM="himawari_500m_3 himawari_500m_2 himawari_500m_1 himawari_1000m_3
 NOON_TIMEOUT=23h
 #: How many noon stores catch up at once; 0 runs them all together.
 NOON_PARALLEL=${NOON_PARALLEL:-0}
+#: Rotation, for a box too small to run every backfill at once (set in host.env; off while
+#: ROTATE_SLOTS is 0): the ROTATE_LANES take turns, at most ROTATE_SLOTS at a time, each for
+#: ROTATE_HOURS before the next in line takes its place. A turn starts only with
+#: ROTATE_MIN_AVAILABLE_GB available, one per `rotate` run. Lanes resume where they left
+#: off, so a turn's end costs at most the partition in progress. The rest always run: the
+#: followers, the JPSS lanes inside NOAA's 90-day retention, and the small lanes.
+ROTATE_SLOTS=${ROTATE_SLOTS:-0}
+ROTATE_HOURS=${ROTATE_HOURS:-8}
+ROTATE_MIN_AVAILABLE_GB=${ROTATE_MIN_AVAILABLE_GB:-80}
+ROTATE_LANES=${ROTATE_LANES-"mtg_1000m mtg_500m mtg_highres_1000m mtg_2000m_archive
+  himawari_500m_0 himawari_500m_1 himawari_500m_2 himawari_500m_3 himawari_1000m_0
+  himawari_1000m_1 himawari_1000m_2 himawari_1000m_3 himawari_2000m_0 himawari_2000m_1
+  himawari_2000m_2 himawari_2000m_3 himawari_2000m_4 himawari_2000m_5
+  metoffice_global_deterministic_10km metoffice_global_deterministic_10km_6hourly_24hr
+  metoffice_uk_deterministic_2km metop_gome metop_avhrr metop_sg_metimage earthcare_atl_nom
+  earthcare_msi_nom earthcare_msi_rgr earthcare_cpr_aux earthcare_acm earthcare_synergy
+  earthcare_msi_l2 earthcare_atl_l2 earthcare_cpr_l2 geos_cf_v1 ifs_analysis pace_l2
+  pace_l2_mapol pace_l1c"}
 
 # The lanes are split over two machines (2026-11-22): a smaller "live" box runs the stores
 # whose sources keep only days (WIS2, KENDA, the ICON mirrors and stores, the UK marine and
@@ -648,7 +669,8 @@ guard)
   # Noon's lanes come last, so they resume even if GUARD_PAUSE_ORDER is overridden without them.
   for name in $(echo $GUARD_PAUSE_ORDER | tr ' ' '\n' | tac) $NOON_MAKE_ROOM; do
     [[ -f $LOGS/$name.paused ]] || continue
-    grep -q '^manual' "$LOGS/$name.paused" && continue
+    # Paused by hand, or waiting for its turn in the rotation: not guard's to resume.
+    grep -qE '^(manual|rotate)' "$LOGS/$name.paused" && continue
     [[ -n ${GUARD_DRY_RUN:-} ]] && { echo "would resume $name (${available} GB)"; exit 0; }
     rm -f "$LOGS/$name.paused"
     "$0" start > /dev/null
@@ -688,8 +710,66 @@ noon)
   done
   wait
   ;;
+rotate)
+  # Run from cron every 10 minutes; see ROTATE_*. A lane waiting its turn has a .paused file
+  # starting "rotate"; one paused by guard or by hand is neither running nor waiting.
+  (( ROTATE_SLOTS > 0 )) || exit 0
+  state=$LOGS/.rotate
+  mkdir -p "$state"
+  exec 8> "$state/.lock"
+  flock -n 8 || exit 0
+  now=$(date -u +%s)
+  lanes=()
+  for name in $ROTATE_LANES; do
+    [[ -n ${LANES[$name]:-}${SCRIPTS[$name]:-} ]] && lanes+=("$name")
+  done
+  # End the turns that are over, and any beyond the slots (rotation just switched on).
+  active=()
+  for name in "${lanes[@]}"; do
+    [[ -f $LOGS/$name.paused ]] && continue
+    since=$(cat "$state/$name.since" 2>/dev/null || echo "")
+    if (( ${#active[@]} < ROTATE_SLOTS )) && [[ -z $since ]]; then
+      # Running when rotation was switched on: its turn starts now, and the line continues
+      # after it.
+      echo "$now" > "$state/$name.since"
+      echo "$name" > "$state/last"
+      active+=("$name")
+      continue
+    fi
+    if (( ${#active[@]} < ROTATE_SLOTS && now - ${since:-0} < ROTATE_HOURS * 3600 )); then
+      active+=("$name")
+      continue
+    fi
+    echo "rotate: $(date -u '+%F %T') waiting for its turn" > "$LOGS/$name.paused"
+    running "$name" && kill -- -"$(cat "$LOGS/$name.pid")" 2>/dev/null
+    rm -f "$state/$name.since"
+    echo "$(date -u '+%F %T') ended the turn of $name"
+  done
+  (( ${#active[@]} < ROTATE_SLOTS )) || exit 0
+  available=$(awk '/MemAvailable/ {print int($2 / 1048576)}' /proc/meminfo)
+  if (( available < ROTATE_MIN_AVAILABLE_GB )); then
+    echo "$(date -u '+%F %T') ${#active[@]}/$ROTATE_SLOTS turns, waiting: ${available} GB available"
+    exit 0
+  fi
+  # The next one waiting, round-robin from the last to start, so each gets a turn.
+  last=$(cat "$state/last" 2>/dev/null || echo "")
+  order=()
+  for i in "${!lanes[@]}"; do
+    [[ ${lanes[$i]} == "$last" ]] && order=("${lanes[@]:i+1}" "${lanes[@]:0:i+1}")
+  done
+  (( ${#order[@]} )) || order=("${lanes[@]}")
+  for name in "${order[@]}"; do
+    grep -q '^rotate' "$LOGS/$name.paused" 2>/dev/null || continue
+    rm -f "$LOGS/$name.paused"
+    echo "$now" > "$state/$name.since"
+    echo "$name" > "$state/last"
+    "$0" start > /dev/null
+    echo "$(date -u '+%F %T') started the turn of $name (${available} GB available)"
+    break
+  done
+  ;;
 *)
-  echo "usage: $0 start|stop|status|noon|guard|names" >&2
+  echo "usage: $0 start|stop|status|noon|guard|names|rotate" >&2
   exit 2
   ;;
 esac
