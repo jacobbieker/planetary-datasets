@@ -222,6 +222,7 @@ class SILAMDustV61Provider(SILAMDustProvider):
         max_step: int = DUST_MAX_STEP,
         workers: int = 4,
     ):
+        """The same as :class:`SILAMDustProvider`, defaulting to the v6.1 files."""
         super().__init__(config=config, version=version, max_step=max_step, workers=workers)
 
 
