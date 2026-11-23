@@ -76,6 +76,19 @@ def test_rotation_keeps_one_turn_and_hands_it_on(box):
     assert following == ROTATE[(ROTATE.index(current) + 1) % len(ROTATE)]
 
 
+def test_a_lane_started_by_rotate_does_not_hold_its_lock(box):
+    """After rotate starts a lane, the next rotate can still take the lock."""
+    run(box, "start")
+    run(box, "rotate")
+    (current,) = set(ROTATE) - waiting(box)
+    since = box / "backfill-logs/.rotate" / f"{current}.since"
+    since.write_text(f"{int(time.time()) - 7200}\n")
+    run(box, "rotate")
+    run(box, "rotate")
+    lock = box / "backfill-logs/.rotate/.lock"
+    assert subprocess.run(["flock", "-n", str(lock), "true"]).returncode == 0
+
+
 def test_guard_never_resumes_a_lane_waiting_its_turn():
     """Guard skips .paused files starting rotate, as it does manual ones."""
     script = (ROOT / "_backfill_box.sh").read_text()
