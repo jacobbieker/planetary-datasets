@@ -763,7 +763,9 @@ rotate)
     rm -f "$LOGS/$name.paused"
     echo "$now" > "$state/$name.since"
     echo "$name" > "$state/last"
-    "$0" start > /dev/null
+    # fd 8 closed: a lane started here would otherwise hold the rotate lock for its whole
+    # life, and every later rotate would find it taken and do nothing (2026-11-23).
+    "$0" start > /dev/null 8>&-
     echo "$(date -u '+%F %T') started the turn of $name (${available} GB available)"
     break
   done
