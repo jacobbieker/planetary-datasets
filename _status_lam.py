@@ -35,7 +35,11 @@ from planetary_datasets.providers.dmi_harmonie import (
     DMIHarmonieProvider,
 )
 from planetary_datasets.providers.meps import MEPSDetProvider
-from planetary_datasets.providers.silam import SILAMAerosolProvider, SILAMDustProvider
+from planetary_datasets.providers.silam import (
+    SILAMAerosolProvider,
+    SILAMDustProvider,
+    SILAMDustV61Provider,
+)
 
 NOW = pd.Timestamp.utcnow().tz_localize(None).floor("h")
 
@@ -62,6 +66,7 @@ class Store:
 
 STORES: tuple[Store, ...] = (
     Store("silam_dust", SILAMDustProvider, "1D", None, 24),
+    Store("silam_dust_v6_1", SILAMDustV61Provider, "1D", None, 24),
     Store("silam_aerosol", SILAMAerosolProvider, "1D", None, 24),
     Store("meps_model_level", MEPSDetProvider, "1h", "3h", 3),
     # HARMONIE's `time` is the cycle, not a valid time: the three forecast hours of each

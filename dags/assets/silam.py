@@ -8,7 +8,11 @@ append-or-create write, and the asset only maps a Dagster partition onto
 import dagster as dg
 import pandas as pd
 
-from planetary_datasets.providers.silam import SILAMAerosolProvider, SILAMDustProvider
+from planetary_datasets.providers.silam import (
+    SILAMAerosolProvider,
+    SILAMDustProvider,
+    SILAMDustV61Provider,
+)
 
 
 def _partition_timestamp(context: dg.AssetExecutionContext) -> pd.Timestamp:
@@ -25,6 +29,12 @@ def _partition_timestamp(context: dg.AssetExecutionContext) -> pd.Timestamp:
 
 dust_partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition(
     start_date="2024-11-14",
+    end_offset=-1,
+)
+
+#: The first v6.1 run still on the server when the store was added; FMI keeps four days.
+dust_v6_1_partitions_def: dg.TimeWindowPartitionsDefinition = dg.DailyPartitionsDefinition(
+    start_date="2026-11-19",
     end_offset=-1,
 )
 
@@ -61,6 +71,32 @@ def silam_dust_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 
 @dg.asset(
+    name="silam_dust_v6_1",
+    description="SILAM v6.1 global dust forecast from the FMI THREDDS server",
+    metadata={
+        "area": dg.MetadataValue.text("global"),
+        "source": dg.MetadataValue.text("silam-dust"),
+        "expected_runtime": dg.MetadataValue.text("6 hours"),
+    },
+    tags={
+        "dagster/max_runtime": str(60 * 60 * 10),
+        "dagster/priority": "1",
+        "dagster/concurrency_key": "download",
+    },
+    partitions_def=dust_v6_1_partitions_def,
+    retry_policy=dg.RetryPolicy(max_retries=3, delay=60),
+    automation_condition=dg.AutomationCondition.eager(),
+)
+def silam_dust_v6_1_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
+    """Write one SILAM v6.1 dust forecast run to icechunk."""
+    provider = SILAMDustV61Provider()
+    written = provider.run_partition(_partition_timestamp(context))
+    return dg.MaterializeResult(
+        metadata={"store": provider.store_path, "written": written},
+    )
+
+
+@dg.asset(
     name="silam_aerosol",
     description="SILAM global surface aerosol forecast from the FMI open data S3 bucket",
     metadata={
@@ -86,4 +122,4 @@ def silam_aerosol_asset(context: dg.AssetExecutionContext) -> dg.MaterializeResu
     )
 
 
-silam_assets = [silam_dust_asset, silam_aerosol_asset]
+silam_assets = [silam_dust_asset, silam_dust_v6_1_asset, silam_aerosol_asset]

@@ -21,6 +21,7 @@ from planetary_datasets.providers.silam import (
     IncompleteForecast,
     SILAMAerosolProvider,
     SILAMDustProvider,
+    SILAMDustV61Provider,
     _species_of,
 )
 
@@ -118,7 +119,7 @@ def aerosol(local_config, tmp_path):
     return _OfflineAerosol(tmp_path / "aerosol_in", config=local_config)
 
 
-@pytest.mark.parametrize("cls", [SILAMDustProvider, SILAMAerosolProvider])
+@pytest.mark.parametrize("cls", [SILAMDustProvider, SILAMDustV61Provider, SILAMAerosolProvider])
 def test_store_prefix_is_a_relative_icechunk_path(cls):
     """The prefix is resolved against the configured bucket, so it must not carry its own."""
     assert cls.store_prefix.endswith(".icechunk")
@@ -130,6 +131,25 @@ def test_dust_urls_cover_every_step():
     assert len(urls) == 4
     assert urls[0].endswith("SILAM-dust-glob01_v5_7_2_2026092500_001.nc4")
     assert urls[-1].endswith("_004.nc4")
+
+
+def test_dust_v6_1_has_its_own_urls_and_store():
+    """v6.1 is fetched from its own THREDDS dataset and written to a store of its own."""
+    urls = SILAMDustV61Provider(max_step=2).urls_for(INIT)
+    assert urls[0].endswith("dust_glob01_v6_1/files/SILAM-dust-glob01_v6_1_2026092500_001.nc4")
+    assert SILAMDustV61Provider.store_prefix != SILAMDustProvider.store_prefix
+    assert SILAMDustV61Provider.name != SILAMDustProvider.name
+
+
+def test_dust_v6_1_keeps_the_v5_names_and_names_its_tracer(monkeypatch):
+    """The v6.1 store uses v5.7.2's readable names, plus names for the ones_gas tracer."""
+    from planetary_datasets.common import naming
+
+    monkeypatch.delenv("PLANETARY_DATASETS_KEEP_SOURCE_NAMES", raising=False)
+    v5 = naming.store_names(SILAMDustProvider.store_prefix)
+    v6 = naming.store_names(SILAMDustV61Provider.store_prefix)
+    assert {k: v for k, v in v6.items() if k in v5} == v5
+    assert v6["cnc_ones_gas"] == "passive_tracer_concentration"
 
 
 def test_dust_process_reshapes_to_init_time_and_step(dust):

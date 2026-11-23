@@ -112,8 +112,8 @@ class PrioritySource(NamedTuple):
 #: AROME is matched by prefix rather than listed, so a new region joins the morning batch
 #: with its module rather than silently missing it until someone remembers this file.
 PRIORITY_ORDER: tuple[PrioritySource, ...] = (
-    # The global 0.1-degree dust forecast only; the aerosol store keeps its own cadence.
-    PrioritySource("silam_dust", keys=("silam/silam_dust",)),
+    # The global 0.1-degree dust forecasts only; the aerosol store keeps its own cadence.
+    PrioritySource("silam_dust", keys=("silam/silam_dust", "silam/silam_dust_v6_1")),
     PrioritySource("dmi_harmonie", keys=("nwp/dmi_harmonie", "nwp/dmi_harmonie_model_level")),
     # The model-level member of the MEPS family; the others keep their own cadence.
     PrioritySource("meps_det", keys=("meps/meps_det",)),

@@ -301,12 +301,12 @@ declare -A SCRIPTS=(
 )
 
 # The short-retention stores. Their sources keep a few days at most, so they are caught up
-# once a day rather than given a lane: SILAM dust, both DMI HARMONIE stores, every AROME
-# domain and the MEPS model levels. Each store is its own process, so one slow or hung store
-# cannot hold the rest past their upstream retention.
-NOON_STORES="silam_dust dmi_harmonie_model_level dmi_harmonie arome_france_0025 arome_france_hd
-  arome_new_caledonia arome_indian_ocean arome_french_guiana arome_caribbean arome_polynesia
-  meps_det"
+# once a day rather than given a lane: SILAM dust (v5.7.2 and v6.1), both DMI HARMONIE
+# stores, every AROME domain and the MEPS model levels. Each store is its own process, so
+# one slow or hung store cannot hold the rest past their upstream retention.
+NOON_STORES="silam_dust silam_dust_v6_1 dmi_harmonie_model_level dmi_harmonie
+  arome_france_0025 arome_france_hd arome_new_caledonia arome_indian_ocean
+  arome_french_guiana arome_caribbean arome_polynesia meps_det"
 #: Lanes paused when the noon catch-up starts; guard resumes them afterwards, after the lanes
 #: of GUARD_PAUSE_ORDER (where each also belongs, so memory pressure can pause it). On
 #: 2026-11-09 the catch-up and mtg_1000m (~70 GB) were OOM-killed with every Himawari lane
