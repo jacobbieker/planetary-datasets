@@ -42,8 +42,8 @@ LOGS=~/backfill-logs
 #: free disk, and its queued ECMWF requests would be abandoned when the box returns).
 declare -A DEFAULTS=(
   [pb]="kenda icon_v1_global icon_v1_global_art icon_v1_eu_art icon_d2_ruc_mirror
-    icon_d2_ruc_60min icon_d2_ruc_15min icon_d2_ruc_5min noon_silam_dust noon_dmi_harmonie
-    noon_arome_france_0025 noon_arome_france_hd noon_arome_new_caledonia
+    icon_d2_ruc_60min icon_d2_ruc_15min icon_d2_ruc_5min noon_silam_dust noon_silam_dust_v6_1
+    noon_dmi_harmonie noon_arome_france_0025 noon_arome_france_hd noon_arome_new_caledonia
     noon_arome_french_guiana noon_arome_polynesia noon_meps_det"
   [aero]="wis2_archive uk_marine uk_radar nordic_radar"
   [mac]=""

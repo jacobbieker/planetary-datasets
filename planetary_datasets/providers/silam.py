@@ -6,6 +6,9 @@ Two products, both global forecasts on a regular lat/lon grid and both stored as
 ``SILAMDustProvider``
     The 10 km global dust forecast, one NetCDF4 file per hourly forecast step, served from
     the FMI THREDDS server.
+``SILAMDustV61Provider``
+    The same forecast from SILAM v6.1, published alongside v5.7.2 since November 2026, in
+    a store of its own.
 ``SILAMAerosolProvider``
     The surface aerosol and trace gas forecast (PM2.5, PM10, O3, NO, NO2, SO2, CO,
     air density), published on the public ``fmi-opendata-silam-surface-netcdf`` S3 bucket
@@ -39,6 +42,7 @@ from planetary_datasets.config import Config
 
 DUST_THREDDS_BASE = "https://thredds.silam.fmi.fi/thredds/fileServer"
 DUST_VERSION = "v5_7_2"
+DUST_V6_VERSION = "v6_1"
 DUST_MAX_STEP = 120
 
 AEROSOL_BUCKET = "fmi-opendata-silam-surface-netcdf"
@@ -198,6 +202,28 @@ class SILAMDustProvider(_SILAMForecastProvider):
         steps = [_open_dust_step(path, it) for path in sorted(input_files)]
         data = xr.concat(steps, dim="step", combine_attrs="override").sortby("step")
         return data.chunk({"init_time": 1, "step": 1, "latitude": -1, "longitude": -1})
+
+
+class SILAMDustV61Provider(SILAMDustProvider):
+    """SILAM v6.1 global dust forecast, in its own store.
+
+    FMI publishes v6.1 beside v5.7.2 on the same grid and with the same variables, plus a
+    passive ``ones_gas`` tracer. A different model version is a different forecast, so it
+    is not appended to the v5.7.2 store. Like v5.7.2, only the last four days are served.
+    """
+
+    name = "silam_dust_v6_1"
+    store_prefix = "bkr/silam-dust/silam_global_dust_v6_1.icechunk"
+
+    def __init__(
+        self,
+        config: Config | None = None,
+        version: str = DUST_V6_VERSION,
+        max_step: int = DUST_MAX_STEP,
+        workers: int = 4,
+    ):
+        """The same as :class:`SILAMDustProvider`, defaulting to the v6.1 files."""
+        super().__init__(config=config, version=version, max_step=max_step, workers=workers)
 
 
 def _open_dust_step(path: str, init_time: pd.Timestamp) -> xr.Dataset:

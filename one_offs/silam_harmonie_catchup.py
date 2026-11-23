@@ -75,7 +75,7 @@ from planetary_datasets.providers.polar.metop_sg import (
     MetopSgMwsProvider,
     MetopSgRoProvider,
 )
-from planetary_datasets.providers.silam import SILAMDustProvider
+from planetary_datasets.providers.silam import SILAMDustProvider, SILAMDustV61Provider
 
 #: An OPERA hour younger than this the archive lacks is retried, not ledgered as missing.
 OPERA_RECENT = pd.Timedelta(days=7)
@@ -303,6 +303,7 @@ def build_catchups() -> List[CatchUp]:
     """
     return [
         CatchUp(SILAMDustProvider(), days=SILAM_DAYS, freq="D"),
+        CatchUp(SILAMDustV61Provider(), days=SILAM_DAYS, freq="D"),
         CatchUp(DMIHarmonieModelLevelProvider(), days=HARMONIE_DAYS, freq="3h"),
         CatchUp(DMIHarmonieProvider(), days=HARMONIE_DAYS, freq="3h"),
         CatchUp(AromeFranceProvider(), days=AROME_DAYS, freq="3h", lag=AROME_LAG_HOURS),
