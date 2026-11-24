@@ -99,13 +99,14 @@ def test_extra_turns_start_one_at_a_time_while_memory_is_spare(box):
     """With memory to spare, each rotate adds one turn, up to ROTATE_MAX_SLOTS."""
     run(box, "start")
     run(box, "rotate")
-    allow_extra_turns(box, 2)
+    allow_extra_turns(box, 3)
     proc = run(box, "rotate")
     assert proc.returncode == 0, proc.stderr
     assert "2 turns" in proc.stdout
-    assert len(waiting(box)) == 1
-    run(box, "rotate")
-    assert len(waiting(box)) == 1
+    assert len(waiting(box)) == 1, "one extra turn per run, not every free slot at once"
+    assert "3 turns" in run(box, "rotate").stdout
+    assert not waiting(box)
+    assert "turn" not in run(box, "rotate").stdout
 
 
 def test_no_extra_turn_while_guard_holds_a_lane_back(box):
