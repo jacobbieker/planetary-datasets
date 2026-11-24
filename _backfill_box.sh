@@ -327,6 +327,12 @@ NOON_PARALLEL=${NOON_PARALLEL:-0}
 ROTATE_SLOTS=${ROTATE_SLOTS:-0}
 ROTATE_HOURS=${ROTATE_HOURS:-8}
 ROTATE_MIN_AVAILABLE_GB=${ROTATE_MIN_AVAILABLE_GB:-80}
+#: Extra turns, up to ROTATE_MAX_SLOTS in all, while memory is to spare: one more starts
+#: only with ROTATE_EXTRA_AVAILABLE_GB available, no lane paused by guard and no memory
+#: pressure for GUARD_QUIET_MINUTES. An extra turn ends like any other; it is refilled only
+#: while the memory is still there.
+ROTATE_MAX_SLOTS=${ROTATE_MAX_SLOTS:-$ROTATE_SLOTS}
+ROTATE_EXTRA_AVAILABLE_GB=${ROTATE_EXTRA_AVAILABLE_GB:-$GUARD_RESUME_AVAILABLE_GB}
 ROTATE_LANES=${ROTATE_LANES-"mtg_1000m mtg_500m mtg_highres_1000m mtg_2000m_archive
   himawari_500m_0 himawari_500m_1 himawari_500m_2 himawari_500m_3 himawari_1000m_0
   himawari_1000m_1 himawari_1000m_2 himawari_1000m_3 himawari_2000m_0 himawari_2000m_1
@@ -723,12 +729,13 @@ rotate)
   for name in $ROTATE_LANES; do
     [[ -n ${LANES[$name]:-}${SCRIPTS[$name]:-} ]] && lanes+=("$name")
   done
+  (( ROTATE_MAX_SLOTS >= ROTATE_SLOTS )) || ROTATE_MAX_SLOTS=$ROTATE_SLOTS
   # End the turns that are over, and any beyond the slots (rotation just switched on).
   active=()
   for name in "${lanes[@]}"; do
     [[ -f $LOGS/$name.paused ]] && continue
     since=$(cat "$state/$name.since" 2>/dev/null || echo "")
-    if (( ${#active[@]} < ROTATE_SLOTS )) && [[ -z $since ]]; then
+    if (( ${#active[@]} < ROTATE_MAX_SLOTS )) && [[ -z $since ]]; then
       # Running when rotation was switched on: its turn starts now, and the line continues
       # after it.
       echo "$now" > "$state/$name.since"
@@ -736,7 +743,7 @@ rotate)
       active+=("$name")
       continue
     fi
-    if (( ${#active[@]} < ROTATE_SLOTS && now - ${since:-0} < ROTATE_HOURS * 3600 )); then
+    if (( ${#active[@]} < ROTATE_MAX_SLOTS && now - ${since:-0} < ROTATE_HOURS * 3600 )); then
       active+=("$name")
       continue
     fi
@@ -745,11 +752,23 @@ rotate)
     rm -f "$state/$name.since"
     echo "$(date -u '+%F %T') ended the turn of $name"
   done
-  (( ${#active[@]} < ROTATE_SLOTS )) || exit 0
+  (( ${#active[@]} < ROTATE_MAX_SLOTS )) || exit 0
   available=$(awk '/MemAvailable/ {print int($2 / 1048576)}' /proc/meminfo)
-  if (( available < ROTATE_MIN_AVAILABLE_GB )); then
-    echo "$(date -u '+%F %T') ${#active[@]}/$ROTATE_SLOTS turns, waiting: ${available} GB available"
-    exit 0
+  if (( ${#active[@]} < ROTATE_SLOTS )); then
+    if (( available < ROTATE_MIN_AVAILABLE_GB )); then
+      echo "$(date -u '+%F %T') ${#active[@]}/$ROTATE_SLOTS turns, waiting: ${available} GB available"
+      exit 0
+    fi
+  else
+    # An extra turn: only with memory to spare, and never while guard is holding a lane
+    # back or has just had to.
+    (( available >= ROTATE_EXTRA_AVAILABLE_GB )) || exit 0
+    pressure=$(cat "$LOGS/.guard/last_pressure" 2>/dev/null || echo 0)
+    (( now - pressure >= GUARD_QUIET_MINUTES * 60 )) || exit 0
+    for paused in "$LOGS"/*.paused; do
+      [[ -f $paused ]] || continue
+      grep -qE '^(manual|rotate)' "$paused" || exit 0
+    done
   fi
   # The next one waiting, round-robin from the last to start, so each gets a turn.
   last=$(cat "$state/last" 2>/dev/null || echo "")
@@ -766,7 +785,8 @@ rotate)
     # fd 8 closed: a lane started here would otherwise hold the rotate lock for its whole
     # life, and every later rotate would find it taken and do nothing (2026-11-23).
     "$0" start > /dev/null 8>&-
-    echo "$(date -u '+%F %T') started the turn of $name (${available} GB available)"
+    echo "$(date -u '+%F %T') started the turn of $name ($(( ${#active[@]} + 1 )) turns," \
+      "${available} GB available)"
     break
   done
   ;;
