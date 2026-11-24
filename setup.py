@@ -21,5 +21,7 @@ setup(
     # Scoped deliberately: a bare find_packages() also picks up dags/, which would put a
     # top-level "dags" module into every environment that installs this.
     packages=find_packages(include=["planetary_datasets", "planetary_datasets.*"]),
+    # The backfills' skip list; without it an installed copy would skip nothing.
+    package_data={"planetary_datasets": ["known_bad.json"]},
     python_requires=">=3.12",
 )

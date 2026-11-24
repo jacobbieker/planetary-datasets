@@ -76,7 +76,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from planetary_datasets.common.known_bad import known_bad
+from planetary_datasets.common import known_bad
 from planetary_datasets.config import Config, get_config
 from planetary_datasets.providers.virtualized.geos_cf_names import variable_names
 
@@ -981,6 +981,9 @@ def run_stream(
         live_from: dict[str, dt.date] = {}
         #: Collections with a unit waiting (still published, or failed while recent).
         deferred: set[str] = set()
+        #: Units broken at the source (planetary_datasets/known_bad.json), one snapshot
+        #: for the whole pass.
+        skips = known_bad.load()
 
         def collection_of(name: str) -> Collection | None:
             c = Collection(stream, name)
@@ -1020,7 +1023,7 @@ def run_stream(
                 if c.name in deferred:
                     return 0
                 count = 0
-                bad = known_bad(c.label)
+                bad = skips.get(c.label, {})
                 for key, unit_files in sorted(units(c, files).items()):
                     if key in ledgers[c.name]:
                         continue

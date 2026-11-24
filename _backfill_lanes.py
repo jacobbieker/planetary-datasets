@@ -628,9 +628,6 @@ def main(argv) -> int:
 
     dask.config.set(scheduler="threads", num_workers=args.threads)
     provider = lane.provider()
-    # Partitions broken at the source fail the same way on every pass; they are listed in
-    # planetary_datasets/known_bad.json and left out.
-    bad = known_bad(args.lane)
     if hasattr(provider, "available") and not provider.available():
         print(f"{args.lane}: nothing published yet; trying again later", flush=True)
         return EXIT_UNAVAILABLE
@@ -659,6 +656,9 @@ def main(argv) -> int:
             # Hours the archive answered with no file at all are not asked for again.
             skip = stager.unavailable(provider.archive_root.expanduser().resolve())
             todo = [it for it in todo if pd.Timestamp(it) not in skip]
+        # Partitions broken at the source fail the same way on every pass; they are listed
+        # in planetary_datasets/known_bad.json, read afresh each pass, and left out.
+        bad = known_bad(args.lane)
         if bad and todo:
             todo = [it for it in todo if pd.Timestamp(it) not in bad]
         if lane.recent_days and todo:
