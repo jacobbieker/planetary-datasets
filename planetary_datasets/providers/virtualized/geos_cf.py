@@ -76,6 +76,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from planetary_datasets.common.known_bad import known_bad
 from planetary_datasets.config import Config, get_config
 from planetary_datasets.providers.virtualized.geos_cf_names import variable_names
 
@@ -1019,8 +1020,15 @@ def run_stream(
                 if c.name in deferred:
                     return 0
                 count = 0
+                bad = known_bad(c.label)
                 for key, unit_files in sorted(units(c, files).items()):
                     if key in ledgers[c.name]:
+                        continue
+                    if pd.Timestamp(key) in bad:
+                        # Broken at the source (planetary_datasets/known_bad.json).
+                        logger.debug(
+                            f"{c.label} {key}: known bad, left out: {bad[pd.Timestamp(key)]}"
+                        )
                         continue
                     when = dt.datetime.fromisoformat(key)
                     settled = now - when >= SETTLE + (

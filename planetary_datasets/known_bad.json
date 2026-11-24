@@ -1,0 +1,11 @@
+{
+ "geos_cf_v2_fcst/aqc_tavg_1hr_slv": {
+  "2025-08-04T09:00:00": "upstream run's times start a day before its init, outside the run's step grid; refused on every pass since 2026-11-08"
+ },
+ "hrrr_alaska_nat": {
+  "2018-11-02T06:00:00": "upstream GRIB holds no valid messages; failed on every pass",
+  "2020-02-14T00:00:00": "no variables remain after filtering the upstream GRIB; failed on every pass",
+  "2020-10-08T06:00:00": "upstream GRIB holds no valid messages; failed on every pass",
+  "2020-11-12T06:00:00": "upstream GRIB holds no valid messages; failed on every pass"
+ }
+}
