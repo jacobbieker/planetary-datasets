@@ -624,6 +624,7 @@ def main(argv) -> int:
     import pandas as pd
 
     import planetary_datasets
+    from planetary_datasets.common.known_bad import known_bad
 
     dask.config.set(scheduler="threads", num_workers=args.threads)
     provider = lane.provider()
@@ -655,12 +656,17 @@ def main(argv) -> int:
             # Hours the archive answered with no file at all are not asked for again.
             skip = stager.unavailable(provider.archive_root.expanduser().resolve())
             todo = [it for it in todo if pd.Timestamp(it) not in skip]
+        # Partitions broken at the source fail the same way on every pass; they are listed
+        # in planetary_datasets/known_bad.json, read afresh each pass, and left out.
+        bad = known_bad(args.lane)
+        if bad and todo:
+            todo = [it for it in todo if pd.Timestamp(it) not in bad]
         if lane.recent_days and todo:
             todo = recent_first(todo, lane.recent_days)
         print(
             f"\npass    : {hours[0] if len(hours) else '-'} -> "
             f"{hours[-1] if len(hours) else '-'}, {len(hours)} partition(s), "
-            f"{len(todo)} missing",
+            f"{len(todo)} missing" + (f", {len(bad)} known bad left out" if bad else ""),
             flush=True,
         )
         written = empty = failed = 0
