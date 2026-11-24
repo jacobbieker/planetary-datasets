@@ -89,6 +89,48 @@ def test_a_lane_started_by_rotate_does_not_hold_its_lock(box):
     assert subprocess.run(["flock", "-n", str(lock), "true"]).returncode == 0
 
 
+def allow_extra_turns(home: pathlib.Path, max_slots: int) -> None:
+    """Let rotate add turns up to ``max_slots`` whatever memory is available."""
+    env = home / ".config/planetary-box/host.env"
+    env.write_text(env.read_text() + f"ROTATE_MAX_SLOTS={max_slots}\nROTATE_EXTRA_AVAILABLE_GB=0\n")
+
+
+def test_extra_turns_start_one_at_a_time_while_memory_is_spare(box):
+    """With memory to spare, each rotate adds one turn, up to ROTATE_MAX_SLOTS."""
+    run(box, "start")
+    run(box, "rotate")
+    allow_extra_turns(box, 3)
+    proc = run(box, "rotate")
+    assert proc.returncode == 0, proc.stderr
+    assert "2 turns" in proc.stdout
+    assert len(waiting(box)) == 1, "one extra turn per run, not every free slot at once"
+    assert "3 turns" in run(box, "rotate").stdout
+    assert not waiting(box)
+    assert "turn" not in run(box, "rotate").stdout
+
+
+def test_no_extra_turn_while_guard_holds_a_lane_back(box):
+    """A lane paused by guard means memory is short: no extra turn starts."""
+    run(box, "start")
+    run(box, "rotate")
+    allow_extra_turns(box, 2)
+    (box / "backfill-logs/uk_radar.paused").write_text("2026-11-24 only 38 GB available\n")
+    run(box, "rotate")
+    assert len(waiting(box)) == 2
+
+
+def test_no_extra_turn_soon_after_memory_pressure(box):
+    """Within GUARD_QUIET_MINUTES of guard's last memory pressure, no extra turn starts."""
+    run(box, "start")
+    run(box, "rotate")
+    allow_extra_turns(box, 2)
+    guard = box / "backfill-logs/.guard"
+    guard.mkdir(parents=True, exist_ok=True)
+    (guard / "last_pressure").write_text(f"{int(time.time()) - 60}\n")
+    run(box, "rotate")
+    assert len(waiting(box)) == 2
+
+
 def test_guard_never_resumes_a_lane_waiting_its_turn():
     """Guard skips .paused files starting rotate, as it does manual ones."""
     script = (ROOT / "_backfill_box.sh").read_text()
