@@ -7,5 +7,9 @@
   "2020-02-14T00:00:00": "no variables remain after filtering the upstream GRIB; failed on every pass",
   "2020-10-08T06:00:00": "upstream GRIB holds no valid messages; failed on every pass",
   "2020-11-12T06:00:00": "upstream GRIB holds no valid messages; failed on every pass"
+ },
+ "hrrr_alaska_sfc": {
+  "2018-09-27T12:00:00": "upstream GRIB holds no valid messages; failed on every pass",
+  "2018-12-17T18:00:00": "upstream GRIB holds no valid messages; failed on every pass"
  }
 }
