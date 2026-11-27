@@ -716,7 +716,12 @@ def decode_file(path: str, key: str, arrived: dt.datetime | None, out_dir: str) 
         target.mkdir(parents=True, exist_ok=True)
         spooled = target / f"{pathlib.Path(path).stem}.npz"
         _save_spool(spooled, arrays)
-        result.update(group=group, path=str(spooled), rows=int(arrays["time"].size))
+        result.update(
+            group=group,
+            path=str(spooled),
+            rows=int(arrays["time"].size),
+            values=int(sum(v.size for v in arrays.values())),
+        )
     return result
 
 
@@ -1436,6 +1441,7 @@ class SatelliteTarget(ArchiveTarget):
             return {"objects": 0}
         started = time.perf_counter()
         paths: dict[str, list[str]] = {}
+        values: Counter = Counter()
         decode_seconds = 0.0
         try:
             for result in self._decode_all():
@@ -1445,6 +1451,7 @@ class SatelliteTarget(ArchiveTarget):
                     logger.warning(f"wis2 satellite: {result['error']}")
                 if result.get("path"):
                     paths.setdefault(result["group"], []).append(result["path"])
+                    values[result["group"]] += result.get("values", 0)
             decoded_at = time.perf_counter()
             repo = store_repo(self.config)
             rows = {}
@@ -1463,7 +1470,7 @@ class SatelliteTarget(ArchiveTarget):
                         partition,
                         counts[group],
                     )
-                    for group, files in sorted(paths.items())
+                    for group, files in write_order(paths, values)
                 }
                 for group, future in futures.items():
                     try:
@@ -1488,6 +1495,16 @@ class SatelliteTarget(ArchiveTarget):
             if self._spool is not None:
                 shutil.rmtree(self._spool, ignore_errors=True)
             self._pool, self._jobs, self._spool = None, [], None
+
+
+def write_order(paths: dict[str, list[str]], values: Counter) -> list[tuple[str, list[str]]]:
+    """Groups to write, those with the most decoded values first.
+
+    The writers take groups in this order, so the longest (IASI, OLCI) start at once
+    instead of after the alphabet's: on 2026-11-27 IASI began 16 minutes into the write
+    and finished 81 minutes later, the last of the window.
+    """
+    return sorted(paths.items(), key=lambda item: (-values[item[0]], item[0]))
 
 
 def decode_paths(paths: Iterable[pathlib.Path]) -> dict[str, dict[str, np.ndarray]]:
