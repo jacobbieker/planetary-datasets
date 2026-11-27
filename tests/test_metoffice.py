@@ -262,6 +262,27 @@ def test_global_partition_round_trips_through_the_store(local_config, archive):
     assert ds["air_temperature_1.5m"].dtype == np.float16
 
 
+def test_write_keeps_few_source_files_open(local_config, archive, monkeypatch):
+    # Each open file keeps its chunk cache; with the default 128 open a global run's write
+    # peaked at 27.4 GB, against 20.5 GB with 8 (2026-11-27).
+    import planetary_datasets.base as base
+
+    root = write_archive(archive, "global-deterministic-10km", INIT, range(6))
+    provider = MetOfficeGlobal10kmProvider(config=local_config, archive_dir=root)
+    before = xr.get_options()["file_cache_maxsize"]
+    seen = []
+    real = base._write_to_icechunk
+
+    def spy(*args, **kwargs):
+        seen.append(xr.get_options()["file_cache_maxsize"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(base, "_write_to_icechunk", spy)
+    assert provider.run_partition(INIT) is True
+    assert seen == [provider.open_files]
+    assert xr.get_options()["file_cache_maxsize"] == before
+
+
 def test_uk_partition_keeps_only_its_own_analysis_hour(local_config, archive):
     """The UK model runs hourly, so each hour comes from its own run, not a forecast.
 

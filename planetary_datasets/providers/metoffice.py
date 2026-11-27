@@ -418,7 +418,16 @@ class MetOfficeAtmosphericProvider(MetOfficeKeepbitsMixin, GenerationalStoreMixi
 
     #: Per-store settings. Set by subclasses.
     variant: AtmosphericVariant
+    #: Source files xarray keeps open while writing. An open netCDF file keeps its chunk
+    #: cache, and the default 128 kept most of a run's 295 files open: a global 10 km run
+    #: (20 GB of fields) peaked at 27.4 GB on 8 threads, against 20.5 GB with 8 open, in
+    #: the same time (616 s vs 622 s, 2026-11-27).
+    open_files: int = 8
 
+    def write_to_icechunk(self, repo, processed: xr.Dataset) -> bool:
+        """Write one run with at most :attr:`open_files` source files open."""
+        with xr.set_options(file_cache_maxsize=self.open_files):
+            return super().write_to_icechunk(repo, processed)
 
     def __init_subclass__(cls, **kwargs) -> None:
         super().__init_subclass__(**kwargs)
