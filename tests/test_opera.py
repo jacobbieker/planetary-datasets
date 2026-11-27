@@ -303,6 +303,46 @@ def test_hours_append_to_the_store_and_staging_is_cleared(stage, opera_root):
     assert stored["latitude"].dims == ("y", "x")
 
 
+def test_a_settled_hour_without_its_first_frame_is_not_planned_again(stage, opera_root):
+    """Regression: an hour lacking its first frame upstream was re-read on every pass.
+
+    The lanes plan on each hour's first frame. 147 rainfall hours that never had one kept
+    a staged file whose frames were all stored; each pass read every one and wrote
+    nothing, 86 minutes a pass and 7.4 GB of staging. Settled hours are left out now, and
+    their redundant staged files deleted.
+    """
+    provider = opera.OPERARainfallProvider()
+    gap = FakeOPERA(missing={HOUR})
+    stage("rainfall", HOUR, source=gap, allow_partial=True)
+    assert provider.run_partition(pd.Timestamp(HOUR), check_present=False)
+    # As on the box: the staged file is still there after the write left the hour start
+    # missing, and it holds nothing the store lacks.
+    stage("rainfall", HOUR, source=gap, allow_partial=True)
+
+    absent = pd.Timestamp(HOUR) + pd.Timedelta(5, "h")
+    recent = pd.Timestamp(HOUR) + pd.Timedelta(10, "D")
+    now = recent + pd.Timedelta(1, "h")
+    hours = [pd.Timestamp(HOUR), absent, recent]
+    assert provider.missing_timesteps([pd.Timestamp(HOUR)]), "still missing by its start"
+
+    assert provider.unsettled(hours, now=now) == [absent, recent]
+    assert not list(opera_root.rglob("*.nc")), "the redundant staged file is removed"
+    assert provider.unsettled(hours, now=pd.Timestamp(HOUR) + pd.Timedelta(1, "D")) == hours
+
+
+def test_a_settled_hour_with_an_unstored_staged_frame_is_still_written(stage, opera_root):
+    """Regression: a settled hour's staged file is only dropped once it adds nothing."""
+    provider = opera.OPERARainfallProvider()
+    last = HOUR + dt.timedelta(minutes=45)
+    stage("rainfall", HOUR, source=FakeOPERA(missing={HOUR, last}), allow_partial=True)
+    assert provider.run_partition(pd.Timestamp(HOUR), check_present=False)
+    stage("rainfall", HOUR, source=FakeOPERA(missing={HOUR}), allow_partial=True)
+
+    now = pd.Timestamp(HOUR) + pd.Timedelta(30, "D")
+    assert provider.unsettled([pd.Timestamp(HOUR)], now=now) == [pd.Timestamp(HOUR)]
+    assert len(list(opera_root.rglob("*.nc"))) == 1
+
+
 def test_hours_before_the_store_end_are_filled_out_of_order(stage):
     """The gaps these stores were left with by out-of-order writes can now be filled.
 

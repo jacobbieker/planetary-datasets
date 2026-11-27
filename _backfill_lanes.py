@@ -656,6 +656,9 @@ def main(argv) -> int:
             # Hours the archive answered with no file at all are not asked for again.
             skip = stager.unavailable(provider.archive_root.expanduser().resolve())
             todo = [it for it in todo if pd.Timestamp(it) not in skip]
+            # Old hours with some frames stored but not their first: gaps upstream, which
+            # were otherwise read again and found to add nothing on every pass.
+            todo = provider.unsettled(todo)
         # Partitions broken at the source fail the same way on every pass; they are listed
         # in planetary_datasets/known_bad.json, read afresh each pass, and left out.
         bad = known_bad(args.lane)
