@@ -263,8 +263,11 @@ def test_global_partition_round_trips_through_the_store(local_config, archive):
 
 
 def test_write_keeps_few_source_files_open(local_config, archive, monkeypatch):
-    # Each open file keeps its chunk cache; with the default 128 open a global run's write
-    # peaked at 27.4 GB, against 20.5 GB with 8 (2026-11-27).
+    """Regression: each open source file keeps its chunk cache during the write.
+
+    With xarray's default of 128 open, a global 10 km run peaked at 27.4 GB on 8 threads,
+    against 20.5 GB with 8 open (2026-11-27).
+    """
     import planetary_datasets.base as base
 
     root = write_archive(archive, "global-deterministic-10km", INIT, range(6))
