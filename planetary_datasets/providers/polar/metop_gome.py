@@ -21,6 +21,24 @@ from planetary_datasets.providers.polar.metop_iasi import harp_to_dataset
 #: Measurements per chunk along ``time``.
 CHUNK_MEASUREMENTS = 1000
 
+#: Rows harp keeps either side of the partition window; the exact cut is
+#: :meth:`~planetary_datasets.providers.polar._granule.GranuleProvider.restrict_to_window`'s.
+HARP_MARGIN = pd.Timedelta(1, "min")
+
+
+def harp_window(start: pd.Timestamp, end: pd.Timestamp) -> str:
+    """The harp operations keeping the rows from ``start`` to ``end``, plus a margin.
+
+    A GOME-2 product is a whole orbit (~100 min), so an hour keeps about a third of each
+    of its three or four products. Imported whole, harp held every orbit's rows while
+    exporting them; filtered, it holds and writes only the hour's.
+    """
+    epoch = pd.Timestamp("2000-01-01")
+    low = (start - HARP_MARGIN - epoch).total_seconds()
+    high = (end + HARP_MARGIN - epoch).total_seconds()
+    unit = "[s since 2000-01-01]"
+    return f"datetime >= {low:.0f} {unit}; datetime < {high:.0f} {unit}"
+
 
 class MetopGomeProvider(EumdacProvider):
     """GOME-2 level 1 radiances for the MetOp series."""
@@ -32,9 +50,21 @@ class MetopGomeProvider(EumdacProvider):
     window = pd.Timedelta(1, "h")
     chunk_measurements = CHUNK_MEASUREMENTS
 
-    def process_granule(self, filename: str, keep_in: pathlib.Path | None = None) -> xr.Dataset:
-        """Read one GOME-2 native product with harp, lazily from ``keep_in`` when given."""
-        ds = harp_to_dataset(filename, keep_in=keep_in, chunks={"time": self.chunk_measurements})
+    def process_granule(
+        self, filename: str, keep_in: pathlib.Path | None = None, operations: str = ""
+    ) -> xr.Dataset:
+        """Read one GOME-2 native product with harp, lazily from ``keep_in`` when given.
+
+        harp applies ``operations`` (such as :func:`harp_window`) as it imports.
+        """
+        ds = harp_to_dataset(
+            filename,
+            keep_in=keep_in,
+            chunks={"time": self.chunk_measurements},
+            operations=operations,
+        )
+        # harp records the operations as ``history``, which unfiltered products never had.
+        ds.attrs.pop("history", None)
         if "time" not in ds.coords and "datetime" in ds.variables:
             ds = ds.assign_coords(time=ds["datetime"].values).drop_vars("datetime")
         # harp gives per-product fields such as ``orbit_index`` once, with no dimension.
@@ -58,12 +88,20 @@ class MetopGomeProvider(EumdacProvider):
         the write, and only its rows inside the window are kept. Read into memory, the
         copies concat and sortby made took an hour of 2.9 GB to 26.7 GB, and the lane
         peaked at up to 37 GB (2026-11); lazily it peaked at 3.7 GB in the same time.
+        harp itself keeps only the window's rows, plus a margin, as it reads each orbit.
         """
+        import harp
+
+        operations = harp_window(*self.partition_window(it))
         datasets = []
         products = self.workdir(temp_dir) / "harp"
         for native in self.iter_natives(input_files, temp_dir=temp_dir):
             try:
-                granule = self.restrict_to_window(self.process_granule(native, products), it)
+                granule = self.process_granule(native, products, operations=operations)
+                granule = self.restrict_to_window(granule, it)
+            except harp.NoDataError:
+                logger.debug(f"{self.name}: {native} has no rows in the window")
+                continue
             except Exception as exc:  # noqa: BLE001 - one bad product must not lose the hour
                 logger.warning(f"{self.name}: {native} failed: {exc}")
                 continue

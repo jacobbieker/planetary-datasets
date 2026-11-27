@@ -61,9 +61,20 @@ def harp_on_disk(monkeypatch):
         "b.nat": gome_product("2024-02-29T04:10:00", rows=2500, orbit=2),
         "c.nat": gome_product("2024-02-29T04:05:00", rows=1500, orbit=3),
     }
+    no_data = type("NoDataError", (Exception,), {})
+
+    def import_product(name, operations=""):
+        harp.asked.append(operations)
+        product = products[pathlib.Path(name).name]
+        if product is None:
+            raise no_data("no rows")
+        return product
+
     harp = types.SimpleNamespace(
-        import_product=lambda name: products[pathlib.Path(name).name],
+        import_product=import_product,
         export_product=lambda product, path: product.to_netcdf(path),
+        NoDataError=no_data,
+        asked=[],
     )
     monkeypatch.setitem(sys.modules, "harp", harp)
     return products
@@ -120,3 +131,37 @@ def test_a_product_wholly_outside_the_hour_leaves_nothing_to_write(
     # a.nat ends at 04:09:59; only b.nat reaches the concatenation.
     assert concatenated == [[2500]]
     assert ds.sizes["time"] == 2500
+
+
+def test_harp_reads_only_the_window_of_each_orbit(harp_on_disk, monkeypatch, tmp_path):
+    """The hour (plus a margin) is asked of harp, so it never holds a whole orbit.
+
+    A product with no rows in the window raises harp's NoDataError and is skipped.
+    """
+    harp_on_disk["d.nat"] = None
+    provider = MetopGomeProvider()
+    natives = [str(tmp_path / name) for name in ("b.nat", "d.nat")]
+    monkeypatch.setattr(provider, "iter_natives", lambda *a, **k: iter(natives))
+
+    ds = provider.process(natives, pd.Timestamp("2024-02-29T04:00"), temp_dir=tmp_path)
+
+    epoch = pd.Timestamp("2000-01-01")
+    low = (pd.Timestamp("2024-02-29T03:59") - epoch).total_seconds()
+    high = (pd.Timestamp("2024-02-29T05:01") - epoch).total_seconds()
+    unit = "[s since 2000-01-01]"
+    window = f"datetime >= {low:.0f} {unit}; datetime < {high:.0f} {unit}"
+    assert sys.modules["harp"].asked == [window, window]
+    assert ds.sizes["time"] == 2500
+    assert "history" not in ds.attrs
+
+
+def test_an_hour_with_no_rows_in_any_product_is_empty(harp_on_disk, monkeypatch, tmp_path):
+    """Every product outside the window gives an empty dataset, which is nothing to do."""
+    harp_on_disk.update({"a.nat": None, "b.nat": None})
+    provider = MetopGomeProvider()
+    natives = [str(tmp_path / "a.nat"), str(tmp_path / "b.nat")]
+    monkeypatch.setattr(provider, "iter_natives", lambda *a, **k: iter(natives))
+
+    ds = provider.process(natives, pd.Timestamp("2024-02-29T04:00"), temp_dir=tmp_path)
+
+    assert ds.sizes.get("time", 0) == 0

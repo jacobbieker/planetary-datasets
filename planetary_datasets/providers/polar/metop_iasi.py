@@ -53,6 +53,7 @@ def harp_to_dataset(
     filename: str,
     keep_in: pathlib.Path | None = None,
     chunks: Mapping[str, int] | None = None,
+    operations: str = "",
 ) -> xr.Dataset:
     """Import an EPS product with harp and return it as a dataset.
 
@@ -60,10 +61,19 @@ def harp_to_dataset(
     that file is temporary and read straight back into memory. With ``keep_in`` it is
     written there instead and opened lazily with ``chunks``, so the product stays on disk
     until it is written; the caller then owns the file.
+
+    Args:
+        filename: The EPS native product.
+        keep_in: Directory to keep the exported netCDF in, opened lazily.
+        chunks: Chunks for the lazy open.
+        operations: harp operations applied on import, e.g. a ``datetime`` filter.
+
+    Raises:
+        harp.NoDataError: ``operations`` left no rows.
     """
     import harp
 
-    product = harp.import_product(filename)
+    product = harp.import_product(filename, operations)
     if keep_in is not None:
         keep_in.mkdir(parents=True, exist_ok=True)
         path = keep_in / f"{pathlib.Path(filename).name}.nc"
