@@ -793,6 +793,7 @@ def test_harmonie_write_runs_on_a_bounded_dask_pool(local_config, monkeypatch, p
             "longitude": (("y", "x"), -40.0 + np.arange(12.0).reshape(4, 3)),
         },
     ).chunk()
+    before = dask.config.get("num_workers", None)
     assert provider.write_to_icechunk(provider.store_for(ds, None), ds)
     assert seen == [provider.write_threads]
-    assert dask.config.get("num_workers", None) != provider.write_threads
+    assert dask.config.get("num_workers", None) == before
