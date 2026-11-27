@@ -693,6 +693,11 @@ noon)
     echo "noon: the backup is off (./_backfill_backup.sh on)" >&2
     exit 0
   fi
+  # One catch-up loop at a time, so NOON_PARALLEL holds. guard relaunches noon after an OOM
+  # kill while the first loop is still going; on 2026-11-26 the two loops ran six stores at
+  # once and the second kill followed. The relaunch waits here, then retries what was killed.
+  exec 7> "$LOGS/noon.lock"
+  flock 7
   # The eleven catch-ups start together and peak at ~200 GB (DMI model levels alone budget
   # ~130 GB), which drove the OOM killer every noon. Make room first: pause the extra
   # Himawari lanes and mtg_1000m now; guard resumes them one by one once memory recovers.
@@ -710,9 +715,14 @@ noon)
     if (( NOON_PARALLEL > 0 )); then
       while (( $(jobs -rp | wc -l) >= NOON_PARALLEL )); do wait -n; done
     fi
+    # The backup may have been switched off while this loop waited for noon.lock or a slot.
+    if [[ $BOX_ROLE == backup && ! -f $BACKUP_ON ]]; then
+      echo "noon: the backup is off; not starting $store" >&2
+      break
+    fi
     flock -n "$LOGS/noon_$store.lock" timeout "$NOON_TIMEOUT" \
       $PIXI run python one_offs/silam_harmonie_catchup.py "=$store" \
-      >> "$LOGS/noon_$store.log" 2>&1 &
+      >> "$LOGS/noon_$store.log" 2>&1 7>&- &
   done
   wait
   ;;
