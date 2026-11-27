@@ -113,6 +113,7 @@ import re
 import shutil
 import tempfile
 import time
+import zipfile
 from collections import Counter
 from typing import Any, Iterable, Sequence
 
@@ -147,6 +148,12 @@ BATCH_VALUES = 40_000_000
 WRITE_THREADS = 4
 #: Channel numbers past this are not channels (a missing value, a stray element).
 MAX_CHANNEL = 20_000
+#: How the decoded objects are spooled: numpy's ``.npz`` layout (``np.load`` reads it as
+#: is) with zstd members. Uncompressed, a window's spool reached ~412 GB, mostly IASI's
+#: 8,007-channel integer spectra and OLCI's per-row object columns; at level 1 the same
+#: arrays, bit for bit, take ~25 times less (2026-11-27).
+SPOOL_COMPRESSION = getattr(zipfile, "ZIP_ZSTANDARD", zipfile.ZIP_DEFLATED)
+SPOOL_LEVEL = 1
 #: Stored identities read back per group to drop repeats from earlier windows.
 RECENT_IDENTITIES = 5_000_000
 #: Rows past this many valid channels are always preferred; used to rank copies.
@@ -707,10 +714,20 @@ def decode_file(path: str, key: str, arrived: dt.datetime | None, out_dir: str) 
         arrays = _compact(arrays)
         target = pathlib.Path(out_dir) / group
         target.mkdir(parents=True, exist_ok=True)
-        stem = target / pathlib.Path(path).stem
-        np.savez(stem, **{k.replace(".", "__"): v for k, v in arrays.items()}, allow_pickle=True)
-        result.update(group=group, path=f"{stem}.npz", rows=int(arrays["time"].size))
+        spooled = target / f"{pathlib.Path(path).stem}.npz"
+        _save_spool(spooled, arrays)
+        result.update(group=group, path=str(spooled), rows=int(arrays["time"].size))
     return result
+
+
+def _save_spool(path: pathlib.Path, arrays: dict[str, np.ndarray]) -> None:
+    """``arrays`` as a compressed ``.npz`` at ``path``, read back with :func:`_load`."""
+    with zipfile.ZipFile(
+        path, mode="w", compression=SPOOL_COMPRESSION, compresslevel=SPOOL_LEVEL
+    ) as archive:
+        for name, values in arrays.items():
+            with archive.open(f"{name.replace('.', '__')}.npy", "w", force_zip64=True) as member:
+                np.lib.format.write_array(member, np.asanyarray(values), allow_pickle=True)
 
 
 # ----------------------------------------------------------------------------- writing

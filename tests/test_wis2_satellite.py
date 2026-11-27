@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import pathlib
 import time
+import zipfile
 
 import eccodes
 import numpy as np
@@ -291,6 +292,29 @@ def test_workers_hand_back_compact_types():
     arrays = sat._compact(decoded("iasi"))
     assert arrays["scaled_radiance"].dtype == np.int32
     assert sat._compact(decoded("atms"))["brightness_temperature"].dtype == np.float32
+
+
+@pytest.mark.parametrize("name", ["iasi", "atms"])
+def test_the_spool_is_compressed_and_reads_back_bit_for_bit(tmp_path, name):
+    """Uncompressed, a window's spool reached ~412 GB (IASI spectra, OLCI object columns)."""
+    bufr = tmp_path / "00000001.bufr"
+    bufr.write_bytes(body(name))
+    result = sat.decode_file(str(bufr), key(name), ARRIVED, str(tmp_path / "decoded"))
+    spooled = pathlib.Path(result["path"])
+    expected = sat._compact(decoded(name))
+    with zipfile.ZipFile(spooled) as archive:
+        assert {m.compress_type for m in archive.infolist()} == {sat.SPOOL_COMPRESSION}
+    if name == "iasi":
+        # 8,007 channels of int32 radiance and scale, mostly fill: ~30 times smaller.
+        assert spooled.stat().st_size < expected["scaled_radiance"].nbytes / 4
+    back = sat._load(str(spooled))
+    assert back.keys() == expected.keys()
+    for column, values in expected.items():
+        assert back[column].dtype == values.dtype and back[column].shape == values.shape
+        if values.dtype.kind == "O":
+            assert back[column].tolist() == values.tolist()
+        else:
+            assert back[column].tobytes() == values.tobytes()
 
 
 def test_first_arrival_joins_a_group_written_before_it_existed(local_config):
