@@ -17,6 +17,7 @@ from __future__ import annotations
 import pathlib
 from typing import List
 
+import icechunk
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -25,6 +26,7 @@ from loguru import logger
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common.generations import GenerationalStoreMixin
 from planetary_datasets.common.grib import open_grib_datasets
+from planetary_datasets.common.lazy_fields import bounded_compute
 from planetary_datasets.providers.regional_lam_common import (
     chunk_present,
     download_with_filesystem,
@@ -54,6 +56,17 @@ _HEIGHT_BY_LEVEL_TYPE = {
 #: Short names that appear on several near-surface level stacks and so need a height
 #: suffix to stay distinct.
 _MULTI_LEVEL_SHORT_NAMES = ("t", "u", "v", "q", "gh", "r", "cc")
+
+
+def _open_grib(path: str | pathlib.Path) -> list[xr.Dataset]:
+    """Open every hypercube in one forecast step's GRIB file as dask arrays.
+
+    Each file is one step, so a variable is one chunk and is decoded only when the write
+    reaches it. cfgrib's own arrays are lazy but not dask, and the concat and merges in
+    ``process`` loaded every one: a model-level init time (18.5 GB of fields) peaked at
+    70 GB in the noon catch-up every run (2026-11).
+    """
+    return open_grib_datasets(str(path), chunks={})
 
 
 def hybrid_coefficients(path: str | pathlib.Path) -> tuple[np.ndarray, np.ndarray]:
@@ -181,7 +194,7 @@ def _split_by_height(
 def process_surface_file(path: str) -> xr.Dataset:
     """Turn one HARMONIE ``SF`` file into a single merged surface dataset."""
     cleaned: list[xr.Dataset] = []
-    for sub_ds in open_grib_datasets(str(path)):
+    for sub_ds in _open_grib(path):
         if "h" in sub_ds.data_vars:
             name = next(
                 (new for coord, new in _HEIGHT_BY_LEVEL_TYPE.items() if coord in sub_ds.coords),
@@ -220,7 +233,7 @@ def process_surface_file(path: str) -> xr.Dataset:
 
 def process_pressure_level_file(path: str) -> xr.Dataset:
     """Turn one HARMONIE ``PL`` file into a single merged dataset."""
-    ds = xr.merge(open_grib_datasets(str(path)), compat="no_conflicts")
+    ds = xr.merge(_open_grib(path), compat="no_conflicts")
     # Near-surface fields already name their height, so only the rest take the suffix.
     renames = {
         var: long_name_slug(str(ds[var].attrs.get("long_name", var)), strip_parens=True)
@@ -246,6 +259,16 @@ class _DMIHarmonieBase(BaseProvider):
     forecast_steps: tuple[int, ...] = (0, 1, 2)
     #: Chunking applied to the assembled dataset.
     chunks: dict[str, int] = {"time": 1, "step": 1, "y": -1, "x": -1}
+    #: Dask tasks writing at once. Fields are decoded during the write (see
+    #: :func:`_open_grib`), so this bounds how many are in memory; a model-level chunk is
+    #: one step of one variable on all 90 levels, 0.77 GB. Dask's default is one thread
+    #: per core, 48 on the live box.
+    write_threads: int = 16
+
+    def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
+        """Write one init time, at most :attr:`write_threads` dask tasks at a time."""
+        with bounded_compute(self.write_threads):
+            return super().write_to_icechunk(repo, processed)
 
     def _filesystem(self):
         import fsspec
@@ -370,6 +393,4 @@ class DMIHarmonieModelLevelProvider(GenerationalStoreMixin, _DMIHarmonieBase):
         # The local renamer rather than common.rename_vars_by_long_name: it goes through
         # resolve_renames, so a long_name shared by two model-level fields cannot take
         # the whole init time down with it.
-        return _rename_by_long_name(
-            xr.merge(open_grib_datasets(str(files[0])), compat="no_conflicts")
-        )
+        return _rename_by_long_name(xr.merge(_open_grib(files[0]), compat="no_conflicts"))

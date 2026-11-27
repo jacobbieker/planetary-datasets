@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from helpers import read_store
+from helpers import read_store, write_grib
 from planetary_datasets.providers import dmi_harmonie as dmi
 from planetary_datasets.providers import hawaii_nam, hrrr_alaska, kenda, regional_lam_common
 from planetary_datasets.providers.regional_lam_common import (
@@ -740,3 +740,59 @@ def test_existing_model_level_store_gains_the_coefficients_and_stays_one_generat
     assert set(stored.data_vars) == {"temperature"}
     assert fingerprint(stored) == fingerprint(new)
     assert stored.sizes["time"] == 3
+
+
+def test_harmonie_fields_stay_on_disk_until_the_write(tmp_path):
+    """Regression: the merges and the step concat loaded cfgrib's arrays, copy after copy.
+
+    A model-level init time holds 18.5 GB of fields; loaded, it peaked at 70 GB in every
+    noon catch-up. Read lazily, the same write peaked at 16.5 GB.
+    """
+    pressure = write_grib(
+        tmp_path / "pl.grib", [("t", "isobaricInhPa", level, 1) for level in (850, 500)]
+    )
+    surface = write_grib(tmp_path / "sf.grib", [("sp", "surface", None, 1)])
+    model = write_grib(tmp_path / "ml.grib", [("t", "hybrid", level, 1) for level in (1, 2)])
+
+    model_step = dmi.DMIHarmonieModelLevelProvider().process_step([str(model)])
+    for ds in (
+        dmi.process_pressure_level_file(pressure),
+        dmi.process_surface_file(surface),
+        model_step,
+    ):
+        for name, var in ds.data_vars.items():
+            assert var.chunks is not None, f"{name} was loaded into memory"
+    (name,) = model_step.data_vars
+    np.testing.assert_array_equal(model_step[name].values[:, 0, 0], [101.0, 102.0])
+
+
+@pytest.mark.parametrize(
+    "provider_cls", [dmi.DMIHarmonieProvider, dmi.DMIHarmonieModelLevelProvider]
+)
+def test_harmonie_write_runs_on_a_bounded_dask_pool(local_config, monkeypatch, provider_cls):
+    """The fields are decoded during the write, so the pool bounds the chunks in memory."""
+    import dask
+
+    from planetary_datasets import base
+
+    seen = []
+    real = base._write_to_icechunk
+
+    def spy(*args, **kwargs):
+        seen.append(dask.config.get("num_workers", None))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(base, "_write_to_icechunk", spy)
+    provider = provider_cls(config=local_config)
+    ds = xr.Dataset(
+        {"t": (("time", "step", "y", "x"), np.ones((1, 1, 4, 3), "float32"))},
+        coords={
+            "time": [pd.Timestamp("2026-11-26")],
+            "step": [pd.Timedelta(0, "h")],
+            "latitude": (("y", "x"), 60.0 + np.arange(12.0).reshape(4, 3)),
+            "longitude": (("y", "x"), -40.0 + np.arange(12.0).reshape(4, 3)),
+        },
+    ).chunk()
+    assert provider.write_to_icechunk(provider.store_for(ds, None), ds)
+    assert seen == [provider.write_threads]
+    assert dask.config.get("num_workers", None) != provider.write_threads
