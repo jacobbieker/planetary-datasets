@@ -500,3 +500,50 @@ def test_disagreeing_site_columns_keep_the_first_instead_of_failing():
     renamed = "Lulin,22:10:2026,00:10:00,295,0.2,1564,Lulin_NCU,23.468611,120.873611,2868.000000"
     table = parse_table("\n".join(["Version 3: AOD", "Level 1.5", header, same, renamed]))
     assert table.rows["site_name"].tolist() == ["Lulin", "Lulin"]
+
+
+def test_stored_keys_are_hashed_a_block_at_a_time(monkeypatch):
+    """Regression: a group's dedup keys were hashed in one frame of every stored row,
+    about 85 bytes a row (8.9 GB for aod_level10). Blocks of whole chunks must give the
+    same sorted, unique keys while no hash call sees more than one block."""
+    import zarr
+
+    rng = np.random.default_rng(0)
+    rows = 23
+    group = zarr.open_group(zarr.storage.MemoryStore(), mode="w")
+    columns = {
+        "site_index": (rng.integers(0, 3, rows).astype("uint16"), 4),
+        "time": (rng.integers(0, 5, rows).astype("int64"), 2),
+        "measurement_type": (rng.integers(0, 2, rows).astype("uint8"), 4),
+    }
+    for name, (values, chunk) in columns.items():
+        group.create_array(name, shape=(rows,), chunks=(chunk,), dtype=values.dtype)[:] = values
+    whole = np.unique(
+        aeronet.row_keys(pd.DataFrame({name: values for name, (values, _) in columns.items()}))
+    )
+    assert len(whole) < rows  # repeated rows, so uniqueness is exercised
+
+    sizes = []
+    real = aeronet.row_keys
+    monkeypatch.setattr(aeronet, "row_keys", lambda frame: sizes.append(len(frame)) or real(frame))
+    keys = aeronet.stored_keys(group, block=5)
+    assert keys.dtype == np.uint64
+    np.testing.assert_array_equal(keys, whole)
+    assert max(sizes) == 4 and sum(sizes) == rows  # one widest chunk (4 rows) per block
+
+
+def test_sorted_key_lookups_match_isin_and_union():
+    """Regression: np.isin and np.union1d against every stored key sorted copies of all
+    of them per append; the binary-search versions must answer the same."""
+    rng = np.random.default_rng(1)
+    stored = np.unique(rng.integers(0, 2**63, 1000, dtype="uint64"))
+    incoming = np.concatenate([rng.choice(stored, 50), rng.integers(0, 2**63, 50, dtype="uint64")])
+    np.testing.assert_array_equal(
+        aeronet.contains_sorted(stored, incoming), np.isin(incoming, stored)
+    )
+    assert not aeronet.contains_sorted(np.empty(0, "uint64"), incoming).any()
+    new = np.unique(incoming[~np.isin(incoming, stored)])
+    np.testing.assert_array_equal(
+        aeronet.insert_sorted(stored, rng.permutation(new)), np.union1d(stored, new)
+    )
+    assert aeronet.insert_sorted(stored, new[:0]) is stored

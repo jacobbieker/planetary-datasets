@@ -712,15 +712,7 @@ class AeronetStore:
             return
         names = [str(v) for v in group["site_name"][:]]
         self._sites = {name: i for i, name in enumerate(names)}
-        # Raw values: the hash must see the same numbers the incoming rows have.
-        frame = pd.DataFrame(
-            {
-                name: group[name][:]
-                for name in ("site_index", "time", *KEY_VARIABLES)
-                if name in group
-            }
-        )
-        self._keys = np.unique(row_keys(frame))
+        self._keys = stored_keys(group)
 
     def ledger(self) -> set[str]:
         """Tarballs (``bulk:<day>``) and history months (``web:<month>``) read whole."""
@@ -794,7 +786,7 @@ class AeronetStore:
         rows["site_index"] = rows["site_name"].map(site_index).astype("uint16")
         rows = rows.drop(columns="site_name")
         keys = row_keys(rows)
-        fresh = ~np.isin(keys, self._keys)
+        fresh = ~contains_sorted(self._keys, keys)
         # Within a batch too: the first of two identical rows is kept.
         _, first_seen = np.unique(keys, return_index=True)
         once = np.zeros(len(rows), bool)
@@ -813,7 +805,7 @@ class AeronetStore:
         ds = self._dataset(rows, attrs, self._site_rows(new_sites, pis))
         ensure_root(self.repo)
         multidim.append_partition(self.repo, ds, None, label=self.path, group=self.path)
-        self._keys = np.union1d(self._keys, keys[keep])
+        self._keys = insert_sorted(self._keys, keys[keep])
         self._sites.update({s: first + i for i, s in enumerate(new_sites)})
         return len(rows)
 
@@ -872,6 +864,59 @@ def row_keys(frame: pd.DataFrame) -> np.ndarray:
         }
     )
     return pd.util.hash_pandas_object(key, index=False).to_numpy("uint64")
+
+
+#: Stored rows hashed at a time when a group's keys are read: about 80 bytes a row of
+#: temporaries, so 8.4 million rows hold that to under 1 GB.
+KEY_BLOCK_ROWS = 8 * 2**20
+
+
+def stored_keys(group: zarr.Group, block: int = KEY_BLOCK_ROWS) -> np.ndarray:
+    """:func:`row_keys` of every row ``group`` holds, sorted and unique.
+
+    Read and hashed ``block`` rows at a time into one preallocated array, sorted in
+    place: 8 bytes a stored row plus one block's temporaries. Hashing the whole group in
+    one frame took about 85 bytes a row, 8.9 GB for ``aod_level10``'s 105 million.
+    """
+    names = [name for name in ("site_index", "time", *KEY_VARIABLES) if name in group]
+    total = int(group["site_index"].shape[0])
+    # Whole chunks of every key array per block, so no chunk is fetched twice.
+    widest = max(int(group[name].chunks[0]) for name in names)
+    step = max(1, block // widest) * widest
+    keys = np.empty(total, "uint64")
+    for start in range(0, total, step):
+        stop = min(start + step, total)
+        # Raw values: the hash must see the same numbers the incoming rows have.
+        keys[start:stop] = row_keys(pd.DataFrame({name: group[name][start:stop] for name in names}))
+    keys.sort()
+    if keys.size > 1:
+        repeated = keys[1:] == keys[:-1]
+        if repeated.any():
+            keys = keys[np.concatenate(([True], ~repeated))]
+    return keys
+
+
+def contains_sorted(sorted_keys: np.ndarray, keys: np.ndarray) -> np.ndarray:
+    """Whether each of ``keys`` is in ``sorted_keys`` (sorted, unique).
+
+    ``np.isin`` against the stored keys sorts a copy of all of them with an index, about
+    three times the keys' size again; a binary search allocates only per incoming key.
+    """
+    if not sorted_keys.size:
+        return np.zeros(len(keys), bool)
+    at = np.searchsorted(sorted_keys, keys)
+    return sorted_keys[np.minimum(at, sorted_keys.size - 1)] == keys
+
+
+def insert_sorted(sorted_keys: np.ndarray, new: np.ndarray) -> np.ndarray:
+    """``sorted_keys`` with ``new`` (unique, none already in it) added, still sorted.
+
+    One copy of the keys, where ``np.union1d`` concatenated and sorted them again.
+    """
+    if not new.size:
+        return sorted_keys
+    new = np.sort(new)
+    return np.insert(sorted_keys, np.searchsorted(sorted_keys, new), new)
 
 
 #: How times are stored: whole seconds, so every source's times encode exactly and a
