@@ -431,3 +431,38 @@ def test_a_file_with_no_science_data_reads_as_an_empty_frame(tmp_path):
     with pytest.raises(ValueError, match="no along-track dimension") as raised:
         earthcare.read_frame(scalar, earthcare.PRODUCTS["ATL_ICE_2A"])
     assert not isinstance(raised.value, earthcare.EmptyFrame)
+
+
+def test_a_frame_is_sized_by_its_data_not_its_file(tmp_path):
+    """Regression: batches counted four times the file size.
+
+    ACM_CAP_2B compresses ten-fold, so its batches held 7.5 GB of data and the lane
+    peaked at 27 GB (2026-11-27).
+    """
+    path = tmp_path / "compressed.h5"
+    with h5py.File(path, "w") as f:
+        f.create_dataset("ScienceData/x", data=np.zeros((1000, 1000)), compression="gzip")
+    assert path.stat().st_size * 4 < 8_000_000 / 10
+    assert earthcare.data_bytes(path) == 8_000_000
+    # A file h5py cannot walk falls back to the old estimate.
+    broken = tmp_path / "broken.h5"
+    broken.write_bytes(b"not hdf5")
+    assert earthcare.data_bytes(broken) == 4 * len(b"not hdf5")
+
+
+def test_a_batch_holds_no_more_frame_data_than_the_bound(provider, monkeypatch):
+    """Each batch closes as soon as its frames' data reaches BATCH_BYTES."""
+    per_frame = earthcare.data_bytes(next(iter(provider.test_maap.files.values())))
+    monkeypatch.setattr(earthcare, "BATCH_BYTES", per_frame + 1)
+    batches = []
+    real = provider._write
+
+    def write(product, paths, first_index):
+        batches.append([earthcare.data_bytes(p) for p in paths])
+        return real(product, paths, first_index)
+
+    monkeypatch.setattr(provider, "_write", write)
+    assert provider.run_partition(pd.Timestamp("2026-10-20"))
+    # Two frames to write, each just under the bound: one batch of both, and no more.
+    assert [len(b) for b in batches] == [2]
+    assert all(sum(b[:-1]) < earthcare.BATCH_BYTES for b in batches)

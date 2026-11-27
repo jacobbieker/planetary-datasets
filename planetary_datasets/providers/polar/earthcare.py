@@ -142,8 +142,13 @@ DAYS_ATTR = "days_complete"
 #: 2025-03-15 and 2025-03-26 were here from 2026-11-08 until :func:`write_beside` let
 #: their baseline-BA frames append.
 SKIPPED_DAYS: dict[str, frozenset[str]] = {}
-#: Uncompressed bytes of frames read into memory before they are written.
-BATCH_BYTES = 3 * 2**30
+#: Uncompressed bytes of frames read into memory before they are written, counted from
+#: each file's own dataset sizes. Counted as four times the file size, ACM_CAP_2B (ten
+#: times smaller compressed) batched 7.5 GB of data and the lane peaked at 27 GB
+#: (2026-11-27), while the products compressing two-fold batched about 1.4 GB. 40
+#: ACM_CAP frames at 4.5 GiB a batch peaked at 15 GB and wrote 7% faster than before;
+#: at 1.5 GiB they peaked at 5 GB but took 23% longer.
+BATCH_BYTES = 9 * 2**29
 #: Names the track dimension goes by across the products.
 ALONG_TRACK_NAMES = ("along_track", "nray")
 #: Header groups copied into the per-frame variables.
@@ -239,6 +244,28 @@ def _header(path: pathlib.Path) -> dict[str, np.ndarray]:
 
             f[root].visititems(keep)
     return out
+
+
+def data_bytes(path: pathlib.Path) -> int:
+    """The bytes ``path``'s datasets take uncompressed, which is what reading it holds.
+
+    Read from the file's metadata, without reading its data. A file h5py cannot walk counts
+    as four times its size, the ratio the batches assumed before.
+    """
+    total = 0
+
+    def add(_name: str, obj) -> None:
+        nonlocal total
+        if isinstance(obj, h5py.Dataset):
+            total += obj.size * obj.dtype.itemsize
+
+    try:
+        with h5py.File(path, "r") as f:
+            f.visititems(add)
+    except (OSError, ValueError) as exc:
+        logger.debug(f"{path.name}: sizing from the file size ({exc})")
+        return path.stat().st_size * 4
+    return total
 
 
 class EmptyFrame(ValueError):
@@ -575,7 +602,7 @@ class EarthCAREProvider(BaseProvider):
                     logger.warning(f"{self.name}: {item['id']} failed to download; next pass")
                     continue
                 batch.append(path)
-                size += path.stat().st_size * 4
+                size += data_bytes(path)
                 if size >= BATCH_BYTES:
                     written += self._write(product, batch, count + written)
                     for done in batch:
