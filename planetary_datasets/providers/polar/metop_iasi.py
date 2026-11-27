@@ -49,15 +49,22 @@ def platform_from_filename(filename: str) -> str:
     return "unknown"
 
 
-def harp_to_dataset(filename: str) -> xr.Dataset:
+def harp_to_dataset(filename: str, operations: str = "") -> xr.Dataset:
     """Import an EPS product with harp and return it as an in-memory dataset.
 
     harp has no direct xarray export, so the product goes out to a temporary netCDF file
     and is read straight back in.
+
+    Args:
+        filename: The native product.
+        operations: harp operations applied on import, e.g. a ``datetime`` filter.
+
+    Raises:
+        harp.NoDataError: ``operations`` left no rows.
     """
     import harp
 
-    product = harp.import_product(filename)
+    product = harp.import_product(filename, operations)
     handle, tmp_path = tempfile.mkstemp(suffix=".nc")
     os.close(handle)
     try:
