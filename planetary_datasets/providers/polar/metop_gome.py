@@ -32,9 +32,9 @@ class MetopGomeProvider(EumdacProvider):
     window = pd.Timedelta(1, "h")
     chunk_measurements = CHUNK_MEASUREMENTS
 
-    def process_granule(self, filename: str) -> xr.Dataset:
-        """Read one GOME-2 native product with harp."""
-        ds = harp_to_dataset(filename)
+    def process_granule(self, filename: str, keep_in: pathlib.Path | None = None) -> xr.Dataset:
+        """Read one GOME-2 native product with harp, lazily from ``keep_in`` when given."""
+        ds = harp_to_dataset(filename, keep_in=keep_in, chunks={"time": self.chunk_measurements})
         if "time" not in ds.coords and "datetime" in ds.variables:
             ds = ds.assign_coords(time=ds["datetime"].values).drop_vars("datetime")
         # harp gives per-product fields such as ``orbit_index`` once, with no dimension.
@@ -52,15 +52,25 @@ class MetopGomeProvider(EumdacProvider):
         temp_dir: pathlib.Path | None = None,
         **kwargs,
     ) -> xr.Dataset:
-        """Unpack, read and concatenate every GOME-2 product in the partition."""
+        """Unpack, read and concatenate every GOME-2 product in the partition.
+
+        Each product stays on disk in the partition's temporary directory, which outlasts
+        the write, and only its rows inside the window are kept. Read into memory, the
+        copies concat and sortby made took an hour of 2.9 GB to 26.7 GB, and the lane
+        peaked at up to 37 GB (2026-11); lazily it peaked at 3.7 GB in the same time.
+        """
         datasets = []
+        products = self.workdir(temp_dir) / "harp"
         for native in self.iter_natives(input_files, temp_dir=temp_dir):
             try:
-                datasets.append(self.process_granule(native))
+                granule = self.restrict_to_window(self.process_granule(native, products), it)
             except Exception as exc:  # noqa: BLE001 - one bad product must not lose the hour
                 logger.warning(f"{self.name}: {native} failed: {exc}")
+                continue
+            if granule.sizes.get("time", 0):
+                datasets.append(granule)
 
-        ds = self.restrict_to_window(self.concat_granules(datasets), it)
+        ds = self.concat_granules(datasets)
         if ds.sizes.get("time", 0) == 0:
             return ds
 

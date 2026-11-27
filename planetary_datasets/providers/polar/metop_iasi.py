@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 import pathlib
 import tempfile
-from typing import List
+from typing import List, Mapping
 
 import numpy as np
 import pandas as pd
@@ -49,15 +49,26 @@ def platform_from_filename(filename: str) -> str:
     return "unknown"
 
 
-def harp_to_dataset(filename: str) -> xr.Dataset:
-    """Import an EPS product with harp and return it as an in-memory dataset.
+def harp_to_dataset(
+    filename: str,
+    keep_in: pathlib.Path | None = None,
+    chunks: Mapping[str, int] | None = None,
+) -> xr.Dataset:
+    """Import an EPS product with harp and return it as a dataset.
 
-    harp has no direct xarray export, so the product goes out to a temporary netCDF file
-    and is read straight back in.
+    harp has no direct xarray export, so the product goes out to a netCDF file. By default
+    that file is temporary and read straight back into memory. With ``keep_in`` it is
+    written there instead and opened lazily with ``chunks``, so the product stays on disk
+    until it is written; the caller then owns the file.
     """
     import harp
 
     product = harp.import_product(filename)
+    if keep_in is not None:
+        keep_in.mkdir(parents=True, exist_ok=True)
+        path = keep_in / f"{pathlib.Path(filename).name}.nc"
+        harp.export_product(product, str(path))
+        return xr.open_dataset(path, chunks=dict(chunks or {}))
     handle, tmp_path = tempfile.mkstemp(suffix=".nc")
     os.close(handle)
     try:
