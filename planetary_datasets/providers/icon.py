@@ -50,6 +50,7 @@ from loguru import logger
 
 from planetary_datasets.base import BaseProvider
 from planetary_datasets.common.download import download_one
+from planetary_datasets.common.lazy_fields import bounded_compute
 from planetary_datasets.common.store import STORE_READ_ERRORS, has_committed_data
 from planetary_datasets.config import Config
 
@@ -1193,6 +1194,10 @@ class ICOND2RUCProvider(BaseProvider):
         "W_CTMAX", "Z0",
     ]
 
+    #: Dask tasks the write runs at once. Fields are opened lazily, one dask block per
+    #: variable and valid time, so this bounds how many are decoded and held at a time.
+    write_threads: int = 8
+
     def __init__(
         self,
         timescale: str = "60min",
@@ -1358,7 +1363,11 @@ class ICOND2RUCProvider(BaseProvider):
                 for name, var in processed.data_vars.items():
                     if name in existing and "coordinates" in existing[name].encoding:
                         var.encoding["coordinates"] = existing[name].encoding["coordinates"]
-        return super().write_to_icechunk(repo, processed)
+        # The fields are still undecoded dask blocks here; the write decodes them, at most
+        # write_threads at once. A lane's own dask setting is no wider (--threads 2-4), but
+        # a caller without one would otherwise get one thread per core.
+        with bounded_compute(self.write_threads):
+            return super().write_to_icechunk(repo, processed)
 
     def _matches_cadence(self, ds: xr.Dataset, variable: str) -> bool:
         """True when ``ds`` has the number and spacing of valid times of this cadence.
@@ -1427,11 +1436,15 @@ def _open_and_merge_by_valid_time(files: Sequence[str]) -> xr.Dataset | None:
     by valid time and stacked over their level coordinate, then concatenated over valid
     time. Valid times with fewer levels than the rest are dropped: they are a partially
     mirrored timestep and would otherwise produce a ragged array.
+
+    Each file is opened as one dask block, so nothing is decoded here: concatenating
+    cfgrib's lazily indexed arrays would load them, and a whole hourly run decoded at once
+    is several GB. The write decodes the blocks a few at a time.
     """
     per_valid_time: dict = {}
     for path in files:
         try:
-            ds = xr.open_dataset(path, engine="cfgrib")
+            ds = xr.open_dataset(path, engine="cfgrib", chunks={})
         except Exception as exc:  # noqa: BLE001 - a corrupt file must not fail the run
             logger.warning(f"error opening {path}: {exc}")
             continue

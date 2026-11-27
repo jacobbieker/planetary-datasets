@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import os
+import pathlib
 
 import numpy as np
 import pandas as pd
@@ -536,6 +538,88 @@ def test_ruc_process_refuses_an_empty_run(local_config):
     provider = icon.ICOND2RUCProvider("60min", config=local_config)
     with pytest.raises(ValueError, match="no 60min variables"):
         provider.process([], pd.Timestamp("2026-09-27T14:00"))
+
+
+@pytest.fixture
+def ruc_mirror():
+    """An empty mirror root, outside ``tmp_path``.
+
+    The provider tells variables apart by ``/<VAR>/`` in the path, and macOS temporary
+    directories contain ``/T/``.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory(dir="/tmp" if os.path.isdir("/tmp") else None) as root:
+        yield pathlib.Path(root)
+
+
+def _ruc_mirror_files(root) -> list[str]:
+    """An hourly run in the mirror layout: CLC on two model levels, and PMSL."""
+    from helpers import write_grib
+
+    run = pathlib.Path("r", "2026-11-26T00:00", "s")
+    files = []
+    for level in (1, 2):
+        directory = root / "CLC" / "lvt1" / "150" / "lv1" / str(level) / run
+        directory.mkdir(parents=True)
+        files.append(write_grib(directory / "PT000H00M.grib2", [("ccl", "hybrid", level, 0)]))
+    directory = root / "PMSL" / run
+    directory.mkdir(parents=True)
+    files.append(write_grib(directory / "PT000H00M.grib2", [("prmsl", "meanSea", None, 0)]))
+    return [str(f) for f in files]
+
+
+def test_ruc_process_decodes_no_field(ruc_mirror, local_config, monkeypatch):
+    """Regression: an hourly run was decoded whole before the write, 8.7 GB at peak.
+
+    The level and valid-time concats, the merge and the sorts loaded every field cfgrib
+    opened. They stay lazy now and the write decodes the fields a few at a time (60min:
+    8.7 -> 1.7 GB). A chunk check alone would pass on loaded-then-rechunked fields, so
+    this watches every read cfgrib makes while the run is assembled. Reads of one value
+    are the scalar time and level coordinates, which cfgrib holds in memory.
+    """
+    from cfgrib.xarray_plugin import CfGribArrayWrapper
+
+    sizes = []
+    real = CfGribArrayWrapper._getitem
+
+    def watch(self, key):
+        values = real(self, key)
+        sizes.append(np.size(values))
+        return values
+
+    monkeypatch.setattr(CfGribArrayWrapper, "_getitem", watch)
+    provider = icon.ICOND2RUCProvider("60min", config=local_config)
+    ds = provider.process(_ruc_mirror_files(ruc_mirror), pd.Timestamp("2026-11-26"))
+
+    fields = [size for size in sizes if size > 1]
+    assert fields == [], f"process decoded fields of {fields} values"
+    assert all(var.chunks is not None for var in ds.data_vars.values())
+    np.testing.assert_array_equal(ds["clc"].values[0, :, 0, 0], [1.0, 2.0])
+    assert ds["pmsl"].values[0, 0, 0] == 0.0
+
+
+def test_ruc_write_runs_on_a_bounded_dask_pool(ruc_mirror, local_config, monkeypatch):
+    """Regression: the lazy fields are decoded by the write on at most write_threads."""
+    import dask
+
+    from planetary_datasets import base
+
+    seen = []
+    real = base._write_to_icechunk
+
+    def spy(*args, **kwargs):
+        seen.append(dask.config.get("num_workers", None))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(base, "_write_to_icechunk", spy)
+    provider = icon.ICOND2RUCProvider("60min", config=local_config, grib_dir=ruc_mirror)
+    _ruc_mirror_files(ruc_mirror)
+    before = dask.config.get("num_workers", None)
+
+    assert provider.run_partition(pd.Timestamp("2026-11-26T00:00")) is True
+    assert seen == [provider.write_threads]
+    assert dask.config.get("num_workers", None) == before
 
 
 # -- completeness -----------------------------------------------------------------------
