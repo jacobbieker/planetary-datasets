@@ -89,3 +89,19 @@ def test_each_product_is_cut_to_the_window_as_it_is_read(monkeypatch):
     assert [g.sizes["time"] for g in concatenated] == [3, 3]
     assert ds.sizes["time"] == 6
     assert ds["time"].values.min() == np.datetime64("2024-02-29T04:00:00")
+
+
+def test_an_hour_with_no_rows_in_any_product_is_empty(monkeypatch):
+    """Every product outside the window gives an empty dataset, which is nothing to do."""
+    import harp
+
+    def no_rows(name, operations=""):
+        raise harp.NoDataError("no rows")
+
+    monkeypatch.setattr("planetary_datasets.providers.polar.metop_gome.harp_to_dataset", no_rows)
+    gome = MetopGomeProvider()
+    monkeypatch.setattr(gome, "iter_natives", lambda *a, **k: iter(["a.nat", "b.nat"]))
+
+    ds = gome.process(["a.nat", "b.nat"], pd.Timestamp("2024-02-29T04:00"))
+
+    assert ds.sizes.get("time", 0) == 0
