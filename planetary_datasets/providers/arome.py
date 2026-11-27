@@ -25,6 +25,7 @@ import pathlib
 from dataclasses import dataclass
 from typing import Iterable, List, Sequence
 
+import icechunk
 import pandas as pd
 import xarray as xr
 from loguru import logger
@@ -37,6 +38,7 @@ from planetary_datasets.common.dataset import (
 )
 from planetary_datasets.common.download import cleanup_files, download_one
 from planetary_datasets.common.grib import open_grib_datasets
+from planetary_datasets.common.lazy_fields import bounded_compute
 from planetary_datasets.memory import memory_guard, require_dataset_fits
 
 URL_BASE = "https://files.data.gouv.fr/meteofrance-pnt/pnt"
@@ -56,6 +58,13 @@ _SURFACE_DROP = ("heightAboveGround", "level", "surface", "meanSea", "unknown")
 
 #: Dimensions written as a single chunk. ``time`` is always chunked to one step.
 _WHOLE_CHUNK_DIMS = ("latitude", "longitude", "level", "height")
+
+#: Dask chunks GRIB files are opened with: one forecast step per chunk, so nothing is
+#: decoded until the write asks for that step. cfgrib's arrays are lazy but not dask, so
+#: concat, merge, sortby and astype each loaded them into a fresh copy: an Indian Ocean
+#: init time (15.8 GB of fields) peaked at 85 GB and was OOM-killed in the noon catch-up
+#: (2026-11). A dimension a file does not have is ignored.
+GRIB_CHUNKS = {"step": 1, "valid_time": 1}
 
 
 @dataclass(frozen=True)
@@ -113,6 +122,12 @@ class AromeProvider(BaseProvider):
 
     #: Attempts per file. A paquet with no analysis step 404s every time, so keep it low.
     download_retries: int = 3
+    #: Dask tasks writing at once. The fields are decoded during the write (see
+    #: :data:`GRIB_CHUNKS`), one step of one variable per task, so this bounds how many
+    #: chunks are in memory. Dask's default is one thread per core, 48 on the live box,
+    #: where an Indian Ocean init time took 190 s at 66 GB that way, 145 s at 7.9 GB with
+    #: 24 threads and 183 s at 5.9 GB with 16 (2026-11-27).
+    write_threads: int = 24
 
     @property
     def layout(self) -> AromeLayout:
@@ -186,7 +201,10 @@ class AromeProvider(BaseProvider):
             # a committed store behind a failed run.
             with memory_guard(what=f"{self.name} {it}"):
                 processed = self.process(input_files, it)
-                require_dataset_fits(processed, what=f"{self.name} {it}")
+                # The write holds up to write_threads chunks at once, not the default 4.
+                require_dataset_fits(
+                    processed, what=f"{self.name} {it}", concurrency=self.write_threads
+                )
         else:
             processed = self.process(input_files, it)
 
@@ -195,6 +213,11 @@ class AromeProvider(BaseProvider):
             removed = cleanup_files(*input_files)
             logger.debug(f"{self.name}: removed {removed} local file(s) for {it}")
         return written
+
+    def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
+        """Write one init time, at most :attr:`write_threads` dask tasks at a time."""
+        with bounded_compute(self.write_threads):
+            return super().write_to_icechunk(repo, processed)
 
 
 class AromeOverseasProvider(AromeProvider):
@@ -322,11 +345,11 @@ class AromeFranceProvider(AromeProvider):
         **kwargs,
     ) -> xr.Dataset:
         height = xr.merge(
-            [xr.merge(open_grib_datasets(f)) for f in _require(input_files, ("HP1", "HP2"), it)],
+            [xr.merge(_open_grib(f)) for f in _require(input_files, ("HP1", "HP2"), it)],
             compat="no_conflicts",
         )
         pressure = xr.merge(
-            [xr.merge(open_grib_datasets(f)) for f in _require(input_files, ("IP1", "IP3"), it)],
+            [xr.merge(_open_grib(f)) for f in _require(input_files, ("IP1", "IP3"), it)],
             compat="no_conflicts",
         )
         surface = xr.merge(
@@ -385,9 +408,7 @@ class AromeFranceHDProvider(AromeProvider):
         for step_token in layout.step_tokens:
             per_step = [f for f in input_files if f"__{step_token}__" in os.path.basename(f)]
             heights.append(
-                xr.merge(
-                    open_grib_datasets(_require(per_step, ("HP1",), it)[0]), compat="no_conflicts"
-                )
+                xr.merge(_open_grib(_require(per_step, ("HP1",), it)[0]), compat="no_conflicts")
             )
             surfaces.append(
                 xr.merge(
@@ -426,6 +447,11 @@ def _require(files: Sequence[str], paquets: Sequence[str], it: pd.Timestamp) -> 
     return [_require_all(files, paquet, it)[0] for paquet in paquets]
 
 
+def _open_grib(path: str) -> List[xr.Dataset]:
+    """Open every hypercube in a GRIB file as dask arrays, one step per chunk."""
+    return open_grib_datasets(path, chunks=GRIB_CHUNKS)
+
+
 def _open_steps(files: Sequence[str]) -> xr.Dataset:
     """Open one file per forecast step and stack them along ``valid_time``."""
     return xr.open_mfdataset(list(files), concat_dim="valid_time", combine="nested")
@@ -448,7 +474,7 @@ def _open_isobaric_steps(files: Sequence[str], drop: Sequence[str] = ()) -> xr.D
     steps = []
     for path in files:
         cubes = []
-        for cube in open_grib_datasets(path):
+        for cube in _open_grib(path):
             if "isobaricInhPa" not in cube.coords:
                 continue
             if "isobaricInhPa" not in cube.dims:
@@ -477,7 +503,7 @@ def _open_surface(path: str, per_step_file: bool = False) -> xr.Dataset:
     drop = list(_SURFACE_DROP)
     drop += ["step", "time"] if per_step_file else ["valid_time"]
     return xr.merge(
-        [ds.drop_vars(drop, errors="ignore") for ds in open_grib_datasets(path)],
+        [ds.drop_vars(drop, errors="ignore") for ds in _open_grib(path)],
         compat="no_conflicts",
     )
 
