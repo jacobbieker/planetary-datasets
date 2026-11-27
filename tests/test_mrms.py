@@ -336,6 +336,28 @@ class TestStoreRoundTrip:
         assert list(times) == list(pd.date_range("2026-09-20T01:00", periods=5, freq="2min"))
         assert times.is_unique
 
+    def test_a_write_reads_the_time_axis_once(self, provider, repo, monkeypatch):
+        """Regression: the provider read the stored axis before the writer read it again.
+
+        Reading the 1.2 million stored steps of a regional store takes ~45 s; the writer
+        already drops stored steps itself, so the provider's own read is gone.
+        """
+        from planetary_datasets.common import store
+
+        provider.write_to_icechunk(repo, make_partition(FIRST_STEPS))
+        reads = []
+        real = store.xr.open_zarr
+
+        def counting(*args, **kwargs):
+            reads.append(1)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(store.xr, "open_zarr", counting)
+        overlapping = pd.date_range("2026-09-20T01:04", periods=3, freq="2min")
+        assert provider.write_to_icechunk(repo, make_partition(overlapping)) is True
+        assert provider.write_to_icechunk(repo, make_partition(overlapping)) is False
+        assert len(reads) == 2
+
     def test_store_path_is_local_under_test_config(self, provider):
         assert not provider.store_path.startswith("s3://")
         assert provider.store_path.endswith("bkr/mrms/mrms_GUAM.icechunk")
@@ -356,6 +378,33 @@ class TestStoreRoundTrip:
         it = pd.Timestamp("2021-01-01T01:00")
         provider.write_to_icechunk(repo, make_partition(provider.partition_timestamps(it)[:5]))
         assert provider.missing_timesteps(pd.DatetimeIndex([it])) == []
+
+    def test_one_membership_test_for_the_whole_window(self, provider, repo, monkeypatch):
+        """Regression: each hour re-sorted the stored axis, 20 min a pass on a real store.
+
+        Against the 1.2 million steps of mrms_ALASKA, testing 1,531 hours one at a time
+        took 1,183 s of every lane pass. The window is now tested in one call, with the
+        same answer for full, settled-partial, recent-partial and absent hours.
+        """
+        full = pd.Timestamp("2026-09-20T01:00")
+        settled = pd.Timestamp("2021-01-01T01:00")
+        recent = mrms.naive_utc(pd.Timestamp.now("UTC")).floor("h") - pd.Timedelta(2, "h")
+        absent = pd.Timestamp("2026-09-20T03:00")
+        provider.write_to_icechunk(repo, make_partition(provider.partition_timestamps(settled)[:5]))
+        provider.write_to_icechunk(repo, make_partition(provider.partition_timestamps(full)))
+        provider.write_to_icechunk(repo, make_partition(provider.partition_timestamps(recent)[:5]))
+
+        calls = []
+        real = mrms.np.isin
+
+        def counting(*args, **kwargs):
+            calls.append(1)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(mrms.np, "isin", counting)
+        wanted = pd.DatetimeIndex([settled, full, absent, recent])
+        assert provider.missing_timesteps(wanted) == [absent, recent]
+        assert len(calls) == 1
 
     def test_empty_store_reports_everything_missing(self, provider):
         wanted = pd.DatetimeIndex(["2026-09-20T01:00", "2026-09-20T02:00"])

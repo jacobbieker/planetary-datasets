@@ -33,7 +33,6 @@ from functools import lru_cache
 from glob import glob
 from typing import Dict, List, Sequence
 
-import icechunk
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -328,16 +327,24 @@ class MRMSProvider(BaseProvider):
         re-attempted until every timestep is present, while an hour older than
         :attr:`settle_after` counts as done once any of it is stored — by then the gaps are
         real gaps, not publishing lag, and re-downloading them every pass is pure waste.
+
+        Every partition's timesteps are tested in one vectorised membership test: testing
+        each hour on its own re-sorted the whole stored axis every time, which against the
+        1.2 million steps of a regional store took 20 minutes per pass of two months.
         """
         present = existing_times(self.get_icechunk_repo(), append_dim=self.append_dim)
-        if present.size == 0:
-            return [naive_utc(it) for it in desired]
+        starts = [naive_utc(it) for it in desired]
+        if present.size == 0 or not starts:
+            return starts
+
+        # Every partition spans the same offsets from its start.
+        offsets = (self.partition_timestamps(starts[0]) - starts[0]).values
+        grid = pd.DatetimeIndex(starts).values[:, None] + offsets[None, :]
+        stored_grid = np.isin(grid.ravel(), present).reshape(grid.shape)
 
         now = naive_utc(pd.Timestamp.now("UTC"))
         missing: List[pd.Timestamp] = []
-        for raw in desired:
-            it = naive_utc(raw)
-            stored = np.isin(self.partition_timestamps(it).values, present)
+        for it, stored in zip(starts, stored_grid):
             if stored.all():
                 continue
             if stored.any() and (now - it) > self.settle_after:
@@ -483,31 +490,6 @@ class MRMSProvider(BaseProvider):
 
         combined = xr.concat(steps, dim="time")
         return combined.chunk({"time": 1, "latitude": -1, "longitude": -1})
-
-    def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
-        """Append only the timesteps the store does not already hold.
-
-        A partition covers thirty two-minute steps, and the archive is not gap-free: the
-        first step of an hour is often missing, so the base class's "is the partition start
-        already stored?" check cannot stand in for a per-timestep check. Filtering here
-        keeps a re-run from appending duplicate times.
-
-        Revisiting a settled-but-partial hour can still surface a step that sorts *before*
-        what is already stored; the base writer's monotonicity guard drops those, since
-        icechunk cannot insert and an unsorted ``time`` would break slicing store-wide.
-        """
-        present = existing_times(repo, append_dim=self.append_dim)
-        if present.size:
-            keep = ~np.isin(processed[self.append_dim].values, present)
-            if not keep.any():
-                logger.debug(f"{self.name}: all {keep.size} timestep(s) already stored")
-                return False
-            if not keep.all():
-                logger.info(
-                    f"{self.name}: dropping {int((~keep).sum())} already-stored timestep(s)"
-                )
-                processed = processed.isel({self.append_dim: keep})
-        return super().write_to_icechunk(repo, processed)
 
 
 class MRMSPrecipRateProvider(MRMSProvider):
