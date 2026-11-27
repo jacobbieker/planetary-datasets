@@ -13,8 +13,8 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from helpers import read_store, write_grib
 
-from helpers import read_store
 from planetary_datasets.providers import arome
 from planetary_datasets.providers.arome import (
     AromeFranceHDProvider,
@@ -336,7 +336,69 @@ def test_overseas_pressure_paquets_merge_fields_on_different_level_sets(monkeypa
         "a": [cube("vo", [850.0, 700.0]), cube("d", [950.0, 300.0]), cube("papt", [1000.0]), pv],
         "b": [cube("vo", [850.0, 700.0]), cube("d", [950.0, 300.0]), cube("papt", [1000.0]), pv],
     }
-    monkeypatch.setattr(arome, "open_grib_datasets", lambda path: files[path])
+    monkeypatch.setattr(arome, "open_grib_datasets", lambda path, **kwargs: files[path])
     ds = arome._open_isobaric_steps(["a", "b"], drop=arome.NEW_OVERSEAS_IP5_FIELDS)
     assert set(ds.data_vars) == {"vo"}
     assert ds.sizes["valid_time"] == 2 and sorted(ds["isobaricInhPa"].values) == [700.0, 850.0]
+
+
+def _assert_one_step_per_chunk(ds: xr.Dataset, dim: str) -> None:
+    for name, var in ds.data_vars.items():
+        assert var.chunks is not None, f"{name} was loaded into memory"
+        assert set(var.chunksizes[dim]) == {1}, f"{name} is not one {dim} per chunk"
+
+
+def test_overseas_paquets_stay_on_disk_until_the_write(tmp_path):
+    """Regression: concat and merge loaded cfgrib's arrays, copy after copy.
+
+    An Indian Ocean init time holds 15.8 GB of fields; loaded, it peaked at 85 GB and was
+    OOM-killed. Read lazily, a step at a time, the same write peaked at 7 GB.
+    """
+    pressure = [
+        write_grib(tmp_path / f"IP1__{step:03d}H.grib2", [("t", "isobaricInhPa", 850, step)])
+        for step in range(3)
+    ]
+    surface = [
+        write_grib(tmp_path / f"SP1__{step:03d}H.grib2", [("sp", "surface", None, step)])
+        for step in range(3)
+    ]
+
+    isobaric = arome._open_isobaric_steps([str(p) for p in pressure])
+    flat = xr.concat(
+        [arome._open_surface(str(p), per_step_file=True) for p in surface], dim="valid_time"
+    )
+
+    _assert_one_step_per_chunk(isobaric, "valid_time")
+    _assert_one_step_per_chunk(flat, "valid_time")
+    np.testing.assert_array_equal(isobaric["t"].values[:, 0, 0, 0], [850.0, 950.0, 1050.0])
+    np.testing.assert_array_equal(flat["sp"].values[:, 0, 0], [0.0, 100.0, 200.0])
+
+
+def test_a_multi_step_file_is_read_a_step_at_a_time(tmp_path):
+    """AROME France's 00H06H files hold every step; only the kept ones should be read."""
+    path = write_grib(
+        tmp_path / "SP1__00H06H.grib2", [("sp", "surface", None, step) for step in range(7)]
+    )
+    ds = arome._keep_steps(arome._open_surface(str(path)), hours=3)
+    _assert_one_step_per_chunk(ds, "step")
+    np.testing.assert_array_equal(ds["sp"].values[:, 0, 0], [0.0, 100.0, 200.0])
+
+
+def test_write_runs_on_a_bounded_dask_pool(local_config, tmp_path, sample_dataset, monkeypatch):
+    """The fields are decoded during the write, so the pool bounds the chunks in memory."""
+    import dask
+
+    from planetary_datasets import base
+
+    seen = []
+    real = base._write_to_icechunk
+
+    def spy(*args, **kwargs):
+        seen.append(dask.config.get("num_workers", None))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(base, "_write_to_icechunk", spy)
+    provider = _StubProvider(_grib_stubs(tmp_path), sample_dataset, config=local_config)
+    assert provider.run_partition(pd.Timestamp(sample_dataset.time.values[0])) is True
+    assert seen == [provider.write_threads]
+    assert dask.config.get("num_workers", None) != provider.write_threads
