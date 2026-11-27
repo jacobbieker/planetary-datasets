@@ -760,14 +760,31 @@ def _float(values: np.ndarray, decimals: int) -> np.ndarray:
 
 
 def _integer(values: np.ndarray) -> tuple[np.ndarray, int]:
-    """The narrowest signed integer type holding ``values`` and a fill below them."""
-    present = values[values != MISSING_LONG] if values.size else values
-    low = int(present.min()) if present.size else 0
-    high = int(present.max()) if present.size else 0
+    """The narrowest signed integer type holding ``values`` and a fill below them.
+
+    Works on int32 or int64 as given, without a widened or masked copy: IASI's batches
+    are ~70 million values, and copying them twice took a quarter of its write.
+    """
+    missing = values == MISSING_LONG
+    if values.dtype == np.int32:
+        # The missing marker is int32's maximum, so the minimum ignores it, and one more
+        # wraps it to the minimum for the maximum.
+        low = int(values.min(initial=MISSING_LONG))
+        high = int((values + np.int32(1)).max(initial=np.iinfo("int32").min)) - 1
+        if low == MISSING_LONG:
+            low = high = 0
+    elif (~missing).any():
+        info = np.iinfo(values.dtype)
+        low = int(values.min(where=~missing, initial=info.max))
+        high = int(values.max(where=~missing, initial=info.min))
+    else:
+        low = high = 0
     for dtype in ("int8", "int16", "int32", "int64"):
         info = np.iinfo(dtype)
         if info.min < low and high <= info.max:
-            return np.where(values == MISSING_LONG, info.min, values).astype(dtype), int(info.min)
+            out = values.astype(dtype)
+            np.copyto(out, info.min, where=missing)
+            return out, int(info.min)
     raise ValueError("integer out of range")
 
 
@@ -781,12 +798,14 @@ def to_dataset(batch: list[dict], width: int, instrument: Instrument) -> xr.Data
             continue
         if columns[0].ndim == 2:
             fill = np.nan if columns[0].dtype.kind == "f" else MISSING_LONG
-            wide = []
+            # Filled in place: padding each object and concatenating held the batch twice.
+            values = np.full(
+                (sum(c.shape[0] for c in columns), width), fill, dtype=np.result_type(*columns)
+            )
+            start = 0
             for c in columns:
-                pad = np.full((c.shape[0], width), fill, dtype=c.dtype)
-                pad[:, : c.shape[1]] = c
-                wide.append(pad)
-            values = np.concatenate(wide)
+                values[start : start + c.shape[0], : c.shape[1]] = c
+                start += c.shape[0]
             dims = ("observation", "channel")
         else:
             values = np.concatenate(columns)
@@ -794,10 +813,14 @@ def to_dataset(batch: list[dict], width: int, instrument: Instrument) -> xr.Data
         attrs: dict[str, Any] = {}
         decimals = max((int(b.get(f"{name}.decimals", 0)) for b in batch), default=0)
         if values.dtype.kind == "f":
-            values = _float(values.astype("float64"), decimals)
+            # float32 already is what _float would return: it reads back unchanged.
+            if values.dtype != np.float32:
+                values = _float(values.astype("float64"), decimals)
             attrs["decimal_places"] = decimals
         elif values.dtype.kind in "iu":
-            values, fill_value = _integer(values.astype("int64"))
+            values, fill_value = _integer(
+                values if values.dtype in (np.int32, np.int64) else values.astype("int64")
+            )
             attrs["_FillValue"] = fill_value
         elif values.dtype.kind == "M":
             # Stored as integer counts with CF units, written like any other integer:
