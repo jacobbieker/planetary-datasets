@@ -243,6 +243,7 @@ def test_a_wider_channel_set_later_widens_the_group(local_config):
     from collections import Counter
 
     assert sat.write_group(repo, sat.INSTRUMENTS[store_group], paths, "b", Counter()) == 120
+    assert not path.exists(), "the spooled object is deleted once its rows are appended"
     iasi = xr.open_zarr(
         repo.readonly_session("main").store, group="satellite/iasi", consolidated=False
     )

@@ -733,6 +733,12 @@ def _save_spool(path: pathlib.Path, arrays: dict[str, np.ndarray]) -> None:
 # ----------------------------------------------------------------------------- writing
 
 
+def _unspool(paths: Iterable[str]) -> None:
+    """Delete spooled objects once their rows are appended (or none are kept)."""
+    for path in paths:
+        pathlib.Path(path).unlink(missing_ok=True)
+
+
 def _load(path: str) -> dict[str, np.ndarray]:
     with np.load(path, allow_pickle=True) as data:
         return {k.replace("__", "."): data[k] for k in data.files}
@@ -949,14 +955,16 @@ def write_group(
     table = table.sort_values(["id", "valid"], ascending=[True, False]).drop_duplicates("id")
     counts[f"{group}_duplicates"] += counts[f"{group}_decoded"] - len(table)
     keep = {file: np.sort(rows["row"].to_numpy()) for file, rows in table.groupby("file")}
+    _unspool(p for i, p in enumerate(paths) if i not in keep)
 
     written = 0
     batch: list[dict] = []
+    spooled: list[str] = []
     width = 0
     values_in_batch = 0
 
     def flush() -> None:
-        nonlocal batch, values_in_batch, written
+        nonlocal batch, values_in_batch, written, spooled
         if not batch:
             return
         ds = wis2_qc.flag(to_dataset(batch, width, instrument), node_path)
@@ -979,10 +987,12 @@ def write_group(
             f"wis2_satellite {group}: channel table", rebase_with=icechunk.ConflictDetector()
         )
         written += ds.sizes["observation"]
-        batch, values_in_batch = [], 0
+        _unspool(spooled)
+        batch, values_in_batch, spooled = [], 0, []
 
     for file, rows in sorted(keep.items()):
         arrays = _load(paths[file])
+        spooled.append(paths[file])
         subset = {
             name: values
             if name.startswith("channel_") or name.endswith(".decimals")
@@ -1160,14 +1170,16 @@ def write_product_group(
     keep = _earliest_copies(paths, stored, group, counts)
     if keep is None:
         return 0
+    _unspool(p for i, p in enumerate(paths) if i not in keep)
     stored_dims = _stored_dims(repo, node_path)
 
     written = 0
     batch: list[dict] = []
+    spooled: list[str] = []
     values_in_batch = 0
 
     def flush() -> None:
-        nonlocal batch, values_in_batch, written
+        nonlocal batch, values_in_batch, written, spooled
         if not batch:
             return
         ds = wis2_qc.flag(product_dataset(batch, stored_dims), node_path)
@@ -1175,10 +1187,12 @@ def write_product_group(
         append_partition(repo, ds, None, fixed_dims=fixed, label=label, group=node_path)
         stored_dims.update({name: ds[name].ndim for name in ds.data_vars})
         written += ds.sizes["observation"]
-        batch, values_in_batch = [], 0
+        _unspool(spooled)
+        batch, values_in_batch, spooled = [], 0, []
 
     for file, rows in sorted(keep.items()):
         arrays = _load(paths[file])
+        spooled.append(paths[file])
         subset = {
             name: values if name.endswith(".decimals") else values[rows]
             for name, values in arrays.items()

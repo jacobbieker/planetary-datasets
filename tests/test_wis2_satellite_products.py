@@ -15,6 +15,7 @@ holds the cache key each came from.
 from __future__ import annotations
 
 import datetime as dt
+import os
 import pathlib
 
 import numpy as np
@@ -365,6 +366,8 @@ def test_ami_vectors_are_backfilled_into_amv_once_without_repeats(
     if relayed_before:
         paths.append(spool(relayed, body("ami_amv")))
     stored = sat.write_product_group(repo, old_amv, paths, "w", Counter())
+    # Each spooled object is deleted once its rows are appended (or none are kept).
+    assert not [p for p in paths if os.path.exists(p)]
     csr = sat.SatelliteTarget(local_config, workers=1)
     csr.feed(key("ami_csr"), body("ami_csr"), ARRIVED)
     csr.finish(None, None, "w")
