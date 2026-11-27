@@ -766,6 +766,39 @@ def test_harmonie_fields_stay_on_disk_until_the_write(tmp_path):
     np.testing.assert_array_equal(model_step[name].values[:, 0, 0], [101.0, 102.0])
 
 
+def test_harmonie_process_decodes_no_field(tmp_path, monkeypatch):
+    """The step concat, sortby and rechunk in ``process`` stay lazy as well.
+
+    A chunk check alone would pass if a field were loaded and then rechunked, so this
+    watches every read cfgrib makes while the init time is assembled.
+    """
+    from cfgrib.xarray_plugin import CfGribArrayWrapper
+
+    sizes = []
+    real = CfGribArrayWrapper._getitem
+
+    def watch(self, key):
+        values = real(self, key)
+        sizes.append(np.size(values))
+        return values
+
+    monkeypatch.setattr(CfGribArrayWrapper, "_getitem", watch)
+    provider = dmi.DMIHarmonieProvider()
+    files = []
+    for step in provider.forecast_steps:
+        pl = [("t", "isobaricInhPa", level, step) for level in (850, 500)]
+        sf = [("sp", "surface", None, step)]
+        files.append(str(write_grib(tmp_path / f"pl{step}.grib", pl)))
+        files.append(str(write_grib(tmp_path / f"sf{step}.grib", sf)))
+
+    ds = provider.process(files, pd.Timestamp("2026-11-26"))
+    assert sizes == [], f"process decoded fields of {sizes} values"
+    (temperature,) = [v for v in ds.data_vars if ds[v].ndim == 5]
+    np.testing.assert_array_equal(
+        ds[temperature].values[0, :, :, 0, 0], [[850, 500], [950, 600], [1050, 700]]
+    )
+
+
 @pytest.mark.parametrize(
     "provider_cls", [dmi.DMIHarmonieProvider, dmi.DMIHarmonieModelLevelProvider]
 )
