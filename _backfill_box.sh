@@ -715,6 +715,11 @@ noon)
     if (( NOON_PARALLEL > 0 )); then
       while (( $(jobs -rp | wc -l) >= NOON_PARALLEL )); do wait -n; done
     fi
+    # The backup may have been switched off while this loop waited for noon.lock or a slot.
+    if [[ $BOX_ROLE == backup && ! -f $BACKUP_ON ]]; then
+      echo "noon: the backup is off; not starting $store" >&2
+      break
+    fi
     flock -n "$LOGS/noon_$store.lock" timeout "$NOON_TIMEOUT" \
       $PIXI run python one_offs/silam_harmonie_catchup.py "=$store" \
       >> "$LOGS/noon_$store.log" 2>&1 7>&- &

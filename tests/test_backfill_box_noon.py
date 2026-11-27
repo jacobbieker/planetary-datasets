@@ -38,7 +38,7 @@ def test_the_guard_resumes_noon_lanes_even_with_an_overridden_pause_order():
 
 
 def test_a_relaunched_catch_up_waits_for_the_running_one(tmp_path):
-    """Two noon loops at once would run twice NOON_PARALLEL stores, as on 2026-11-26."""
+    """Regression: two noon loops at once ran twice NOON_PARALLEL stores on 2026-11-26."""
     running = tmp_path / "running"
     running.mkdir()
     peak = tmp_path / "peak"
@@ -71,3 +71,31 @@ def test_a_relaunched_catch_up_waits_for_the_running_one(tmp_path):
     # Both loops ran every store, one loop after the other.
     assert len(counts) == 2 * len(_box_list("NOON_STORES"))
     assert max(counts) <= 2
+
+
+def test_a_backup_switched_off_mid_catch_up_starts_no_more_stores(tmp_path):
+    """Once the backup is off the box is back, and a store must not get a second writer."""
+    config = tmp_path / ".config/planetary-box"
+    config.mkdir(parents=True)
+    (config / "role").write_text("backup\n")
+    stores = _box_list("NOON_STORES")[:3]
+    (config / "backup-lanes").write_text("".join(f"noon_{s}\n" for s in stores))
+    switch = config / "backup-on"
+    switch.touch()
+    started = tmp_path / "started"
+    pixi = tmp_path / "pixi"
+    # The first store switches the backup off, as ``_backfill_backup.sh off`` would.
+    pixi.write_text(f'#!/bin/bash\necho "$*" >> "{started}"\nrm -f "{switch}"\n')
+    pixi.chmod(0o755)
+    (config / "host.env").write_text(f"PIXI={pixi}\nNOON_PARALLEL=1\n")
+    env = {k: v for k, v in os.environ.items() if k != "BOX_ROLE"}
+    proc = subprocess.run(
+        ["bash", str(ROOT / "_backfill_box.sh"), "noon"],
+        env={**env, "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert len(started.read_text().splitlines()) == 1
+    assert "the backup is off" in proc.stderr
