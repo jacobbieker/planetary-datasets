@@ -348,7 +348,24 @@ def _assert_one_step_per_chunk(ds: xr.Dataset, dim: str) -> None:
         assert set(var.chunksizes[dim]) == {1}, f"{name} is not one {dim} per chunk"
 
 
-def test_overseas_paquets_stay_on_disk_until_the_write(tmp_path):
+@pytest.fixture
+def cfgrib_reads(monkeypatch):
+    """The number of values of every read cfgrib makes from a GRIB file."""
+    from cfgrib.xarray_plugin import CfGribArrayWrapper
+
+    sizes = []
+    real = CfGribArrayWrapper._getitem
+
+    def watch(self, key):
+        values = real(self, key)
+        sizes.append(np.size(values))
+        return values
+
+    monkeypatch.setattr(CfGribArrayWrapper, "_getitem", watch)
+    return sizes
+
+
+def test_overseas_paquets_stay_on_disk_until_the_write(tmp_path, cfgrib_reads):
     """Regression: concat and merge loaded cfgrib's arrays, copy after copy.
 
     An Indian Ocean init time holds 15.8 GB of fields; loaded, it peaked at 85 GB and was
@@ -370,18 +387,22 @@ def test_overseas_paquets_stay_on_disk_until_the_write(tmp_path):
 
     _assert_one_step_per_chunk(isobaric, "valid_time")
     _assert_one_step_per_chunk(flat, "valid_time")
+    assert cfgrib_reads == [], "a field was decoded before the write"
     np.testing.assert_array_equal(isobaric["t"].values[:, 0, 0, 0], [850.0, 950.0, 1050.0])
     np.testing.assert_array_equal(flat["sp"].values[:, 0, 0], [0.0, 100.0, 200.0])
 
 
-def test_a_multi_step_file_is_read_a_step_at_a_time(tmp_path):
+def test_a_multi_step_file_is_read_a_step_at_a_time(tmp_path, cfgrib_reads):
     """AROME France's 00H06H files hold every step; only the kept ones should be read."""
     path = write_grib(
         tmp_path / "SP1__00H06H.grib2", [("sp", "surface", None, step) for step in range(7)]
     )
     ds = arome._keep_steps(arome._open_surface(str(path)), hours=3)
     _assert_one_step_per_chunk(ds, "step")
+    assert cfgrib_reads == [], "a field was decoded before the write"
     np.testing.assert_array_equal(ds["sp"].values[:, 0, 0], [0.0, 100.0, 200.0])
+    # One 5 x 4 message per kept step; the four dropped steps are never decoded.
+    assert cfgrib_reads == [20, 20, 20]
 
 
 def test_write_runs_on_a_bounded_dask_pool(local_config, tmp_path, sample_dataset, monkeypatch):
