@@ -185,6 +185,54 @@ def test_the_earliest_copy_of_each_identity_is_kept(tmp_path):
     assert counts["amv_decoded"] == 7 and counts["amv_duplicates"] == 3
 
 
+def _earliest_copies_in_one_sort(paths, stored):
+    """The choice over the whole window at once, as first written: the reference."""
+    ids, arrivals, files, rows = [], [], [], []
+    for index, path in enumerate(paths):
+        with np.load(path) as data:
+            ids.append(data["observation_identity"].astype("int64"))
+            arrivals.append(data["arrival_time"].astype("datetime64[s]").astype("int64"))
+        files.append(np.full(ids[-1].size, index))
+        rows.append(np.arange(ids[-1].size))
+    identity, arrived = np.concatenate(ids), np.concatenate(arrivals)
+    file, row = np.concatenate(files), np.concatenate(rows)
+    new = ~np.isin(identity, np.array(sorted(stored), dtype="int64"))
+    identity, arrived, file, row = identity[new], arrived[new], file[new], row[new]
+    arrived = np.where(arrived == np.iinfo("int64").min, np.iinfo("int64").max, arrived)
+    order = np.lexsort((row, file, arrived, identity))
+    first = np.ones(order.size, dtype=bool)
+    first[1:] = identity[order][1:] != identity[order][:-1]
+    chosen = order[first]
+    return {int(f): np.sort(row[chosen[file[chosen] == f]]) for f in np.unique(file[chosen])}
+
+
+def test_choosing_copies_slice_by_slice_keeps_the_same_rows(tmp_path):
+    """Sorting OLCI's ~250 million rows at once held the window's temporaries at once."""
+    from collections import Counter
+
+    rng = np.random.default_rng(7)
+    paths = []
+    for index in range(12):
+        size = int(rng.integers(0, 3000))
+        ids = rng.integers(-5000, 5000, size) * 7919  # many copies, negative too
+        seconds = np.datetime64("2026-11-01T06:00", "s") + rng.integers(0, 600, size).astype(
+            "timedelta64[s]"
+        )
+        seconds[rng.random(size) < 0.05] = np.datetime64("NaT", "s")
+        path = tmp_path / f"{index}.npz"
+        np.savez(path, observation_identity=ids, arrival_time=seconds)
+        paths.append(str(path))
+    stored = {int(i) * 7919 for i in rng.integers(-5000, 5000, 400)}
+    counts = Counter()
+    keep = sat._earliest_copies(paths, stored, "olci_wv", counts)
+    expected = _earliest_copies_in_one_sort(paths, stored)
+    assert keep.keys() == expected.keys()
+    for index, rows in expected.items():
+        assert keep[index].tolist() == rows.tolist()
+    kept = sum(r.size for r in expected.values())
+    assert counts["olci_wv_duplicates"] == counts["olci_wv_decoded"] - kept
+
+
 SPACE = "data/int-eumetsat/data/core/weather/space-based-observations"
 
 

@@ -154,6 +154,8 @@ MAX_CHANNEL = 20_000
 #: float32 radiances, which compress least.
 SPOOL_COMPRESSION = getattr(zipfile, "ZIP_ZSTANDARD", zipfile.ZIP_DEFLATED)
 SPOOL_LEVEL = 1
+#: Slices (a power of two) the identities are deduplicated in, bounding the sort.
+DEDUPE_BUCKETS = 16
 #: Stored identities read back per group to drop repeats from earlier windows.
 RECENT_IDENTITIES = 5_000_000
 #: Rows past this many valid channels are always preferred; used to rank copies.
@@ -1127,37 +1129,51 @@ def _earliest_copies(
 
     Identities the store already holds are dropped. Plain arrays and one lexsort rather
     than a table: OLCI water vapour alone is ~250 million rows a window, and a pandas sort
-    and group-by over that drove the archiver out of memory. None when nothing decoded.
+    and group-by over that drove the archiver out of memory. Copies are chosen among
+    :data:`DEDUPE_BUCKETS` slices of the identities in turn (every copy of one identity
+    is in the same slice), so the sort's temporaries cover a slice, not the window. None
+    when nothing decoded.
     """
-    ids, arrivals, files, rows = [], [], [], []
-    for index, path in enumerate(paths):
+    ids, arrivals = [], []
+    for path in paths:
         with np.load(path, allow_pickle=True) as data:
-            identity = data["observation_identity"].astype("int64")
-            arrived = data["arrival_time"].astype("datetime64[s]").astype("int64")
-        ids.append(identity)
-        arrivals.append(arrived)
-        files.append(np.full(identity.size, index, dtype="int32"))
-        rows.append(np.arange(identity.size, dtype="int32"))
+            ids.append(data["observation_identity"].astype("int64"))
+            arrivals.append(data["arrival_time"].astype("datetime64[s]").astype("int64"))
     if not ids:
         return None
+    # Row i of the window is row i - offsets[f] of file f: one index orders by file, row.
+    offsets = np.cumsum([0, *(a.size for a in ids)])
     identity, arrived = np.concatenate(ids), np.concatenate(arrivals)
-    file, row = np.concatenate(files), np.concatenate(rows)
-    del ids, arrivals, files, rows
+    del ids, arrivals
     counts[f"{group}_decoded"] += int(identity.size)
-    if stored:
-        new = ~np.isin(identity, np.fromiter(stored, dtype="int64", count=len(stored)))
-        identity, arrived, file, row = identity[new], arrived[new], file[new], row[new]
     # NaT (int64's minimum) would sort first; a known arrival is preferred to none.
-    arrived = np.where(arrived == np.iinfo("int64").min, np.iinfo("int64").max, arrived)
-    order = np.lexsort((row, file, arrived, identity))
-    first = np.ones(order.size, dtype=bool)
-    first[1:] = identity[order][1:] != identity[order][:-1]
-    chosen = order[first]
-    counts[f"{group}_duplicates"] += counts[f"{group}_decoded"] - int(chosen.size)
+    arrived[arrived == np.iinfo("int64").min] = np.iinfo("int64").max
+    known = np.sort(np.fromiter(stored, dtype="int64", count=len(stored))) if stored else None
+    bucket = (identity & (DEDUPE_BUCKETS - 1)).astype("uint8")
+    # Window rows by slice, each slice's in window order (a stable sort of small keys).
+    by_bucket = np.argsort(bucket, kind="stable")
+    bounds = np.cumsum([0, *np.bincount(bucket, minlength=DEDUPE_BUCKETS)])
+    del bucket
+    chosen = []
+    for b in range(DEDUPE_BUCKETS):
+        index = by_bucket[bounds[b] : bounds[b + 1]]
+        ident = identity[index]
+        if known is not None and known.size:
+            at = np.minimum(np.searchsorted(known, ident), known.size - 1)
+            new = known[at] != ident
+            index, ident = index[new], ident[new]
+        order = np.lexsort((index, arrived[index], ident))
+        first = np.ones(order.size, dtype=bool)
+        first[1:] = ident[order][1:] != ident[order][:-1]
+        chosen.append(index[order[first]])
+    del identity, arrived, by_bucket
+    rows = np.sort(np.concatenate(chosen))
+    counts[f"{group}_duplicates"] += counts[f"{group}_decoded"] - int(rows.size)
+    files = np.searchsorted(offsets, rows, side="right") - 1
     keep: dict[int, np.ndarray] = {}
-    by_file = file[chosen]
-    for index in np.unique(by_file):
-        keep[int(index)] = np.sort(row[chosen[by_file == index]])
+    for index in np.unique(files):
+        mine = rows[files == index]
+        keep[int(index)] = (mine - offsets[index]).astype("int32")
     return keep
 
 
