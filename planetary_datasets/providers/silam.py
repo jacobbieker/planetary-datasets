@@ -94,8 +94,8 @@ class _SILAMForecastProvider(BaseProvider):
     write_threads = 8
     #: Files xarray keeps open while writing. Each open netCDF file keeps a chunk cache per
     #: variable that holds a whole step, so with all 120 dust files open a write grew by
-    #: ~1 GB per step read and peaked at 124 GB (v6.1, 2026-11-27); with 4 open it peaked
-    #: at 2.5 GB for 24 steps, against 25.6 GB, in the same time.
+    #: ~1 GB per step read and peaked at 124 GB in 30 min (v6.1, 2026-11-27); with 8 open
+    #: the same full forecast peaked at 4.6 GB in 31 min.
     open_files = 8
 
     @contextlib.contextmanager
