@@ -27,12 +27,14 @@ stored.
 from __future__ import annotations
 
 import pathlib
-from typing import List
+from typing import Iterable, List
 
+import numpy as np
 import pandas as pd
 import xarray as xr
 from loguru import logger
 
+from planetary_datasets.common.store import existing_times
 from planetary_datasets.config import Config
 from planetary_datasets.providers._timestamps import to_naive_utc
 from planetary_datasets.providers.opera_download import PRODUCTS, Product
@@ -57,6 +59,9 @@ class OPERAProvider(LocalArchiveRadarProvider):
     #: it has, when ``allow_partial`` is not given. The downloader is then run with
     #: ``--allow-partial`` too.
     partial_by_default: bool = False
+    #: An hour this old with some of its frames stored is settled: the frames it lacks are
+    #: gaps upstream, not publishing lag. Matches the lane's seven-day recent window.
+    settle_after = pd.Timedelta(7, "D")
 
     def __init__(self, config: Config | None = None, allow_partial: bool | None = None):
         """Build a provider.
@@ -129,6 +134,60 @@ class OPERAProvider(LocalArchiveRadarProvider):
         # sortby copies the whole hour even when it is already in order, which it
         # normally is.
         return ds if times.is_monotonic_increasing else ds.sortby("time")
+
+    def unsettled(
+        self, hours: Iterable[pd.Timestamp], now: pd.Timestamp | None = None
+    ) -> List[pd.Timestamp]:
+        """The hours in ``hours`` that may still gain frames, in their order.
+
+        The lanes plan a pass on each hour's first frame, so an hour whose first frame
+        never existed upstream is "missing" on every pass, and its staged file was read
+        and found to add nothing every time: 147 rainfall hours, 86 minutes of each pass.
+        An hour older than :attr:`settle_after` with any frame stored is left out.
+
+        A staged file left for a settled hour is deleted once every frame in it is
+        stored. One holding a frame the store lacks keeps its hour in the list, so it is
+        written first.
+
+        Args:
+            hours: Hour starts, as the lane planned them.
+            now: Current time, naive UTC; defaults to the clock.
+        """
+        hours = [to_naive_utc(h) for h in hours]
+        now = to_naive_utc(now) if now is not None else to_naive_utc(pd.Timestamp.now("UTC"))
+        old = [h for h in hours if now - h > self.settle_after]
+        if not old:
+            return hours
+        present = existing_times(self.get_icechunk_repo(), append_dim=self.append_dim)
+        present = np.sort(present.astype("datetime64[ns]"))
+        if not present.size:
+            return hours
+        starts = pd.DatetimeIndex(old).values
+        span = np.timedelta64(pd.tseries.frequencies.to_offset(self.partition_freq).nanos, "ns")
+        first = np.searchsorted(present, starts, side="left")
+        last = np.searchsorted(present, starts + span, side="left")
+        partial = {h for h, a, b in zip(old, first, last) if b > a}
+
+        keep = []
+        for h in hours:
+            if h not in partial:
+                keep.append(h)
+                continue
+            staged = self.candidates(h)
+            if any(not self._frames_stored(path, present) for path in staged):
+                keep.append(h)
+                continue
+            for path in staged:
+                path.unlink(missing_ok=True)
+                logger.debug(f"{self.name}: {h} is settled; removed staged {path.name}")
+        return keep
+
+    @staticmethod
+    def _frames_stored(path: pathlib.Path, present: np.ndarray) -> bool:
+        """True when every frame in the staged file ``path`` is in ``present``."""
+        with xr.open_dataset(path, engine="h5netcdf") as staged:
+            times = staged["time"].values
+        return bool(np.isin(times, present).all())
 
     def has_staged(self, it: pd.Timestamp) -> bool:
         """True when this hour's file has been staged."""
