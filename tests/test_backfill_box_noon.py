@@ -61,12 +61,14 @@ def test_a_relaunched_catch_up_waits_for_the_running_one(tmp_path):
             ["bash", str(ROOT / "_backfill_box.sh"), "noon"],
             env={**env, "HOME": str(tmp_path)},
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         for _ in range(2)
     ]
     for loop in loops:
-        assert loop.wait(timeout=60) == 0
+        _, stderr = loop.communicate(timeout=60)
+        assert loop.returncode == 0, stderr
     counts = [int(n) for n in peak.read_text().split()]
     # Both loops ran every store, one loop after the other.
     assert len(counts) == 2 * len(_box_list("NOON_STORES"))
