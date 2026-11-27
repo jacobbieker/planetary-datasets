@@ -839,8 +839,11 @@ def mws_product(tmp_path, start: str, scans: int) -> str:
 
 
 def test_metop_sg_granules_stay_on_disk_until_the_write(local_config, tmp_path, monkeypatch):
-    """Loaded and copied by merge, pad, concat and sortby, a 4.3 GB METimage partition
-    peaked at 18.4 GB (2026-11-25T12:00)."""
+    """Regression: granules were loaded, then copied by merge, pad, concat and sortby.
+
+    A 4.3 GB METimage partition (2026-11-25T12:00) peaked at 18.4 GB, and the lane at up
+    to 26.7 GB (2026-11).
+    """
     provider = MetopSgMwsProvider(config=local_config)
     archives = [
         mws_product(tmp_path, "2026-09-27T12:03", scans=78),
