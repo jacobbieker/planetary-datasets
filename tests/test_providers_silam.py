@@ -187,11 +187,16 @@ def test_write_runs_on_a_bounded_dask_pool(name, request, monkeypatch):
 
     def spy(*args, **kwargs):
         seen.append(dask.config.get("num_workers", None))
+        open_files.append(xr.get_options()["file_cache_maxsize"])
         return real(*args, **kwargs)
 
+    open_files = []
     monkeypatch.setattr(silam, "_write_to_icechunk", spy)
     assert provider.run_partition(INIT) is True
     assert seen == [provider.write_threads]
+    # Each open source file caches whole steps; all 120 open took a write to 124 GB.
+    assert open_files == [provider.open_files]
+    assert xr.get_options()["file_cache_maxsize"] != provider.open_files
 
 
 def test_aerosol_process_merges_species_and_days(aerosol):
