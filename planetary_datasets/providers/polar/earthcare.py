@@ -145,8 +145,10 @@ SKIPPED_DAYS: dict[str, frozenset[str]] = {}
 #: Uncompressed bytes of frames read into memory before they are written, counted from
 #: each file's own dataset sizes. Counted as four times the file size, ACM_CAP_2B (ten
 #: times smaller compressed) batched 7.5 GB of data and the lane peaked at 27 GB
-#: (2026-11-27), while the products compressing two-fold batched about 1.4 GB.
-BATCH_BYTES = 3 * 2**29
+#: (2026-11-27), while the products compressing two-fold batched about 1.4 GB. 40
+#: ACM_CAP frames at 4.5 GiB a batch peaked at 15 GB and wrote 7% faster than before;
+#: at 1.5 GiB they peaked at 5 GB but took 23% longer.
+BATCH_BYTES = 9 * 2**29
 #: Names the track dimension goes by across the products.
 ALONG_TRACK_NAMES = ("along_track", "nray")
 #: Header groups copied into the per-frame variables.
