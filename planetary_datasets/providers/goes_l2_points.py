@@ -47,7 +47,9 @@ the calling program's main module: call :func:`run_prefix` from behind an
 from __future__ import annotations
 
 import argparse
+import ctypes
 import datetime as dt
+import gc
 import io
 import re
 import sys
@@ -138,6 +140,20 @@ def _same(a, b) -> bool:
 
 def store_prefix(satellite: int) -> str:
     return f"bkr/geo/goes{satellite}_l2_points.icechunk"
+
+
+#: Chunk references a store handle keeps cached. The groups' manifests are unsplit, so
+#: each partition's commit writes its group's whole manifests anew (``glm_lcfa`` on
+#: GOES-19 was 317,000 references in 2026-11) and icechunk's default cache of 15 million
+#: kept those of dozens of past commits, ~5 GB. One commit reads one group's.
+CACHED_CHUNK_REFS = 2_000_000
+
+
+def repository_config() -> icechunk.RepositoryConfig:
+    """Handle settings for the points stores: a bounded cache of chunk references."""
+    return icechunk.RepositoryConfig(
+        caching=icechunk.CachingConfig(num_chunk_refs=CACHED_CHUNK_REFS)
+    )
 
 
 def group_of(key: str) -> str | None:
@@ -388,6 +404,26 @@ def _parser():
 
             _PARSER = ProcessPoolExecutor(PARSE_WORKERS)
         return _PARSER
+
+
+def release_between_passes() -> None:
+    """Give back what a pass held before the lane sleeps for an hour.
+
+    The parser processes (eight, ~200 MB each once they have parsed) are stopped; the
+    next pass starts a pool again. Freed heap is returned to the OS: glibc keeps what
+    the pass's file bodies, parsed lists and icechunk manifests freed in its arenas, so
+    an idle ``--follow`` lane held ~4 GB, besides its workers, until the next pass.
+    """
+    global _PARSER
+    with _PARSER_LOCK:
+        pool, _PARSER = _PARSER, None
+    if pool is not None:
+        pool.shutdown(wait=True, cancel_futures=True)
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):  # not glibc
+        pass
 
 
 def _discard_parser(pool) -> None:
@@ -655,7 +691,7 @@ def run_prefix(
     last = (now - SETTLE).date() - dt.timedelta(days=1)
     store = store or source_store(SATELLITES[satellite])
     family = "GLM" if prefix.startswith("GLM") else prefix[len("ABI-L2-") :].rstrip("FCM")
-    repo = config.icechunk_repo(store_prefix(satellite))
+    repo = config.icechunk_repo(store_prefix(satellite), config=repository_config())
     ensure_root(repo, satellite)
     days = [d for d in available_days(store, prefix) if d <= last]
     days = [d for d in days if (start is None or d >= start) and (end is None or d <= end)]
@@ -707,6 +743,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.info(f"goes{args.satellite} points: pass done, {written:,} file(s) copied")
         if not args.follow:
             return 0
+        release_between_passes()
         for _ in range(6):  # an hour, saying so every ten minutes for the box's stall guard
             time.sleep(600)
             logger.info(f"goes{args.satellite} points: waiting for the next pass")
