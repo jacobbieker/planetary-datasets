@@ -746,7 +746,7 @@ def test_harmonie_fields_stay_on_disk_until_the_write(tmp_path):
     """Regression: the merges and the step concat loaded cfgrib's arrays, copy after copy.
 
     A model-level init time holds 18.5 GB of fields; loaded, it peaked at 70 GB in every
-    noon catch-up. Read lazily, the same write peaked at 16.5 GB.
+    noon catch-up. Read lazily, the same write peaked at 21.7 GB on 24 threads.
     """
     pressure = write_grib(
         tmp_path / "pl.grib", [("t", "isobaricInhPa", level, 1) for level in (850, 500)]

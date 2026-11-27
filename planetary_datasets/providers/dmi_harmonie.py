@@ -262,8 +262,10 @@ class _DMIHarmonieBase(BaseProvider):
     #: Dask tasks writing at once. Fields are decoded during the write (see
     #: :func:`_open_grib`), so this bounds how many are in memory; a model-level chunk is
     #: one step of one variable on all 90 levels, 0.77 GB. Dask's default is one thread
-    #: per core, 48 on the live box.
-    write_threads: int = 16
+    #: per core, 48 on the live box. On that box a model-level init time took 306 s and
+    #: peaked at 52 GB that way; 24 threads took 247 s at 21.7 GB, 16 took 370 s at 16.4 GB
+    #: (2026-11-27).
+    write_threads: int = 24
 
     def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
         """Write one init time, at most :attr:`write_threads` dask tasks at a time."""
