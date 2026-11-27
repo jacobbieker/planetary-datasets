@@ -149,9 +149,9 @@ WRITE_THREADS = 4
 #: Channel numbers past this are not channels (a missing value, a stray element).
 MAX_CHANNEL = 20_000
 #: How the decoded objects are spooled: numpy's ``.npz`` layout (``np.load`` reads it as
-#: is) with zstd members. Uncompressed, a window's spool reached ~412 GB, mostly IASI's
-#: 8,007-channel integer spectra and OLCI's per-row object columns; at level 1 the same
-#: arrays, bit for bit, take ~25 times less (2026-11-27).
+#: is) with zstd members. Uncompressed, the 2026-11-27 12Z window's spool peaked at
+#: ~450 GB; at level 1 the same arrays, bit for bit, peak at ~38 GB, most of it CrIS's
+#: float32 radiances, which compress least.
 SPOOL_COMPRESSION = getattr(zipfile, "ZIP_ZSTANDARD", zipfile.ZIP_DEFLATED)
 SPOOL_LEVEL = 1
 #: Stored identities read back per group to drop repeats from earlier windows.
