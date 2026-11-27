@@ -838,6 +838,30 @@ def mws_product(tmp_path, start: str, scans: int) -> str:
     return str(archive)
 
 
+def test_metop_sg_granules_stay_on_disk_until_the_write(local_config, tmp_path, monkeypatch):
+    """Loaded and copied by merge, pad, concat and sortby, a 4.3 GB METimage partition
+    peaked at 18.4 GB (2026-11-25T12:00)."""
+    provider = MetopSgMwsProvider(config=local_config)
+    archives = [
+        mws_product(tmp_path, "2026-09-27T12:03", scans=78),
+        mws_product(tmp_path, "2026-09-27T12:00", scans=80),
+    ]
+
+    def no_load(self, **kwargs):
+        raise AssertionError("a granule was loaded into memory")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(xr.Dataset, "load", no_load)
+        ds = provider.process(archives, pd.Timestamp("2026-09-27"), temp_dir=tmp_path / "work")
+    assert ds.sizes["time"] == 2, "a granule failed to read"
+    bt = ds["mws_toa_brightness_temperature"]
+    assert bt.chunks is not None, "the granules were loaded"
+    # Whole dimensions apart from ``time``, as when the granules were loaded.
+    assert bt.chunks == ((2,), (80,), (3,), (2,))
+    assert ds["latitude"].chunks == ((2,), (80,), (3,))
+    assert list(ds["time"].values) == sorted(ds["time"].values)
+
+
 def test_metop_sg_mws_granules_are_padded_and_written_to_both_stores(local_config, tmp_path):
     provider = MetopSgMwsProvider(config=local_config)
     archives = [

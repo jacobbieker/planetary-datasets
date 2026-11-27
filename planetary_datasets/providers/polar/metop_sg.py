@@ -43,15 +43,23 @@ class MetopSgProvider(EumdacProvider):
     chunks: Dict[str, int] = {"time": 1}
 
     def read_granule(self, path: str) -> xr.Dataset:
-        """Read one product into a single ``time`` step."""
+        """Read one product into a single ``time`` step, lazily.
+
+        The product stays on disk in the partition's temporary directory, which outlasts
+        the write. Loaded, every granule was held at once and then copied by merge, pad,
+        concat and sortby: a 10-minute METimage partition of 4.3 GB peaked at 18.4 GB, and
+        the lane at up to 26.7 GB (2026-11).
+        """
         with xr.open_dataset(path, engine="h5netcdf") as root:
             attrs = dict(root.attrs)
         parts = []
         for group, names in self.groups.items():
-            with xr.open_dataset(
+            ds = xr.open_dataset(
                 path, engine="h5netcdf", group=group, decode_times=self.decode_times
-            ) as ds:
-                parts.append(ds[list(names)].load())
+            )
+            # One dask block per variable: the files' own chunks (41 lines of METimage)
+            # made a 90,000-task graph per variable and a write 10x slower.
+            parts.append(ds[list(names)].chunk())
         ds = xr.merge(parts, combine_attrs="drop", compat="no_conflicts").drop_encoding()
         ds = ds.rename({k: v for k, v in self.dim_renames.items() if k in ds.dims})
         start = pd.Timestamp(attrs["sensing_start_time_utc"])
@@ -83,7 +91,11 @@ class MetopSgProvider(EumdacProvider):
         ds = self.restrict_to_window(self.concat_granules(granules), it)
         if ds.sizes.get("time", 0) == 0:
             return ds
-        return ds.chunk({d: n for d, n in self.chunks.items() if d in ds.dims})
+        # Whole dimensions apart from those in ``chunks``, as when granules were loaded:
+        # padding adds a block that must not become a chunk boundary in the store.
+        chunks = {d: -1 for d in ds.dims}
+        chunks.update({d: n for d, n in self.chunks.items() if d in ds.dims})
+        return ds.chunk(chunks)
 
 
 class MetopSgMwsProvider(MetopSgProvider):
