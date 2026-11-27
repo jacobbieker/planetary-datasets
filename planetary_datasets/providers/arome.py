@@ -124,9 +124,10 @@ class AromeProvider(BaseProvider):
     download_retries: int = 3
     #: Dask tasks writing at once. The fields are decoded during the write (see
     #: :data:`GRIB_CHUNKS`), one step of one variable per task, so this bounds how many
-    #: chunks are in memory. An Indian Ocean init time peaked at 7 GB with 16, and was no
-    #: slower than the unbounded write; dask's default is one thread per core, 48 here.
-    write_threads: int = 16
+    #: chunks are in memory. Dask's default is one thread per core, 48 on the live box,
+    #: where an Indian Ocean init time took 190 s at 66 GB that way, 145 s at 7.9 GB with
+    #: 24 threads and 183 s at 5.9 GB with 16 (2026-11-27).
+    write_threads: int = 24
 
     @property
     def layout(self) -> AromeLayout:

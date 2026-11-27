@@ -369,7 +369,7 @@ def test_overseas_paquets_stay_on_disk_until_the_write(tmp_path, cfgrib_reads):
     """Regression: concat and merge loaded cfgrib's arrays, copy after copy.
 
     An Indian Ocean init time holds 15.8 GB of fields; loaded, it peaked at 85 GB and was
-    OOM-killed. Read lazily, a step at a time, the same write peaked at 7 GB.
+    OOM-killed. Read lazily, a step at a time, the same write peaked at 7.9 GB.
     """
     pressure = [
         write_grib(tmp_path / f"IP1__{step:03d}H.grib2", [("t", "isobaricInhPa", 850, step)])
