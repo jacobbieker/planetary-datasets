@@ -70,11 +70,20 @@ def harp_on_disk(monkeypatch):
 
 
 def test_products_stay_on_disk_until_the_write(harp_on_disk, monkeypatch, tmp_path):
-    """Read into memory, an hour of 2.9 GB peaked at 26.7 GB through concat and sortby."""
+    """Regression: products read into memory were copied by concat and sortby.
+
+    An hour of 2.9 GB of rows peaked at 26.7 GB, and the lane at up to 37 GB (2026-11).
+    """
     provider = MetopGomeProvider()
     natives = [str(tmp_path / name) for name in harp_on_disk]
     monkeypatch.setattr(provider, "iter_natives", lambda *a, **k: iter(natives))
-    ds = provider.process(natives, pd.Timestamp("2024-02-29T04:00"), temp_dir=tmp_path)
+
+    def no_load(self, **kwargs):
+        raise AssertionError("a product was loaded into memory")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(xr.Dataset, "load", no_load)
+        ds = provider.process(natives, pd.Timestamp("2024-02-29T04:00"), temp_dir=tmp_path)
 
     assert ds["measured_radiances"].chunks is not None, "the radiances were loaded"
     assert max(ds["measured_radiances"].chunks[0]) <= provider.chunk_measurements
@@ -91,9 +100,23 @@ def test_products_stay_on_disk_until_the_write(harp_on_disk, monkeypatch, tmp_pa
 def test_a_product_wholly_outside_the_hour_leaves_nothing_to_write(
     harp_on_disk, monkeypatch, tmp_path
 ):
-    """A neighbour's product is dropped before concatenation rather than carried through it."""
+    """Regression: a neighbour's product went through concat and sortby before the window.
+
+    One of the two products of 2026-11-25T12 lay wholly in the hour before, and the
+    partition still peaked at 13.5 GB for 1.7 GB of rows.
+    """
     provider = MetopGomeProvider()
-    natives = [str(tmp_path / "a.nat")]
+    natives = [str(tmp_path / "a.nat"), str(tmp_path / "b.nat")]
     monkeypatch.setattr(provider, "iter_natives", lambda *a, **k: iter(natives))
-    ds = provider.process(natives, pd.Timestamp("2024-02-29T05:00"), temp_dir=tmp_path)
-    assert ds.sizes.get("time", 0) == 0
+    concatenated = []
+    real = provider.concat_granules
+
+    def spy(datasets):
+        concatenated.append([int(ds.sizes["time"]) for ds in datasets])
+        return real(datasets)
+
+    monkeypatch.setattr(provider, "concat_granules", spy)
+    ds = provider.process(natives, pd.Timestamp("2024-02-29T04:10"), temp_dir=tmp_path)
+    # a.nat ends at 04:09:59; only b.nat reaches the concatenation.
+    assert concatenated == [[2500]]
+    assert ds.sizes["time"] == 2500
