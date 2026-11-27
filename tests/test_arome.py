@@ -399,6 +399,19 @@ def test_write_runs_on_a_bounded_dask_pool(local_config, tmp_path, sample_datase
 
     monkeypatch.setattr(base, "_write_to_icechunk", spy)
     provider = _StubProvider(_grib_stubs(tmp_path), sample_dataset, config=local_config)
+    before = dask.config.get("num_workers", None)
     assert provider.run_partition(pd.Timestamp(sample_dataset.time.values[0])) is True
     assert seen == [provider.write_threads]
-    assert dask.config.get("num_workers", None) != provider.write_threads
+    assert dask.config.get("num_workers", None) == before
+
+
+def test_admission_check_sizes_the_write_pool(local_config, tmp_path, sample_dataset, monkeypatch):
+    """The memory check before the write counts the chunks the write pool holds at once."""
+    seen = []
+    monkeypatch.setattr(
+        arome, "require_dataset_fits", lambda ds, what, concurrency: seen.append(concurrency)
+    )
+    provider = _StubProvider(_grib_stubs(tmp_path), sample_dataset, config=local_config)
+    provider.guard_memory = True
+    assert provider.run_partition(pd.Timestamp(sample_dataset.time.values[0])) is True
+    assert seen == [provider.write_threads]

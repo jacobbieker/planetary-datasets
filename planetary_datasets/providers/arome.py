@@ -200,7 +200,10 @@ class AromeProvider(BaseProvider):
             # a committed store behind a failed run.
             with memory_guard(what=f"{self.name} {it}"):
                 processed = self.process(input_files, it)
-                require_dataset_fits(processed, what=f"{self.name} {it}")
+                # The write holds up to write_threads chunks at once, not the default 4.
+                require_dataset_fits(
+                    processed, what=f"{self.name} {it}", concurrency=self.write_threads
+                )
         else:
             processed = self.process(input_files, it)
 
