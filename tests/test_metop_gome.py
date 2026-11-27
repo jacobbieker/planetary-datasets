@@ -37,6 +37,9 @@ def gome(monkeypatch):
         "planetary_datasets.providers.polar.metop_gome.harp_to_dataset",
         lambda name, **kwargs: products[name],
     )
+    # process imports harp for its NoDataError; harp is not a declared dependency.
+    no_data = type("NoDataError", (Exception,), {})
+    monkeypatch.setitem(sys.modules, "harp", types.SimpleNamespace(NoDataError=no_data))
     return MetopGomeProvider()
 
 
