@@ -92,6 +92,11 @@ class _SILAMForecastProvider(BaseProvider):
     #: of ~0.6 GB); on the 192-core box dask's default pool read nearly all of it at once
     #: and the write peaked above 100 GB until the OOM killer took it, every attempt.
     write_threads = 8
+    #: Files xarray keeps open while writing. Each open netCDF file keeps a chunk cache per
+    #: variable that holds a whole step, so with all 120 dust files open a write grew by
+    #: ~1 GB per step read and peaked at 124 GB in 30 min (v6.1, 2026-11-27); with 8 open
+    #: the same full forecast peaked at 4.6 GB in 31 min.
+    open_files = 8
 
     @contextlib.contextmanager
     def local_tempdir(self) -> Iterator[pathlib.Path]:
@@ -109,6 +114,8 @@ class _SILAMForecastProvider(BaseProvider):
     def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
         """Append one forecast to the store, at most ``write_threads`` dask tasks at a time.
 
+        At most ``open_files`` source files are open meanwhile, which bounds their caches.
+
         Args:
             repo: The store's repository.
             processed: One forecast, as returned by ``process``.
@@ -120,7 +127,10 @@ class _SILAMForecastProvider(BaseProvider):
             IncompleteForecast: The store refused a forecast it does not hold, because its
                 variables or step axis do not match the store's.
         """
-        with bounded_compute(self.write_threads):
+        with (
+            bounded_compute(self.write_threads),
+            xr.set_options(file_cache_maxsize=self.open_files),
+        ):
             written = _write_to_icechunk(
                 repo,
                 processed,
