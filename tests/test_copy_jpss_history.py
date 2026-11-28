@@ -431,7 +431,7 @@ def test_a_missing_old_store_is_skipped_but_a_broken_one_raises(old_mirs, monkey
     copier = tool.Copier("mirs_img", end=HOUR + pd.Timedelta(3, "h"))
     assert [o.satellite for o in copier.olds] == ["n20", "n21"]
 
-    def broken(storage):
+    def broken(storage, **kwargs):
         raise tool.icechunk.IcechunkError("storage unavailable")
 
     monkeypatch.setattr(tool.icechunk.Repository, "open", broken)

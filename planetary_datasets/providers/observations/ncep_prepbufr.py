@@ -131,7 +131,8 @@ CHUNK_ROWS = 250_000
 #: commit writes each array's whole manifest anew (~4,500 references an array in 2026)
 #: and icechunk's default cache of 15 million kept those of hundreds of past commits: the
 #: lane grew from 0.2 to 4.3 GB over 1,800 cycles. A commit reads only the newest
-#: manifests, ~100,000 references for the larger store.
+#: manifests, ~100,000 references for the larger store, so this overrides the central
+#: default of ``Config.icechunk_repo`` (``DEFAULT_CACHED_CHUNK_REFS``) with less.
 CACHED_CHUNK_REFS = 500_000
 
 
