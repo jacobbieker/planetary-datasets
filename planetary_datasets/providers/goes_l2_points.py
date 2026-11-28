@@ -67,7 +67,7 @@ import zarr
 from loguru import logger
 
 from planetary_datasets.common import multidim
-from planetary_datasets.config import DEFAULT_CACHED_CHUNK_REFS, Config, get_config
+from planetary_datasets.config import Config, get_config
 from planetary_datasets.providers.virtualized.goes_l2 import (
     SATELLITES,
     SETTLE,
@@ -145,9 +145,8 @@ def store_prefix(satellite: int) -> str:
 #: Chunk references a store handle keeps cached. The groups' manifests are unsplit, so
 #: each partition's commit writes its group's whole manifests anew (``glm_lcfa`` on
 #: GOES-19 was 317,000 references in 2026-11) and icechunk's default cache of 15 million
-#: kept those of dozens of past commits, ~5 GB. One commit reads one group's. This is
-#: the central default of ``Config.icechunk_repo``, named here as this store's need.
-CACHED_CHUNK_REFS = DEFAULT_CACHED_CHUNK_REFS
+#: kept those of dozens of past commits, ~5 GB. One commit reads one group's.
+CACHED_CHUNK_REFS = 2_000_000
 
 
 def repository_config() -> icechunk.RepositoryConfig:
