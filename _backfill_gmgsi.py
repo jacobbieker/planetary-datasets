@@ -168,6 +168,7 @@ def main(argv: list[str]) -> int:
     import pandas as pd
 
     import planetary_datasets
+    from planetary_datasets.memory import release_freed_memory
     from planetary_datasets.providers.gmgsi import GMGSILegacyProvider, GMGSIProvider
 
     provider = (GMGSIProvider if args.provider == "gmgsi_v3" else GMGSILegacyProvider)()
@@ -208,6 +209,7 @@ def main(argv: list[str]) -> int:
             if not args.follow:
                 break
             print(f"=== next catch-up in {args.period}s", flush=True)
+            release_freed_memory("gmgsi")
             time.sleep(args.period)
     finally:
         if paused:

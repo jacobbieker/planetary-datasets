@@ -94,6 +94,7 @@ def main(argv) -> int:
     import zarr
 
     import planetary_datasets
+    from planetary_datasets.memory import release_freed_memory
     from planetary_datasets.providers.eumetsat.mtg_irs import (
         ARCHIVE_START,
         PROVIDERS,
@@ -213,6 +214,7 @@ def main(argv) -> int:
         # does not re-search every empty hour back to the archive start.
         start = min(failed_hours, default=end - pd.Timedelta(LIVE_LAG_HOURS * 3, "h"))
         failed_hours = []
+        release_freed_memory(f"mtg_irs {args.provider}")
         time.sleep(FOLLOW_PAUSE_SECONDS)
 
 

@@ -10,6 +10,9 @@ and legible instead:
     Watch resident memory while work runs and abort past a ceiling.
 ``estimate_dataset_gb``
     Size a lazy :class:`xarray.Dataset` without loading it.
+``release_freed_memory``
+    Hand heap freed by a finished pass back to the OS (``gc`` and glibc's
+    ``malloc_trim``) before a lane sleeps.
 
 The design follows ``docker/goes-virtual/memory_watchdog.py``, which already solved this for
 the EC2 ingests. Two lessons from it are carried over deliberately:
@@ -24,6 +27,8 @@ the EC2 ingests. Two lessons from it are carried over deliberately:
 from __future__ import annotations
 
 import contextlib
+import ctypes
+import gc
 import os
 import resource
 import threading
@@ -299,10 +304,71 @@ def configure_malloc_arenas(max_arenas: int = 2) -> None:
     os.environ.setdefault("MALLOC_ARENA_MAX", str(max_arenas))
 
 
+@dataclass(frozen=True)
+class MemoryRelease:
+    """What :func:`release_freed_memory` did.
+
+    Attributes:
+        released: glibc reported returning memory to the OS.
+        before_gb: Process-tree RSS before, in GB (0.0 when not measured).
+        after_gb: Process-tree RSS after, in GB (0.0 when not measured).
+    """
+
+    released: bool
+    before_gb: float = 0.0
+    after_gb: float = 0.0
+
+
+def malloc_trim() -> bool:
+    """Ask glibc to hand free heap back to the OS with ``malloc_trim(0)``.
+
+    Returns:
+        True if glibc released anything. Always False off glibc (macOS, musl), where
+        this is a no-op.
+    """
+    try:
+        return bool(ctypes.CDLL("libc.so.6").malloc_trim(0))
+    except (OSError, AttributeError):  # not glibc
+        return False
+
+
+def release_freed_memory(what: str = "", collect: bool = True, log: bool = True) -> MemoryRelease:
+    """Return the heap a pass freed to the OS, typically before a lane sleeps.
+
+    glibc keeps freed spans in its per-thread arenas instead of unmapping them, so a
+    ``--follow`` lane slept holding what its last pass had grown to (the WIS2 archiver at
+    49-58 GB, the GOES points lanes ~4 GB) although Python had freed it. This runs
+    :func:`gc.collect` (unless ``collect`` is False), then :func:`malloc_trim`.
+
+    Args:
+        what: Label for the log line, e.g. the lane's name.
+        collect: Run a full garbage collection first.
+        log: Measure process-tree RSS before and after and log it at INFO. Off for
+            per-batch callers that only want the trim.
+
+    Returns:
+        A :class:`MemoryRelease`; its RSS fields are 0.0 when ``log`` is False.
+    """
+    before = process_tree_rss_gb() if log else 0.0
+    if collect:
+        gc.collect()
+    released = malloc_trim()
+    if not log:
+        return MemoryRelease(released)
+    after = process_tree_rss_gb()
+    logger.info(
+        f"{what + ': ' if what else ''}memory {before:.1f} GB -> {after:.1f} GB RSS "
+        f"after releasing freed heap"
+    )
+    return MemoryRelease(released, before, after)
+
+
 def log_memory(what: str = "") -> float:
     """Log and return current process-tree RSS in GB."""
     rss = process_tree_rss_gb()
-    logger.info(f"{what + ': ' if what else ''}{rss:.1f} GB RSS, {available_memory_gb():.1f} GB available")
+    logger.info(
+        f"{what + ': ' if what else ''}{rss:.1f} GB RSS, {available_memory_gb():.1f} GB available"
+    )
     return rss
 
 

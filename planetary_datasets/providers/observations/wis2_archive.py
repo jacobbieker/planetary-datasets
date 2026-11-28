@@ -712,21 +712,9 @@ def release_memory() -> bool:
     freed spans in its arenas, so the archiver slept between windows at 49-58 GB RSS
     (2026-11-27). Returns whether anything was released; a no-op off glibc.
     """
-    import ctypes
-    import gc
+    from planetary_datasets.memory import release_freed_memory
 
-    from planetary_datasets.memory import process_tree_rss_gb
-
-    before = process_tree_rss_gb()
-    gc.collect()
-    try:
-        released = bool(ctypes.CDLL("libc.so.6").malloc_trim(0))
-    except (OSError, AttributeError):
-        return False
-    logger.info(
-        f"wis2: memory {before:.1f} GB -> {process_tree_rss_gb():.1f} GB RSS before sleeping"
-    )
-    return released
+    return release_freed_memory("wis2").released
 
 
 def wait(upcoming: dt.datetime, pause: float, sleep: Callable[[float], None] = time.sleep) -> None:
