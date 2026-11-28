@@ -381,8 +381,13 @@ def test_a_day_missing_from_a_yearly_store_is_recorded_without_reloading_its_axi
     assert stored(local_config, osmc_ragged.ALL_STORE).sizes["time"] == 12
 
 
-def test_an_empty_day_before_the_store_exists_records_nothing(provider, monkeypatch):
-    """No store is created just to hold an empty day."""
+def test_an_empty_day_before_the_store_has_data_writes_nothing(provider, monkeypatch):
+    """An empty day ahead of any data commits nothing: no arrays and no ledger entry.
+
+    Opening the provider's repo may create it empty; that is all that may happen.
+    """
     monkeypatch.setattr(osmc_ragged.requests, "get", lambda url, **kw: _Response(404, NO_RESULTS))
     assert not provider.run_partition(pd.Timestamp("2016-10-29"))
-    assert ledger(provider.get_icechunk_repo()) == set()
+    repo = provider.get_icechunk_repo()
+    assert len(list(repo.ancestry(branch="main"))) == 1
+    assert ledger(repo) == set()
