@@ -127,6 +127,20 @@ LEDGER_ATTR = "ingested_cycles"
 FALLBACK_ATTR = "nr_fallback_cycles"
 #: Rows per chunk along ``time``: about two cycles of aircraft reports.
 CHUNK_ROWS = 250_000
+#: Chunk references each store's handle keeps cached. The manifests are unsplit, so every
+#: commit writes each array's whole manifest anew (~4,500 references an array in 2026)
+#: and icechunk's default cache of 15 million kept those of hundreds of past commits: the
+#: lane grew from 0.2 to 4.3 GB over 1,800 cycles. A commit reads only the newest
+#: manifests, ~100,000 references for the larger store.
+CACHED_CHUNK_REFS = 500_000
+
+
+def repository_config() -> icechunk.RepositoryConfig:
+    """Handle settings for both stores: a bounded cache of chunk references."""
+    return icechunk.RepositoryConfig(
+        caching=icechunk.CachingConfig(num_chunk_refs=CACHED_CHUNK_REFS)
+    )
+
 
 #: BUFR mnemonics pb2nc is asked for, and the MET names it writes them under.
 OBS_BUFR_VAR = ("POB", "QOB", "TOB", "ZOB", "UOB", "VOB")
@@ -582,8 +596,12 @@ class NCEPUpperAirProvider(StagedFilesMixin, BaseProvider):
         if prefix == self.store_prefix:
             return self.get_icechunk_repo()
         if prefix not in self._repos:
-            self._repos[prefix] = self.config.icechunk_repo(prefix)
+            self._repos[prefix] = self.config.icechunk_repo(prefix, config=repository_config())
         return self._repos[prefix]
+
+    def repository_config(self) -> icechunk.RepositoryConfig:
+        """A bounded chunk-reference cache; see :data:`CACHED_CHUNK_REFS`."""
+        return repository_config()
 
     def missing_timesteps(self, desired: Iterable) -> List[pd.Timestamp]:
         """Cycles not in the aircraft store's ledger, which is written last for each."""

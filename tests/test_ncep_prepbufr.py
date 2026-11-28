@@ -463,3 +463,19 @@ def test_run_pb2nc_docker_needs_docker(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(MissingToolError, match="docker"):
         run_pb2nc_docker(tmp_path / "a", tmp_path / "b.nc", tmp_path / "c")
+
+
+def test_both_stores_cache_a_bounded_number_of_chunk_references(
+    provider, local_config, staged_fetch
+):
+    """Regression: with icechunk's default cache (15 million chunk references a handle)
+    the unsplit manifests of every past commit stayed cached, and the lane grew from 0.2
+    to 4.3 GB over 1,800 cycles. Both stores' handles must be opened with the bound."""
+    assert provider.run_partition(CYCLE) is True
+    handles = {
+        AMDAR_STORE: provider.get_icechunk_repo(),
+        ADPUPA_STORE: provider.repo_for(ADPUPA_STORE),
+    }
+    for prefix, repo in handles.items():
+        assert repo.config.caching.num_chunk_refs == ncep.CACHED_CHUNK_REFS, prefix
+    assert ncep.CACHED_CHUNK_REFS <= 1_000_000
