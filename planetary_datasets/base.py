@@ -122,7 +122,9 @@ class BaseProvider(ABC):
     def repository_config(self) -> icechunk.RepositoryConfig | None:
         """Repository settings for the handle :meth:`get_icechunk_repo` opens.
 
-        None keeps the repository's own. Override for, e.g., manifest splitting.
+        None keeps the repository's own. Override for, e.g., manifest splitting. The
+        handle's chunk-reference cache is bounded by ``Config.icechunk_repo`` unless the
+        config returned here sets caching of its own (never persisted either way).
         """
         return None
 

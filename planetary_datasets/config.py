@@ -32,6 +32,76 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_BUCKET = "us-west-2.opendata.source.coop"
 DEFAULT_REGION = "us-west-2"
 
+#: Chunk references a handle from :meth:`Config.icechunk_repo` keeps cached, unless its
+#: caller sets its own. icechunk's default is 15 million: with unsplit manifests every
+#: commit writes each appended array's whole manifest anew, and a long-lived handle kept
+#: those of hundreds of past commits (the GOES L2 points lanes ~5 GB, NCEP upper air
+#: 0.2 -> 4.3 GB). A commit reads each manifest it rewrites once, cached or not; the cache
+#: only spares re-reads of a manifest within one snapshot, as chunk reads do. Those thrash
+#: once the manifests being read exceed the bound, so stores with a larger array keep
+#: icechunk's default (:data:`UNBOUNDED_STORE_PREFIXES`).
+DEFAULT_CACHED_CHUNK_REFS = 2_000_000
+
+#: Stores whose handles keep icechunk's default cache: each holds an array whose manifest
+#: alone is over half of :data:`DEFAULT_CACHED_CHUNK_REFS` (survey of every store's newest
+#: snapshot, 2026-11-28): ``ifs_native``/``ifs_native_025`` 6.0M references,
+#: ``mtg_irs_l1`` 3.3M, ``pace_l2`` 2.9M, the Met Office 6-hourly global 2.2M, MRMS
+#: outside CONUS up to 1.6M (five arrays, 3.2M together), ``gmgsi_v1`` 1.1M. Matched as
+#: the start of the store prefix, so later generations of a store are covered too.
+UNBOUNDED_STORE_PREFIXES = (
+    "bkr/ifs/",
+    "bkr/geo/mtg_irs_l1",
+    "bkr/polar/pace_l2",
+    "bkr/metoffice/metoffice_global_deterministic_10km_6hourly_24hr",
+    "bkr/mrms/",
+    "bkr/gmgi/gmgsi_v1",
+)
+
+
+def cached_chunk_refs_for(prefix: str) -> int | None:
+    """Chunk references a handle on ``prefix`` caches by default; None for icechunk's own.
+
+    Args:
+        prefix: Store prefix, as given to :meth:`Config.icechunk_repo`.
+    """
+    if prefix.strip("/").startswith(UNBOUNDED_STORE_PREFIXES):
+        return None
+    return DEFAULT_CACHED_CHUNK_REFS
+
+
+def bounded_handle_config(config=None, num_chunk_refs: int | None = DEFAULT_CACHED_CHUNK_REFS):
+    """``config`` with a bounded chunk-reference cache, for opening a handle.
+
+    Args:
+        config: Optional ``icechunk.RepositoryConfig``. Caching it sets itself wins.
+        num_chunk_refs: Chunk references to cache when ``config`` sets none; None leaves
+            ``config`` as it is (icechunk's default, or the repository's own).
+
+    Returns:
+        An ``icechunk.RepositoryConfig`` (or None); ``config`` is not modified.
+    """
+    import icechunk
+
+    if num_chunk_refs is None:
+        return config
+    bound = icechunk.RepositoryConfig(caching=icechunk.CachingConfig(num_chunk_refs=num_chunk_refs))
+    return bound if config is None else bound.merge(config)
+
+
+def without_caching(config):
+    """``config`` without its caching settings, which are per handle, never persisted.
+
+    ``Repository.create`` persists the configuration it is given, so a repository created
+    with a handle's cache bound would impose it on every later reader.
+    """
+    import icechunk
+
+    if config is None or config.caching is None:
+        return config
+    stripped = icechunk.RepositoryConfig().merge(config)
+    stripped.caching = None
+    return stripped
+
 
 def _env(name: str, default: str | None = None) -> str | None:
     value = os.environ.get(name, default)
@@ -240,19 +310,28 @@ class Config:
     def icechunk_repo(self, prefix: str, config=None):
         """Open or create the icechunk repository for a store prefix.
 
+        The handle caches at most :data:`DEFAULT_CACHED_CHUNK_REFS` chunk references unless
+        ``config`` sets its own caching or the store is one of
+        :data:`UNBOUNDED_STORE_PREFIXES`. Caching is never persisted: a repository created
+        here is created with ``config`` less its caching.
+
         Args:
             prefix: Store prefix.
-            config: Optional ``icechunk.RepositoryConfig`` for this handle (and for the
-                repository, if this creates it).
+            config: Optional ``icechunk.RepositoryConfig`` for this handle (and, less its
+                caching, for the repository, if this creates it).
         """
         import icechunk
 
         storage = self.icechunk_storage(prefix)
-        try:
-            return icechunk.Repository.open_or_create(storage, config=config)
-        except icechunk.ConflictError:
-            # Another writer created it between this one finding nothing and creating.
-            return icechunk.Repository.open(storage, config=config)
+        if not icechunk.Repository.exists(storage):
+            try:
+                icechunk.Repository.create(storage, config=without_caching(config))
+            except icechunk.IcechunkError:
+                # Another writer created it between this one finding nothing and creating.
+                if not icechunk.Repository.exists(storage):
+                    raise
+        handle = bounded_handle_config(config, cached_chunk_refs_for(prefix))
+        return icechunk.Repository.open(storage, config=handle)
 
 
 class NotAnIcechunkPrefix(ValueError):
