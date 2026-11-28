@@ -68,7 +68,14 @@ from botocore.config import Config
 
 from sondehub_icechunk import DEFAULT_STORE, FlightWriter, WriterError
 
-BUCKET = "sondehub-history"
+# Anonymous S3 access to s3://sondehub-history has returned AccessDenied for both listing and
+# reads since about 2026-11-10. SondeHub now serves the bucket through
+# https://history.sondehub.org and documents reaching it as endpoint https://sondehub.org,
+# bucket "history", virtual-host addressing (sondehub-infra wiki, SondeHub-Historic-Data).
+# Public, unsigned endpoint: not a credential.
+ENDPOINT_URL = "https://sondehub.org"
+BUCKET = "history"
+HISTORY_URL = "https://history.sondehub.org"
 SITES_URL = "https://api.v2.sondehub.org/sites"
 ARCHIVE_START = date(2018, 1, 1)
 
@@ -146,11 +153,18 @@ MAX_LIST_FAILURES = 10
 READ_TIMEOUT = 180
 
 
-def make_client(workers, read_timeout=READ_TIMEOUT):
+def make_client(workers, read_timeout=READ_TIMEOUT, endpoint_url=ENDPOINT_URL):
+    """Unsigned S3 client for SondeHub's history front end.
+
+    Virtual-host addressing turns bucket ``history`` on ``https://sondehub.org`` into
+    requests to ``https://history.sondehub.org/<key>``, which is where the bucket is served.
+    """
     return boto3.client(
         "s3",
+        endpoint_url=endpoint_url,
         config=Config(
             signature_version=UNSIGNED,
+            s3={"addressing_style": "virtual"},
             max_pool_connections=max(workers * 2, 10),
             retries={"max_attempts": 5, "mode": "standard"},
             # botocore defaults to 60s, which is fine on a healthy link but turns a merely
@@ -367,8 +381,8 @@ def build_attrs(serial, records, times, receivers, n_raw, sites, day=None):
             "n_receivers": len(receivers),
             "receivers": ",".join(name for name, _ in receivers.most_common(50)),
             "indexed_day": day.isoformat() if day is not None else None,
-            "source": f"s3://{BUCKET}/serial/{serial}.json.gz",
-            "index_source": f"s3://{BUCKET}/date/",
+            "source": f"{HISTORY_URL}/serial/{serial}.json.gz",
+            "index_source": f"{HISTORY_URL}/date/",
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
     )
