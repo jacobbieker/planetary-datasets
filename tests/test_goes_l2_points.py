@@ -393,3 +393,45 @@ def test_a_file_published_without_any_attributes_is_left_out(archive, local_conf
     ds = xr.open_zarr(store(local_config), group="dmw_f_c14", consolidated=False)
     assert ds.sizes["file"] == 2 and ds.sizes["wind"] == 7
     assert gp.run_prefix(19, "ABI-L2-DMWF", local_config, now=NOW, store=src) == 0
+
+
+def test_a_follow_lane_gives_back_its_parsers_and_heap_between_passes(
+    archive, local_config, monkeypatch, real_pool
+):
+    """Regression: an idle --follow lane kept its eight parser processes and ~4 GB of
+    freed heap for the hour between passes; the store handle cached up to 15 million
+    chunk references. The pool must be stopped between passes (and start again for the
+    next), the heap trimmed, and the handle opened with a bounded cache."""
+    root, src = archive
+    start = dt.datetime(2026, 10, 27, 18)
+    for i in range(12):
+        glm_file(root, start + dt.timedelta(seconds=20 * i), events=3, groups=2, flashes=1)
+    opened = []
+    real_open = type(local_config).icechunk_repo
+    monkeypatch.setattr(
+        type(local_config),
+        "icechunk_repo",
+        lambda self, prefix, config=None: opened.append(config) or real_open(self, prefix, config),
+    )
+    assert gp.run_prefix(19, "GLM-L2-LCFA", local_config, now=NOW, store=src) == 12
+    assert opened and all(
+        c is not None and c.caching.num_chunk_refs == gp.CACHED_CHUNK_REFS for c in opened
+    )
+    assert gp.CACHED_CHUNK_REFS <= 2_000_000
+
+    pool = gp._PARSER
+    assert pool is not None  # 12 files is more than one parse job
+    trims = []
+    monkeypatch.setattr(
+        gp.ctypes, "CDLL", lambda name: type("libc", (), {"malloc_trim": trims.append})
+    )
+    gp.release_between_passes()
+    assert gp._PARSER is None and trims == [0]
+    with pytest.raises(RuntimeError):
+        pool.submit(int)  # shut down, its processes gone
+    # The next pass starts a fresh pool.
+    later = dt.datetime(2026, 10, 28, 18)
+    for i in range(12):
+        glm_file(root, later + dt.timedelta(seconds=20 * i), events=3, groups=2, flashes=1)
+    assert gp.run_prefix(19, "GLM-L2-LCFA", local_config, now=NOW, store=src) == 12
+    assert gp._PARSER is not None and gp._PARSER is not pool
