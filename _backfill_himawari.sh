@@ -45,6 +45,10 @@ while true; do
     end=$(date -u -d "$y-$m-01 +1 month" '+%Y-%m-%dT00:00:00Z')
     store="s3://us-west-2.opendata.source.coop/bkr/geo/himawari_${RES}m_backfill_${month}.icechunk"
     low=false; [[ $RES == 500 ]] && low=true
+    # Two HSD decodes at once (no netCDF, so no thread-safety limit), the rest downloading
+    # ahead on disk: 4.8 GB peak and 172 s an hour at 1000m, vs 9.0 GB and 182 s
+    # unbounded (2026-11-28). 500m's low-memory mode decodes one at a time itself.
+    slots=2; [[ $RES == 500 ]] && slots=1
     echo "=== $(date -u '+%F %T') himawari ${RES}m $month (lane $LANE/$LANES) start -> $store"
     # The shard's readable variable names (planetary_datasets/naming), for satellite-consumer.
     renames="$PWD/data/satcons_names_himawari_${RES}m_${month}.json"
@@ -54,7 +58,7 @@ while true; do
     while true; do
       (cd "$SCRATCH" && SATCONS_SATELLITE=himawari SATCONS_RESOLUTION=$RES SATCONS_RENAME_JSON=$renames \
         SATCONS_START_TIMESTAMP=$start SATCONS_END_TIMESTAMP=$end SATCONS_RAW_PATH=. \
-        SATCONS_ZARR_PATH=$store SATCONS_ICECHUNK=True SATCONS_LOW_MEMORY=$low \
+        SATCONS_ZARR_PATH=$store SATCONS_ICECHUNK=True SATCONS_LOW_MEMORY=$low SATCONS_DECODE_SLOTS=$slots \
         SATCONS_S3_LISTING_CACHE_DIR=$LISTINGS \
         $PIXI run --manifest-path "$CONSUMER/pyproject.toml" sat-consumer)
       rc=$?  # before any $(...) below, which would reset it
