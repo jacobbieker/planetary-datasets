@@ -11,9 +11,11 @@
 cd "$(dirname "$0")"
 set -a; source .env; set +a
 PIXI=${PIXI:-~/.pixi/bin/pixi}
+# Four download workers: the archive is now served from SondeHub's own CloudFront
+# (history.sondehub.org), whose egress SondeHub pays for, and the walk back to 2018 is done.
 while true; do
   echo "=== $(date -u '+%F %T') sondehub start"
-  $PIXI run python sondehub_t.py --workers 16
+  $PIXI run python sondehub_t.py --workers 4
   rc=$?
   echo "=== $(date -u '+%F %T') sondehub exited $rc"
   if (( rc == 0 )); then sleep 86400; else sleep 600; fi

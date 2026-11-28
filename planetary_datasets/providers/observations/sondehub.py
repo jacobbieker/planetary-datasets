@@ -1,4 +1,4 @@
-"""Sondehub amateur radiosonde telemetry, read from the public S3 history archive.
+"""Sondehub amateur radiosonde telemetry, read from the public history archive.
 
 Sondehub publishes every tracked radiosonde flight in ``s3://sondehub-history``, laid out
 two ways: ``date/YYYY/MM/DD/<serial>.json`` holds a subsampled day of every flight that
@@ -31,10 +31,20 @@ The archive is read with :mod:`fsspec` directly rather than through the ``sondeh
 package. The package's ``download`` helper starts fifty unbounded threads per call and
 pulls a whole prefix into memory, which is what made the original script unusable on a
 busy day; going through fsspec also drops a dependency.
+
+Since November 2026 the bucket is no longer readable directly: anonymous ``ListObjectsV2``
+and ``GetObject`` against ``sondehub-history.s3.amazonaws.com`` return AccessDenied, even
+for keys that exist. SondeHub now serves it through ``https://history.sondehub.org``, an
+S3-compatible front end that exposes the bucket at its root. Their documented way in is
+endpoint ``https://sondehub.org``, bucket ``history``, virtual-host addressing, which
+resolves to that host (the SondeHub-Historic-Data page of the sondehub-infra wiki, and
+pysondehub's "switch to history endpoint"). :data:`SONDEHUB_STORAGE_OPTIONS` encodes exactly
+that, so s3fs lists (paging included) and reads through the front end unchanged.
 """
 
 from __future__ import annotations
 
+import copy
 import gzip
 import json
 import pathlib
@@ -50,6 +60,7 @@ import zarr
 from loguru import logger
 from zarr.codecs import BloscCodec
 
+from planetary_datasets.common.download import read_bytes
 from planetary_datasets.config import Config
 from planetary_datasets.providers.observations.upper_air_common import (
     PointObservationProvider,
@@ -57,8 +68,24 @@ from planetary_datasets.providers.observations.upper_air_common import (
     table_to_dataset,
 )
 
-#: Public, anonymously readable bucket. Not a credential.
-SONDEHUB_BUCKET = "sondehub-history"
+#: Public, anonymous S3-compatible endpoint SondeHub serves its history archive from. Not a
+#: credential. With virtual-host addressing, bucket ``history`` on this endpoint resolves to
+#: ``https://history.sondehub.org``, a front end over the ``sondehub-history`` bucket.
+SONDEHUB_ENDPOINT = "https://sondehub.org"
+
+#: Bucket name on :data:`SONDEHUB_ENDPOINT`. Public; not a credential.
+SONDEHUB_BUCKET = "history"
+
+#: Where the archive is browsable over plain HTTPS, for provenance attributes.
+SONDEHUB_HISTORY_URL = "https://history.sondehub.org"
+
+#: fsspec/s3fs options for the public front end: unsigned requests, SondeHub's endpoint and
+#: virtual-host addressing. Caller ``storage_options`` are layered over these.
+SONDEHUB_STORAGE_OPTIONS: dict = {
+    "anon": True,
+    "client_kwargs": {"endpoint_url": SONDEHUB_ENDPOINT},
+    "config_kwargs": {"s3": {"addressing_style": "virtual"}},
+}
 
 #: Frame field to store variable. Sondehub frames are JSON with every value as a string.
 SONDEHUB_FIELDS = {
@@ -94,9 +121,44 @@ SONDEHUB_SCHEMA = {
 }
 
 
+def archive_storage_options(storage_options: dict | None = None) -> dict:
+    """The s3fs options for the archive: :data:`SONDEHUB_STORAGE_OPTIONS` plus overrides.
+
+    Args:
+        storage_options: Options layered over the defaults, key by key. Pass
+            ``client_kwargs``/``config_kwargs`` to point at a mirror or a test server.
+
+    Returns:
+        A fresh options dict, safe for the caller to modify.
+    """
+    options = copy.deepcopy(SONDEHUB_STORAGE_OPTIONS)
+    options.update(copy.deepcopy(storage_options or {}))
+    return options
+
+
+def archive_source(bucket: str = SONDEHUB_BUCKET, storage_options: dict | None = None) -> str:
+    """Where a day's sondes were read from, for the store's ``source`` attribute.
+
+    Args:
+        bucket: Archive bucket the provider reads.
+        storage_options: Overrides for :data:`SONDEHUB_STORAGE_OPTIONS`.
+
+    Returns:
+        ``https://history.sondehub.org/date`` for SondeHub's front end, otherwise the
+        endpoint and bucket actually in use, so a mirror is recorded as itself.
+    """
+    options = archive_storage_options(storage_options)
+    endpoint = options.get("client_kwargs", {}).get("endpoint_url")
+    if bucket == SONDEHUB_BUCKET and endpoint == SONDEHUB_ENDPOINT:
+        return f"{SONDEHUB_HISTORY_URL}/date"
+    if endpoint:
+        return f"{endpoint.rstrip('/')}/{bucket}/date"
+    return f"s3://{bucket}/date"
+
+
 def _filesystem(storage_options: dict | None = None):
-    """An anonymous S3 filesystem. The archive is public; signing it would fail."""
-    return fsspec.filesystem("s3", anon=True, **(storage_options or {}))
+    """An anonymous S3 filesystem on SondeHub's front end. Signing requests would fail."""
+    return fsspec.filesystem("s3", **archive_storage_options(storage_options))
 
 
 def list_serials(
@@ -126,8 +188,17 @@ def list_day_keys(
 ) -> List[str]:
     """List the per-sonde JSON objects the archive holds for one UTC day.
 
-    Returns an empty list for a day the archive does not cover, which is a genuine
-    absence rather than a failure.
+    s3fs pages through the listing itself (ListObjectsV2 continuation tokens), so a day
+    holding more than one page of sondes comes back whole.
+
+    Args:
+        day: The UTC day.
+        bucket: Archive bucket on the endpoint.
+        storage_options: Overrides for :data:`SONDEHUB_STORAGE_OPTIONS`.
+
+    Returns:
+        Sorted ``<bucket>/date/YYYY/MM/DD/<serial>.json`` keys; an empty list for a day the
+        archive does not cover, which is a genuine absence rather than a failure.
     """
     day = pd.Timestamp(day)
     fs = _filesystem(storage_options)
@@ -141,20 +212,34 @@ def list_day_keys(
 
 
 def read_frames(key: str, storage_options: dict | None = None) -> List[dict]:
-    """Read the frames from one archive object, local path or ``s3://`` key.
+    """Read the frames from one archive object, local path or archive key.
 
-    Both ``.json`` and gzipped ``.json.gz`` objects are handled; a file holding a single
-    frame object rather than a list is normalised to a one-element list.
+    Archive reads go through :func:`planetary_datasets.common.download.read_bytes`, so
+    transient failures are retried with backoff. Both ``.json`` and gzipped ``.json.gz``
+    objects are handled; a file holding a single frame object rather than a list is
+    normalised to a one-element list.
+
+    Args:
+        key: A local path, or ``<bucket>/<key>``, optionally ``s3://``-prefixed.
+        storage_options: Overrides for :data:`SONDEHUB_STORAGE_OPTIONS`.
+
+    Returns:
+        The object's frames.
+
+    Raises:
+        FileNotFoundError: The archive has no such object, or refuses it.
     """
     path = str(key)
     if path.startswith("s3://") or not pathlib.Path(path).exists():
-        fs = _filesystem(storage_options)
-        opener = fs.open(path.removeprefix("s3://"), "rb")
+        uri = path if path.startswith("s3://") else f"s3://{path}"
+        raw = read_bytes(uri, storage_options=archive_storage_options(storage_options))
+        if raw is None:
+            raise FileNotFoundError(f"{uri} is missing or denied")
     else:
-        opener = open(path, "rb")
-    with opener as handle:
-        raw = handle.read()
-    if path.endswith(".gz"):
+        raw = pathlib.Path(path).read_bytes()
+    # The front end serves ``.json.gz`` with ``Content-Encoding: gzip``. s3fs returns the
+    # stored bytes, but go by the gzip magic rather than the suffix in case that changes.
+    if raw[:2] == b"\x1f\x8b":
         raw = gzip.decompress(raw)
     frames = json.loads(raw)
     if isinstance(frames, dict):
@@ -162,9 +247,11 @@ def read_frames(key: str, storage_options: dict | None = None) -> List[dict]:
     return list(frames)
 
 
-def download_serial(serial: str, storage_options: dict | None = None) -> List[dict]:
+def download_serial(
+    serial: str, storage_options: dict | None = None, bucket: str = SONDEHUB_BUCKET
+) -> List[dict]:
     """Read every frame of one flight from the per-serial layout."""
-    return read_frames(f"{SONDEHUB_BUCKET}/serial/{serial}.json.gz", storage_options)
+    return read_frames(f"{bucket}/serial/{serial}.json.gz", storage_options)
 
 
 #: Fields that describe the *receiver*, not the sonde, so they must not survive a merge.
@@ -627,11 +714,15 @@ class SondehubProvider(PointObservationProvider):
 
     Args:
         config: Configuration override.
-        bucket: Archive bucket. Public, and only a parameter so a mirror can be pointed at.
-        workers: Concurrent object reads. A day is thousands of small objects, so this is
-            latency-bound and threads pay off.
+        bucket: Archive bucket on the endpoint. Public, and only a parameter so a mirror
+            can be pointed at.
+        workers: Concurrent object reads. A day is hundreds of small objects, so this is
+            latency-bound and threads pay off. The archive now sits behind SondeHub's own
+            CloudFront distribution, a hobby project's bill, so keep this modest.
         max_sondes: Read at most this many sondes from the day. For trying the provider
             out against a real day without pulling all of it.
+        storage_options: Overrides for :data:`SONDEHUB_STORAGE_OPTIONS`, e.g. another
+            ``client_kwargs["endpoint_url"]`` for a mirror.
     """
 
     name = "sondehub"
@@ -689,7 +780,7 @@ class SondehubProvider(PointObservationProvider):
             table,
             SONDEHUB_SCHEMA,
             attrs={
-                "source": f"s3://{self.bucket}/date",
+                "source": archive_source(self.bucket, self.storage_options),
                 "partition": f"{pd.Timestamp(it):%Y-%m-%d}",
             },
         )
@@ -712,7 +803,7 @@ class SondehubProvider(PointObservationProvider):
         Returns None when the serial has no usable frames, which happens for a sonde that
         was indexed under a day but never uploaded readable telemetry.
         """
-        frames = download_serial(serial, self.storage_options)
+        frames = download_serial(serial, self.storage_options, bucket=self.bucket)
         table = frames_to_table(frames)
         if table.empty:
             return None
@@ -728,9 +819,7 @@ class SondehubProvider(PointObservationProvider):
         if summary["start"] is not None and summary["end"] is not None:
             attrs["start_time"] = str(summary["start"])
             attrs["end_time"] = str(summary["end"])
-            attrs["duration_seconds"] = float(
-                (summary["end"] - summary["start"]).total_seconds()
-            )
+            attrs["duration_seconds"] = float((summary["end"] - summary["start"]).total_seconds())
         for field in ("sonde_type", "launch_site"):
             if field in table.columns and table[field].notna().any():
                 attrs[field] = str(table[field].dropna().iloc[0])
@@ -811,11 +900,15 @@ __all__ = [
     "FLIGHT_TIMES",
     "OBS_VARS",
     "SONDEHUB_BUCKET",
+    "SONDEHUB_ENDPOINT",
+    "SONDEHUB_HISTORY_URL",
     "SONDEHUB_SCHEMA",
+    "SONDEHUB_STORAGE_OPTIONS",
     "TARGET_CHUNK_POINTS",
     "FlightWriter",
     "SondeFlights",
     "SondehubProvider",
+    "archive_storage_options",
     "download_serial",
     "flight_columns",
     "flight_dataset",
@@ -825,6 +918,7 @@ __all__ = [
     "list_serials",
     "merge_frames",
     "read_frames",
+    "archive_source",
     "rebuild_serial_index",
     "write_flight_batch",
 ]
