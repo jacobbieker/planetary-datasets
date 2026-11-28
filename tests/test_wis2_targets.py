@@ -725,3 +725,25 @@ def test_a_window_due_while_archived_windows_run_their_targets_goes_first(monkey
     # ``due`` came due while ``old`` ran, so it is archived before ``newer`` or any
     # more pending work.
     assert order == [old, due, old, newer, "pending"]
+
+
+def test_follow_hands_freed_memory_back_before_sleeping(monkeypatch):
+    """The archiver slept between windows at 49-58 GB of freed but unreturned heap."""
+    calls = []
+
+    def record(upcoming, pause):
+        calls.append("wait")
+        raise StopIteration
+
+    monkeypatch.setattr(wis2, "window_ends", lambda now: [])
+    monkeypatch.setattr(wis2, "finish_pending", lambda *a, **k: 0)
+    monkeypatch.setattr(wis2, "_unarchived", lambda ends, config: [])
+    monkeypatch.setattr(wis2, "release_memory", lambda: calls.append("release"))
+    monkeypatch.setattr(wis2, "wait", record)
+    with pytest.raises(StopIteration):
+        wis2.follow(_config())
+    assert calls == ["release", "wait"]
+
+
+def test_releasing_memory_never_raises():
+    assert wis2.release_memory() in (True, False)

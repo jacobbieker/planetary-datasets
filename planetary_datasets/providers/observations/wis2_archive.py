@@ -705,6 +705,30 @@ def archived_tars(config: Config | None = None) -> list[str]:
     return sorted(keys)
 
 
+def release_memory() -> bool:
+    """Hand the heap freed by the last window back to the OS before sleeping.
+
+    A window's targets allocate and free tens of GB from many threads; glibc keeps the
+    freed spans in its arenas, so the archiver slept between windows at 49-58 GB RSS
+    (2026-11-27). Returns whether anything was released; a no-op off glibc.
+    """
+    import ctypes
+    import gc
+
+    from planetary_datasets.memory import process_tree_rss_gb
+
+    before = process_tree_rss_gb()
+    gc.collect()
+    try:
+        released = bool(ctypes.CDLL("libc.so.6").malloc_trim(0))
+    except (OSError, AttributeError):
+        return False
+    logger.info(
+        f"wis2: memory {before:.1f} GB -> {process_tree_rss_gb():.1f} GB RSS before sleeping"
+    )
+    return released
+
+
 def wait(upcoming: dt.datetime, pause: float, sleep: Callable[[float], None] = time.sleep) -> None:
     """Sleep ``pause`` seconds, logging every :data:`HEARTBEAT`.
 
@@ -860,6 +884,7 @@ def follow(config: Config | None = None, targets: Sequence[str] | None = None) -
         logger.info(
             f"wis2: next archive at {upcoming:%Y-%m-%dT%H:%MZ}; sleeping {pause / 3600:.1f} h"
         )
+        release_memory()
         wait(upcoming, pause)
 
 
