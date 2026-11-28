@@ -78,6 +78,7 @@ from loguru import logger
 
 from planetary_datasets.common import known_bad
 from planetary_datasets.config import Config, get_config
+from planetary_datasets.memory import release_freed_memory
 from planetary_datasets.providers.virtualized.geos_cf_names import variable_names
 
 HOST = "https://portal.nccs.nasa.gov"
@@ -1122,6 +1123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             logger.info(f"geos_cf_{stream.name}: pass done, {written_files:,} file(s) referenced")
         if not args.follow:
             return 0
+        release_freed_memory("geos_cf")
         waited = 0
         while waited < args.pause:  # saying so every ten minutes, for the box's stall guard
             time.sleep(min(600, args.pause - waited))

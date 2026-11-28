@@ -651,3 +651,20 @@ def test_a_day_whose_second_group_fails_is_retried_without_repeating_the_first(
     stores = g.generations(local_config, product.store_prefix)
     assert sorted(read(product, local_config, p).sizes["t"] for p in stores) == [1, 2]
     assert g.run_product(product, local_config, now=now) == 0, "the day is recorded done"
+
+
+def test_follow_releases_freed_memory_before_sleeping(monkeypatch):
+    """A following lane hands the pass's freed heap back before its hour's sleep."""
+    calls = []
+    monkeypatch.setattr(g, "get_config", lambda: None)
+    monkeypatch.setattr(g, "list_products", lambda *a: [])
+    monkeypatch.setattr(g, "release_freed_memory", lambda what: calls.append(what))
+
+    def sleep(seconds):
+        calls.append("sleep")
+        raise StopIteration
+
+    monkeypatch.setattr(g.time, "sleep", sleep)
+    with pytest.raises(StopIteration):
+        g.main(["--satellite", "19", "--follow"])
+    assert calls == ["goes19 L2", "sleep"]

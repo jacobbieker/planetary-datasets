@@ -8,7 +8,6 @@ operational dates, codec eras, and a handful of loadable variables differ.
 from __future__ import annotations
 
 import contextlib
-import ctypes
 import sys
 import dataclasses
 import functools
@@ -33,6 +32,7 @@ from virtualizarr.manifests import ManifestArray
 
 from planetary_datasets.config import get_config
 from planetary_datasets.memory import configure_malloc_arenas, process_tree_rss_gb
+from planetary_datasets.memory import malloc_trim as _malloc_trim
 
 if TYPE_CHECKING:
     import icechunk
@@ -1200,11 +1200,9 @@ def malloc_trim() -> bool:
     even though `gc.collect()` finds nothing to free — which is exactly what
     the per-stage trace showed (cleanup reclaiming -1MB while RSS rose). This
     is a no-op off glibc (musl, macOS), so callers must not rely on it.
+    Delegates to :func:`planetary_datasets.memory.malloc_trim`.
     """
-    try:
-        return bool(ctypes.CDLL("libc.so.6").malloc_trim(0))
-    except (OSError, AttributeError):
-        return False
+    return _malloc_trim()
 
 
 def rss_gb() -> float:

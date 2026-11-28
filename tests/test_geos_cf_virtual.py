@@ -906,3 +906,21 @@ def test_a_day_with_a_geos_chem_pm_field_beside_the_total_one_is_written(portal,
     assert "nitrate_particulate_matter_2_5um_rh35_geos_chem" in odd
     assert "nitrate_particulate_matter_2_5um_rh35_geos_chem" not in base
     assert g.written(repo, c) == {"2019-03-07", "2019-03-08"}
+
+
+def test_follow_releases_freed_memory_before_sleeping(monkeypatch):
+    """A following lane hands the pass's freed heap back before it waits."""
+    calls = []
+    monkeypatch.setattr(g, "get_config", lambda: None)
+    monkeypatch.setattr(g, "Portal", lambda: None)
+    monkeypatch.setattr(g, "run_stream", lambda *a, **k: 0)
+    monkeypatch.setattr(g, "release_freed_memory", lambda what: calls.append(what))
+
+    def sleep(seconds):
+        calls.append("sleep")
+        raise StopIteration
+
+    monkeypatch.setattr(g.time, "sleep", sleep)
+    with pytest.raises(StopIteration):
+        g.main(["--streams", "v2_ana", "--follow"])
+    assert calls == ["geos_cf", "sleep"]

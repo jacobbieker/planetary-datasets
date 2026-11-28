@@ -47,9 +47,7 @@ the calling program's main module: call :func:`run_prefix` from behind an
 from __future__ import annotations
 
 import argparse
-import ctypes
 import datetime as dt
-import gc
 import io
 import re
 import sys
@@ -68,6 +66,7 @@ from loguru import logger
 
 from planetary_datasets.common import multidim
 from planetary_datasets.config import Config, get_config
+from planetary_datasets.memory import release_freed_memory
 from planetary_datasets.providers.virtualized.goes_l2 import (
     SATELLITES,
     SETTLE,
@@ -406,24 +405,23 @@ def _parser():
         return _PARSER
 
 
-def release_between_passes() -> None:
+def release_between_passes(what: str = "goes points") -> None:
     """Give back what a pass held before the lane sleeps for an hour.
 
     The parser processes (eight, ~200 MB each once they have parsed) are stopped; the
     next pass starts a pool again. Freed heap is returned to the OS: glibc keeps what
     the pass's file bodies, parsed lists and icechunk manifests freed in its arenas, so
     an idle ``--follow`` lane held ~4 GB, besides its workers, until the next pass.
+
+    Args:
+        what: Label for the memory log line.
     """
     global _PARSER
     with _PARSER_LOCK:
         pool, _PARSER = _PARSER, None
     if pool is not None:
         pool.shutdown(wait=True, cancel_futures=True)
-    gc.collect()
-    try:
-        ctypes.CDLL("libc.so.6").malloc_trim(0)
-    except (OSError, AttributeError):  # not glibc
-        pass
+    release_freed_memory(what)
 
 
 def _discard_parser(pool) -> None:
@@ -743,7 +741,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.info(f"goes{args.satellite} points: pass done, {written:,} file(s) copied")
         if not args.follow:
             return 0
-        release_between_passes()
+        release_between_passes(f"goes{args.satellite} points")
         for _ in range(6):  # an hour, saying so every ten minutes for the box's stall guard
             time.sleep(600)
             logger.info(f"goes{args.satellite} points: waiting for the next pass")

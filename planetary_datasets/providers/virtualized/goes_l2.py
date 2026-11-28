@@ -63,6 +63,7 @@ import numpy as np
 from loguru import logger
 
 from planetary_datasets.config import Config, get_config
+from planetary_datasets.memory import release_freed_memory
 
 SATELLITES = {16: "noaa-goes16", 17: "noaa-goes17", 18: "noaa-goes18", 19: "noaa-goes19"}
 SOURCE_REGION = "us-east-1"
@@ -854,6 +855,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.info(f"goes{args.satellite} L2: pass done, {written:,} file(s) referenced")
         if not args.follow:
             return 0
+        release_freed_memory(f"goes{args.satellite} L2")
         for _ in range(6):  # an hour, saying so every ten minutes for the box's stall guard
             time.sleep(600)
             logger.info(f"goes{args.satellite} L2: waiting for the next pass")

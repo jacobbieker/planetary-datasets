@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from planetary_datasets import memory
 from planetary_datasets.providers import goes_l2_points as gp
 
 DAY = dt.date(2026, 10, 27)
@@ -423,7 +424,7 @@ def test_a_follow_lane_gives_back_its_parsers_and_heap_between_passes(
     assert pool is not None  # 12 files is more than one parse job
     trims = []
     monkeypatch.setattr(
-        gp.ctypes, "CDLL", lambda name: type("libc", (), {"malloc_trim": trims.append})
+        memory.ctypes, "CDLL", lambda name: type("libc", (), {"malloc_trim": trims.append})
     )
     gp.release_between_passes()
     assert gp._PARSER is None and trims == [0]
