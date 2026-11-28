@@ -173,7 +173,12 @@ def archive_server():
 
 
 def test_default_options_are_the_documented_front_end():
-    """Endpoint sondehub.org + bucket ``history`` + virtual addressing = history.sondehub.org."""
+    """Regression: direct ``s3://sondehub-history`` reads were refused from about 2026-11-10.
+
+    The lane wrote nothing (AccessDenied) until it moved to SondeHub's front end.
+
+    Endpoint sondehub.org + bucket ``history`` + virtual addressing = history.sondehub.org.
+    """
     options = archive_storage_options()
     assert options["anon"] is True
     assert options["client_kwargs"]["endpoint_url"] == SONDEHUB_ENDPOINT == "https://sondehub.org"
@@ -231,7 +236,15 @@ def test_provider_writes_a_day_through_the_front_end(local_config, archive_serve
     # Five sondes, three summary frames each; the README is not a sonde.
     assert stored.sizes["time"] == 15
     assert sorted(set(stored["serial"].values.tolist())) == sorted(SERIALS)
-    assert stored.attrs["source"] == "https://history.sondehub.org/date"
+    endpoint = options["client_kwargs"]["endpoint_url"].rstrip("/")
+    assert stored.attrs["source"] == f"{endpoint}/history/date"
+
+
+def test_source_names_the_front_end_or_the_mirror_in_use():
+    assert sondehub_module.archive_source() == "https://history.sondehub.org/date"
+    mirror = {"client_kwargs": {"endpoint_url": "http://mirror/"}}
+    assert sondehub_module.archive_source("copy", mirror) == "http://mirror/copy/date"
+    assert sondehub_module.archive_source("copy", {"client_kwargs": {}}) == "s3://copy/date"
 
 
 # --- backfill driver (boto3) --------------------------------------------------------------
@@ -267,6 +280,10 @@ def stubbed_client():
 
 
 def test_driver_requests_go_to_history_sondehub_org(stubbed_client):
+    """Regression: the lane's boto3 client hit AccessDenied on ``sondehub-history``.
+
+    From about 2026-11-10 every request must go to history.sondehub.org instead.
+    """
     client, _, hosts = stubbed_client
     sondehub_t.list_serials(client, date(2026, 11, 20))
     assert hosts and set(hosts) == {"history.sondehub.org"}

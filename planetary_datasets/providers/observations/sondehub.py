@@ -136,6 +136,26 @@ def archive_storage_options(storage_options: dict | None = None) -> dict:
     return options
 
 
+def archive_source(bucket: str = SONDEHUB_BUCKET, storage_options: dict | None = None) -> str:
+    """Where a day's sondes were read from, for the store's ``source`` attribute.
+
+    Args:
+        bucket: Archive bucket the provider reads.
+        storage_options: Overrides for :data:`SONDEHUB_STORAGE_OPTIONS`.
+
+    Returns:
+        ``https://history.sondehub.org/date`` for SondeHub's front end, otherwise the
+        endpoint and bucket actually in use, so a mirror is recorded as itself.
+    """
+    options = archive_storage_options(storage_options)
+    endpoint = options.get("client_kwargs", {}).get("endpoint_url")
+    if bucket == SONDEHUB_BUCKET and endpoint == SONDEHUB_ENDPOINT:
+        return f"{SONDEHUB_HISTORY_URL}/date"
+    if endpoint:
+        return f"{endpoint.rstrip('/')}/{bucket}/date"
+    return f"s3://{bucket}/date"
+
+
 def _filesystem(storage_options: dict | None = None):
     """An anonymous S3 filesystem on SondeHub's front end. Signing requests would fail."""
     return fsspec.filesystem("s3", **archive_storage_options(storage_options))
@@ -760,7 +780,7 @@ class SondehubProvider(PointObservationProvider):
             table,
             SONDEHUB_SCHEMA,
             attrs={
-                "source": f"{SONDEHUB_HISTORY_URL}/date",
+                "source": archive_source(self.bucket, self.storage_options),
                 "partition": f"{pd.Timestamp(it):%Y-%m-%d}",
             },
         )
@@ -898,6 +918,7 @@ __all__ = [
     "list_serials",
     "merge_frames",
     "read_frames",
+    "archive_source",
     "rebuild_serial_index",
     "write_flight_batch",
 ]
