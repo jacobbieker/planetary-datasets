@@ -245,6 +245,12 @@ declare -A LANES=(
   [metop_sg_metimage]="_backfill_lanes.py metop_sg_metimage --threads 8"
 )
 
+# lane name -> NAME=value words set for that lane's python only (via env).
+declare -A LANE_ENV=(
+  # Fewer glibc arenas: 0.40 GB after 300 commits against 1.10 GB, at the same speed.
+  [ncep_upper_air]="MALLOC_ARENA_MAX=2"
+)
+
 # Jobs with launchers of their own, which do their own restarting: the MARS archive (stops
 # once its range is complete) and the SondeHub flights (re-runs daily).
 declare -A SCRIPTS=(
@@ -393,13 +399,13 @@ live | bulk)
 esac
 
 lane_loop() {
-  local name=$1 cmd=$2 rc
+  local name=$1 cmd=$2 lane_env=${3:-} rc
   # A virtual-reference commit touches hundreds of arrays at once; 1024 descriptors is not
   # enough for HRRR's native-level files.
   ulimit -n 65536
   while true; do
     echo "=== $(date -u '+%F %T') $name start: $cmd"
-    $PIXI run python $cmd
+    env $lane_env $PIXI run python $cmd
     rc=$?
     echo "=== $(date -u '+%F %T') $name exited $rc"
     if (( rc == 3 )); then
@@ -484,7 +490,7 @@ start)
     fi
     [[ -f $LOGS/$name.paused ]] && continue
     # setsid: the loop leads its own process group, so stop can take down the python too.
-    setsid bash -c "$(declare -f lane_loop); PIXI=$PIXI RETRY_PAUSE=$RETRY_PAUSE UNAVAILABLE_PAUSE=$UNAVAILABLE_PAUSE lane_loop $name '${LANES[$name]}'" \
+    setsid bash -c "$(declare -f lane_loop); PIXI=$PIXI RETRY_PAUSE=$RETRY_PAUSE UNAVAILABLE_PAUSE=$UNAVAILABLE_PAUSE lane_loop $name '${LANES[$name]}' '${LANE_ENV[$name]:-}'" \
       >> "$LOGS/$name.log" 2>&1 < /dev/null 9>&- &
     record_lane "$name" $!
     echo "started $name"
