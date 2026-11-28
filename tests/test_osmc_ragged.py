@@ -224,7 +224,12 @@ def test_an_erddap_day_is_fetched_and_written(provider, local_config, tmp_path, 
 def test_an_erddap_day_with_no_reports_is_empty(provider, monkeypatch, tmp_path):
     body = b'Error {\n    message="Not Found: Your query produced no matching results.";\n}'
     monkeypatch.setattr(osmc_ragged.requests, "get", lambda url, **kw: _Response(404, body))
-    assert provider.fetch(pd.Timestamp("2016-01-01"), temp_dir=tmp_path) == []
+    recent = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize() - pd.Timedelta(2, "D")
+    assert provider.fetch(recent, temp_dir=tmp_path) == []
+    # Old enough not to be filled later: handed on, so the writer records it.
+    assert provider.fetch(pd.Timestamp("2016-01-01"), temp_dir=tmp_path) == [
+        osmc_ragged.EMPTY_SOURCE
+    ]
 
 
 def test_an_erddap_failure_raises(provider, monkeypatch, tmp_path):
@@ -305,3 +310,84 @@ def test_appended_days_take_the_readable_names_and_decode_in_era5_units(
     np.testing.assert_allclose(
         full["sea_surface_temperature"].values, source["sst"].values.astype("float64") + 273.15
     )
+
+
+# =============================================================================
+# Empty days
+# =============================================================================
+NO_RESULTS = b'Error {\n    message="Not Found: Your query produced no matching results.";\n}'
+
+
+def test_a_day_settles_after_settle_days_or_at_once_before_erddap():
+    """Yearly-store days are final; ERDDAP days only once SETTLE_DAYS old."""
+    now = pd.Timestamp("2026-11-28T01:00")
+    assert osmc_ragged.settled(pd.Timestamp("2015-06-12"), now)
+    assert osmc_ragged.settled(pd.Timestamp("2016-01-01"), now)
+    assert osmc_ragged.settled(now - pd.Timedelta(osmc_ragged.SETTLE_DAYS, "D"), now)
+    assert not osmc_ragged.settled(pd.Timestamp("2026-11-26"), now)
+
+
+def test_a_settled_empty_erddap_day_is_recorded_and_not_requested_again(
+    provider, yearly_2012, local_config, monkeypatch
+):
+    """The day joins the ledger with no rows and no attribute; a new pass skips it."""
+    assert provider.run_partition(pd.Timestamp("2012-01-01"))
+    requests_made = []
+
+    def get(url, **kwargs):
+        requests_made.append(url)
+        return _Response(404, NO_RESULTS)
+
+    monkeypatch.setattr(osmc_ragged.requests, "get", get)
+    day = pd.Timestamp("2016-10-29")
+    assert not provider.run_partition(day)
+    assert ledger(local_config.icechunk_repo(osmc_ragged.ALL_STORE)) == {"2012-01-01", "2016-10-29"}
+    full = stored(local_config, osmc_ragged.ALL_STORE)
+    assert full.sizes["time"] == 12
+    assert osmc_ragged.DAY_ATTR not in full.attrs
+
+    fresh = OSMCRaggedProvider(config=local_config)
+    assert fresh.missing_timesteps(pd.DatetimeIndex([day])) == []
+    assert len(requests_made) == 1
+
+
+def test_a_recent_empty_erddap_day_is_asked_for_again(
+    provider, yearly_2012, local_config, monkeypatch
+):
+    """ERDDAP may still fill a recent day, so it is not recorded."""
+    assert provider.run_partition(pd.Timestamp("2012-01-01"))
+    monkeypatch.setattr(osmc_ragged.requests, "get", lambda url, **kw: _Response(404, NO_RESULTS))
+    day = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize() - pd.Timedelta(2, "D")
+    assert not provider.run_partition(day)
+    assert ledger(local_config.icechunk_repo(osmc_ragged.ALL_STORE)) == {"2012-01-01"}
+    assert provider.missing_timesteps(pd.DatetimeIndex([day])) == [day]
+
+
+def test_a_day_missing_from_a_yearly_store_is_recorded_without_reloading_its_axis(
+    provider, yearly_2012, local_config, monkeypatch
+):
+    """The fixture holds 2012-01-01 and 02; the 3rd is a gap that will never be filled."""
+    assert provider.run_partition(pd.Timestamp("2012-01-01"))
+    gap = pd.Timestamp("2012-01-03")
+    assert not provider.run_partition(gap)
+    assert "2012-01-03" in ledger(local_config.icechunk_repo(osmc_ragged.ALL_STORE))
+
+    loads = []
+    real = osmc_ragged._yearly_times
+    monkeypatch.setattr(osmc_ragged, "_yearly_times", lambda *a: loads.append(a) or real(*a))
+    fresh = OSMCRaggedProvider(config=local_config)
+    assert fresh.run_range(pd.DatetimeIndex([gap])) == 0
+    assert loads == []
+    assert stored(local_config, osmc_ragged.ALL_STORE).sizes["time"] == 12
+
+
+def test_an_empty_day_before_the_store_has_data_writes_nothing(provider, monkeypatch):
+    """An empty day ahead of any data commits nothing: no arrays and no ledger entry.
+
+    Opening the provider's repo may create it empty; that is all that may happen.
+    """
+    monkeypatch.setattr(osmc_ragged.requests, "get", lambda url, **kw: _Response(404, NO_RESULTS))
+    assert not provider.run_partition(pd.Timestamp("2016-10-29"))
+    repo = provider.get_icechunk_repo()
+    assert len(list(repo.ancestry(branch="main"))) == 1
+    assert ledger(repo) == set()
