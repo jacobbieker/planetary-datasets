@@ -21,6 +21,11 @@ one attribute read rather than a scan of billions of timestamps, and a day inter
 half-way through its stores is resumed without duplicating the stores it already reached:
 each type store is skipped when it already lists the day, and ``osmc_all`` is written last,
 so its ledger is the record of which days are complete.
+
+Empty days. A day with no observations at all (ERDDAP's "no matching results", or a day
+missing from a yearly store) is added to ``osmc_all``'s ledger, with no rows, once it is
+settled: :data:`SETTLE_DAYS` old for ERDDAP, which may still fill a recent day, and at once
+for the fixed yearly stores. Until then it is asked for again on every pass.
 """
 
 from __future__ import annotations
@@ -64,6 +69,14 @@ YEARLY_STORE = "bkr/aoml/aoml_{year}.icechunk"
 STORE_BASE = "bkr/aoml/v2"
 ALL_STORE = f"{STORE_BASE}/osmc_all.icechunk"
 LEDGER_ATTR = "ingested_days"
+#: Age after which ERDDAP is taken not to fill a day it answers as empty. Late reports
+#: reach OSMC within days; a month leaves a wide margin.
+SETTLE_DAYS = 30
+#: Dataset attribute carrying the day from :meth:`OSMCRaggedProvider.process` to the
+#: writer, which cannot read it off an empty ``time`` axis. Never written to a store.
+DAY_ATTR = "osmc_day"
+#: :meth:`OSMCRaggedProvider.fetch`'s input for a settled day ERDDAP has no reports for.
+EMPTY_SOURCE = "empty:"
 
 STRING_VARS = ("platform_code", "platform_type", "country")
 #: Kept at full precision: a float32 latitude is good to about a metre, but platform ids
@@ -109,6 +122,23 @@ def type_slug(platform_type) -> str:
     label = re.sub(r"\s*\(GENERIC\)\s*$", "", str(platform_type or "").strip(), flags=re.I)
     slug = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
     return slug or "unknown"
+
+
+def settled(day: pd.Timestamp, now: pd.Timestamp | None = None) -> bool:
+    """Whether an empty ``day`` stays empty: it is from a yearly store, or old enough.
+
+    Args:
+        day: The UTC day.
+        now: The current time; defaults to now.
+
+    Returns:
+        True if the day may be recorded as empty and not asked for again.
+    """
+    day = naive_utc(day).normalize()
+    if day < ERDDAP_START:
+        return True
+    now = naive_utc(pd.Timestamp.now(tz="UTC") if now is None else now)
+    return now - day >= pd.Timedelta(SETTLE_DAYS, "D")
 
 
 def store_prefix_for(slug: str) -> str:
@@ -327,7 +357,9 @@ class OSMCRaggedProvider(BaseProvider):
         """The day's ERDDAP file, or a reference to the yearly store for days before 2016.
 
         ERDDAP answers a day with no reports with 404 and a body saying so; that is an
-        empty day. Anything else that is not a 200 raises, so the day is retried.
+        empty day: nothing to do while it may still be filled, and :data:`EMPTY_SOURCE`
+        once it is :func:`settled`, so that the writer records it. Anything else that is
+        not a 200 raises, so the day is retried.
         """
         day = naive_utc(it).normalize()
         if day < ERDDAP_START:
@@ -339,7 +371,7 @@ class OSMCRaggedProvider(BaseProvider):
         try:
             if response.status_code == 404 and NO_RESULTS_MARKER in response.text.lower():
                 logger.info(f"{self.name}: ERDDAP has no observations for {day:%Y-%m-%d}")
-                return []
+                return [EMPTY_SOURCE] if settled(day) else []
             response.raise_for_status()
             part = dest.with_name(dest.name + ".part")
             with open(part, "wb") as handle:
@@ -386,7 +418,9 @@ class OSMCRaggedProvider(BaseProvider):
         """Read the day from its source into the shared schema, clipped to the day."""
         day = naive_utc(it).normalize()
         source = input_files[0]
-        if source.startswith("yearly:"):
+        if source == EMPTY_SOURCE:
+            raw = xr.Dataset(coords={"time": np.array([], dtype="datetime64[ns]")})
+        elif source.startswith("yearly:"):
             raw = self.read_yearly_day(source.removeprefix("yearly:"), day)
         else:
             with xr.open_dataset(source) as handle:
@@ -398,16 +432,31 @@ class OSMCRaggedProvider(BaseProvider):
         )
         ds = ds.isel(time=np.flatnonzero(keep))
         logger.info(f"{self.name}: {ds.sizes['time']} observation(s) for {day:%Y-%m-%d}")
+        ds.attrs[DAY_ATTR] = f"{day:%Y-%m-%d}"
         return ds
 
     # ------------------------------------------------------------------ writing
 
     def write_to_icechunk(self, repo: icechunk.Repository, processed: xr.Dataset) -> bool:
-        """Write each type store, then ``osmc_all``, each with its ledger, for one day."""
+        """Write each type store, then ``osmc_all``, each with its ledger, for one day.
+
+        A day with no rows writes no rows, but once :func:`settled` it is added to
+        ``osmc_all``'s ledger, so later passes neither request it again nor, before 2016,
+        load the yearly store's time axis (1.2 GB for 2015) to slice nothing out of it.
+
+        Returns:
+            True if rows were written; False for an empty day, recorded or not.
+        """
+        day = processed.attrs.get(DAY_ATTR)
+        processed = processed.copy(deep=False)
+        processed.attrs = {}
         times = processed["time"].values
         if times.size == 0:
+            if day is not None and settled(pd.Timestamp(day)):
+                if _append_with_ledger(repo, processed, day, "osmc_all", ALL_STORE):
+                    logger.info(f"{self.name}: {day} recorded as empty, not asked for again")
             return False
-        day = pd.Timestamp(times[0]).strftime("%Y-%m-%d")
+        day = day or pd.Timestamp(times[0]).strftime("%Y-%m-%d")
         slugs = np.array([type_slug(t) for t in processed["platform_type"].values], dtype=object)
 
         def write_type(slug: str) -> tuple[str, bool]:
