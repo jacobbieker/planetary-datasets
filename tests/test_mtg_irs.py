@@ -222,6 +222,14 @@ def test_read_dwell_leaves_the_spectra_lazy(dwells):
     assert np.isnan(radiance.values[0, 0, 0, 0])
 
 
+def test_read_dwell_chunks_the_spectra_as_the_store_does(dwells, monkeypatch):
+    """Read straight into store chunks, so no rechunk holds pieces of several reads."""
+    monkeypatch.setattr(mtg_irs, "RADIANCE_CHUNK", 3)
+    for band in ("lwir", "mwir"):
+        radiance = mtg_irs.read_dwell(dwells[0])[f"{band}_effective_radiance"]
+        assert radiance.chunks[1:] == ((3, 1), (3, 1), (N_WAVENUMBERS[band],))
+
+
 def test_a_differently_packed_file_is_refused(tmp_path):
     path = write_dwell(tmp_path / "d.nc", "2026-10-13T00:45:39", scale={"mwir": 1e-08})
     with pytest.raises(PackingChanged, match="mwir"):

@@ -230,8 +230,13 @@ def read_dwell(path: str) -> xr.Dataset:
 
     parts = [pixels, flags[["dust_warning"]]]
     for band in BANDS:
+        # Read in the store's chunks: on-disk chunks (54 x 54) straddle them, and a
+        # rechunk from those holds every source piece of a store chunk until it is whole.
         measured = xr.open_dataset(
-            path, engine="h5netcdf", group=f"data/{band}/measured", chunks={}
+            path,
+            engine="h5netcdf",
+            group=f"data/{band}/measured",
+            chunks={"dwell_row": RADIANCE_CHUNK, "dwell_column": RADIANCE_CHUNK, "wavenumber": -1},
         )
         radiance = measured["effective_radiance"]
         scale, offset = RADIANCE_PACKING[band]
