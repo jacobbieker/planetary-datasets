@@ -538,3 +538,66 @@ def test_the_groups_with_most_decoded_values_are_written_first(local_config, mon
         target.feed(key(name), body(name), ARRIVED)
     target.finish(None, None, "x")
     assert order[:2] == ["iasi", "cris"] and sorted(order) == ["amsua", "atms", "cris", "iasi"]
+
+
+def _integer_by_masking(values):
+    """The narrowing as first written, with widened and masked copies: the reference."""
+    values = values.astype("int64")
+    present = values[values != sat.MISSING_LONG]
+    low = int(present.min()) if present.size else 0
+    high = int(present.max()) if present.size else 0
+    for dtype in ("int8", "int16", "int32", "int64"):
+        info = np.iinfo(dtype)
+        if info.min < low and high <= info.max:
+            return np.where(values == sat.MISSING_LONG, info.min, values).astype(dtype), info.min
+    raise ValueError
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        np.array([[1, 2], [sat.MISSING_LONG, -5]], dtype="int32"),
+        np.array([300, sat.MISSING_LONG, -2], dtype="int64"),
+        np.array([sat.MISSING_LONG, sat.MISSING_LONG], dtype="int32"),
+        np.array([], dtype="int32"),
+        np.array([-128, 5], dtype="int32"),
+        np.array([2**40, sat.MISSING_LONG], dtype="int64"),
+    ],
+)
+def test_integers_narrow_as_before_without_copies(values):
+    out, fill = sat._integer(values)
+    expected, expected_fill = _integer_by_masking(values)
+    assert out.dtype == expected.dtype and fill == expected_fill
+    assert out.tobytes() == expected.tobytes()
+
+
+def test_float32_columns_are_what_the_precision_check_would_return():
+    """to_dataset skips _float on float32: the check always hands float32 back unchanged."""
+    values = sat._compact(decoded("atms"))["brightness_temperature"].copy()
+    values[0, :3] = np.nan
+    assert values.dtype == np.float32
+    for decimals in (0, 2, 6):
+        assert sat._float(values.astype("float64"), decimals).tobytes() == values.tobytes()
+
+
+def test_a_batch_of_mixed_widths_is_padded_with_fill():
+    iasi = sat._compact(decoded("iasi"))
+    narrow = dict(iasi, scaled_radiance=iasi["scaled_radiance"][:, :100])
+    width = iasi["scaled_radiance"].shape[1]
+    ds = sat.to_dataset([narrow, iasi], width, sat.INSTRUMENTS["iasi"])
+    rows = iasi["time"].size
+    stored = ds["scaled_radiance"].values
+    expected, fill = _integer_by_masking(
+        np.concatenate(
+            [
+                np.pad(
+                    narrow["scaled_radiance"],
+                    ((0, 0), (0, width - 100)),
+                    constant_values=sat.MISSING_LONG,
+                ),
+                iasi["scaled_radiance"],
+            ]
+        )
+    )
+    assert stored.shape == (2 * rows, width) and ds["scaled_radiance"].attrs["_FillValue"] == fill
+    assert stored.tobytes() == expected.tobytes()
