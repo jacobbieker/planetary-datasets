@@ -113,6 +113,7 @@ import re
 import shutil
 import tempfile
 import time
+import zipfile
 from collections import Counter
 from typing import Any, Iterable, Sequence
 
@@ -147,6 +148,12 @@ BATCH_VALUES = 40_000_000
 WRITE_THREADS = 4
 #: Channel numbers past this are not channels (a missing value, a stray element).
 MAX_CHANNEL = 20_000
+#: How the decoded objects are spooled: numpy's ``.npz`` layout (``np.load`` reads it as
+#: is) with zstd members. Uncompressed, the 2026-11-27 12Z window's spool peaked at
+#: ~450 GB; at level 1 the same arrays, bit for bit, peak at ~38 GB, most of it CrIS's
+#: float32 radiances, which compress least.
+SPOOL_COMPRESSION = getattr(zipfile, "ZIP_ZSTANDARD", zipfile.ZIP_DEFLATED)
+SPOOL_LEVEL = 1
 #: Stored identities read back per group to drop repeats from earlier windows.
 RECENT_IDENTITIES = 5_000_000
 #: Rows past this many valid channels are always preferred; used to rank copies.
@@ -707,13 +714,29 @@ def decode_file(path: str, key: str, arrived: dt.datetime | None, out_dir: str) 
         arrays = _compact(arrays)
         target = pathlib.Path(out_dir) / group
         target.mkdir(parents=True, exist_ok=True)
-        stem = target / pathlib.Path(path).stem
-        np.savez(stem, **{k.replace(".", "__"): v for k, v in arrays.items()}, allow_pickle=True)
-        result.update(group=group, path=f"{stem}.npz", rows=int(arrays["time"].size))
+        spooled = target / f"{pathlib.Path(path).stem}.npz"
+        _save_spool(spooled, arrays)
+        result.update(group=group, path=str(spooled), rows=int(arrays["time"].size))
     return result
 
 
+def _save_spool(path: pathlib.Path, arrays: dict[str, np.ndarray]) -> None:
+    """``arrays`` as a compressed ``.npz`` at ``path``, read back with :func:`_load`."""
+    with zipfile.ZipFile(
+        path, mode="w", compression=SPOOL_COMPRESSION, compresslevel=SPOOL_LEVEL
+    ) as archive:
+        for name, values in arrays.items():
+            with archive.open(f"{name.replace('.', '__')}.npy", "w", force_zip64=True) as member:
+                np.lib.format.write_array(member, np.asanyarray(values), allow_pickle=True)
+
+
 # ----------------------------------------------------------------------------- writing
+
+
+def _unspool(paths: Iterable[str]) -> None:
+    """Delete spooled objects once their rows are appended (or none are kept)."""
+    for path in paths:
+        pathlib.Path(path).unlink(missing_ok=True)
 
 
 def _load(path: str) -> dict[str, np.ndarray]:
@@ -932,14 +955,16 @@ def write_group(
     table = table.sort_values(["id", "valid"], ascending=[True, False]).drop_duplicates("id")
     counts[f"{group}_duplicates"] += counts[f"{group}_decoded"] - len(table)
     keep = {file: np.sort(rows["row"].to_numpy()) for file, rows in table.groupby("file")}
+    _unspool(p for i, p in enumerate(paths) if i not in keep)
 
     written = 0
     batch: list[dict] = []
+    spooled: list[str] = []
     width = 0
     values_in_batch = 0
 
     def flush() -> None:
-        nonlocal batch, values_in_batch, written
+        nonlocal batch, values_in_batch, written, spooled
         if not batch:
             return
         ds = wis2_qc.flag(to_dataset(batch, width, instrument), node_path)
@@ -962,10 +987,12 @@ def write_group(
             f"wis2_satellite {group}: channel table", rebase_with=icechunk.ConflictDetector()
         )
         written += ds.sizes["observation"]
-        batch, values_in_batch = [], 0
+        _unspool(spooled)
+        batch, values_in_batch, spooled = [], 0, []
 
     for file, rows in sorted(keep.items()):
         arrays = _load(paths[file])
+        spooled.append(paths[file])
         subset = {
             name: values
             if name.startswith("channel_") or name.endswith(".decimals")
@@ -1143,14 +1170,16 @@ def write_product_group(
     keep = _earliest_copies(paths, stored, group, counts)
     if keep is None:
         return 0
+    _unspool(p for i, p in enumerate(paths) if i not in keep)
     stored_dims = _stored_dims(repo, node_path)
 
     written = 0
     batch: list[dict] = []
+    spooled: list[str] = []
     values_in_batch = 0
 
     def flush() -> None:
-        nonlocal batch, values_in_batch, written
+        nonlocal batch, values_in_batch, written, spooled
         if not batch:
             return
         ds = wis2_qc.flag(product_dataset(batch, stored_dims), node_path)
@@ -1158,10 +1187,12 @@ def write_product_group(
         append_partition(repo, ds, None, fixed_dims=fixed, label=label, group=node_path)
         stored_dims.update({name: ds[name].ndim for name in ds.data_vars})
         written += ds.sizes["observation"]
-        batch, values_in_batch = [], 0
+        _unspool(spooled)
+        batch, values_in_batch, spooled = [], 0, []
 
     for file, rows in sorted(keep.items()):
         arrays = _load(paths[file])
+        spooled.append(paths[file])
         subset = {
             name: values if name.endswith(".decimals") else values[rows]
             for name, values in arrays.items()
