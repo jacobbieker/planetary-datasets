@@ -31,11 +31,13 @@ from __future__ import annotations
 
 import pathlib
 import re
+from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 import xarray as xr
+import zarr
 from loguru import logger
 
 from planetary_datasets.common import naming
@@ -78,6 +80,11 @@ ROLLING_RETENTION = pd.Timedelta(90, "D")
 NS_DATETIME = "datetime64[ns]"
 
 GRANULE_TIME_ENCODING = {"units": "microseconds since 1970-01-01", "dtype": "int64"}
+
+#: Chunk reads in flight while reading a group's granule axis: it is stored in chunks of
+#: tens of granules, so the ATMS group's 7.6M are ~250k chunks, read ~4x faster at 256
+#: than at zarr's default.
+GRANULE_AXIS_CONCURRENCY = 256
 
 
 class PackingChanged(RuntimeError):
@@ -222,6 +229,91 @@ def granule_id(satellite: str, start: pd.Timestamp) -> str:
     """
     start = pd.Timestamp(start)
     return f"{start:%Y-%m-%dT%H:%M:%S}.{start.microsecond // 100000}_{satellite}"
+
+
+# ------------------------------------------------------------------ stored granules
+
+
+@dataclass(frozen=True)
+class StoredGranules:
+    """A group's granule axis, held compactly for membership tests.
+
+    Strings are fixed-width ASCII bytes: ~25 bytes a granule with no Python object each,
+    and sorted and searched natively (numpy's variable-width ``StringDType`` sorted the
+    ATMS group's 7.6M ids in minutes, not seconds).
+
+    Attributes:
+        ids: Every stored :func:`granule_id`, sorted.
+        times: Per ``platform_name``, the stored granule ``time`` values, sorted.
+    """
+
+    ids: np.ndarray
+    times: Dict[str, np.ndarray]
+
+    @staticmethod
+    def _strings(values: Any) -> np.ndarray:
+        """``values`` as fixed-width bytes, as wide as the longest."""
+        strings = np.asarray(values)
+        if strings.dtype.kind == "S":
+            return strings
+        if strings.size == 0:
+            return np.zeros(0, dtype="S1")
+        strings = strings.astype(np.dtypes.StringDType())
+        width = max(int(np.strings.str_len(strings).max()), 1)
+        return strings.astype(f"S{width}")
+
+    @classmethod
+    def build(cls, ids: Any, times: Any, platforms: Any) -> StoredGranules:
+        """Index a granule axis as read from the store (or as about to be written)."""
+        platforms = cls._strings(platforms)
+        times = np.asarray(times, dtype=NS_DATETIME)
+        return cls(
+            ids=np.sort(cls._strings(ids)),
+            times={
+                platform.decode(): np.sort(times[platforms == platform])
+                for platform in np.unique(platforms)
+            },
+        )
+
+    @classmethod
+    def extend(
+        cls, stored: StoredGranules | None, ids: Any, times: Any, platforms: Any
+    ) -> StoredGranules:
+        """``stored`` with granules just written added."""
+        added = cls.build(ids, times, platforms)
+        if stored is None:
+            return added
+        merged = dict(stored.times)
+        for platform, stamps in added.times.items():
+            if platform in merged:
+                held = merged[platform]
+                merged[platform] = np.insert(held, np.searchsorted(held, stamps), stamps)
+            else:
+                merged[platform] = stamps
+        held = stored.ids.astype(np.promote_types(stored.ids.dtype, added.ids.dtype))
+        return cls(ids=np.insert(held, np.searchsorted(held, added.ids), added.ids), times=merged)
+
+    def contains(self, ids: Sequence[str]) -> np.ndarray:
+        """Whether each of ``ids`` is stored."""
+        wanted = self._strings(list(ids))
+        if self.ids.size == 0 or wanted.size == 0:
+            return np.zeros(wanted.size, dtype=bool)
+        # Longer than every stored id: not stored, and cast to the ids' width it would
+        # be cut short, so it is masked out rather than looked up.
+        fits = np.strings.str_len(wanted) <= self.ids.dtype.itemsize
+        probe = wanted.astype(self.ids.dtype)
+        at = np.minimum(np.searchsorted(self.ids, probe), self.ids.size - 1)
+        return fits & (self.ids[at] == probe)
+
+    def has_time_in(self, platform: str, start: pd.Timestamp, end: pd.Timestamp) -> bool:
+        """Whether ``platform`` has a stored granule ``time`` in ``[start, end)``."""
+        stamps = self.times.get(platform)
+        if stamps is None:
+            return False
+        return bool(
+            np.searchsorted(stamps, np.datetime64(end), side="left")
+            > np.searchsorted(stamps, np.datetime64(start), side="left")
+        )
 
 
 # ------------------------------------------------------------------ provider
@@ -402,6 +494,8 @@ class JpssProductProvider(JpssGranuleProvider):
         self.satellites = tuple(satellites)
         self.granule_limit = granule_limit
         self.download_workers = download_workers
+        self._stored_cache: StoredGranules | None = None
+        self._stored_cache_valid = False
 
     # ------------------------------------------------------------------ identity
 
@@ -424,8 +518,13 @@ class JpssProductProvider(JpssGranuleProvider):
 
     # ------------------------------------------------------------------ what is stored
 
-    def stored_granules(self) -> xr.Dataset | None:
-        """The group's ``granule``, ``time`` and ``platform_name``, or None when empty.
+    def stored_granules(self) -> StoredGranules | None:
+        """The group's granule axis, read from the store, or None when the group is empty.
+
+        Read with zarr, not xarray: the ATMS group's granule axis is 7.6M entries in chunks
+        of 64-224, and xarray's pandas index over it (one Python string per granule) held
+        ~3 GB and took minutes on every partition. Zarr reads the many small chunks
+        :data:`GRANULE_AXIS_CONCURRENCY` at a time, into numpy strings.
 
         Raises:
             StoreReadError: the group exists but could not be read. Reporting it as empty
@@ -433,12 +532,7 @@ class JpssProductProvider(JpssGranuleProvider):
         """
         repo = self.get_icechunk_repo()
         try:
-            ds = xr.open_zarr(
-                repo.readonly_session("main").store,
-                group=self.group,
-                consolidated=False,
-                decode_timedelta=True,
-            )
+            group = zarr.open_group(repo.readonly_session("main").store, mode="r", path=self.group)
         except STORE_READ_ERRORS as exc:
             if holds_data(repo, self.group):
                 raise StoreReadError(
@@ -446,51 +540,62 @@ class JpssProductProvider(JpssGranuleProvider):
                     f"({type(exc).__name__}: {exc})"
                 ) from exc
             return None
-        if self.append_dim not in ds.coords:
+        names = set(group.array_keys())
+        if self.append_dim not in names or group[self.append_dim].shape[0] == 0:
             return None
-        return ds[["time", "platform_name"]].load()
+        with zarr.config.set({"async.concurrency": GRANULE_AXIS_CONCURRENCY}):
+            ids = group[self.append_dim][...]
+            stamps = group["time"]
+            times = xr.conventions.decode_cf_variable(
+                "time", xr.Variable((self.append_dim,), stamps[...], dict(stamps.attrs))
+            ).values
+            platforms = group["platform_name"][...]
+        return StoredGranules.build(ids, times, platforms)
+
+    def stored_index(self, refresh: bool = False) -> StoredGranules | None:
+        """:meth:`stored_granules`, read once and then kept current by this provider's writes.
+
+        A group has one writer, so the index only changes through
+        :meth:`write_to_icechunk`, which adds what it commits. ``refresh`` reads it again.
+        """
+        if refresh or not self._stored_cache_valid:
+            self._stored_cache = self.stored_granules()
+            self._stored_cache_valid = True
+        return self._stored_cache
 
     def stored_ids(self) -> set[str]:
         """Every granule id already in the group."""
-        stored = self.stored_granules()
-        if stored is None:
-            return set()
-        return {str(value) for value in stored[self.append_dim].values}
+        stored = self.stored_index()
+        return set() if stored is None else {value.decode() for value in stored.ids}
 
     def missing_timesteps(self, desired: pd.DatetimeIndex) -> List[pd.Timestamp]:
         """Partitions in which some expected spacecraft has no stored granule.
 
         Checked per spacecraft: a partition written while one spacecraft's granules had
         not reached the bucket yet stays missing for that spacecraft, and is completed by
-        the next pass rather than counted as done.
+        the next pass rather than counted as done. Reads the store afresh: this is called
+        once per pass, and the pass then works from the index.
         """
-        stored = self.stored_granules()
-        if stored is None or stored.sizes.get(self.append_dim, 0) == 0:
+        stored = self.stored_index(refresh=True)
+        if stored is None:
             return list(desired)
-        times = stored["time"].values
-        platforms = np.array([str(value) for value in stored["platform_name"].values], dtype=object)
-        by_platform = {
-            platform: np.sort(times[platforms == platform]) for platform in np.unique(platforms)
-        }
 
         missing = []
         for it in desired:
             start, end = self.partition_window(it)
             for satellite in self.expected_satellites(end):
-                stamps = by_platform.get(PLATFORM_NAMES[satellite])
-                if stamps is None or np.searchsorted(
-                    stamps, np.datetime64(start), side="left"
-                ) == np.searchsorted(stamps, np.datetime64(end), side="left"):
+                if not stored.has_time_in(PLATFORM_NAMES[satellite], start, end):
                     missing.append(it)
                     break
         return missing
 
     def drop_stored(self, keys: Sequence[str]) -> List[str]:
         """``keys`` without the granules already in the group, so they are not re-fetched."""
-        stored = self.stored_ids()
-        if not stored:
+        stored = self.stored_index()
+        if stored is None or not keys:
             return list(keys)
-        kept = [key for key in keys if self.id_of(key) not in stored]
+        held = stored.contains([self.id_of(key) for key in keys])
+        kept = [key for key, present in zip(keys, held) if not present]
         if len(kept) < len(keys):
             logger.info(f"{self.name}: {len(keys) - len(kept)} granule(s) already stored")
         return kept
@@ -612,4 +717,18 @@ class JpssProductProvider(JpssGranuleProvider):
             stored_name = renames.get(name, name)
             overrides[stored_name] = {**overrides.get(stored_name, {}), **encoding}
         self.encoding_overrides = overrides
-        return super().write_to_icechunk(repo, processed)
+        try:
+            wrote = super().write_to_icechunk(repo, processed)
+        except BaseException:
+            # Whatever reached the store is unknown; read it again next time.
+            self._stored_cache_valid = False
+            raise
+        if wrote and self._stored_cache_valid:
+            # The granule axis keeps its names in the store, so these are the stored ones.
+            self._stored_cache = StoredGranules.extend(
+                self._stored_cache,
+                processed[self.append_dim].values,
+                processed["time"].values,
+                processed["platform_name"].values,
+            )
+        return wrote

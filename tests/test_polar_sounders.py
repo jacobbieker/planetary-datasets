@@ -34,6 +34,7 @@ from planetary_datasets.providers.polar import (
     process_eps_netcdf,
     serialize_attrs,
 )
+from planetary_datasets.providers.polar._jpss import StoredGranules
 from planetary_datasets.providers.polar.jpss_atms import (
     granule_end,
     granule_key,
@@ -388,6 +389,86 @@ def test_jpss_atms_does_not_refetch_stored_granules(jpss, monkeypatch):
     stored = atms_granule(jpss, "n21", str(granule_start(SDR_NAME)))
     assert jpss.write_to_icechunk(jpss.get_icechunk_repo(), stored)
     assert jpss.granule_pairs(hour) == []
+
+
+def test_stored_granules_index_answers_like_a_set():
+    index = StoredGranules.build(
+        ["2025-06-01T00:00:24.4_n21", "2025-06-01T00:00:56.4_n21", "2025-06-01T00:00:24.4_n20"],
+        pd.to_datetime(["2025-06-01T00:00:40", "2025-06-01T00:01:12", "2025-06-01T00:00:40"]),
+        ["NOAA-21", "NOAA-21", "NOAA-20"],
+    )
+    # The second is longer than any stored id, with a stored id as its prefix.
+    asked = ["2025-06-01T00:00:24.4_n20", "2025-06-01T00:00:24.4_n20x", "9", ""]
+    assert list(index.contains(asked)) == [True, False, False, False]
+    assert index.has_time_in(
+        "NOAA-20", pd.Timestamp("2025-06-01T00:00"), pd.Timestamp("2025-06-01T01:00")
+    )
+    assert not index.has_time_in(
+        "NOAA-20", pd.Timestamp("2025-06-01T01:00"), pd.Timestamp("2025-06-01T02:00")
+    )
+    assert not index.has_time_in(
+        "Suomi-NPP", pd.Timestamp("2025-06-01T00:00"), pd.Timestamp("2025-06-01T01:00")
+    )
+
+    grown = StoredGranules.extend(
+        index,
+        ["2025-06-01T01:00:00.0_snpp"],
+        pd.to_datetime(["2025-06-01T01:00:16"]),
+        ["Suomi-NPP"],
+    )
+    assert list(grown.contains(["2025-06-01T01:00:00.0_snpp", "2025-06-01T00:00:56.4_n21"])) == [
+        True,
+        True,
+    ]
+    assert grown.has_time_in(
+        "Suomi-NPP", pd.Timestamp("2025-06-01T01:00"), pd.Timestamp("2025-06-01T02:00")
+    )
+    # The longer id widened the index rather than being cut to fit it; still sorted.
+    assert grown.ids.dtype.itemsize == len("2025-06-01T01:00:00.0_snpp")
+    assert list(grown.ids) == sorted(grown.ids)
+
+
+def test_jpss_reads_the_granule_axis_once_per_pass(jpss, monkeypatch):
+    """A pass reads the store's granule axis once.
+
+    Partitions then use the index, which the provider's own writes keep current.
+    """
+    hour = pd.Timestamp("2025-06-01T00:00")
+    stored = atms_granule(jpss, "n21", str(granule_start(SDR_NAME)))
+    assert jpss.write_to_icechunk(jpss.get_icechunk_repo(), stored)
+
+    reads = []
+    original = jpss.stored_granules
+    monkeypatch.setattr(jpss, "stored_granules", lambda: reads.append(1) or original())
+    jpss.missing_timesteps(pd.DatetimeIndex([hour]))
+    assert len(reads) == 1
+
+    later = SDR_NAME.replace("t0000244_e0000560", "t0001004_e0001320").replace("b13247", "b13248")
+    keys = [f"b/ATMS-SDR/{SDR_NAME}", f"b/ATMS-SDR/{later}"]
+    assert jpss.drop_stored(keys) == [keys[1]]
+    assert jpss.write_to_icechunk(
+        jpss.get_icechunk_repo(), atms_granule(jpss, "n21", str(granule_start(later)))
+    )
+    assert jpss.drop_stored(keys) == []
+    assert len(reads) == 1
+
+
+def test_jpss_index_is_reread_after_a_failed_write(jpss, monkeypatch):
+    jpss.missing_timesteps(pd.DatetimeIndex([pd.Timestamp("2025-06-01T00:00")]))
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr("planetary_datasets.base._write_to_icechunk", fail)
+    with pytest.raises(RuntimeError):
+        jpss.write_to_icechunk(
+            jpss.get_icechunk_repo(), atms_granule(jpss, "n21", str(granule_start(SDR_NAME)))
+        )
+    reads = []
+    original = jpss.stored_granules
+    monkeypatch.setattr(jpss, "stored_granules", lambda: reads.append(1) or original())
+    jpss.drop_stored([f"b/ATMS-SDR/{SDR_NAME}"])
+    assert len(reads) == 1
 
 
 def test_jpss_https_url_is_anonymous_and_public():
