@@ -522,3 +522,19 @@ def test_a_spool_that_cannot_be_removed_is_not_reported_removed(tmp_path, monkey
     (tmp_path / f"{child.pid}-abc").mkdir()
     monkeypatch.setattr(sat.shutil, "rmtree", lambda path, ignore_errors=False: None)
     assert sat.remove_orphan_spools(tmp_path) == []
+
+
+def test_the_groups_with_most_decoded_values_are_written_first(local_config, monkeypatch):
+    """IASI (8,007 channels a row) waited behind the alphabet and ended every window."""
+    order = []
+
+    def record(repo, spec, files, partition, counts):
+        order.append(spec.group)
+        return 0
+
+    monkeypatch.setattr(sat, "write_group", record)
+    target = sat.SatelliteTarget(local_config, workers=1)
+    for name in ("atms", "amsua", "iasi", "cris"):
+        target.feed(key(name), body(name), ARRIVED)
+    target.finish(None, None, "x")
+    assert order[:2] == ["iasi", "cris"] and sorted(order) == ["amsua", "atms", "cris", "iasi"]
